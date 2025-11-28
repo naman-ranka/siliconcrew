@@ -1,4 +1,9 @@
-langgraph
 langchain
-pydantic
-pytest
+langchain-google-genai
+langgraph
+langgraph-checkpoint-sqlite
+streamlit
+watchdog
+python-dotenv
+rich
+plotly
