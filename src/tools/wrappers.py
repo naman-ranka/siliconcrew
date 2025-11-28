@@ -4,6 +4,7 @@ from src.tools.run_linter import run_linter
 from src.tools.run_simulation import run_simulation
 from src.tools.run_synthesis import run_synthesis
 from src.tools.get_ppa import get_ppa_metrics
+from src.tools.read_waveform import read_waveform
 
 # Helper to get workspace path
 def get_workspace_path():
@@ -120,6 +121,21 @@ def ppa_tool() -> str:
     metrics = get_ppa_metrics(logs_dir)
     return str(metrics)
 
+@tool
+def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0, end_time: int = 1000) -> str:
+    """
+    Reads a VCD waveform file to inspect signal values.
+    Use this when simulation fails to understand WHY.
+    Args:
+        vcd_file: Name of the .vcd file (e.g., 'dump.vcd').
+        signals: List of signal names to inspect (e.g., ['clk', 'rst', 'count']).
+        start_time: Start time to view.
+        end_time: End time to view.
+    """
+    workspace = get_workspace_path()
+    abs_file = os.path.join(workspace, vcd_file)
+    return read_waveform(abs_file, signals, start_time, end_time)
+
 # List of tools to bind to the agent
 architect_tools = [
     write_file,
@@ -127,5 +143,6 @@ architect_tools = [
     linter_tool,
     simulation_tool,
     synthesis_tool,
-    ppa_tool
+    ppa_tool,
+    waveform_tool
 ]

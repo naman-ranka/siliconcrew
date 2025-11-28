@@ -1,4 +1,0 @@
-
-19. Executing CHECK pass (checking for obvious problems).
-Checking module up_counter_4bit...
-Found and reported 0 problems.

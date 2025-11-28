@@ -142,3 +142,9 @@ cython_debug/
 # IDEs
 .vscode/
 .idea/
+
+# Project specific
+state.db
+workspace/*
+!workspace/.gitkeep
+!workspace/README.md

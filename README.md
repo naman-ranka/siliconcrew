@@ -4,21 +4,6 @@ SiliconCrew is an agentic AI framework designed to automate the digital hardware
 
 This project leverages LangGraph to create a cyclic state machine (not a linear chain), allowing the system to iterate, debug, and self-correct errors in Verilog code and physical implementation flows.
 
-🎯 Project Goals
-
-Automate the "Loop of Death": Eliminate the manual back-and-forth between coding and fixing syntax/logic errors.
-
-Hybrid Execution Environment: Combine the speed of local tools (Icarus Verilog, Verilator) with the power of containerized enterprise tools (OpenROAD in Docker).
-
-Stateful Engineering: Maintain a persistent "Design State" that tracks the history of errors, preventing the AI from repeating the same mistakes.
-
-Metric-Driven Optimization: Go beyond "it compiles" to "it meets timing," using real PPA (Power, Performance, Area) feedback to guide architectural decisions.
-
-🏗️ High-Level Architecture
-
-The system is architected as a Cyclic Multi-Agent Graph. Unlike standard chatbots, this system moves through distinct states of engineering.
-
-The Agent Trio
 
 The Architect (RTL Coder)
 
@@ -33,20 +18,6 @@ Role: Writes testbenches and analyzes simulation waveforms.
 Behavior: Compiles code, runs tests, and parses logs. It acts as the "gatekeeper," rejecting any design that fails functional checks.
 
 The Builder (PPA Analyst)
-
-Role: Manages the physical implementation flow (Synthesis, Place & Route).
-
-Behavior: Interfaces with the OpenROAD Docker container. It extracts timing slack, area, and power metrics to provide feedback for architectural optimization.
-
-The Supervisor (Router)
-
-A logic layer that decides the next step based on the Design State.
-
-Example Logic: "If simulation fails, route back to Architect with error logs. If simulation passes, route to Builder. If timing fails, request human intervention."
-
-🛠️ System Tools
-
-The agents interact with the environment through a strict set of tools. We utilize a Hybrid Architecture where fast logic checks run locally, and heavy physical design runs in isolated Docker containers.
 
 1. The Architect's Tools (Local Execution)
 
@@ -104,23 +75,6 @@ Phase 1: The Foundation (Infrastructure)
 
 [ ] Tool Wrapper - Local Exec: Implement a robust subprocess wrapper with timeouts to run iverilog and capture stdout/stderr.
 
-Phase 2: The Inner Loop (Code & Verify)
-
-[ ] Linter Tool: Create a wrapper for verilator --lint-only (or iverilog -t null) to catch syntax errors fast.
-
-[ ] Simulation Tool: Create a wrapper that compiles RTL + Testbench and parses the output for "PASS/FAIL".
-
-[ ] The "RTL Coder" Node: Build the first LangGraph node that takes a prompt and calls the write tool.
-
-[ ] The "Verifier" Node: Build the second node that runs the simulation tool and updates the state.
-
-[ ] The Cycle: Connect Coder $\leftrightarrow$ Verifier in LangGraph. Test that the Coder fixes a syntax error automatically.
-
-Phase 3: The Outer Loop (Physical Design)
-
-[ ] Docker Bridge: Implement the Python function that triggers docker run with volume mounting to the /workspace.
-
-[ ] Synthesis Tool: Create a specific wrapper for running Yosys synthesis inside the container.
 
 [ ] Metric Parser: Write a Regex parser to extract "Worst Negative Slack" and "Total Area" from OpenROAD logs.
 

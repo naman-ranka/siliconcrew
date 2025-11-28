@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import SystemMessage
 from src.tools.wrappers import architect_tools
 from src.config import DEFAULT_MODEL
 
@@ -19,13 +20,15 @@ You have access to a workspace and a set of tools:
 3.  `simulation_tool`: Run testbenches.
 4.  `synthesis_tool`: Run synthesis.
 5.  `ppa_tool`: Check area/timing/power.
+6.  `waveform_tool`: Inspect VCD files for debugging.
 
 **Workflow Guidelines:**
 1.  **Plan:** Break down the request.
 2.  **Implement:** Write the RTL (`design.v`) and Testbench (`tb.v`).
 3.  **Verify:**
     *   Run `linter_tool` on both files. Fix errors if any.
-    *   Run `simulation_tool`. If it fails, read the logs, fix the code, and retry.
+    *   Run `simulation_tool`.
+    *   **CRITICAL:** If simulation fails, DO NOT just guess. Use `waveform_tool` to inspect signals (e.g., `clk`, `rst`, `count`, `state`) around the failure time. This will tell you EXACTLY what went wrong.
 4.  **Synthesize:** Once verified, run `synthesis_tool`.
 5.  **Analyze:** Run `ppa_tool` to see the results.
 6.  **Report:** Summarize your findings.
@@ -36,8 +39,18 @@ You have access to a workspace and a set of tools:
 *   If a tool fails, analyze the error and try to fix it. Do not give up immediately.
 """
 
-def create_architect_agent():
+def create_architect_agent(checkpointer=None):
     """
-    Creates the ReAct agent graph.
+    Creates the Architect agent (ReAct).
+    Args:
+        checkpointer: Optional LangGraph checkpointer (e.g. SqliteSaver) for persistence.
     """
-    return create_react_agent(llm, tools=architect_tools)
+    # Create the ReAct agent using the prebuilt helper
+    # This automatically handles tool calling and message history
+    agent_graph = create_react_agent(
+        model=llm,
+        tools=architect_tools,
+        checkpointer=checkpointer
+    )
+    
+    return agent_graph
