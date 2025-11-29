@@ -8,6 +8,15 @@ from src.tools.read_waveform import read_waveform
 
 # Helper to get workspace path
 def get_workspace_path():
+    """
+    Returns the active workspace directory.
+    Defaults to 'workspace/' relative to project root, 
+    but can be overridden by RTL_WORKSPACE env var for isolated runs.
+    """
+    env_path = os.environ.get("RTL_WORKSPACE")
+    if env_path:
+        return os.path.abspath(env_path)
+        
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
 
 @tool
