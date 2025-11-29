@@ -31,10 +31,21 @@ def verifier_node(state: DesignState) -> DesignState:
     """
     print("🕵️ Verifier: Generating testbench and running simulation...")
     
-    # 1. Generate Testbench
-    rtl_code = state['verilog_code']
+    # 0. Read Code from Workspace
+    # The Architect wrote 'design.v' to disk. We should read it to ensure we have the latest.
+    workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
+    rtl_file = os.path.join(workspace_dir, "design.v")
+
+    if os.path.exists(rtl_file):
+        with open(rtl_file, "r") as f:
+            rtl_code = f.read()
+    else:
+        # Fallback or error if file missing
+        rtl_code = state.get("verilog_code", "")
+
     spec = state['design_spec']
     
+    # 1. Generate Testbench
     user_content = f"""
     Design Specification:
     {spec}
@@ -64,17 +75,11 @@ def verifier_node(state: DesignState) -> DesignState:
         
     tb_code = tb_code.strip()
     
-    # 2. Setup Workspace
-    workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
+    # 2. Write TB File
     if not os.path.exists(workspace_dir):
         os.makedirs(workspace_dir)
         
-    # Write files
-    rtl_file = os.path.join(workspace_dir, "design.v")
     tb_file = os.path.join(workspace_dir, "tb.v")
-    
-    with open(rtl_file, "w") as f:
-        f.write(rtl_code)
     with open(tb_file, "w") as f:
         f.write(tb_code)
         
@@ -84,8 +89,9 @@ def verifier_node(state: DesignState) -> DesignState:
     
     # 4. Update State
     new_state = {
+        "verilog_code": rtl_code, # Sync back just in case
         "testbench_code": tb_code,
-        "functional_valid": result["test_passed"],
+        "functional_valid": result["success"], # result['success'] checks for 'TEST PASSED'
         "error_logs": []
     }
     
@@ -93,7 +99,7 @@ def verifier_node(state: DesignState) -> DesignState:
         # Simulation failed or Test failed
         error_msg = f"Simulation Failed.\nStdout: {result['stdout']}\nStderr: {result['stderr']}"
         new_state["error_logs"] = [error_msg]
-        print("❌ Verification Failed.")
+        print(f"❌ Verification Failed. Error: {error_msg[:100]}...")
     else:
         print("✅ Verification Passed.")
         

@@ -5,48 +5,50 @@ from dotenv import load_dotenv
 # Add src to python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.graph.graph import create_graph
-from src.state.state import DesignState
+from src.graph.workflow import create_workflow_graph
 
 def main():
     load_dotenv()
-    print("Verifying Orchestration Cycle (Coder <-> Verifier)...")
+    if not os.environ.get("GOOGLE_API_KEY"):
+        print("❌ GOOGLE_API_KEY not found.")
+        sys.exit(1)
+
+    print("🚀 Initializing SiliconCrew Multi-Agent System...")
+
+    # 1. Create the Graph
+    workflow = create_workflow_graph()
+
+    # 2. Define the Goal
+    goal = "Design a 4-bit Up-Counter with asynchronous reset and enable."
     
-    app = create_graph()
+    print(f"🎯 Goal: {goal}")
+    print("---------------------------------------------------")
     
-    initial_state: DesignState = {
-        "design_spec": "A simple 2-to-1 Multiplexer (MUX) with 1-bit inputs a, b, select line sel, and output y.",
-        "verilog_code": "",
-        "testbench_code": "",
+    # 3. Initialize State
+    initial_state = {
+        "design_spec": goal,
         "iteration_count": 0,
-        "max_iterations": 3,
+        "max_iterations": 5, # Safety limit
         "error_logs": [],
-        "syntax_valid": False,
-        "functional_valid": False,
-        "ppa_metrics": {},
-        "current_agent": "start",
         "messages": []
     }
     
-    print(f"Goal: {initial_state['design_spec']}")
-    
+    # 4. Run the Graph
     try:
-        # Run the graph
-        final_state = app.invoke(initial_state)
+        # stream() yields events as the graph transitions
+        events = workflow.stream(initial_state)
         
-        print("\n--- Final Result ---")
-        print(f"Iterations: {final_state['iteration_count']}")
-        print(f"Functional Valid: {final_state['functional_valid']}")
-        
-        if final_state["functional_valid"]:
-            print("✅ Cycle succeeded! Design verified.")
-            print("\n--- Final Verilog ---")
-            print(final_state["verilog_code"])
-            print("\n🎉 Orchestration Verification PASSED!")
-        else:
-            print("❌ Cycle failed to produce a valid design within max iterations.")
-            print(f"Last Errors: {final_state['error_logs']}")
-            sys.exit(1)
+        for event in events:
+            # event is a dict like {'architect': {updated_state_subset}}
+            for node_name, state_update in event.items():
+                print(f"\n🔄 Node '{node_name}' Finished.")
+                if "error_logs" in state_update and state_update["error_logs"]:
+                     print(f"   Errors: {len(state_update['error_logs'])}")
+                if "functional_valid" in state_update:
+                     print(f"   Functional Valid: {state_update['functional_valid']}")
+
+        print("\n---------------------------------------------------")
+        print("✅ Workflow Execution Finished.")
             
     except Exception as e:
         print(f"❌ Execution Failed: {e}")

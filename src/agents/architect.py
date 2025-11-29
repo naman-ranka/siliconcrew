@@ -1,56 +1,90 @@
 import os
-from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import SystemMessage
-from src.tools.wrappers import architect_tools
+from langchain_core.messages import SystemMessage, HumanMessage
+from src.tools.wrappers import write_file, read_file, linter_tool
+from src.state.state import DesignState
 from src.config import DEFAULT_MODEL
-
-load_dotenv()
 
 # Initialize LLM
 llm = ChatGoogleGenerativeAI(model=DEFAULT_MODEL, google_api_key=os.environ.get("GOOGLE_API_KEY"))
 
-SYSTEM_PROMPT = """You are "The Architect", an autonomous Digital Design Agent.
-Your goal is to design, verify, and synthesize hardware based on user specifications.
+# Restrict tools for the Multi-Agent Architect
+# It can only Write and Lint. It CANNOT simulate or synthesize.
+architect_tools = [write_file, read_file, linter_tool]
 
-You have access to a workspace and a set of tools:
-1.  `write_file` / `read_file`: Manage Verilog source code.
-2.  `linter_tool`: Check syntax.
-3.  `simulation_tool`: Run testbenches.
-4.  `synthesis_tool`: Run synthesis.
-5.  `ppa_tool`: Check area/timing/power.
-6.  `waveform_tool`: Inspect VCD files for debugging.
+SYSTEM_PROMPT = """You are "The Architect", the RTL Coding Specialist.
+Your goal is to write SystemVerilog/Verilog code that meets the user's specification.
 
-**Workflow Guidelines:**
-1.  **Plan:** Break down the request.
-2.  **Implement:** Write the RTL (`design.v`) and Testbench (`tb.v`).
-3.  **Verify:**
-    *   Run `linter_tool` on both files. Fix errors if any.
-    *   Run `simulation_tool`.
-    *   **CRITICAL:** If simulation fails, DO NOT just guess. Use `waveform_tool` to inspect signals (e.g., `clk`, `rst`, `count`, `state`) around the failure time. This will tell you EXACTLY what went wrong.
-4.  **Synthesize:** Once verified, run `synthesis_tool`.
-5.  **Analyze:** Run `ppa_tool` to see the results.
-6.  **Report:** Summarize your findings.
+**Your Role in the Team:**
+1.  **Write Code:** You generate `design.v`.
+2.  **Lint Code:** You use `linter_tool` to ensure syntax is perfect.
+3.  **Fix Bugs:** If the "Verifier" sends you an error log, you analyze it and fix the code.
 
-**Important:**
-*   Always use standard Verilog-2001 or SystemVerilog.
-*   Ensure testbenches are self-checking (print "TEST PASSED").
-*   If a tool fails, analyze the error and try to fix it. Do not give up immediately.
+**What you CANNOT do:**
+- Do NOT write testbenches (The Verifier does that).
+- Do NOT run simulations (The Verifier does that).
+- Do NOT run synthesis (The Analyst does that).
+
+**Instructions:**
+- If this is the first iteration, write the code based on the spec.
+- If you have `error_logs` in the state, analyze them carefully. They come from failed simulations.
+- Always run `linter_tool` before finishing. If it fails, fix the syntax immediately.
+- Once you are confident the code is syntax-free and addresses the requirements/errors, STOP.
 """
 
-def create_architect_agent(checkpointer=None):
+def architect_node(state: DesignState) -> DesignState:
     """
-    Creates the Architect agent (ReAct).
-    Args:
-        checkpointer: Optional LangGraph checkpointer (e.g. SqliteSaver) for persistence.
+    The Architect Node.
+    - Input: Design Spec + (Optional) Error Logs.
+    - Output: design.v (written to disk) + Updated State.
     """
-    # Create the ReAct agent using the prebuilt helper
-    # This automatically handles tool calling and message history
-    agent_graph = create_react_agent(
-        model=llm,
-        tools=architect_tools,
-        checkpointer=checkpointer
-    )
+    print("🏗️ Architect: Working on RTL...")
+
+    # 1. Increment Iteration Count
+    current_iter = state.get("iteration_count", 0) + 1
+
+    # 2. Construct Prompt
+    # We explicitly feed the state into the agent's context
+    prompt_content = f"Design Spec: {state['design_spec']}\n"
+
+    if state.get("error_logs") and len(state["error_logs"]) > 0:
+        # Load current code to help the agent fix it
+        # Try to read design.v from workspace, or fallback to state
+        current_code = state.get("verilog_code", "")
+        workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
+        design_path = os.path.join(workspace_dir, "design.v")
+        if os.path.exists(design_path):
+             with open(design_path, "r") as f:
+                 current_code = f.read()
+
+        prompt_content += f"\n⚠️ PREVIOUS SIMULATION FAILED:\n{state['error_logs'][-1]}\n"
+        prompt_content += f"\nCURRENT CODE:\n{current_code}\n"
+        prompt_content += "Please fix the code based on this error."
+    else:
+        prompt_content += "\nPlease generate the initial RTL design (design.v)."
+
+    # 3. Create/Invoke the ReAct Agent (Local Loop)
+    # We use a localized agent just for this step to handle tool calls (Linting)
+    agent = create_react_agent(llm, architect_tools)
+
+    result = agent.invoke({
+        "messages": [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=prompt_content)
+        ]
+    })
+
+    # 4. Extract Final Response
+    last_message = result["messages"][-1]
+
+    # 5. Read the generated file to put into state (for the Verifier to see)
+    # We assume the agent used write_file tool.
+    # To be safe, we read 'design.v' from the workspace.
+    # Note: Ideally, the agent should return the code, but file I/O is robust.
+    # Using read_file tool logic manually here would be cleaner, but we can trust the agent wrote it.
     
-    return agent_graph
+    return {
+        "iteration_count": current_iter,
+        "messages": [last_message] # Append to history
+    }

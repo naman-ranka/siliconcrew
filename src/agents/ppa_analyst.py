@@ -3,6 +3,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
 from src.state.state import DesignState
+from src.tools.run_synthesis import run_synthesis
 from src.tools.get_ppa import get_ppa_metrics
 from src.config import DEFAULT_MODEL
 
@@ -30,19 +31,43 @@ Format your response as a structured summary.
 
 def ppa_analyst_node(state: DesignState) -> DesignState:
     """
-    Agent node that extracts PPA metrics and analyzes them.
+    Agent node that runs Synthesis, extracts PPA metrics, and analyzes them.
     """
-    print("📊 PPA Analyst: Extracting and Analyzing Metrics...")
+    print("🚀 PPA Analyst: Running Synthesis and Analyzing Metrics...")
     
-    # 1. Extract Metrics using the Tool
-    # We assume logs are in workspace/orfs_logs relative to the project root
-    # We need to resolve the path dynamically
-    base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
-    logs_dir = os.path.join(base_path, "orfs_logs")
+    # 0. Setup Workspace
+    workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
+    design_file = os.path.join(workspace_dir, "design.v")
     
+    # 1. Run Synthesis
+    # We assume top module is 'design' or we need to infer it.
+    # Ideally, we should parse the code to find top module, or ask State.
+    # For now, let's assume the Architect named the top module based on spec or standard 'design'
+    # Hack: We grep the file for 'module <name>'
+    top_module = "design" # Default
+    if os.path.exists(design_file):
+        with open(design_file, "r") as f:
+            for line in f:
+                if line.strip().startswith("module"):
+                    parts = line.split()
+                    if len(parts) > 1:
+                        top_module = parts[1].split("(")[0].split(";")[0]
+                        break
+
+    print(f"   Synthesis Target: {top_module}")
+    synth_result = run_synthesis([design_file], top_module=top_module, cwd=workspace_dir)
+
+    if not synth_result["success"]:
+        print("❌ Synthesis Failed.")
+        return {
+            "messages": [f"Synthesis Failed. Log: {synth_result['stderr'][-500:]}"]
+        }
+
+    # 2. Extract Metrics using the Tool
+    logs_dir = os.path.join(workspace_dir, "orfs_logs")
     metrics = get_ppa_metrics(logs_dir)
     
-    # 2. Construct Prompt for LLM Analysis
+    # 3. Construct Prompt for LLM Analysis
     metrics_str = f"""
     Area: {metrics.get('area_um2', 'N/A')} um^2
     Cell Count: {metrics.get('cell_count', 'N/A')}
@@ -60,7 +85,7 @@ def ppa_analyst_node(state: DesignState) -> DesignState:
     Please analyze these results.
     """
     
-    # 3. Call LLM
+    # 4. Call LLM
     response = llm.invoke([
         SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(content=user_message)
@@ -69,8 +94,7 @@ def ppa_analyst_node(state: DesignState) -> DesignState:
     analysis = response.content
     print(f"📊 Analysis:\n{analysis}")
     
-    # 4. Update State
-    # We update ppa_metrics and append the analysis to messages
+    # 5. Update State
     return {
         "ppa_metrics": metrics,
         "messages": [f"PPA Analysis: {analysis}"]
