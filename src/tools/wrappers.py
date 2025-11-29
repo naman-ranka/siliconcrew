@@ -98,13 +98,14 @@ def simulation_tool(verilog_files: list[str], top_module: str) -> str:
 from src.tools.search_logs import search_logs
 
 @tool
-def synthesis_tool(design_file: str, top_module: str) -> str:
+def synthesis_tool(design_file: str, top_module: str, clock_period_ns: float = 10.0) -> str:
     """
     Runs logic synthesis using OpenROAD Flow Scripts (ORFS).
     Returns a rich summary including generated files and key metrics.
     Args:
         design_file: Name of the Verilog design file (e.g., 'design.v').
         top_module: Name of the top module to synthesize.
+        clock_period_ns: Target clock period in nanoseconds (default: 10.0).
     """
     workspace = get_workspace_path()
     abs_file = os.path.join(workspace, design_file)
@@ -112,7 +113,7 @@ def synthesis_tool(design_file: str, top_module: str) -> str:
     if not os.path.exists(abs_file):
         return f"Error: File {design_file} does not exist."
         
-    result = run_synthesis([abs_file], top_module=top_module, cwd=workspace)
+    result = run_synthesis([abs_file], top_module=top_module, clock_period_ns=clock_period_ns, cwd=workspace)
     
     if result["success"]:
         # 1. Auto-Grep for Metrics
@@ -178,10 +179,33 @@ def search_logs_tool(query: str) -> str:
     workspace = get_workspace_path()
     return search_logs(query, workspace)
 
+from src.tools.edit_file import replace_in_file
+
+@tool
+def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> str:
+    """
+    Surgically replaces a block of text in a file.
+    Use this for small fixes (e.g. changing a parameter, fixing a typo) to avoid rewriting the whole file.
+    Args:
+        filename: Name of the file (e.g., 'design.v').
+        target_text: The EXACT text block to find and replace (must match whitespace).
+        replacement_text: The new text to insert.
+    """
+    workspace = get_workspace_path()
+    abs_file = os.path.join(workspace, filename)
+    
+    result = replace_in_file(abs_file, target_text, replacement_text)
+    
+    if result["success"]:
+        return f"Success: {result['message']}\nDiff:\n{result.get('diff', '')}"
+    else:
+        return f"Error: {result['message']}"
+
 # List of tools to bind to the agent
 architect_tools = [
     write_file,
     read_file,
+    edit_file_tool,
     linter_tool,
     simulation_tool,
     synthesis_tool,

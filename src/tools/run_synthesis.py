@@ -2,7 +2,7 @@ import os
 import sys
 from .run_docker import run_docker_command
 
-def run_synthesis(verilog_files, top_module, platform="sky130hd", cwd=None):
+def run_synthesis(verilog_files, top_module, platform="sky130hd", clock_period_ns=None, cwd=None):
     """
     Runs Yosys synthesis using the OpenROAD Flow Scripts (ORFS) via Docker.
     
@@ -10,6 +10,7 @@ def run_synthesis(verilog_files, top_module, platform="sky130hd", cwd=None):
         verilog_files (list): List of absolute paths to .v files.
         top_module (str): Name of the top-level module.
         platform (str): Target platform (default: sky130hd).
+        clock_period_ns (float): Target clock period in nanoseconds (optional).
         cwd (str): Workspace directory (optional).
         
     Returns:
@@ -56,9 +57,15 @@ def run_synthesis(verilog_files, top_module, platform="sky130hd", cwd=None):
             print(f"Warning: File {f} is not in workspace {cwd}. It may not be visible to Docker.")
             container_verilog_files.append(f"/workspace/{os.path.basename(f)}")
 
-    # Generate dummy SDC file if not provided (ORFS often requires it)
+    # Generate or Update SDC file
     sdc_file = os.path.join(cwd, "constraints.sdc")
-    if not os.path.exists(sdc_file):
+    
+    # If clock_period is provided, we overwrite/create the SDC
+    if clock_period_ns is not None:
+        with open(sdc_file, "w") as f:
+            f.write(f"create_clock -period {clock_period_ns} [get_ports clk]")
+    # If not provided and file doesn't exist, create default
+    elif not os.path.exists(sdc_file):
         with open(sdc_file, "w") as f:
             f.write(f"create_clock -period 10 [get_ports clk]")
             
@@ -85,7 +92,15 @@ export CORE_MARGIN = 2
     ]
     
     # Command: make DESIGN_CONFIG=/workspace/config.mk
-    make_cmd = "make DESIGN_CONFIG=/workspace/config.mk"
+    # We add 'touch' to ensure make realizes the config has changed
+    # But for SDC changes to propagate, we often need to force a clean or at least touch the target
+    # The most robust way for ORFS when config changes is to force a run.
+    # We can use the -B flag (Always make) or just rely on the fact that we just wrote config.mk
+    # However, make might not track config.mk as a dependency of the flow targets in ORFS.
+    
+    # BEST FIX: Run 'make clean_issue' (ORFS specific) or just nuke the results for this design if we suspect a change.
+    # Simpler approach: Use -B to force execution.
+    make_cmd = "make -B DESIGN_CONFIG=/workspace/config.mk"
     
     print(f"🚀 Starting Synthesis for {top_module}...")
     result = run_docker_command(
