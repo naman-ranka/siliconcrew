@@ -148,3 +148,11 @@ state.db
 workspace/*
 !workspace/.gitkeep
 !workspace/README.md
+
+# Simulation outputs
+*.out
+*.vcd
+
+# SQLite WAL/SHM
+*.db-wal
+*.db-shm
