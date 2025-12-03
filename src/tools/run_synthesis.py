@@ -2,7 +2,8 @@ import os
 import sys
 from .run_docker import run_docker_command
 
-def run_synthesis(verilog_files, top_module, platform="sky130hd", clock_period_ns=None, cwd=None):
+def run_synthesis(verilog_files, top_module, platform="sky130hd", clock_period_ns=None, 
+                  utilization=5, aspect_ratio=1, core_margin=2, cwd=None, timeout=600):
     """
     Runs Yosys synthesis using the OpenROAD Flow Scripts (ORFS) via Docker.
     
@@ -11,7 +12,11 @@ def run_synthesis(verilog_files, top_module, platform="sky130hd", clock_period_n
         top_module (str): Name of the top-level module.
         platform (str): Target platform (default: sky130hd).
         clock_period_ns (float): Target clock period in nanoseconds (optional).
+        utilization (int): Core utilization percentage (1-100, default: 5).
+        aspect_ratio (float): Core aspect ratio H/W (default: 1).
+        core_margin (float): Margin around core in microns (default: 2).
         cwd (str): Workspace directory (optional).
+        timeout (int): Timeout in seconds (default 600).
         
     Returns:
         dict: {
@@ -74,9 +79,9 @@ export DESIGN_NAME = {top_module}
 export PLATFORM = {platform}
 export VERILOG_FILES = {" ".join(container_verilog_files)}
 export SDC_FILE = /workspace/constraints.sdc
-export CORE_UTILIZATION = 5
-export CORE_ASPECT_RATIO = 1
-export CORE_MARGIN = 2
+export CORE_UTILIZATION = {utilization}
+export CORE_ASPECT_RATIO = {aspect_ratio}
+export CORE_MARGIN = {core_margin}
 """
     
     config_file = os.path.join(cwd, "config.mk")
@@ -106,7 +111,8 @@ export CORE_MARGIN = 2
     result = run_docker_command(
         command=make_cmd,
         workspace_path=cwd,
-        volumes=volumes
+        volumes=volumes,
+        timeout=timeout
     )
     
     return result

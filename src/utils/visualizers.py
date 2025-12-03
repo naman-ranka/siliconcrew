@@ -33,19 +33,82 @@ def render_waveform(vcd_path):
             
             times = [t for t, v in tv]
             values = []
+            
+            # Determine if signal is a bus (multi-bit) based on max value
+            is_bus = False
+            max_val = 1
+            
             for t, v in tv:
-                if v == '0': values.append(0)
-                elif v == '1': values.append(1)
-                else: values.append(0.5) # X or Z
+                val = 0
+                try:
+                    # Handle binary strings (e.g., '101', '0', '1')
+                    if isinstance(v, str):
+                        # Replace x/z with 0 (or handle differently)
+                        v_clean = v.lower().replace('x', '0').replace('z', '0')
+                        val = int(v_clean, 2)
+                    else:
+                        val = int(v)
+                except ValueError:
+                    val = 0 # Fallback
+                
+                values.append(val)
+            
+            if values:
+                max_val = max(values)
+                if max_val > 1:
+                    is_bus = True
             
             # Add end time point for step plot continuity
             times.append(endtime)
             values.append(values[-1])
             
-            ax[i].step(times, values, where='post')
-            ax[i].set_ylabel(sig_name.split('.')[-1], rotation=0, ha='right', fontsize=8)
-            ax[i].set_yticks([0, 1])
-            ax[i].set_yticklabels(['0', '1'], fontsize=6)
+            if is_bus:
+                # Bus Rendering Style: "Valid" block with text
+                # We plot a "box" or just a line in the middle, and annotate
+                
+                # 1. Draw transitions
+                # We'll plot a line at y=0.5, but add vertical markers at changes
+                # To make it look like a bus, we can plot two lines at y=0.2 and y=0.8
+                
+                # Simplified: Plot a step at 0.5, but we need to see edges.
+                # Let's iterate and draw rectangles or just place text.
+                
+                ax[i].set_ylim(0, 1)
+                ax[i].set_yticks([]) # No Y ticks for bus
+                
+                # Draw "Bus Lines"
+                ax[i].hlines(0.8, times[0], times[-1], colors='tab:blue', linewidth=1)
+                ax[i].hlines(0.2, times[0], times[-1], colors='tab:blue', linewidth=1)
+                
+                # Annotate values
+                for j in range(len(times) - 1):
+                    t_start = times[j]
+                    t_end = times[j+1]
+                    val = values[j]
+                    
+                    # Draw vertical lines at transitions
+                    ax[i].vlines(t_start, 0.2, 0.8, colors='tab:blue', linewidth=1)
+                    
+                    # Add Text (only if interval is wide enough)
+                    duration = t_end - t_start
+                    if duration > (endtime * 0.02): # 2% threshold to avoid clutter
+                        center = t_start + (duration / 2)
+                        ax[i].text(center, 0.5, str(val), ha='center', va='center', fontsize=8, clip_on=True)
+                        
+                ax[i].vlines(times[-1], 0.2, 0.8, colors='tab:blue', linewidth=1)
+
+            else:
+                # Standard Step Plot for single bits
+                ax[i].step(times, values, where='post')
+                ax[i].set_yticks([0, 1])
+                ax[i].set_yticklabels(['0', '1'], fontsize=6)
+            
+            # Label formatting
+            short_name = sig_name.split('.')[-1]
+            if is_bus:
+                short_name += f" [Bus]" 
+                
+            ax[i].set_ylabel(short_name, rotation=0, ha='right', fontsize=8)
             ax[i].grid(True, alpha=0.3)
             
             # Remove spines for cleaner look

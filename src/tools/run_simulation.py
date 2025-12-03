@@ -2,7 +2,7 @@ import os
 import sys
 from .run_iverilog import run_iverilog
 
-def run_simulation(verilog_files, top_module="tb", cwd=None):
+def run_simulation(verilog_files, top_module="tb", cwd=None, timeout=60):
     """
     Runs a Verilog simulation and parses the output for pass/fail status.
     
@@ -10,6 +10,7 @@ def run_simulation(verilog_files, top_module="tb", cwd=None):
         verilog_files (list): List of paths to .v files (RTL + Testbench).
         top_module (str): Name of the top-level module (used for naming the executable).
         cwd (str): Working directory.
+        timeout (int): Timeout in seconds (default 60).
         
     Returns:
         dict: {
@@ -27,7 +28,7 @@ def run_simulation(verilog_files, top_module="tb", cwd=None):
     output_exec = f"{top_module}.out"
     
     # Run Icarus Verilog (Compile + Run)
-    result = run_iverilog(verilog_files, output_executable=output_exec, cwd=cwd)
+    result = run_iverilog(verilog_files, output_executable=output_exec, cwd=cwd, timeout=timeout)
     
     response = {
         "success": False,

@@ -36,8 +36,8 @@ DB_PATH = session_manager.db_path
 st.markdown("""
 <style>
     .stChatMessage { padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; }
-    .tool-call { background-color: transparent; padding: 0.5rem; border-radius: 0.3rem; border-left: 3px solid #2196f3; font-family: monospace; margin-bottom: 0.5rem; }
-    .tool-output { background-color: #f0f2f6; padding: 0.5rem; border-radius: 0.3rem; font-family: monospace; font-size: 0.9em; border-left: 3px solid #ff4b4b; }
+    .tool-call-header { font-size: 0.85em; color: #666; display: flex; align-items: center; gap: 0.5rem; }
+    .tool-icon { font-size: 1em; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -136,8 +136,6 @@ def render_tree_view(tree, current_path=""):
 
 from src.utils.visualizers import render_waveform, render_gds
 
-# ... (rest of imports)
-
 def render_workspace():
     # --- Main Layout ---
     # Top Bar for Navigation
@@ -178,7 +176,7 @@ def render_workspace():
             st.subheader("Live Workspace")
             
             # Tabs for different views
-            tab_code, tab_wave, tab_layout = st.tabs(["📝 Code", "📈 Waveform", "🗺️ Layout"])
+            tab_code, tab_wave, tab_layout, tab_schematic = st.tabs(["📝 Code", "📈 Waveform", "🗺️ Layout", "🔌 Schematic"])
             
             with tab_code:
                 file_viewer_placeholder = st.empty()
@@ -235,6 +233,28 @@ def render_workspace():
                 else:
                     st.info("No GDS files found. Run synthesis to generate layout.")
 
+            with tab_schematic:
+                # Search for SVGs
+                svg_files = []
+                if os.path.exists(CURRENT_WORKSPACE):
+                    svg_files = [f for f in os.listdir(CURRENT_WORKSPACE) if f.endswith(".svg")]
+                
+                if svg_files:
+                    selected_svg = st.selectbox("Select Schematic", svg_files)
+                    if selected_svg:
+                        # Render with white background for visibility in dark mode
+                        svg_path = os.path.join(CURRENT_WORKSPACE, selected_svg)
+                        with open(svg_path, "r") as f:
+                            svg_content = f.read()
+                        
+                        # Encode SVG for embedding
+                        import base64
+                        b64 = base64.b64encode(svg_content.encode('utf-8')).decode("utf-8")
+                        html = f'<div style="background-color: white; padding: 20px; border-radius: 10px; overflow: auto;"><img src="data:image/svg+xml;base64,{b64}" style="width: 100%;" /></div>'
+                        st.markdown(html, unsafe_allow_html=True)
+                else:
+                    st.info("No Schematic found. Ask the agent to 'generate schematic' for your design.")
+
     # Column 1: Chat Interface
     with col1:
         st.subheader("Chat")
@@ -247,31 +267,81 @@ def render_workspace():
         
         current_state = agent_graph.get_state(config)
         
-        # Render History
+        # Render History with Grouping
         if current_state.values and "messages" in current_state.values:
-            for msg in current_state.values["messages"]:
+            messages = current_state.values["messages"]
+            
+            # Grouping Logic
+            grouped_messages = []
+            current_group = []
+            
+            for msg in messages:
                 if isinstance(msg, SystemMessage): continue
                 
-                role = "user"
-                if isinstance(msg, AIMessage):
-                    role = "assistant"
-                    with st.chat_message(role):
-                        if hasattr(msg, "tool_calls") and msg.tool_calls:
-                            for tool_call in msg.tool_calls:
-                                args_str = str(tool_call['args'])
-                                short_args = (args_str[:100] + '...') if len(args_str) > 100 else args_str
-                                st.markdown(f"<div class='tool-call'>🛠️ Calling <b>{tool_call['name']}</b></div>", unsafe_allow_html=True)
-                                with st.expander(f"Arguments: {short_args}", expanded=False):
-                                    st.code(args_str)
-                        
-                        clean_text = get_clean_content(msg)
-                        if clean_text:
-                            st.markdown(clean_text)
+                is_tool_related = False
+                if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
+                    is_tool_related = True
                 elif hasattr(msg, "tool_call_id"): # ToolMessage
-                    role = "tool"
+                    is_tool_related = True
+                    
+                if is_tool_related:
+                    current_group.append(msg)
+                else:
+                    # Flush current group if exists
+                    if current_group:
+                        grouped_messages.append({"type": "group", "msgs": current_group})
+                        current_group = []
+                    # Add normal text message
+                    grouped_messages.append({"type": "single", "msg": msg})
+            
+            # Flush remaining group
+            if current_group:
+                grouped_messages.append({"type": "group", "msgs": current_group})
+                
+            # Render Groups
+            for item in grouped_messages:
+                if item["type"] == "single":
+                    msg = item["msg"]
+                    role = "user"
+                    if isinstance(msg, AIMessage): role = "assistant"
                     with st.chat_message(role):
-                        with st.expander("🛠️ Tool Output", expanded=False):
-                            st.markdown(f"```\n{msg.content}\n```")
+                        st.markdown(get_clean_content(msg))
+                        
+                elif item["type"] == "group":
+                    # Render text of FIRST message if it exists
+                    first_msg = item["msgs"][0]
+                    if isinstance(first_msg, AIMessage):
+                        clean_text = get_clean_content(first_msg)
+                        if clean_text:
+                            with st.chat_message("assistant"):
+                                st.markdown(clean_text)
+                    
+                    # Render Steps in Expander
+                    with st.chat_message("assistant"):
+                        with st.status("🛠️ Execution Log", expanded=False, state="complete"):
+                            for m in item["msgs"]:
+                                if isinstance(m, AIMessage) and m.tool_calls:
+                                    for tc in m.tool_calls:
+                                        t_name = tc['name']
+                                        t_args = tc['args']
+                                        # Smart Summary
+                                        summary = ""
+                                        if "filename" in t_args: summary = t_args["filename"]
+                                        elif "target_file" in t_args: summary = t_args["target_file"]
+                                        elif "design_file" in t_args: summary = t_args["design_file"]
+                                        
+                                        with st.expander(f"⚙️ **{t_name}** {summary}", expanded=False):
+                                            st.json(t_args)
+                                            
+                                elif hasattr(m, "tool_call_id"):
+                                    # Output
+                                    icon = "📄"
+                                    if "Success" in m.content or "PASSED" in m.content: icon = "✅"
+                                    elif "Error" in m.content or "FAILED" in m.content: icon = "❌"
+                                    
+                                    with st.expander(f"{icon} Output", expanded=False):
+                                        st.code(m.content[:500] + ("..." if len(m.content)>500 else ""))
+
         else:
             st.info("👋 Hi! I'm the Architect. What hardware shall we build today?")
 
@@ -281,8 +351,12 @@ def render_workspace():
                 st.markdown(prompt)
                 
             with st.chat_message("assistant"):
-                status_container = st.status("Thinking...", expanded=True)
+                # 1. Text Placeholder First
                 response_placeholder = st.empty()
+                
+                # 2. Status Container (Thinking) Second
+                status_container = st.status("Thinking...", expanded=True)
+                
                 full_response = ""
                 
                 try:
@@ -299,27 +373,47 @@ def render_workspace():
                     for event in events:
                         if "agent" in event:
                             msg = event["agent"]["messages"][-1]
-                            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                                for tool_call in msg.tool_calls:
-                                    status_container.markdown(f"**🛠️ Calling {tool_call['name']}**")
                             
                             clean_text = get_clean_content(msg)
                             if clean_text:
                                 full_response = clean_text
                                 response_placeholder.markdown(full_response)
                                 
+                            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                for tool_call in msg.tool_calls:
+                                    # Extract key info for the header
+                                    t_name = tool_call['name']
+                                    t_args = tool_call['args']
+                                    
+                                    # Smart Summary
+                                    summary = ""
+                                    if "filename" in t_args: summary = t_args["filename"]
+                                    elif "target_file" in t_args: summary = t_args["target_file"]
+                                    elif "design_file" in t_args: summary = t_args["design_file"]
+                                    elif "verilog_files" in t_args: summary = str(t_args["verilog_files"])
+                                    
+                                    # Render as Expander inside Status
+                                    with status_container:
+                                        with st.expander(f"🛠️ **{t_name}** {summary}", expanded=False):
+                                            st.json(t_args)
+                            
                         elif "tools" in event:
                             msg = event["tools"]["messages"][-1]
                             content = msg.content
-                            status_container.markdown(f"**📄 Output:**\n```\n{content[:500]}...\n```")
                             
-                            if "Successfully wrote to" in content:
+                            # Render Output inside Status
+                            with status_container:
+                                # Determine if success or fail for icon
+                                icon = "📄"
+                                if "Success" in content or "PASSED" in content: icon = "✅"
+                                elif "Error" in content or "FAILED" in content: icon = "❌"
+                                
+                                with st.expander(f"{icon} Output", expanded=False):
+                                    st.code(content)
+                                    
+                            # Side Effects (Refresh UI)
+                            if "Successfully wrote" in content:
                                 render_files() # Update tabs
-                                status_container.success(f"Updated file.")
-                            elif "FAILED" in content:
-                                status_container.error("Tool Failed. Retrying...")
-                            elif "PASSED" in content:
-                                status_container.success("Verification Passed!")
                                 
                     status_container.update(label="Finished!", state="complete", expanded=False)
                                 

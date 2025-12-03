@@ -2,7 +2,7 @@ import subprocess
 import os
 import sys
 
-def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flow-scripts/flow", workspace_path=None, volumes=None):
+def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flow-scripts/flow", workspace_path=None, volumes=None, timeout=600):
     """
     Executes a command inside the OpenROAD Docker container.
     
@@ -13,6 +13,7 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
         workspace_path (str): Absolute path to the local workspace directory. 
                               If None, defaults to ../../workspace relative to this file.
         volumes (list): Optional list of volume mappings ["host_path:container_path"].
+        timeout (int): Timeout in seconds (default 600s = 10m).
         
     Returns:
         dict: {
@@ -56,26 +57,40 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
         "bash", "-c", command
     ])
 
+    proc = None
     try:
         # Run the command
-        result = subprocess.run(
+        proc = subprocess.Popen(
             docker_cmd,
-            capture_output=True,
-            text=True,
-            check=False
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
+        stdout, stderr = proc.communicate(timeout=timeout)
         
         return {
-            "success": result.returncode == 0,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "success": proc.returncode == 0,
+            "stdout": stdout,
+            "stderr": stderr,
             "command": " ".join(docker_cmd)
         }
         
+    except subprocess.TimeoutExpired:
+        if proc: proc.kill()
+        return {
+            "success": False,
+            "stdout": "",
+            "stderr": "Error: Docker command timed out.",
+            "command": " ".join(docker_cmd)
+        }
     except Exception as e:
+        if proc: proc.kill()
         return {
             "success": False,
             "stdout": "",
             "stderr": f"Docker Execution Error: {str(e)}",
             "command": " ".join(docker_cmd)
         }
+    finally:
+        if proc and proc.poll() is None:
+            proc.kill()

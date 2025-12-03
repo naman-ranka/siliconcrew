@@ -98,7 +98,8 @@ def simulation_tool(verilog_files: list[str], top_module: str) -> str:
 from src.tools.search_logs import search_logs
 
 @tool
-def synthesis_tool(design_file: str, top_module: str, clock_period_ns: float = 10.0) -> str:
+def synthesis_tool(design_file: str, top_module: str, clock_period_ns: float = 10.0,
+                   utilization: int = 5, aspect_ratio: float = 1.0, core_margin: float = 2.0) -> str:
     """
     Runs logic synthesis using OpenROAD Flow Scripts (ORFS).
     Returns a rich summary including generated files and key metrics.
@@ -106,6 +107,9 @@ def synthesis_tool(design_file: str, top_module: str, clock_period_ns: float = 1
         design_file: Name of the Verilog design file (e.g., 'design.v').
         top_module: Name of the top module to synthesize.
         clock_period_ns: Target clock period in nanoseconds (default: 10.0).
+        utilization: Core utilization percentage (1-100). Higher = smaller area. Default: 5 (very safe).
+        aspect_ratio: Core aspect ratio (Height/Width). 1.0 = Square. Default: 1.0.
+        core_margin: Margin around core in microns. Default: 2.0.
     """
     workspace = get_workspace_path()
     abs_file = os.path.join(workspace, design_file)
@@ -113,7 +117,9 @@ def synthesis_tool(design_file: str, top_module: str, clock_period_ns: float = 1
     if not os.path.exists(abs_file):
         return f"Error: File {design_file} does not exist."
         
-    result = run_synthesis([abs_file], top_module=top_module, clock_period_ns=clock_period_ns, cwd=workspace)
+    result = run_synthesis([abs_file], top_module=top_module, clock_period_ns=clock_period_ns, 
+                           utilization=utilization, aspect_ratio=aspect_ratio, core_margin=core_margin,
+                           cwd=workspace)
     
     if result["success"]:
         # 1. Auto-Grep for Metrics
@@ -201,6 +207,29 @@ def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> st
     else:
         return f"Error: {result['message']}"
 
+from src.tools.generate_schematic import generate_schematic
+
+@tool
+def schematic_tool(verilog_file: str, top_module: str) -> str:
+    """
+    Generates a visual schematic (SVG) from a Verilog file.
+    Args:
+        verilog_file: Name of the Verilog file (e.g., 'design.v').
+        top_module: Name of the top-level module.
+    """
+    workspace = get_workspace_path()
+    abs_file = os.path.join(workspace, verilog_file)
+    
+    if not os.path.exists(abs_file):
+        return f"Error: File {verilog_file} does not exist."
+        
+    result = generate_schematic(abs_file, top_module, cwd=workspace)
+    
+    if result["success"]:
+        return f"Schematic generated successfully! 🎨\nSVG Path: {result['svg_path']}\n(The user can see this in the 'Schematic' tab)"
+    else:
+        return f"Failed to generate schematic: {result['error']}"
+
 # List of tools to bind to the agent
 architect_tools = [
     write_file,
@@ -211,5 +240,6 @@ architect_tools = [
     synthesis_tool,
     ppa_tool,
     waveform_tool,
+    schematic_tool,
     search_logs_tool
 ]
