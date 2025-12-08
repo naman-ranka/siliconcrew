@@ -158,3 +158,5 @@ workspace/*
 # SQLite WAL/SHM
 *.db-wal
 *.db-shm
+state.db-shm
+state.db-wal
