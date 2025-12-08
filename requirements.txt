@@ -6,4 +6,10 @@ streamlit
 watchdog
 python-dotenv
 rich
-plotly
+matplotlib
+gdstk
+vcdvcd
+numpy
+cocotb
+cocotb-test
+pytest

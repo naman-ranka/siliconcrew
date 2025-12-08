@@ -2,7 +2,7 @@ import subprocess
 import os
 import sys
 
-def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flow-scripts/flow", workspace_path=None, volumes=None, timeout=600):
+def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flow-scripts/flow", workspace_path=None, volumes=None, timeout=3600):
     """
     Executes a command inside the OpenROAD Docker container.
     

@@ -3,7 +3,7 @@ import sys
 from .run_docker import run_docker_command
 
 def run_synthesis(verilog_files, top_module, platform="sky130hd", clock_period_ns=None, 
-                  utilization=5, aspect_ratio=1, core_margin=2, cwd=None, timeout=600):
+                  utilization=5, aspect_ratio=1, core_margin=2, cwd=None, timeout=3600):
     """
     Runs Yosys synthesis using the OpenROAD Flow Scripts (ORFS) via Docker.
     

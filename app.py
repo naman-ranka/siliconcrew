@@ -1,4 +1,5 @@
 import streamlit as st
+import time
 import os
 import sqlite3
 import shutil
@@ -358,6 +359,8 @@ def render_workspace():
                 status_container = st.status("Thinking...", expanded=True)
                 
                 full_response = ""
+                total_time = 0
+                tool_start_times = {} # Map tool_call_id (or name) to start time
                 
                 try:
                     input_messages = []
@@ -384,6 +387,10 @@ def render_workspace():
                                     # Extract key info for the header
                                     t_name = tool_call['name']
                                     t_args = tool_call['args']
+                                    t_id = tool_call['id']
+                                    
+                                    # Track start time
+                                    tool_start_times[t_id] = time.time()
                                     
                                     # Smart Summary
                                     summary = ""
@@ -400,6 +407,14 @@ def render_workspace():
                         elif "tools" in event:
                             msg = event["tools"]["messages"][-1]
                             content = msg.content
+                            t_id = msg.tool_call_id
+                            
+                            # Calculate Duration
+                            duration_str = ""
+                            if t_id in tool_start_times:
+                                duration = time.time() - tool_start_times[t_id]
+                                total_time += duration
+                                duration_str = f"({duration:.1f}s)"
                             
                             # Render Output inside Status
                             with status_container:
@@ -408,14 +423,14 @@ def render_workspace():
                                 if "Success" in content or "PASSED" in content: icon = "✅"
                                 elif "Error" in content or "FAILED" in content: icon = "❌"
                                 
-                                with st.expander(f"{icon} Output", expanded=False):
+                                with st.expander(f"{icon} Output {duration_str}", expanded=False):
                                     st.code(content)
                                     
                             # Side Effects (Refresh UI)
                             if "Successfully wrote" in content:
                                 render_files() # Update tabs
                                 
-                    status_container.update(label="Finished!", state="complete", expanded=False)
+                    status_container.update(label=f"Finished! (Total: {total_time:.1f}s)", state="complete", expanded=False)
                                 
                 except Exception as e:
                     status_container.update(label="Error", state="error")

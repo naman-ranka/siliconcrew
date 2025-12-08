@@ -1,97 +1,87 @@
-SiliconCrew: The Autonomous ASIC Design System
+# SiliconCrew: Autonomous Hardware Design Agent
 
-SiliconCrew is an agentic AI framework designed to automate the digital hardware design loop. By orchestrating three specialized AI agents—an RTL Coder, a Verification Engineer, and a Physical Design Analyst—it transforms natural language specifications into functionally verified, physically realizable silicon designs.
+**SiliconCrew** is an agentic AI framework that automates the digital hardware design loop. It orchestrates three specialized AI agents to transform natural language specifications into functionally verified, physically realizable silicon designs.
 
-This project leverages LangGraph to create a cyclic state machine (not a linear chain), allowing the system to iterate, debug, and self-correct errors in Verilog code and physical implementation flows.
+## 🤖 The Architecture
 
+The system uses a cyclic **LangGraph** state machine to iterate, debug, and self-correct:
 
-The Architect (RTL Coder)
+1.  **The Architect (RTL Coder)**: Writes SystemVerilog based on specs and linter feedback.
+2.  **The Auditor (Verifier)**: Writes testbenches, runs simulations (Icarus Verilog), and analyzes waveforms.
+3.  **The Builder (PPA Analyst)**: Runs synthesis (OpenROAD) to generate GDSII layouts and analyze Power, Performance, and Area (PPA).
 
-Role: Generates and fixes SystemVerilog/Verilog code.
+---
 
-Behavior: Writes code based on specs and strictly adheres to linter feedback. It cannot run simulations; it only writes.
+## 🚀 Getting Started
 
-The Auditor (Verifier)
+You can run SiliconCrew in two ways. **Option 1 (Dev Container)** is recommended for the easiest setup.
 
-Role: Writes testbenches and analyzes simulation waveforms.
+### Option 1: VS Code Dev Container (Recommended)
+*Best for: Users who want a "one-click" setup without installing tools manually.*
 
-Behavior: Compiles code, runs tests, and parses logs. It acts as the "gatekeeper," rejecting any design that fails functional checks.
+1.  Install **Docker Desktop** and **VS Code**.
+2.  Install the **Dev Containers** extension in VS Code.
+3.  Open this folder in VS Code.
+4.  Click **"Reopen in Container"** when prompted.
+    *   *This automatically installs Python, Icarus Verilog, and all dependencies.*
+5.  Open the terminal in VS Code and run:
+    ```bash
+    streamlit run app.py
+    ```
 
-The Builder (PPA Analyst)
+### Option 2: Local Setup (Power Users)
+*Best for: Users who prefer running tools natively on their OS.*
 
-1. The Architect's Tools (Local Execution)
+1.  **Install Prerequisites**:
+    *   **Python 3.10+**
+    *   **Icarus Verilog**:
+        *   *Windows*: [Download Installer](https://bleyer.org/icarus/) (Check "Add to PATH").
+        *   *Linux*: `sudo apt-get install iverilog`
+        *   *Mac*: `brew install icarus-verilog`
+    *   **Docker** (Optional, only required for Synthesis/Layout).
 
-read_design_spec: Retrieves design requirements (IOs, protocols) from the global state.
+2.  **Setup Environment**:
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate  # Windows: .\.venv\Scripts\activate
+    pip install -r requirements.txt
+    ```
 
-write_verilog_file: Creates or overwrites source code files in the workspace.
+3.  **Run**:
+    ```bash
+    streamlit run app.py
+    ```
 
-run_linter: Executes a lightweight syntax checker (Verilator/Icarus) to catch syntax errors immediately, avoiding expensive simulation runs.
+---
 
-2. The Auditor's Tools (Local Execution)
+## 🔑 Configuration
 
-write_testbench: Generates the simulation harness (SystemVerilog or Cocotb).
+Create a `.env` file in the root directory with your Google Gemini API Key:
+```env
+GOOGLE_API_KEY=your_api_key_here
+```
 
-run_simulation: Compiles the RTL + Testbench and executes the simulation binary. Returns "PASS/FAIL" status and specific error logs.
+---
 
-read_vcd_snippet: Parses specific time windows of the waveform dump to visually debug signal transitions when tests fail.
+## 🛠️ Usage
 
-3. The Builder's Tools (Docker Execution)
+Once the app is running at `http://localhost:8501`:
 
-generate_openroad_config: Creates the necessary Makefiles/Scripts for the OpenROAD Flow Scripts (ORFS).
+1.  **Chat**: Describe your design (e.g., "Design a 4-bit counter with reset").
+2.  **Code Tab**: Watch the agent write Verilog in real-time.
+3.  **Waveform Tab**: View simulation results (VCD) to verify functionality.
+4.  **Layout Tab**: (Requires Docker) View the final GDSII layout after synthesis.
 
-run_synthesis_job: Triggers the Docker container to convert Verilog to a Gate-Level Netlist.
+---
 
-run_pnr_job: Triggers the Docker container to perform Placement and Routing.
+## 📂 Project Structure
 
-get_ppa_metrics: A local parser that reads the generated reports to extract Worst Negative Slack (WNS), Total Area, and Power consumption.
+*   `src/agents`: Logic for the Architect, Verifier, and Builder.
+*   `src/tools`: Python wrappers for Icarus, OpenROAD, and File I/O.
+*   `src/graph`: LangGraph state machine definitions.
+*   `workspace/`: Sandbox where agents write code and tools dump logs.
+*   `.devcontainer/`: Configuration for the VS Code Dev Container.
 
-📂 Code Structure Overview
+---
 
-The project is organized to separate the "Agent Brains" (Python) from the "Engineering Tools" (Shell/Docker) and the "Construction Site" (Workspace).
-
-/src/agents: Contains the prompt definitions and persona logic for the Coder, Verifier, and Analyst.
-
-/src/tools: The "Hands" of the system. Contains Python wrappers for OS-level commands (File I/O, subprocess execution, Docker volume mounting).
-
-/src/graph: The LangGraph state machine definition. This defines the nodes (agents) and the edges (conditional logic/routing).
-
-/src/state: Defines the data schema (TypedDict) passed between agents. This is the "memory bus" holding the current code, error logs, and metrics.
-
-/workspace: A disposable sandbox directory where agents write .v files and tools dump logs. This directory is mounted to Docker.
-
-/templates: Standard boilerplate code (e.g., standard Makefile for OpenROAD, basic testbench templates) to ground the agents.
-
-✅ Sequential Implementation Task List
-
-Follow this roadmap to build the system layer-by-layer, ensuring stability before complexity.
-
-Phase 1: The Foundation (Infrastructure)
-
-[ ] Project Skeleton: Set up the directory structure and Python environment (poetry or venv).
-
-[ ] Docker Setup: Pull the openroad/orfs image and verify it runs manually.
-
-[ ] Tool Wrapper - File I/O: Implement Python functions for agents to read/write text files to the /workspace.
-
-[ ] Tool Wrapper - Local Exec: Implement a robust subprocess wrapper with timeouts to run iverilog and capture stdout/stderr.
-
-
-[ ] Metric Parser: Write a Regex parser to extract "Worst Negative Slack" and "Total Area" from OpenROAD logs.
-
-[ ] The "PPA Analyst" Node: Integrate the Docker tools into a third agent node.
-
-Phase 4: Intelligence & Orchestration
-
-[ ] State Management: Finalize the DesignState object to track iteration_count (to prevent infinite loops).
-
-[ ] Routing Logic: Implement the conditional edges (e.g., "If slack < 0, go to Coder; else, Finish").
-
-[ ] Human-in-the-Loop: Add an interrupt breakpoint before the PPA phase to allow user approval.
-
-Phase 5: Testing & Refinement
-
-[ ] Benchmark: Run the system on a simple design (e.g., "Make an 8-bit Counter").
-
-[ ] Prompt Tuning: Refine system prompts to stop agents from being "lazy" or hallucinating non-existent Verilog syntax.
-
-[ ] Error Handling: Ensure the system gracefully handles Docker crashes or compiler timeouts.
+**License**: MIT
