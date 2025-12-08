@@ -44,45 +44,59 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None, timeout=60):
     
     # Also, cocotb-test compiles in a 'sim_build' directory by default.
     
+    import contextlib
+    import io
+    
+    # Capture stdout/stderr to find compilation errors
+    out_capture = io.StringIO()
+    err_capture = io.StringIO()
+    
+    # Helper to sanitize output for Windows consoles
+    def safe_output(s):
+        try:
+            # Try to encode/decode with current stdout encoding to filter bad chars
+            encoding = sys.stdout.encoding or 'utf-8'
+            return s.encode(encoding, errors='replace').decode(encoding)
+        except:
+            return s.encode('ascii', errors='replace').decode('ascii')
+            
     try:
         # We need to ensure python_module is in python path
         # If python_module is "test_cocotb_design" and it is in "workspace",
         # we need to add "workspace" to PYTHONPATH.
-        # The 'cwd' arg in run_cocotb usually implies where the test is.
-        
-        # Let's add cwd to PYTHONPATH
         env = os.environ.copy()
         env["PYTHONPATH"] = cwd + os.pathsep + env.get("PYTHONPATH", "")
-        
-        # Run cocotb-test
-        # Note: run() might not support 'timeout' directly in all versions, 
-        # but it supports 'kwargs' passed to simulator.
+        env["PYTHONIOENCODING"] = "utf-8" # Force UTF-8 for subprocess
         
         print(f"Running cocotb-test for {toplevel}...")
         
-        run(
-            verilog_sources=verilog_files,
-            toplevel=toplevel,
-            module=python_module,
-            simulator="icarus",
-            python_search=[cwd], # Add cwd to python search path
-            toplevel_lang="verilog",
-            work_dir=os.path.join(cwd, "sim_build"),
-            timescale="1ns/1ps",
-            extra_env=env
-        )
+        with contextlib.redirect_stdout(out_capture), contextlib.redirect_stderr(err_capture):
+            run(
+                verilog_sources=verilog_files,
+                toplevel=toplevel,
+                module=python_module,
+                simulator="icarus",
+                python_search=[cwd], # Add cwd to python search path
+                toplevel_lang="verilog",
+                work_dir=os.path.join(cwd, "sim_build"),
+                timescale="1ns/1ps",
+                extra_env=env
+            )
+            
+        full_stdout = out_capture.getvalue() or "Cocotb test passed successfully."
+        full_stderr = err_capture.getvalue()
         
         return {
             "success": True,
-            "stdout": "Cocotb test passed successfully.",
-            "stderr": "",
+            "stdout": safe_output(full_stdout),
+            "stderr": safe_output(full_stderr),
             "command": "cocotb_test.simulator.run(...)"
         }
         
-    except Exception as e:
+    except BaseException as e: # Catch SystemExit (raised by pytest) and others
         return {
             "success": False,
-            "stdout": "",
-            "stderr": f"Cocotb test failed: {str(e)}",
+            "stdout": safe_output(out_capture.getvalue()),
+            "stderr": f"Cocotb test failed: {str(e)}\nCaptured Stderr: {safe_output(err_capture.getvalue())}\nCaptured Stdout: {safe_output(out_capture.getvalue())}",
             "command": "cocotb_test.simulator.run(...)"
         }

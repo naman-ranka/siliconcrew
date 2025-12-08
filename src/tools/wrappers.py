@@ -5,6 +5,8 @@ from src.tools.run_simulation import run_simulation
 from src.tools.run_synthesis import run_synthesis
 from src.tools.get_ppa import get_ppa_metrics
 from src.tools.read_waveform import read_waveform
+from src.tools.run_cocotb import run_cocotb
+from src.tools.run_sby import run_sby
 
 # Helper to get workspace path
 def get_workspace_path():
@@ -237,6 +239,54 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
     else:
         return f"Failed to generate schematic: {result['error']}"
 
+@tool
+def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
+    """
+    Runs a constrained random verification test using Cocotb (Python).
+    Use this ONLY when the user explicitly asks for "Cocotb", "Python testbench", or "Randomized testing".
+    Args:
+        verilog_files: List of Verilog source files.
+        top_module: Name of the top-level Verilog module.
+        python_module: Name of the Python test file (without .py extension).
+    """
+    workspace = get_workspace_path()
+    
+    # Ensure all files exist
+    abs_files = [os.path.join(workspace, f) for f in verilog_files]
+    for f in abs_files:
+        if not os.path.exists(f):
+             return f"Error: File {f} does not exist."
+             
+    result = run_cocotb(abs_files, top_module, python_module, cwd=workspace)
+    
+    if result["success"]:
+        return "Cocotb Test PASSED. ✅"
+    else:
+        return f"Cocotb Test FAILED. ❌\nError: {result['stderr']}"
+
+@tool
+def sby_tool(sby_file: str) -> str:
+    """
+    Runs Formal Verification using SymbiYosys (SBY).
+    Use this ONLY when the user explicitly asks for "Formal Verification", "SBY", or "Proofs".
+    Args:
+        sby_file: Name of the .sby configuration file (e.g., 'fifo.sby').
+    """
+    workspace = get_workspace_path()
+    abs_file = os.path.join(workspace, sby_file)
+    
+    if not os.path.exists(abs_file):
+        return f"Error: File {sby_file} does not exist."
+        
+    result = run_sby(abs_file, cwd=workspace)
+    
+    status_icon = "❓"
+    if result["status"] == "PASS": status_icon = "✅"
+    elif result["status"] == "FAIL": status_icon = "❌"
+    elif result["status"] == "ERROR": status_icon = "⚠️"
+    
+    return f"SBY Run Finished. Status: {result['status']} {status_icon}\nOutput:\n{result['stdout'][-500:]}"
+
 # List of tools to bind to the agent
 architect_tools = [
     write_file,
@@ -248,5 +298,7 @@ architect_tools = [
     ppa_tool,
     waveform_tool,
     schematic_tool,
-    search_logs_tool
+    search_logs_tool,
+    cocotb_tool,
+    sby_tool
 ]

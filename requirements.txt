@@ -1,8 +1,11 @@
-langchain
-langchain-google-genai
-langgraph
+langchain>=0.3.7
+langchain-community>=0.3.7
+langchain-google-genai>=4.0.0
+google-generativeai>=0.8.5
+langgraph>=0.2.53
 langgraph-checkpoint-sqlite
-streamlit
+langchain-experimental>=0.3.3
+streamlit>=1.40.1
 watchdog
 python-dotenv
 rich

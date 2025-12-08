@@ -8,8 +8,8 @@ from src.config import DEFAULT_MODEL
 
 load_dotenv()
 
-# Initialize LLM
-llm = ChatGoogleGenerativeAI(model=DEFAULT_MODEL, google_api_key=os.environ.get("GOOGLE_API_KEY"))
+# Remove global llm init
+# llm = ChatGoogleGenerativeAI(model=DEFAULT_MODEL, google_api_key=os.environ.get("GOOGLE_API_KEY"))
 
 SYSTEM_PROMPT = """You are "The Architect", an autonomous Digital Design Agent.
 Your goal is to design, verify, and synthesize hardware based on user specifications.
@@ -41,18 +41,26 @@ You have access to a workspace and a set of tools:
 5.  **Analyze:** Run `ppa_tool` to see the results.
 6.  **Report:** Summarize your findings.
 
+**Advanced Verification (Use ONLY if User Requests):**
+*   **Cocotb / Python Testbench**: If the user asks for "Cocotb", "Python test", or "Randomized testing", use `cocotb_tool`. You will need to write a Python test file (`test_design.py`) instead of `tb.v`.
+*   **Formal Verification / SBY**: If the user asks for "Formal", "Proofs", or "SBY", use `sby_tool`. You will need to write a `.sby` configuration file and a formal property file (or embed properties in `design.v`).
+
 **Important:**
 *   Always use standard Verilog-2001 or SystemVerilog.
 *   Ensure testbenches are self-checking (print "TEST PASSED").
 *   If a tool fails, analyze the error and try to fix it. Do not give up immediately.
 """
 
-def create_architect_agent(checkpointer=None):
+def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL):
     """
     Creates the Architect agent (ReAct).
     Args:
         checkpointer: Optional LangGraph checkpointer (e.g. SqliteSaver) for persistence.
+        model_name: Name of the Gemini model to use.
     """
+    # Initialize LLM with specific model
+    llm = ChatGoogleGenerativeAI(model=model_name, google_api_key=os.environ.get("GOOGLE_API_KEY"))
+
     # Create the ReAct agent using the prebuilt helper
     # This automatically handles tool calling and message history
     agent_graph = create_react_agent(

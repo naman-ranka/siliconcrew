@@ -15,6 +15,74 @@ load_dotenv()
 
 st.set_page_config(page_title="SiliconCrew Architect", layout="wide", initial_sidebar_state="collapsed")
 
+# Initialize Token Usage State
+if "token_usage" not in st.session_state:
+    st.session_state.token_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cached_tokens": 0,
+        "total_cost": 0.0
+    }
+
+if "processed_msg_ids" not in st.session_state:
+    st.session_state.processed_msg_ids = set()
+
+if "selected_model" not in st.session_state:
+    st.session_state.selected_model = "gemini-2.5-flash"
+
+# Pricing Constants (Per 1M Tokens)
+PRICING = {
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
+    "gemini-3-pro-preview": {"input": 2.00, "output": 12.00}
+}
+
+def update_token_usage(usage_metadata, model_name, msg_id=None):
+    if not usage_metadata: return
+    
+    # Prevent double counting
+    if msg_id and msg_id in st.session_state.processed_msg_ids:
+        return
+        
+    if msg_id:
+        st.session_state.processed_msg_ids.add(msg_id)
+    
+    in_t = usage_metadata.get("input_tokens", 0)
+    out_t = usage_metadata.get("output_tokens", 0)
+    total_t = usage_metadata.get("total_tokens", 0)
+    
+    # Attempt to extract cache info (provider dependent)
+    cached_t = 0
+    # Check for cache_read (Google style via LangChain)
+    if "input_token_details" in usage_metadata:
+        details = usage_metadata["input_token_details"]
+        if isinstance(details, dict):
+            # Try both keys just in case
+            cached_t = details.get("cache_read", 0) or details.get("cache_read_input_tokens", 0)
+    
+    st.session_state.token_usage["input_tokens"] += in_t
+    st.session_state.token_usage["output_tokens"] += out_t
+    st.session_state.token_usage["total_tokens"] += total_t
+    st.session_state.token_usage["cached_tokens"] += cached_t
+    
+    # Calculate Cost based on Model
+    rates = PRICING.get(model_name, PRICING["gemini-2.5-flash"]) # Default to 2.5 rates if unknown
+    
+    cost_input = (in_t / 1_000_000) * rates["input"]
+    cost_output = (out_t / 1_000_000) * rates["output"]
+    
+    st.session_state.token_usage["total_cost"] += (cost_input + cost_output)
+    
+    # Persist to DB
+    if st.session_state.current_session:
+        session_manager.update_session_stats(
+            st.session_state.current_session,
+            st.session_state.token_usage["input_tokens"],
+            st.session_state.token_usage["output_tokens"],
+            st.session_state.token_usage["cached_tokens"],
+            st.session_state.token_usage["total_cost"]
+        )
+
 # Initialize Manager
 session_manager = SessionManager(base_dir=os.path.join(os.path.dirname(__file__), 'workspace'), 
                                db_path=os.path.join(os.path.dirname(__file__), 'state.db'))
@@ -69,11 +137,24 @@ def render_home():
         st.subheader("🚀 Start New Session")
         with st.form("new_session_home"):
             tag = st.text_input("Session Name (Required)", placeholder="e.g., LFSR_Design")
+            
+            # Model Selection at Creation
+            model = st.selectbox(
+                "Select Model", 
+                ["gemini-2.5-flash", "gemini-3-pro-preview"],
+                index=0,
+                help="Choose the model for this entire session."
+            )
+            
             if st.form_submit_button("Create & Start", type="primary", use_container_width=True):
                 if tag:
                     try:
-                        new_session = session_manager.create_session(tag=tag)
+                        new_session = session_manager.create_session(tag=tag, model_name=model)
                         st.session_state.current_session = new_session
+                        # Reset token session state for new session
+                        st.session_state.token_usage = {
+                             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cached_tokens": 0, "total_cost": 0.0
+                        }
                         st.rerun()
                     except ValueError as e:
                         st.error(str(e))
@@ -134,8 +215,13 @@ def render_tree_view(tree, current_path=""):
         # Create a unique key for the expander
         with st.sidebar.expander(f"📁 {d}", expanded=False):
             render_tree_view(sub_tree, os.path.join(current_path, d))
+            
+    # --- Export Section (Bottom of Sidebar if possible, or just append) ---
+        with st.sidebar.expander(f"📁 {d}", expanded=False):
+            render_tree_view(sub_tree, os.path.join(current_path, d))
 
 from src.utils.visualizers import render_waveform, render_gds
+from src.utils.reporter import generate_markdown_report
 
 def render_workspace():
     # --- Main Layout ---
@@ -146,7 +232,62 @@ def render_workspace():
             st.session_state.current_session = None
             st.rerun()
     with top_col2:
-        st.caption(f"Session: `{st.session_state.current_session}`")
+        # Metrics Display
+        metrics = st.session_state.token_usage
+        cost_str = f"${metrics['total_cost']:.4f}"
+        
+        # Determine Color for Cost (Visual Indicator)
+        cost_color = "green"
+        if metrics['total_cost'] > 0.1: cost_color = "orange"
+        if metrics['total_cost'] > 1.0: cost_color = "red"
+        
+        # Tooltip for details
+        tooltip = f"""
+        Model: {st.session_state.selected_model}
+        Input: {metrics['input_tokens']:,}
+        Output: {metrics['output_tokens']:,}
+        Cached: {metrics.get('cached_tokens', 0):,}
+        """
+        
+        c1, c2, c3, c4, c5 = st.columns([0.35, 0.2, 0.15, 0.15, 0.15])
+        c1.caption(f"Session: `{st.session_state.current_session}`")
+        
+        # Load Model from Metadata (Locked)
+        locked_model = "gemini-2.5-flash" # Default
+        meta = session_manager.get_session_metadata(st.session_state.current_session)
+        if meta and meta.get("model_name"):
+            locked_model = meta["model_name"]
+            st.session_state.selected_model = locked_model # Sync state
+            
+            # Sync starting tokens if local is empty but DB has data (Resume scenario)
+            if st.session_state.token_usage["total_tokens"] == 0 and meta["total_tokens"] > 0:
+                 st.session_state.token_usage["input_tokens"] = meta["input_tokens"]
+                 st.session_state.token_usage["output_tokens"] = meta["output_tokens"]
+                 st.session_state.token_usage["cached_tokens"] = meta["cached_tokens"]
+                 st.session_state.token_usage["total_tokens"] = meta["total_tokens"]
+                 st.session_state.token_usage["total_cost"] = meta["total_cost"]
+        
+        # Display Locked Model
+        with c2:
+            st.markdown(f"**🤖 {locked_model}**", help="Model is locked for this session.")
+            
+        # Display Totals
+        c3.markdown(f"**🎫 {metrics['total_tokens'] // 1000}k**", help=tooltip)
+        c4.markdown(f":{cost_color}[**{cost_str}**]")
+        
+        # Expert Button
+        with c5:
+             if st.session_state.current_session and DB_PATH:
+                 # Generate on fly (lightweight)
+                 report = generate_markdown_report(st.session_state.current_session, DB_PATH, locked_model)
+                 st.download_button(
+                     label="📥",
+                     data=report,
+                     file_name=f"{st.session_state.current_session}.md",
+                     mime="text/markdown",
+                     help="Download Session Report",
+                     key="top_dl_btn"
+                 )
 
     col1, col2 = st.columns([1.2, 0.8])
 
@@ -263,7 +404,9 @@ def render_workspace():
         # Initialize Agent
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         memory = SqliteSaver(conn)
-        agent_graph = create_architect_agent(checkpointer=memory)
+        # Pass Dynamic Model
+        model_to_use = st.session_state.get("selected_model", "gemini-2.5-flash")
+        agent_graph = create_architect_agent(checkpointer=memory, model_name=model_to_use)
         config = {"configurable": {"thread_id": st.session_state.current_session}}
         
         current_state = agent_graph.get_state(config)
@@ -381,7 +524,11 @@ def render_workspace():
                             if clean_text:
                                 full_response = clean_text
                                 response_placeholder.markdown(full_response)
-                                
+                            
+                            # Track Tokens (Agent)
+                            if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                                update_token_usage(msg.usage_metadata, st.session_state.selected_model, msg.id)
+
                             if hasattr(msg, "tool_calls") and msg.tool_calls:
                                 for tool_call in msg.tool_calls:
                                     # Extract key info for the header
