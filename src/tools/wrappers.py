@@ -217,6 +217,194 @@ def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> st
         return f"Error: {result['message']}"
 
 from src.tools.generate_schematic import generate_schematic
+from src.tools.design_report import generate_design_report, save_design_report, save_metrics
+from src.tools.spec_manager import (
+    DesignSpec, PortSpec, parse_yaml_spec, validate_spec, 
+    spec_to_prompt, save_yaml_file, load_yaml_file, create_spec_from_dict
+)
+
+@tool
+def write_spec(
+    module_name: str,
+    description: str,
+    ports: list[dict],
+    clock_period_ns: float = 10.0,
+    tech_node: str = "SkyWater 130HD",
+    parameters: dict = None,
+    module_signature: str = "",
+    behavioral_description: str = ""
+) -> str:
+    """
+    Creates a YAML design specification file. Call this FIRST before writing any RTL.
+    The spec defines the module interface and requirements that the RTL must follow.
+    
+    Args:
+        module_name: Name of the Verilog module (e.g., 'counter_8bit')
+        description: What the module does (e.g., '8-bit synchronous counter with enable')
+        ports: List of port definitions, each with keys: name, direction ('input'/'output'), 
+               optional: type ('logic'), width (int), description (str)
+               Example: [{"name": "clk", "direction": "input"}, 
+                        {"name": "count", "direction": "output", "width": 8}]
+        clock_period_ns: Target clock period in nanoseconds (default: 10.0)
+        tech_node: Target technology node (default: 'SkyWater 130HD')
+        parameters: Optional dict of Verilog parameters (e.g., {"WIDTH": 8, "DEPTH": 16})
+        module_signature: Optional exact Verilog module signature to enforce
+        behavioral_description: Optional detailed behavioral requirements
+        
+    Returns:
+        Confirmation message with the spec filename
+    """
+    workspace = get_workspace_path()
+    if not os.path.exists(workspace):
+        os.makedirs(workspace)
+    
+    # Create DesignSpec from arguments
+    spec = create_spec_from_dict({
+        "module_name": module_name,
+        "description": description,
+        "ports": ports,
+        "clock_period_ns": clock_period_ns,
+        "tech_node": tech_node,
+        "parameters": parameters or {},
+        "module_signature": module_signature,
+        "behavioral_description": behavioral_description
+    })
+    
+    # Validate
+    validation = validate_spec(spec)
+    if not validation["valid"]:
+        return f"Spec validation failed:\n" + "\n".join(validation["errors"])
+    
+    # Generate module signature if not provided
+    if not spec.module_signature:
+        spec.module_signature = spec.generate_module_signature()
+    
+    # Save to file
+    spec_filename = f"{module_name}_spec.yaml"
+    spec_filepath = os.path.join(workspace, spec_filename)
+    save_yaml_file(spec, spec_filepath)
+    
+    # Also generate SDC
+    sdc_content = spec.generate_sdc()
+    sdc_filepath = os.path.join(workspace, "constraints.sdc")
+    with open(sdc_filepath, "w") as f:
+        f.write(sdc_content)
+    
+    warnings_str = ""
+    if validation["warnings"]:
+        warnings_str = "\nWarnings:\n" + "\n".join(f"  - {w}" for w in validation["warnings"])
+    
+    return f"""Spec created successfully! ✅
+
+**File**: {spec_filename}
+**Module**: {module_name}
+**Clock Period**: {clock_period_ns}ns
+**Ports**: {len(ports)}
+**SDC Generated**: constraints.sdc
+{warnings_str}
+
+The user can now review the spec in the **Spec tab**. 
+Once confirmed, proceed to write the RTL following this specification exactly."""
+
+
+@tool
+def read_spec(spec_filename: str = None) -> str:
+    """
+    Reads a design specification from a YAML file.
+    Use this to understand requirements before writing RTL.
+    
+    Args:
+        spec_filename: Name of the spec file (e.g., 'counter_spec.yaml'). 
+                      If not provided, reads the most recent *_spec.yaml file.
+    
+    Returns:
+        The spec contents formatted for RTL implementation
+    """
+    workspace = get_workspace_path()
+    
+    if spec_filename:
+        spec_path = os.path.join(workspace, spec_filename)
+    else:
+        # Find most recent spec file
+        spec_files = [f for f in os.listdir(workspace) if f.endswith("_spec.yaml")]
+        if not spec_files:
+            return "Error: No spec files found in workspace. Create one first with write_spec."
+        spec_files.sort(key=lambda x: os.path.getmtime(os.path.join(workspace, x)), reverse=True)
+        spec_path = os.path.join(workspace, spec_files[0])
+        spec_filename = spec_files[0]
+    
+    if not os.path.exists(spec_path):
+        return f"Error: Spec file {spec_filename} not found."
+    
+    try:
+        spec = load_yaml_file(spec_path)
+        prompt = spec_to_prompt(spec)
+        
+        return f"""**Design Specification: {spec.module_name}**
+
+{prompt}
+
+---
+Use this specification to write the RTL. The module signature MUST match exactly."""
+    except Exception as e:
+        return f"Error parsing spec file: {str(e)}"
+
+
+@tool
+def load_yaml_spec_file(yaml_path: str) -> str:
+    """
+    Loads an external YAML specification file (e.g., from hackathon problems).
+    Copies it to workspace and returns the parsed spec.
+    
+    Args:
+        yaml_path: Path to the YAML file (relative to workspace or absolute)
+    
+    Returns:
+        Parsed specification ready for implementation
+    """
+    workspace = get_workspace_path()
+    
+    # Handle relative paths
+    if not os.path.isabs(yaml_path):
+        # Try workspace first
+        check_path = os.path.join(workspace, yaml_path)
+        if not os.path.exists(check_path):
+            # Try project root
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            check_path = os.path.join(project_root, yaml_path)
+        yaml_path = check_path
+    
+    if not os.path.exists(yaml_path):
+        return f"Error: YAML file not found at {yaml_path}"
+    
+    try:
+        spec = load_yaml_file(yaml_path)
+        
+        # Copy to workspace as the active spec
+        spec_filename = f"{spec.module_name}_spec.yaml"
+        spec_filepath = os.path.join(workspace, spec_filename)
+        save_yaml_file(spec, spec_filepath)
+        
+        # Generate SDC
+        sdc_content = spec.generate_sdc()
+        sdc_filepath = os.path.join(workspace, "constraints.sdc")
+        with open(sdc_filepath, "w") as f:
+            f.write(sdc_content)
+        
+        prompt = spec_to_prompt(spec)
+        
+        return f"""**Loaded External Spec: {spec.module_name}**
+
+{prompt}
+
+---
+Spec saved to: {spec_filename}
+SDC generated: constraints.sdc
+
+Proceed to implement the RTL following this specification."""
+    except Exception as e:
+        return f"Error loading YAML spec: {str(e)}"
+
 
 @tool
 def schematic_tool(verilog_file: str, top_module: str) -> str:
@@ -238,6 +426,88 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
         return f"Schematic generated successfully! 🎨\nSVG Path: {result['svg_path']}\n(The user can see this in the 'Schematic' tab)"
     else:
         return f"Failed to generate schematic: {result['error']}"
+
+@tool
+def save_metrics_tool(
+    area_um2: float = None,
+    cell_count: int = None,
+    wns_ns: float = None,
+    tns_ns: float = None,
+    power_uw: float = None
+) -> str:
+    """
+    Saves PPA metrics that you found (e.g., via search_logs_tool) for the design report.
+    Use this when ppa_tool fails but you found metrics manually through log searching.
+    
+    Args:
+        area_um2: Chip area in square micrometers (e.g., 142.5)
+        cell_count: Number of standard cells (e.g., 48)
+        wns_ns: Worst Negative Slack in nanoseconds (e.g., 0.85 or -0.12)
+        tns_ns: Total Negative Slack in nanoseconds (e.g., 0.0 or -1.5)
+        power_uw: Total power in microwatts (e.g., 12.34)
+        
+    Returns:
+        Confirmation of saved metrics
+    """
+    workspace = get_workspace_path()
+    
+    metrics = {}
+    if area_um2 is not None:
+        metrics["area_um2"] = area_um2
+    if cell_count is not None:
+        metrics["cell_count"] = cell_count
+    if wns_ns is not None:
+        metrics["wns_ns"] = wns_ns
+    if tns_ns is not None:
+        metrics["tns_ns"] = tns_ns
+    if power_uw is not None:
+        metrics["power_uw"] = power_uw
+    
+    if not metrics:
+        return "Error: No metrics provided. Please specify at least one metric."
+    
+    try:
+        save_metrics(workspace, metrics)
+        
+        saved_str = ", ".join([f"{k}={v}" for k, v in metrics.items()])
+        return f"""Metrics saved successfully! 📊
+
+**Saved**: {saved_str}
+
+These will be included in the design report when you call `generate_report_tool`."""
+    except Exception as e:
+        return f"Error saving metrics: {str(e)}"
+
+
+@tool
+def generate_report_tool() -> str:
+    """
+    Generates a comprehensive design report comparing the specification vs actual results.
+    Call this at the end of a design session to summarize verification and synthesis outcomes.
+    
+    Note: If ppa_tool failed but you found metrics via search_logs_tool, use save_metrics_tool 
+    first to persist those values, then call this.
+    
+    Returns:
+        The generated report content and the path where it was saved
+    """
+    workspace = get_workspace_path()
+    
+    if not os.path.exists(workspace):
+        return "Error: Workspace does not exist."
+    
+    try:
+        report_path = save_design_report(workspace)
+        report_content = generate_design_report(workspace)
+        
+        return f"""Design Report Generated! 📊
+
+**Saved to**: {os.path.basename(report_path)}
+
+{report_content}"""
+    except Exception as e:
+        return f"Error generating report: {str(e)}"
+
 
 @tool
 def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
@@ -310,17 +580,27 @@ def list_files_tool() -> str:
 
 # List of tools to bind to the agent
 architect_tools = [
+    # Specification tools (use FIRST)
+    write_spec,
+    read_spec,
+    load_yaml_spec_file,
+    # File management
     write_file,
     read_file,
     edit_file_tool,
+    list_files_tool,
+    # Verification tools
     linter_tool,
     simulation_tool,
-    synthesis_tool,
-    ppa_tool,
     waveform_tool,
-    schematic_tool,
-    search_logs_tool,
     cocotb_tool,
     sby_tool,
-    list_files_tool
+    # Synthesis & Analysis
+    synthesis_tool,
+    ppa_tool,
+    search_logs_tool,
+    schematic_tool,
+    # Reporting & Metrics
+    save_metrics_tool,
+    generate_report_tool,
 ]

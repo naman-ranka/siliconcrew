@@ -223,6 +223,7 @@ def render_tree_view(tree, current_path=""):
 
 from src.utils.visualizers import render_waveform, render_gds
 from src.utils.reporter import generate_markdown_report
+import yaml
 
 def render_workspace():
     # --- Main Layout ---
@@ -319,7 +320,82 @@ def render_workspace():
             st.subheader("Live Workspace")
             
             # Tabs for different views
-            tab_code, tab_wave, tab_layout, tab_schematic = st.tabs(["📝 Code", "📈 Waveform", "🗺️ Layout", "🔌 Schematic"])
+            tab_spec, tab_code, tab_wave, tab_layout, tab_schematic, tab_report = st.tabs(["📋 Spec", "📝 Code", "📈 Waveform", "🗺️ Layout", "🔌 Schematic", "📊 Report"])
+            
+            with tab_spec:
+                spec_placeholder = st.empty()
+                
+                def render_spec_content():
+                    with spec_placeholder.container():
+                        # Find and display spec files
+                        spec_files = []
+                        if os.path.exists(CURRENT_WORKSPACE):
+                            spec_files = sorted([f for f in os.listdir(CURRENT_WORKSPACE) if f.endswith("_spec.yaml")], 
+                                                key=lambda x: os.path.getmtime(os.path.join(CURRENT_WORKSPACE, x)), reverse=True)
+                        
+                        if spec_files:
+                            # Auto-select most recent spec
+                            selected_spec = spec_files[0]
+                            st.caption(f"📄 **{selected_spec}**")
+                            
+                            spec_path = os.path.join(CURRENT_WORKSPACE, selected_spec)
+                            try:
+                                with open(spec_path, "r") as f:
+                                    spec_content = f.read()
+                                
+                                # Parse for display
+                                spec_data = yaml.safe_load(spec_content)
+                                module_name = list(spec_data.keys())[0]
+                                spec_info = spec_data[module_name]
+                                
+                                # Display spec info nicely
+                                col_a, col_b = st.columns(2)
+                                with col_a:
+                                    st.metric("Module", module_name)
+                                    st.metric("Clock Period", spec_info.get("clock_period", "N/A"))
+                                with col_b:
+                                    st.metric("Tech Node", spec_info.get("tech_node", "N/A"))
+                                    st.metric("Ports", len(spec_info.get("ports", [])))
+                                
+                                st.divider()
+                                
+                                # Description
+                                st.markdown(f"**Description:** {spec_info.get('description', 'N/A')}")
+                                
+                                # Ports table
+                                if spec_info.get("ports"):
+                                    st.markdown("**Ports:**")
+                                    port_data = []
+                                    for p in spec_info["ports"]:
+                                        port_data.append({
+                                            "Name": p.get("name", ""),
+                                            "Direction": p.get("direction", ""),
+                                            "Type": p.get("type", "logic"),
+                                            "Width": p.get("width", 1),
+                                            "Description": p.get("description", "")
+                                        })
+                                    st.dataframe(port_data, use_container_width=True, hide_index=True)
+                                
+                                # Module signature
+                                if spec_info.get("module_signature"):
+                                    st.markdown("**Module Signature:**")
+                                    st.code(spec_info["module_signature"], language="verilog")
+                                
+                                # Parameters
+                                if spec_info.get("parameters"):
+                                    st.markdown("**Parameters:**")
+                                    st.json(spec_info["parameters"])
+                                
+                                # Raw YAML in expander
+                                with st.expander("📄 Raw YAML", expanded=False):
+                                    st.code(spec_content, language="yaml")
+                                    
+                            except Exception as e:
+                                st.error(f"Error reading spec: {e}")
+                        else:
+                            st.info("No specifications found. Ask the agent to design something, and a spec will be created here first.")
+                
+                render_spec_content()
             
             with tab_code:
                 file_viewer_placeholder = st.empty()
@@ -397,6 +473,57 @@ def render_workspace():
                         st.markdown(html, unsafe_allow_html=True)
                 else:
                     st.info("No Schematic found. Ask the agent to 'generate schematic' for your design.")
+            
+            with tab_report:
+                report_placeholder = st.empty()
+                
+                def render_report_content():
+                    with report_placeholder.container():
+                        # Search for report files
+                        report_files = []
+                        if os.path.exists(CURRENT_WORKSPACE):
+                            report_files = sorted([f for f in os.listdir(CURRENT_WORKSPACE) if f.endswith("_report.md")],
+                                                 key=lambda x: os.path.getmtime(os.path.join(CURRENT_WORKSPACE, x)), reverse=True)
+                        
+                        col_r1, col_r2 = st.columns([0.7, 0.3])
+                        
+                        with col_r2:
+                            if st.button("🔄 Generate Report", use_container_width=True, key="gen_report_btn"):
+                                try:
+                                    from src.tools.design_report import save_design_report
+                                    report_path = save_design_report(CURRENT_WORKSPACE)
+                                    st.success(f"Report generated!")
+                                    # Re-render this tab
+                                    render_report_content()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                        
+                        if report_files:
+                            with col_r1:
+                                st.caption(f"📊 **{report_files[0]}**")
+                            
+                            # Show most recent report
+                            report_path = os.path.join(CURRENT_WORKSPACE, report_files[0])
+                            try:
+                                with open(report_path, "r", encoding="utf-8") as f:
+                                    report_content = f.read()
+                                
+                                st.markdown(report_content)
+                                
+                                # Download button
+                                st.download_button(
+                                    label="📥 Download Report",
+                                    data=report_content,
+                                    file_name=report_files[0],
+                                    mime="text/markdown",
+                                    key="download_report_btn"
+                                )
+                            except Exception as e:
+                                st.error(f"Error reading report: {e}")
+                        else:
+                            st.info("No reports generated yet. Click 'Generate Report' or ask the agent to generate one.")
+                
+                render_report_content()
 
     # Column 1: Chat Interface
     with col1:
@@ -581,9 +708,17 @@ def render_workspace():
                                 with st.expander(f"{icon} Output {duration_str}", expanded=False):
                                     st.code(content)
                                     
-                            # Side Effects (Refresh UI)
+                            # Side Effects (Refresh UI components)
                             if "Successfully wrote" in content:
-                                render_files() # Update tabs
+                                render_files() # Update code tabs
+                            
+                            # Update Spec tab when spec is created
+                            if any(x in content for x in ["Spec created successfully", "_spec.yaml"]):
+                                render_spec_content()
+                            
+                            # Update Report tab when report is generated
+                            if any(x in content for x in ["Design Report Generated", "_report.md"]):
+                                render_report_content()
                                 
                     status_container.update(label=f"Finished! (Total: {total_time:.1f}s)", state="complete", expanded=False)
                                 

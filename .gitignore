@@ -160,3 +160,7 @@ workspace/*
 *.db-shm
 state.db-shm
 state.db-wal
+*.zip
+
+# Hackathon reference repo
+ASU-Spec2Tapeout-ICLAD25-Hackathon/
