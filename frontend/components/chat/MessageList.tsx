@@ -8,9 +8,21 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToolCallCard } from "./ToolCallCard";
 import { cn } from "@/lib/utils";
 import type { Message, ToolResult } from "@/types";
+
+function formatTimestamp(timestamp?: string): string {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 function MessageContent({ message }: { message: Message }) {
   const { setArtifactTab } = useStore();
@@ -228,37 +240,48 @@ export function MessageList() {
 
   return (
     <ScrollArea ref={scrollRef} className="flex-1">
-      <div className="max-w-4xl mx-auto py-4">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={cn(
-              "flex gap-4 p-4",
-              message.role === "user" ? "bg-muted/30" : ""
-            )}
-          >
+      <TooltipProvider>
+        <div className="max-w-4xl mx-auto py-4">
+          {messages.map((message) => (
             <div
+              key={message.id}
               className={cn(
-                "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center",
-                message.role === "user"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-primary/10"
+                "flex gap-4 p-4 group",
+                message.role === "user" ? "bg-muted/30" : ""
               )}
             >
-              {message.role === "user" ? (
-                <User className="h-5 w-5" />
-              ) : (
-                <Bot className="h-5 w-5 text-primary" />
-              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div
+                    className={cn(
+                      "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center cursor-default",
+                      message.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-primary/10"
+                    )}
+                  >
+                    {message.role === "user" ? (
+                      <User className="h-5 w-5" />
+                    ) : (
+                      <Bot className="h-5 w-5 text-primary" />
+                    )}
+                  </div>
+                </TooltipTrigger>
+                {message.timestamp && (
+                  <TooltipContent side="right">
+                    <p className="text-xs">{formatTimestamp(message.timestamp)}</p>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+              <div className="flex-1 min-w-0">
+                <MessageContent message={message} />
+              </div>
             </div>
-            <div className="flex-1 min-w-0">
-              <MessageContent message={message} />
-            </div>
-          </div>
-        ))}
+          ))}
 
-        <StreamingMessage />
-      </div>
+          <StreamingMessage />
+        </div>
+      </TooltipProvider>
     </ScrollArea>
   );
 }

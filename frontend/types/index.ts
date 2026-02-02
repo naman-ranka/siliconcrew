@@ -73,4 +73,4 @@ export type WSMessageType =
   | { type: "error"; error: string };
 
 // UI State types
-export type ArtifactTab = "spec" | "code" | "waveform" | "layout" | "report";
+export type ArtifactTab = "spec" | "code" | "waveform" | "schematic" | "layout" | "report";
