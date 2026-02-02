@@ -7,6 +7,9 @@ langgraph-checkpoint-sqlite
 langchain-experimental>=0.3.3
 streamlit>=1.40.1
 gradio>=4.0.0
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+websockets>=12.0
 watchdog
 pyyaml
 python-dotenv
