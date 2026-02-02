@@ -1,7 +1,6 @@
 import os
 import shutil
 import datetime
-import streamlit as st
 
 class SessionManager:
     def __init__(self, base_dir="workspace", db_path="state.db"):
@@ -152,7 +151,7 @@ class SessionManager:
             try:
                 os.remove(self.db_path)
             except PermissionError:
-                st.error("Could not delete database file. It might be in use.")
+                print("Could not delete database file. It might be in use.")
                 
     def get_workspace_path(self, session_id):
         return os.path.join(self.base_dir, session_id)

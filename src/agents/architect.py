@@ -530,10 +530,30 @@ def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL):
     Returns:
         Compiled LangGraph agent
     """
-    llm = ChatGoogleGenerativeAI(
-        model=model_name, 
-        google_api_key=os.environ.get("GOOGLE_API_KEY")
-    )
+    # Gemini 3 models require special configuration for proper tool calling
+    # See: https://python.langchain.com/docs/integrations/chat/google_generative_ai
+    is_gemini_3 = "gemini-3" in model_name.lower()
+    
+    llm_kwargs = {
+        "model": model_name,
+        "google_api_key": os.environ.get("GOOGLE_API_KEY"),
+    }
+    
+    if is_gemini_3:
+        # WARNING: Gemini 3 has known issues with create_react_agent + many tools
+        # See: https://github.com/langchain-ai/langgraph/issues/6133
+        # The model returns empty responses. Use gemini-2.5-flash until LangChain fixes this.
+        import warnings
+        warnings.warn(
+            f"⚠️ {model_name} has known issues with LangChain's create_react_agent. "
+            "You may experience empty responses. Consider using 'gemini-2.5-flash' instead.",
+            UserWarning
+        )
+        # Gemini 3 specific settings (may not fully work due to LangChain bugs):
+        llm_kwargs["temperature"] = 1.0
+        llm_kwargs["include_thoughts"] = True
+    
+    llm = ChatGoogleGenerativeAI(**llm_kwargs)
 
     agent_graph = create_react_agent(
         model=llm,

@@ -107,7 +107,7 @@ export CORE_MARGIN = {core_margin}
     # Simpler approach: Use -B to force execution.
     make_cmd = "make -B DESIGN_CONFIG=/workspace/config.mk"
     
-    print(f"🚀 Starting Synthesis for {top_module}...")
+    print(f"[SYNTH] Starting Synthesis for {top_module}...")
     result = run_docker_command(
         command=make_cmd,
         workspace_path=cwd,

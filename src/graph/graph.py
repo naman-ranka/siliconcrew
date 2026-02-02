@@ -15,14 +15,14 @@ def route_after_verifier(state: DesignState):
     Decides the next step after verification.
     """
     if state["functional_valid"]:
-        print("✅ Design Verified! Proceeding to Synthesis.")
+        print("[OK] Design Verified! Proceeding to Synthesis.")
         return "synthesis"
     
     if state["iteration_count"] >= state["max_iterations"]:
-        print("🛑 Max iterations reached. Stopping.")
+        print("[STOP] Max iterations reached. Stopping.")
         return END
         
-    print(f"🔄 Verification Failed. Iteration {state['iteration_count']}/{state['max_iterations']}. Routing back to Coder.")
+    print(f"[RETRY] Verification Failed. Iteration {state['iteration_count']}/{state['max_iterations']}. Routing back to Coder.")
     return "rtl_coder"
 
 def create_graph():

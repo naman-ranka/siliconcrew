@@ -6,7 +6,7 @@ def synthesis_node(state: DesignState) -> DesignState:
     """
     Node to run synthesis on the verified design.
     """
-    print("🔨 Synthesis Node: Running Synthesis...")
+    print("[SYNTH] Synthesis Node: Running Synthesis...")
     
     # Resolve paths
     base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
@@ -40,7 +40,7 @@ def synthesis_node(state: DesignState) -> DesignState:
     )
     
     if result["success"]:
-        print("✅ Synthesis Successful.")
+        print("[OK] Synthesis Successful.")
         return {"messages": ["Synthesis Successful."]}
     else:
         # Check if artifacts exist (partial success)
@@ -54,8 +54,8 @@ def synthesis_node(state: DesignState) -> DesignState:
         found = glob.glob(os.path.join(base_path, "orfs_results", "**", "*yosys.v"), recursive=True)
         
         if found:
-            print("⚠️ Synthesis Command Failed, but Netlist Found. Proceeding.")
+            print("[WARN] Synthesis Command Failed, but Netlist Found. Proceeding.")
             return {"messages": ["Synthesis Partial Success (Netlist found)."]}
         
-        print("❌ Synthesis Failed.")
+        print("[FAIL] Synthesis Failed.")
         return {"messages": [f"Synthesis Failed: {result['stderr']}"]}

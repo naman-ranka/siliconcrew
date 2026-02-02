@@ -7,7 +7,7 @@ managing design specifications in YAML format.
 
 import os
 import yaml
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
@@ -18,13 +18,19 @@ class PortSpec:
     name: str
     direction: str  # 'input' or 'output'
     type: str = "logic"
-    width: Optional[int] = None
+    width: Optional[Any] = None  # Can be int (e.g., 8) or str (e.g., "WIDTH-1:0") for parameterized
     description: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         d = {"name": self.name, "direction": self.direction, "type": self.type}
-        if self.width and self.width > 1:
-            d["width"] = self.width
+        # Handle both integer widths and parameterized string expressions
+        if self.width is not None:
+            if isinstance(self.width, int):
+                if self.width > 1:
+                    d["width"] = self.width
+            else:
+                # String expression like "WIDTH-1:0" - always include
+                d["width"] = self.width
         if self.description:
             d["description"] = self.description
         return d
@@ -91,7 +97,15 @@ class DesignSpec:
         # Build port list
         port_lines = []
         for p in self.ports:
-            width_str = f"[{p.width-1}:0] " if p.width and p.width > 1 else ""
+            # Handle both integer widths and string expressions
+            if p.width is not None:
+                if isinstance(p.width, int):
+                    width_str = f"[{p.width-1}:0] " if p.width > 1 else ""
+                else:
+                    # String expression - use as-is (e.g., "WIDTH-1:0" -> "[WIDTH-1:0]")
+                    width_str = f"[{p.width}] "
+            else:
+                width_str = ""
             port_lines.append(f"    {p.direction} {p.type} {width_str}{p.name}")
         
         ports_str = ",\n".join(port_lines)
@@ -250,7 +264,14 @@ def spec_to_prompt(spec: DesignSpec) -> str:
     # Ports
     prompt_parts.append("\n**Ports**:")
     for port in spec.ports:
-        width_str = f"[{port.width-1}:0]" if port.width and port.width > 1 else ""
+        # Handle both integer widths and string expressions
+        if port.width is not None:
+            if isinstance(port.width, int):
+                width_str = f"[{port.width-1}:0]" if port.width > 1 else ""
+            else:
+                width_str = f"[{port.width}]"
+        else:
+            width_str = ""
         desc_str = f" - {port.description}" if port.description else ""
         prompt_parts.append(f"  - `{port.direction} {port.type} {width_str} {port.name}`{desc_str}")
     

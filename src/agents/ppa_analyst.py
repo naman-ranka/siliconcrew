@@ -32,7 +32,7 @@ def ppa_analyst_node(state: DesignState) -> DesignState:
     """
     Agent node that extracts PPA metrics and analyzes them.
     """
-    print("📊 PPA Analyst: Extracting and Analyzing Metrics...")
+    print("[PPA] PPA Analyst: Extracting and Analyzing Metrics...")
     
     # 1. Extract Metrics using the Tool
     # We assume logs are in workspace/orfs_logs relative to the project root
@@ -67,7 +67,7 @@ def ppa_analyst_node(state: DesignState) -> DesignState:
     ])
     
     analysis = response.content
-    print(f"📊 Analysis:\n{analysis}")
+    print(f"[PPA] Analysis:\n{analysis}")
     
     # 4. Update State
     # We update ppa_metrics and append the analysis to messages

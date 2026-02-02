@@ -29,7 +29,7 @@ def verifier_node(state: DesignState) -> DesignState:
     """
     Agent node that generates testbenches and runs simulations.
     """
-    print("🕵️ Verifier: Generating testbench and running simulation...")
+    print("[VERIFY] Verifier: Generating testbench and running simulation...")
     
     # 1. Generate Testbench
     rtl_code = state['verilog_code']
@@ -93,8 +93,8 @@ def verifier_node(state: DesignState) -> DesignState:
         # Simulation failed or Test failed
         error_msg = f"Simulation Failed.\nStdout: {result['stdout']}\nStderr: {result['stderr']}"
         new_state["error_logs"] = [error_msg]
-        print("❌ Verification Failed.")
+        print("[FAIL] Verification Failed.")
     else:
-        print("✅ Verification Passed.")
+        print("[PASS] Verification Passed.")
         
     return new_state

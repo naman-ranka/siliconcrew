@@ -26,7 +26,7 @@ def rtl_coder_node(state: DesignState) -> DesignState:
     """
     Agent node that generates or fixes Verilog code.
     """
-    print("🤖 RTL Coder: Generating code...")
+    print("[RTL] RTL Coder: Generating code...")
     
     messages = [SystemMessage(content=SYSTEM_PROMPT)]
     

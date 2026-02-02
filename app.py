@@ -651,7 +651,10 @@ def render_workspace():
                     
                     events = agent_graph.stream({"messages": input_messages}, config)
                     
+                    event_count = 0
                     for event in events:
+                        event_count += 1
+                        
                         if "agent" in event:
                             msg = event["agent"]["messages"][-1]
                             
@@ -720,11 +723,20 @@ def render_workspace():
                             if any(x in content for x in ["Design Report Generated", "_report.md"]):
                                 render_report_content()
                                 
-                    status_container.update(label=f"Finished! (Total: {total_time:.1f}s)", state="complete", expanded=False)
+                    # Check if stream returned anything
+                    if event_count == 0:
+                        status_container.update(label="No response", state="error")
+                        st.warning(f"⚠️ No response from model `{model_to_use}`. This could mean:\n"
+                                   "- The model name is incorrect\n"
+                                   "- Your API key doesn't have access to this model\n"
+                                   "- Rate limit exceeded\n\n"
+                                   "Try switching to `gemini-2.5-flash` or check your API quota.")
+                    else:
+                        status_container.update(label=f"Finished! (Total: {total_time:.1f}s)", state="complete", expanded=False)
                                 
                 except Exception as e:
                     status_container.update(label="Error", state="error")
-                    st.error(f"❌ Error: {e}")
+                    st.error(f"❌ Error with model `{model_to_use}`: {e}")
                     
         conn.close()
 
