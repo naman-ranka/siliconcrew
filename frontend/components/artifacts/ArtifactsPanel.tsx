@@ -1,12 +1,13 @@
 "use client";
 
-import { X, Minimize2, FileText, Code, Activity, Layout, BarChart3 } from "lucide-react";
+import { X, Minimize2, FileText, Code, Activity, Layout, BarChart3, CircuitBoard } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SpecViewer } from "./SpecViewer";
 import { CodeViewer } from "./CodeViewer";
 import { WaveformViewer } from "./WaveformViewer";
+import { SchematicViewer } from "./SchematicViewer";
 import { ReportViewer } from "./ReportViewer";
 import type { ArtifactTab } from "@/types";
 
@@ -19,6 +20,7 @@ export function ArtifactsPanel() {
     spec,
     codeFiles,
     waveformFiles,
+    schematicFiles,
     report,
   } = useStore();
 
@@ -44,6 +46,12 @@ export function ArtifactsPanel() {
       label: "Wave",
       icon: <Activity className="h-4 w-4" />,
       badge: waveformFiles.length,
+    },
+    {
+      id: "schematic",
+      label: "Schem",
+      icon: <CircuitBoard className="h-4 w-4" />,
+      badge: schematicFiles.length,
     },
     {
       id: "layout",
@@ -107,6 +115,10 @@ export function ArtifactsPanel() {
 
         <TabsContent value="waveform" className="flex-1 m-0 data-[state=inactive]:hidden">
           <WaveformViewer />
+        </TabsContent>
+
+        <TabsContent value="schematic" className="flex-1 m-0 data-[state=inactive]:hidden">
+          <SchematicViewer />
         </TabsContent>
 
         <TabsContent value="layout" className="flex-1 m-0 data-[state=inactive]:hidden">

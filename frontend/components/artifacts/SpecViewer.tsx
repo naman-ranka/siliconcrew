@@ -51,9 +51,9 @@ export function SpecViewer() {
     );
   }
 
-  const parsed = spec.parsed;
+  const parsed = spec.parsed as Record<string, Record<string, unknown>> | null;
   const moduleName = parsed ? Object.keys(parsed)[0] : "unknown";
-  const moduleSpec = parsed ? parsed[moduleName] : null;
+  const moduleSpec = parsed ? (parsed[moduleName] as Record<string, unknown>) : null;
 
   return (
     <div className="flex flex-col h-full">
@@ -97,31 +97,31 @@ export function SpecViewer() {
             {/* Module header */}
             <div>
               <h2 className="text-lg font-semibold">{moduleName}</h2>
-              {moduleSpec.description && (
+              {"description" in moduleSpec && moduleSpec.description ? (
                 <p className="text-sm text-muted-foreground mt-1">
-                  {moduleSpec.description}
+                  {String(moduleSpec.description)}
                 </p>
-              )}
+              ) : null}
             </div>
 
             {/* Properties */}
             <div className="grid grid-cols-2 gap-4 text-sm">
-              {moduleSpec.clock_period && (
+              {"clock_period" in moduleSpec && moduleSpec.clock_period ? (
                 <div>
                   <p className="text-xs text-muted-foreground">Clock Period</p>
-                  <p className="font-medium">{moduleSpec.clock_period} ns</p>
+                  <p className="font-medium">{String(moduleSpec.clock_period)} ns</p>
                 </div>
-              )}
-              {moduleSpec.tech_node && (
+              ) : null}
+              {"tech_node" in moduleSpec && moduleSpec.tech_node ? (
                 <div>
                   <p className="text-xs text-muted-foreground">Tech Node</p>
-                  <p className="font-medium">{moduleSpec.tech_node}</p>
+                  <p className="font-medium">{String(moduleSpec.tech_node)}</p>
                 </div>
-              )}
+              ) : null}
             </div>
 
             {/* Ports table */}
-            {moduleSpec.ports && moduleSpec.ports.length > 0 && (
+            {"ports" in moduleSpec && Array.isArray(moduleSpec.ports) && moduleSpec.ports.length > 0 ? (
               <div>
                 <h3 className="text-sm font-medium mb-2">Ports</h3>
                 <div className="border rounded-lg overflow-hidden">
@@ -166,37 +166,37 @@ export function SpecViewer() {
                   </table>
                 </div>
               </div>
-            )}
+            ) : null}
 
             {/* Module signature */}
-            {moduleSpec.module_signature && (
+            {"module_signature" in moduleSpec && moduleSpec.module_signature ? (
               <div>
                 <h3 className="text-sm font-medium mb-2">Module Signature</h3>
                 <pre className="bg-muted p-3 rounded-lg text-xs overflow-x-auto">
-                  {moduleSpec.module_signature}
+                  {String(moduleSpec.module_signature)}
                 </pre>
               </div>
-            )}
+            ) : null}
 
             {/* Parameters */}
-            {moduleSpec.parameters && Object.keys(moduleSpec.parameters).length > 0 && (
+            {"parameters" in moduleSpec && moduleSpec.parameters && typeof moduleSpec.parameters === "object" && Object.keys(moduleSpec.parameters as object).length > 0 ? (
               <div>
                 <h3 className="text-sm font-medium mb-2">Parameters</h3>
                 <pre className="bg-muted p-3 rounded-lg text-xs overflow-x-auto">
                   {JSON.stringify(moduleSpec.parameters, null, 2)}
                 </pre>
               </div>
-            )}
+            ) : null}
 
             {/* Behavioral description */}
-            {moduleSpec.behavioral_description && (
+            {"behavioral_description" in moduleSpec && moduleSpec.behavioral_description ? (
               <div>
                 <h3 className="text-sm font-medium mb-2">Behavior</h3>
                 <p className="text-sm text-muted-foreground whitespace-pre-wrap">
-                  {moduleSpec.behavioral_description}
+                  {String(moduleSpec.behavioral_description)}
                 </p>
               </div>
-            )}
+            ) : null}
           </div>
         ) : (
           <pre className="p-4 text-xs font-mono whitespace-pre-wrap">
