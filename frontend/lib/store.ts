@@ -97,7 +97,13 @@ export const useStore = create<AppState>((set, get) => ({
     set({ sessionsLoading: true, sessionsError: null });
     try {
       const sessions = await sessionsApi.list();
-      set({ sessions, sessionsLoading: false });
+      // Sort sessions by created_at (latest first)
+      const sortedSessions = [...sessions].sort((a, b) => {
+        const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return dateB - dateA;
+      });
+      set({ sessions: sortedSessions, sessionsLoading: false });
     } catch (error) {
       set({
         sessionsError: error instanceof Error ? error.message : "Failed to load sessions",

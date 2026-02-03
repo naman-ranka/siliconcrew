@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { User, Bot, Loader2 } from "lucide-react";
+import { User, Bot, Loader2, Sparkles } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToolCallCard } from "./ToolCallCard";
 import { cn } from "@/lib/utils";
 import type { Message, ToolResult } from "@/types";
@@ -24,8 +24,23 @@ function formatTimestamp(timestamp?: string): string {
   });
 }
 
+function CopyButton({ text }: { text: string }) {
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text);
+  };
+
+  return (
+    <button
+      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-surface-2 hover:bg-surface-3 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground"
+      onClick={handleCopy}
+    >
+      Copy
+    </button>
+  );
+}
+
 function MessageContent({ message }: { message: Message }) {
-  const { setArtifactTab } = useStore();
+  const { setArtifactTab, toggleArtifacts } = useStore();
 
   // Find matching tool results
   const getToolResult = (toolCallId: string): ToolResult | undefined => {
@@ -36,7 +51,7 @@ function MessageContent({ message }: { message: Message }) {
     <div className="space-y-4">
       {/* Text content */}
       {message.content && (
-        <div className="prose prose-sm dark:prose-invert max-w-none">
+        <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-surface-2 prose-pre:border prose-pre:border-border">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
@@ -47,7 +62,7 @@ function MessageContent({ message }: { message: Message }) {
                 if (isInline) {
                   return (
                     <code
-                      className="bg-muted px-1.5 py-0.5 rounded text-sm"
+                      className="bg-surface-2 text-primary px-1.5 py-0.5 rounded text-sm font-mono"
                       {...props}
                     >
                       {children}
@@ -56,23 +71,24 @@ function MessageContent({ message }: { message: Message }) {
                 }
 
                 return (
-                  <div className="relative group">
+                  <div className="relative group rounded-lg overflow-hidden border border-border">
+                    <div className="flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-border">
+                      <span className="text-xs text-muted-foreground font-mono">{match[1]}</span>
+                      <CopyButton text={String(children)} />
+                    </div>
                     <SyntaxHighlighter
                       style={oneDark}
                       language={match[1]}
                       PreTag="div"
-                      className="rounded-lg !bg-zinc-900 text-sm"
+                      className="!bg-surface-1 !m-0 text-sm !rounded-t-none"
+                      customStyle={{
+                        margin: 0,
+                        padding: "1rem",
+                        background: "hsl(var(--surface-1))",
+                      }}
                     >
                       {String(children).replace(/\n$/, "")}
                     </SyntaxHighlighter>
-                    <button
-                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-muted/80 hover:bg-muted px-2 py-1 rounded text-xs"
-                      onClick={() => {
-                        navigator.clipboard.writeText(String(children));
-                      }}
-                    >
-                      Copy
-                    </button>
                   </div>
                 );
               },
@@ -82,8 +98,11 @@ function MessageContent({ message }: { message: Message }) {
                   const tab = href.replace("#artifact:", "");
                   return (
                     <button
-                      className="text-primary underline"
-                      onClick={() => setArtifactTab(tab as any)}
+                      className="text-primary hover:underline font-medium"
+                      onClick={() => {
+                        setArtifactTab(tab as any);
+                        toggleArtifacts();
+                      }}
                     >
                       {children}
                     </button>
@@ -94,11 +113,65 @@ function MessageContent({ message }: { message: Message }) {
                     href={href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-primary underline"
+                    className="text-primary hover:underline"
                   >
                     {children}
                   </a>
                 );
+              },
+              table({ children }) {
+                return (
+                  <div className="overflow-x-auto my-4 rounded-lg border border-border">
+                    <table className="min-w-full divide-y divide-border">{children}</table>
+                  </div>
+                );
+              },
+              thead({ children }) {
+                return <thead className="bg-surface-2">{children}</thead>;
+              },
+              th({ children }) {
+                return (
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">
+                    {children}
+                  </th>
+                );
+              },
+              td({ children }) {
+                return <td className="px-4 py-3 text-sm">{children}</td>;
+              },
+              ul({ children }) {
+                return <ul className="list-disc pl-6 space-y-1">{children}</ul>;
+              },
+              ol({ children }) {
+                return <ol className="list-decimal pl-6 space-y-1">{children}</ol>;
+              },
+              li({ children }) {
+                return <li className="text-foreground">{children}</li>;
+              },
+              blockquote({ children }) {
+                return (
+                  <blockquote className="border-l-4 border-primary pl-4 italic text-muted-foreground">
+                    {children}
+                  </blockquote>
+                );
+              },
+              h1({ children }) {
+                return <h1 className="text-xl font-semibold mt-6 mb-3">{children}</h1>;
+              },
+              h2({ children }) {
+                return <h2 className="text-lg font-semibold mt-5 mb-2">{children}</h2>;
+              },
+              h3({ children }) {
+                return <h3 className="text-base font-semibold mt-4 mb-2">{children}</h3>;
+              },
+              p({ children }) {
+                return <p className="my-3 leading-relaxed">{children}</p>;
+              },
+              strong({ children }) {
+                return <strong className="font-semibold text-foreground">{children}</strong>;
+              },
+              hr() {
+                return <hr className="my-6 border-border" />;
               },
             }}
           >
@@ -109,7 +182,7 @@ function MessageContent({ message }: { message: Message }) {
 
       {/* Tool calls */}
       {message.tool_calls && message.tool_calls.length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-2 mt-4">
           {message.tool_calls.map((toolCall, idx) => (
             <ToolCallCard
               key={toolCall.id || idx}
@@ -140,9 +213,9 @@ function StreamingMessage() {
   });
 
   return (
-    <div className="flex gap-4 p-4">
-      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-        <Bot className="h-5 w-5 text-primary" />
+    <div className="flex gap-4 px-4 py-6 animate-fade-in">
+      <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+        <Bot className="h-4 w-4 text-primary" />
       </div>
       <div className="flex-1 min-w-0 space-y-4">
         {/* Text content */}
@@ -171,12 +244,91 @@ function StreamingMessage() {
         )}
 
         {/* Loading indicator */}
-        {!streamingMessage.content && streamingMessage.tool_calls?.length === 0 && (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+        {!streamingMessage.content && (!streamingMessage.tool_calls || streamingMessage.tool_calls.length === 0) && (
+          <div className="flex items-center gap-3 text-muted-foreground">
+            <div className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-primary animate-pulse" style={{ animationDelay: "0ms" }} />
+              <span className="w-2 h-2 rounded-full bg-primary animate-pulse" style={{ animationDelay: "150ms" }} />
+              <span className="w-2 h-2 rounded-full bg-primary animate-pulse" style={{ animationDelay: "300ms" }} />
+            </div>
             <span className="text-sm">Thinking...</span>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function WelcomeScreen() {
+  const sendMessage = useStore((state) => state.sendMessage);
+
+  const suggestions = [
+    {
+      title: "Design an 8-bit counter",
+      description: "with async reset and enable",
+      prompt: "Design an 8-bit counter with asynchronous reset and enable signals",
+    },
+    {
+      title: "Create a FIFO buffer",
+      description: "16 entries deep, 8-bit width",
+      prompt: "Create a synchronous FIFO with 16 entries depth and 8-bit data width",
+    },
+    {
+      title: "Design a simple ALU",
+      description: "add, sub, and, or operations",
+      prompt: "Design a simple ALU that supports add, subtract, AND, and OR operations on 8-bit operands",
+    },
+    {
+      title: "Build an FSM controller",
+      description: "for a traffic light system",
+      prompt: "Design a finite state machine controller for a traffic light system with red, yellow, and green states",
+    },
+  ];
+
+  return (
+    <div className="flex-1 flex items-center justify-center px-4">
+      <div className="text-center max-w-2xl">
+        <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-6">
+          <Sparkles className="h-8 w-8 text-primary" />
+        </div>
+        <h2 className="text-2xl font-semibold mb-2">Welcome to SiliconCrew</h2>
+        <p className="text-muted-foreground mb-8 max-w-md mx-auto">
+          I can help you design digital hardware. Describe what you need, and I'll create
+          specifications, implement RTL, and verify your designs.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg mx-auto">
+          {suggestions.map((suggestion, idx) => (
+            <button
+              key={idx}
+              className="text-left p-4 rounded-lg bg-surface-1 hover:bg-surface-2 border border-border hover:border-primary/50 transition-all group"
+              onClick={() => sendMessage(suggestion.prompt)}
+            >
+              <p className="text-sm font-medium text-foreground group-hover:text-primary transition-colors">
+                {suggestion.title}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {suggestion.description}
+              </p>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NoSessionScreen() {
+  return (
+    <div className="flex-1 flex items-center justify-center px-4">
+      <div className="text-center max-w-md">
+        <div className="w-16 h-16 rounded-2xl bg-surface-2 flex items-center justify-center mx-auto mb-6">
+          <Bot className="h-8 w-8 text-muted-foreground" />
+        </div>
+        <h2 className="text-xl font-semibold mb-2">Select a Session</h2>
+        <p className="text-muted-foreground">
+          Choose an existing session from the sidebar or create a new one to start
+          designing hardware with AI assistance.
+        </p>
       </div>
     </div>
   );
@@ -189,99 +341,63 @@ export function MessageList() {
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const scrollElement = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
+      if (scrollElement) {
+        scrollElement.scrollTop = scrollElement.scrollHeight;
+      }
     }
   }, [messages, isStreaming]);
 
   if (!currentSession) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center max-w-md">
-          <Bot className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-          <h2 className="text-xl font-semibold mb-2">Welcome to SiliconCrew</h2>
-          <p className="text-muted-foreground">
-            Select a session from the sidebar or create a new one to start
-            designing hardware.
-          </p>
-        </div>
-      </div>
-    );
+    return <NoSessionScreen />;
   }
 
   if (messages.length === 0 && !isStreaming) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center max-w-lg">
-          <Bot className="h-12 w-12 mx-auto mb-4 text-primary" />
-          <h2 className="text-xl font-semibold mb-2">Start Designing</h2>
-          <p className="text-muted-foreground mb-6">
-            Ask me to design hardware modules. I'll create specifications,
-            implement RTL, and verify your designs.
-          </p>
-          <div className="flex flex-wrap gap-2 justify-center">
-            {[
-              "Design an 8-bit counter with async reset",
-              "Create a FIFO with depth 16",
-              "Design a simple ALU",
-            ].map((prompt) => (
-              <button
-                key={prompt}
-                className="text-sm bg-muted hover:bg-muted/80 px-3 py-2 rounded-lg transition-colors"
-                onClick={() => useStore.getState().sendMessage(prompt)}
-              >
-                {prompt}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
+    return <WelcomeScreen />;
   }
 
   return (
     <ScrollArea ref={scrollRef} className="flex-1">
-      <TooltipProvider>
-        <div className="max-w-4xl mx-auto py-4">
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={cn(
-                "flex gap-4 p-4 group",
-                message.role === "user" ? "bg-muted/30" : ""
+      <div className="max-w-3xl mx-auto py-6">
+        {messages.map((message) => (
+          <div
+            key={message.id}
+            className={cn(
+              "flex gap-4 px-4 py-6 group",
+              message.role === "user" ? "bg-surface-1/50" : ""
+            )}
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  className={cn(
+                    "flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center cursor-default",
+                    message.role === "user"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-primary/10"
+                  )}
+                >
+                  {message.role === "user" ? (
+                    <User className="h-4 w-4" />
+                  ) : (
+                    <Bot className="h-4 w-4 text-primary" />
+                  )}
+                </div>
+              </TooltipTrigger>
+              {message.timestamp && (
+                <TooltipContent side="right">
+                  <p className="text-xs">{formatTimestamp(message.timestamp)}</p>
+                </TooltipContent>
               )}
-            >
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div
-                    className={cn(
-                      "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center cursor-default",
-                      message.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-primary/10"
-                    )}
-                  >
-                    {message.role === "user" ? (
-                      <User className="h-5 w-5" />
-                    ) : (
-                      <Bot className="h-5 w-5 text-primary" />
-                    )}
-                  </div>
-                </TooltipTrigger>
-                {message.timestamp && (
-                  <TooltipContent side="right">
-                    <p className="text-xs">{formatTimestamp(message.timestamp)}</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-              <div className="flex-1 min-w-0">
-                <MessageContent message={message} />
-              </div>
+            </Tooltip>
+            <div className="flex-1 min-w-0">
+              <MessageContent message={message} />
             </div>
-          ))}
+          </div>
+        ))}
 
-          <StreamingMessage />
-        </div>
-      </TooltipProvider>
+        <StreamingMessage />
+      </div>
     </ScrollArea>
   );
 }
