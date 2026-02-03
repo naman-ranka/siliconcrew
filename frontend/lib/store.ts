@@ -349,6 +349,38 @@ export const useStore = create<AppState>((set, get) => ({
     const { currentSession } = get();
     if (!currentSession) return;
 
+    const parseModified = (modified?: string) => (modified ? new Date(modified).getTime() : 0);
+
+    const fileTypeToArtifactTab = (type: FileInfo["type"]): ArtifactTab | null => {
+      switch (type) {
+        case "spec":
+          return "spec";
+        case "verilog":
+          return "code";
+        case "waveform":
+          return "waveform";
+        case "schematic":
+          return "schematic";
+        case "report":
+          return "report";
+        default:
+          return null;
+      }
+    };
+
+    const getNewestArtifactFromFiles = (files: FileInfo[]) => {
+      let best: { tab: ArtifactTab; ts: number } | null = null;
+      for (const f of files) {
+        const tab = fileTypeToArtifactTab(f.type);
+        if (!tab) continue;
+        const ts = parseModified(f.modified);
+        if (!best || ts > best.ts) best = { tab, ts };
+      }
+      return best;
+    };
+
+    const prevNewestArtifact = getNewestArtifactFromFiles(get().files);
+
     // Capture previous state for comparison
     const prevSpec = get().spec;
     const prevCodeCount = get().codeFiles.length;
@@ -365,6 +397,8 @@ export const useStore = create<AppState>((set, get) => ({
       ]);
 
       set({ files, waveformFiles, layoutFiles, schematicFiles });
+
+      const newNewestArtifact = getNewestArtifactFromFiles(files);
 
       // Auto-load spec and code if they exist
       const hasSpec = files.some((f) => f.type === "spec");
@@ -386,23 +420,33 @@ export const useStore = create<AppState>((set, get) => ({
       const newState = get();
       let newTab: ArtifactTab | null = null;
 
-      // Detect what's new (priority: report > waveform > code > schematic > spec)
-      const specIsNew = hasSpec && newState.spec && !prevSpec;
-      const codeIsNew = newState.codeFiles.length > prevCodeCount;
-      const waveformIsNew = waveformFiles.length > prevWaveformCount;
-      const schematicIsNew = schematicFiles.length > prevSchematicCount;
-      const reportIsNew = hasReport && newState.report && !prevReport;
+      // Prefer switching to the most recently modified artifact type
+      const newestArtifactIsNewer =
+        newNewestArtifact &&
+        (!prevNewestArtifact || newNewestArtifact.ts > prevNewestArtifact.ts);
 
-      if (reportIsNew) {
-        newTab = "report";
-      } else if (waveformIsNew) {
-        newTab = "waveform";
-      } else if (codeIsNew) {
-        newTab = "code";
-      } else if (schematicIsNew) {
-        newTab = "schematic";
-      } else if (specIsNew) {
-        newTab = "spec";
+      if (newestArtifactIsNewer) {
+        newTab = newNewestArtifact!.tab;
+      } else {
+        // Fallback: detect "new" by presence/count deltas
+        // (priority: report > waveform > code > schematic > spec)
+        const specIsNew = hasSpec && newState.spec && !prevSpec;
+        const codeIsNew = newState.codeFiles.length > prevCodeCount;
+        const waveformIsNew = waveformFiles.length > prevWaveformCount;
+        const schematicIsNew = schematicFiles.length > prevSchematicCount;
+        const reportIsNew = hasReport && newState.report && !prevReport;
+
+        if (reportIsNew) {
+          newTab = "report";
+        } else if (waveformIsNew) {
+          newTab = "waveform";
+        } else if (codeIsNew) {
+          newTab = "code";
+        } else if (schematicIsNew) {
+          newTab = "schematic";
+        } else if (specIsNew) {
+          newTab = "spec";
+        }
       }
 
       // Show artifacts panel and switch tab if we have content

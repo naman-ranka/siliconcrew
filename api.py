@@ -8,7 +8,6 @@ Provides REST endpoints and WebSocket streaming for the Next.js frontend.
 import os
 import json
 import asyncio
-import sqlite3
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
@@ -20,7 +19,7 @@ import yaml
 
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from src.agents.architect import create_architect_agent, SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
@@ -263,58 +262,55 @@ async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        memory = SqliteSaver(conn)
+        async with AsyncSqliteSaver.from_conn_string(DB_PATH) as memory:
+            meta = session_manager.get_session_metadata(session_id)
+            model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
 
-        meta = session_manager.get_session_metadata(session_id)
-        model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
+            agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+            config = {"configurable": {"thread_id": session_id}}
 
-        agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
-        config = {"configurable": {"thread_id": session_id}}
+            current_state = await agent_graph.aget_state(config)
 
-        current_state = agent_graph.get_state(config)
-        conn.close()
+            if not current_state.values or "messages" not in current_state.values:
+                return []
 
-        if not current_state.values or "messages" not in current_state.values:
-            return []
+            messages = current_state.values["messages"]
+            history = []
 
-        messages = current_state.values["messages"]
-        history = []
-
-        for msg in messages:
-            if isinstance(msg, SystemMessage):
-                continue
-            elif isinstance(msg, HumanMessage):
-                history.append({
-                    "role": "user",
-                    "content": get_clean_content(msg)
-                })
-            elif isinstance(msg, AIMessage):
-                entry = {
-                    "role": "assistant",
-                    "content": get_clean_content(msg),
-                    "tool_calls": []
-                }
-
-                if hasattr(msg, "tool_calls") and msg.tool_calls:
-                    entry["tool_calls"] = [
-                        format_tool_call_for_api(tc) for tc in msg.tool_calls
-                    ]
-
-                history.append(entry)
-
-            elif hasattr(msg, "tool_call_id"):
-                # Tool result - attach to previous assistant message
-                result = format_tool_result_for_api(msg.content)
-                if history and history[-1]["role"] == "assistant":
-                    if "tool_results" not in history[-1]:
-                        history[-1]["tool_results"] = []
-                    history[-1]["tool_results"].append({
-                        "tool_call_id": msg.tool_call_id,
-                        **result
+            for msg in messages:
+                if isinstance(msg, SystemMessage):
+                    continue
+                elif isinstance(msg, HumanMessage):
+                    history.append({
+                        "role": "user",
+                        "content": get_clean_content(msg)
                     })
+                elif isinstance(msg, AIMessage):
+                    entry = {
+                        "role": "assistant",
+                        "content": get_clean_content(msg),
+                        "tool_calls": []
+                    }
 
-        return history
+                    if hasattr(msg, "tool_calls") and msg.tool_calls:
+                        entry["tool_calls"] = [
+                            format_tool_call_for_api(tc) for tc in msg.tool_calls
+                        ]
+
+                    history.append(entry)
+
+                elif hasattr(msg, "tool_call_id"):
+                    # Tool result - attach to previous assistant message
+                    result = format_tool_result_for_api(msg.content)
+                    if history and history[-1]["role"] == "assistant":
+                        if "tool_results" not in history[-1]:
+                            history[-1]["tool_results"] = []
+                        history[-1]["tool_results"].append({
+                            "tool_call_id": msg.tool_call_id,
+                            **result
+                        })
+
+            return history
 
     except Exception as e:
         print(f"[ERROR] Loading history: {e}")
@@ -346,117 +342,111 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             os.environ["RTL_WORKSPACE"] = workspace
             print(f"[CHAT] Session: {session_id} | Message: {message[:50]}...")
 
-            # Initialize agent
-            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-            memory = SqliteSaver(conn)
+            # Initialize agent with AsyncSqliteSaver (supports async streaming/state)
+            async with AsyncSqliteSaver.from_conn_string(DB_PATH) as memory:
+                meta = session_manager.get_session_metadata(session_id)
+                model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
 
-            meta = session_manager.get_session_metadata(session_id)
-            model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
+                agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+                config = {"configurable": {"thread_id": session_id}, "recursion_limit": 50}
 
-            agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
-            config = {"configurable": {"thread_id": session_id}, "recursion_limit": 50}
+                # Check for corrupted state
+                snapshot = await agent_graph.aget_state(config)
+                input_messages = []
 
-            # Check for corrupted state
-            snapshot = agent_graph.get_state(config)
-            input_messages = []
+                if snapshot.values and snapshot.values.get("messages"):
+                    messages = snapshot.values["messages"]
+                    pending_tool_ids = set()
 
-            if snapshot.values and snapshot.values.get("messages"):
-                messages = snapshot.values["messages"]
-                pending_tool_ids = set()
-
-                for msg in messages:
-                    if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
-                        for tc in msg.tool_calls:
-                            pending_tool_ids.add(tc.get("id"))
-                    elif hasattr(msg, "tool_call_id"):
-                        pending_tool_ids.discard(msg.tool_call_id)
-
-                # Fix corrupted state with fake responses
-                if pending_tool_ids:
-                    for tool_id in pending_tool_ids:
-                        fake_response = ToolMessage(
-                            content="[Tool execution was interrupted. Please retry the operation.]",
-                            tool_call_id=tool_id
-                        )
-                        input_messages.append(fake_response)
-
-            if not snapshot.values or not snapshot.values.get("messages"):
-                input_messages.append(SystemMessage(content=SYSTEM_PROMPT))
-            input_messages.append(("user", message))
-
-            # Stream using LangGraph's astream() - works with sync SqliteSaver
-            await websocket.send_json({"type": "start"})
-
-            total_input_tokens = 0
-            total_output_tokens = 0
-
-            try:
-                # Use astream() for streaming - compatible with sync checkpointers
-                async for event in agent_graph.astream(
-                    {"messages": input_messages},
-                    config,
-                    stream_mode="updates"
-                ):
-                    if "agent" in event:
-                        msg = event["agent"]["messages"][-1]
-
-                        # Send text content
-                        text = get_clean_content(msg)
-                        if text:
-                            await websocket.send_json({
-                                "type": "text",
-                                "content": text
-                            })
-
-                        # Track tokens
-                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
-                            total_input_tokens += msg.usage_metadata.get("input_tokens", 0)
-                            total_output_tokens += msg.usage_metadata.get("output_tokens", 0)
-
-                        # Send tool calls
-                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    for msg in messages:
+                        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
                             for tc in msg.tool_calls:
+                                pending_tool_ids.add(tc.get("id"))
+                        elif hasattr(msg, "tool_call_id"):
+                            pending_tool_ids.discard(msg.tool_call_id)
+
+                    # Fix corrupted state with fake responses
+                    if pending_tool_ids:
+                        for tool_id in pending_tool_ids:
+                            fake_response = ToolMessage(
+                                content="[Tool execution was interrupted. Please retry the operation.]",
+                                tool_call_id=tool_id
+                            )
+                            input_messages.append(fake_response)
+
+                if not snapshot.values or not snapshot.values.get("messages"):
+                    input_messages.append(SystemMessage(content=SYSTEM_PROMPT))
+                input_messages.append(("user", message))
+
+                # Stream using LangGraph's astream()
+                await websocket.send_json({"type": "start"})
+
+                total_input_tokens = 0
+                total_output_tokens = 0
+
+                try:
+                    async for event in agent_graph.astream(
+                        {"messages": input_messages},
+                        config,
+                        stream_mode="updates"
+                    ):
+                        if "agent" in event:
+                            msg = event["agent"]["messages"][-1]
+
+                            # Send text content
+                            text = get_clean_content(msg)
+                            if text:
                                 await websocket.send_json({
-                                    "type": "tool_call",
-                                    "tool": format_tool_call_for_api(tc)
+                                    "type": "text",
+                                    "content": text
                                 })
 
-                    elif "tools" in event:
-                        msg = event["tools"]["messages"][-1]
-                        result = format_tool_result_for_api(msg.content)
-                        await websocket.send_json({
-                            "type": "tool_result",
-                            "tool_call_id": msg.tool_call_id,
-                            **result
-                        })
+                            # Track tokens
+                            if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                                total_input_tokens += msg.usage_metadata.get("input_tokens", 0)
+                                total_output_tokens += msg.usage_metadata.get("output_tokens", 0)
 
-                # Update token usage
-                if total_input_tokens > 0 or total_output_tokens > 0:
-                    current_meta = session_manager.get_session_metadata(session_id)
-                    if current_meta:
-                        new_input = current_meta.get("input_tokens", 0) + total_input_tokens
-                        new_output = current_meta.get("output_tokens", 0) + total_output_tokens
-                        cached = current_meta.get("cached_tokens", 0)
-                        new_cost = calculate_cost(new_input, new_output, model_name)
-                        session_manager.update_session_stats(session_id, new_input, new_output, cached, new_cost)
+                            # Send tool calls
+                            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                for tc in msg.tool_calls:
+                                    await websocket.send_json({
+                                        "type": "tool_call",
+                                        "tool": format_tool_call_for_api(tc)
+                                    })
 
-                await websocket.send_json({
-                    "type": "done",
-                    "tokens": {
-                        "input": total_input_tokens,
-                        "output": total_output_tokens
-                    }
-                })
+                        elif "tools" in event:
+                            msg = event["tools"]["messages"][-1]
+                            result = format_tool_result_for_api(msg.content)
+                            await websocket.send_json({
+                                "type": "tool_result",
+                                "tool_call_id": msg.tool_call_id,
+                                **result
+                            })
 
-            except Exception as e:
-                print(f"[ERROR] Agent error: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "error": str(e)
-                })
+                    # Update token usage
+                    if total_input_tokens > 0 or total_output_tokens > 0:
+                        current_meta = session_manager.get_session_metadata(session_id)
+                        if current_meta:
+                            new_input = current_meta.get("input_tokens", 0) + total_input_tokens
+                            new_output = current_meta.get("output_tokens", 0) + total_output_tokens
+                            cached = current_meta.get("cached_tokens", 0)
+                            new_cost = calculate_cost(new_input, new_output, model_name)
+                            session_manager.update_session_stats(session_id, new_input, new_output, cached, new_cost)
 
-            finally:
-                conn.close()
+                    await websocket.send_json({
+                        "type": "done",
+                        "tokens": {
+                            "input": total_input_tokens,
+                            "output": total_output_tokens
+                        }
+                    })
+
+                except Exception as e:
+                    print(f"[ERROR] Agent error: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": str(e)
+                    })
 
     except WebSocketDisconnect:
         print(f"[CHAT] WebSocket disconnected: {session_id}")
