@@ -391,14 +391,42 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             total_output_tokens = 0
 
             try:
-                # Run agent in thread to not block
+                # Use a queue to stream events from the agent thread to the async WebSocket
+                import queue
+                event_queue = queue.Queue()
+                agent_error = [None]  # Use list to allow mutation in thread
+
                 def run_agent():
-                    return list(agent_graph.stream({"messages": input_messages}, config))
+                    try:
+                        for event in agent_graph.stream({"messages": input_messages}, config):
+                            event_queue.put(event)
+                        event_queue.put(None)  # Signal completion
+                    except Exception as e:
+                        agent_error[0] = e
+                        event_queue.put(None)
 
-                loop = asyncio.get_event_loop()
-                events = await loop.run_in_executor(None, run_agent)
+                # Start the agent in a background thread
+                import threading
+                agent_thread = threading.Thread(target=run_agent, daemon=True)
+                agent_thread.start()
 
-                for event in events:
+                # Process events as they arrive
+                while True:
+                    try:
+                        # Use a small timeout to allow checking for WebSocket closure
+                        event = await asyncio.get_event_loop().run_in_executor(
+                            None, lambda: event_queue.get(timeout=0.1)
+                        )
+                    except:
+                        # Queue.get timeout - check if thread is still alive
+                        if not agent_thread.is_alive():
+                            break
+                        continue
+
+                    if event is None:
+                        # Agent finished
+                        break
+
                     if "agent" in event:
                         msg = event["agent"]["messages"][-1]
 
@@ -431,6 +459,10 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             "tool_call_id": msg.tool_call_id,
                             **result
                         })
+
+                # Check for errors from agent thread
+                if agent_error[0]:
+                    raise agent_error[0]
 
                 # Update token usage
                 if total_input_tokens > 0 or total_output_tokens > 0:
