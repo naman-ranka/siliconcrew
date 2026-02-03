@@ -244,7 +244,15 @@ export const useStore = create<AppState>((set, get) => ({
       if (!msg) return;
 
       switch (data.type) {
+        case "text_delta":
+          // Token-level streaming - update content incrementally
+          set({
+            streamingMessage: { ...msg, content: data.content },
+          });
+          break;
+
         case "text":
+          // Full text update (fallback or final state)
           set({
             streamingMessage: { ...msg, content: data.content },
           });
