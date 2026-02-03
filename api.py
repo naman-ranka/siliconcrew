@@ -384,103 +384,51 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 input_messages.append(SystemMessage(content=SYSTEM_PROMPT))
             input_messages.append(("user", message))
 
-            # Stream events using modern LangGraph astream_events API
-            # This provides token-level streaming for real-time UI updates
+            # Stream using LangGraph's astream() - works with sync SqliteSaver
             await websocket.send_json({"type": "start"})
 
             total_input_tokens = 0
             total_output_tokens = 0
-            current_text = ""
-            current_tool_calls = []
 
             try:
-                # Use astream_events for granular token-level streaming
-                async for event in agent_graph.astream_events(
+                # Use astream() for streaming - compatible with sync checkpointers
+                async for event in agent_graph.astream(
                     {"messages": input_messages},
                     config,
-                    version="v2"
+                    stream_mode="updates"
                 ):
-                    event_type = event.get("event")
+                    if "agent" in event:
+                        msg = event["agent"]["messages"][-1]
 
-                    # Token-level streaming from LLM
-                    if event_type == "on_chat_model_stream":
-                        chunk = event.get("data", {}).get("chunk")
-                        if chunk and hasattr(chunk, "content"):
-                            content = chunk.content
-                            if isinstance(content, str) and content:
-                                current_text += content
-                                # Send incremental text update (token by token)
-                                await websocket.send_json({
-                                    "type": "text_delta",
-                                    "delta": content,
-                                    "content": current_text
-                                })
-
-                    # Tool call started
-                    elif event_type == "on_tool_start":
-                        tool_input = event.get("data", {}).get("input", {})
-                        tool_name = event.get("name", "unknown")
-                        run_id = event.get("run_id", "")
-
-                        tool_call = {
-                            "id": run_id,
-                            "name": tool_name,
-                            "args": tool_input
-                        }
-                        current_tool_calls.append(tool_call)
-
-                        await websocket.send_json({
-                            "type": "tool_call",
-                            "tool": tool_call
-                        })
-
-                    # Tool call completed
-                    elif event_type == "on_tool_end":
-                        output = event.get("data", {}).get("output", "")
-                        run_id = event.get("run_id", "")
-
-                        # Format tool result
-                        content = str(output) if output else ""
-                        status = "success"
-                        if "Error" in content or "FAILED" in content:
-                            status = "error"
-
-                        await websocket.send_json({
-                            "type": "tool_result",
-                            "tool_call_id": run_id,
-                            "status": status,
-                            "content": content[:5000] if len(content) > 5000 else content
-                        })
-
-                    # Track token usage from LLM responses
-                    elif event_type == "on_chat_model_end":
-                        output = event.get("data", {}).get("output")
-                        if output and hasattr(output, "usage_metadata"):
-                            usage = output.usage_metadata
-                            if usage:
-                                total_input_tokens += usage.get("input_tokens", 0)
-                                total_output_tokens += usage.get("output_tokens", 0)
-
-                        # Check for tool calls in the final response
-                        if output and hasattr(output, "tool_calls") and output.tool_calls:
-                            for tc in output.tool_calls:
-                                tool_call = format_tool_call_for_api(tc)
-                                # Only send if not already sent via on_tool_start
-                                if not any(t["id"] == tool_call["id"] for t in current_tool_calls):
-                                    current_tool_calls.append(tool_call)
-                                    await websocket.send_json({
-                                        "type": "tool_call",
-                                        "tool": tool_call
-                                    })
-
-                        # Reset text accumulator for next turn
-                        if current_text:
-                            # Send final text state
+                        # Send text content
+                        text = get_clean_content(msg)
+                        if text:
                             await websocket.send_json({
                                 "type": "text",
-                                "content": current_text
+                                "content": text
                             })
-                            current_text = ""
+
+                        # Track tokens
+                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                            total_input_tokens += msg.usage_metadata.get("input_tokens", 0)
+                            total_output_tokens += msg.usage_metadata.get("output_tokens", 0)
+
+                        # Send tool calls
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            for tc in msg.tool_calls:
+                                await websocket.send_json({
+                                    "type": "tool_call",
+                                    "tool": format_tool_call_for_api(tc)
+                                })
+
+                    elif "tools" in event:
+                        msg = event["tools"]["messages"][-1]
+                        result = format_tool_result_for_api(msg.content)
+                        await websocket.send_json({
+                            "type": "tool_result",
+                            "tool_call_id": msg.tool_call_id,
+                            **result
+                        })
 
                 # Update token usage
                 if total_input_tokens > 0 or total_output_tokens > 0:

@@ -245,14 +245,8 @@ export const useStore = create<AppState>((set, get) => ({
 
       switch (data.type) {
         case "text_delta":
-          // Token-level streaming - update content incrementally
-          set({
-            streamingMessage: { ...msg, content: data.content },
-          });
-          break;
-
         case "text":
-          // Full text update (fallback or final state)
+          // Text streaming - update content
           set({
             streamingMessage: { ...msg, content: data.content },
           });
@@ -279,6 +273,11 @@ export const useStore = create<AppState>((set, get) => ({
               tool_results: [...(msg.tool_results || []), result],
             },
           });
+          // Refresh workspace when file-writing tools complete to show artifacts immediately
+          const toolCall = msg.tool_calls?.find((tc) => tc.id === data.tool_call_id);
+          if (toolCall && ["write_spec", "write_file", "edit_file_tool", "generate_report_tool"].includes(toolCall.name)) {
+            get().refreshWorkspace();
+          }
           break;
 
         case "done":
@@ -290,7 +289,7 @@ export const useStore = create<AppState>((set, get) => ({
               streamingMessage: null,
             });
           }
-          // Refresh workspace after completion
+          // Final workspace refresh after completion
           get().refreshWorkspace();
           break;
 
@@ -347,8 +346,15 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Workspace actions
   refreshWorkspace: async () => {
-    const { currentSession, spec: prevSpec, codeFiles: prevCodeFiles, waveformFiles: prevWaveforms, schematicFiles: prevSchematics, report: prevReport } = get();
+    const { currentSession } = get();
     if (!currentSession) return;
+
+    // Capture previous state for comparison
+    const prevSpec = get().spec;
+    const prevCodeCount = get().codeFiles.length;
+    const prevWaveformCount = get().waveformFiles.length;
+    const prevSchematicCount = get().schematicFiles.length;
+    const prevReport = get().report;
 
     try {
       const [files, waveformFiles, layoutFiles, schematicFiles] = await Promise.all([
@@ -365,6 +371,7 @@ export const useStore = create<AppState>((set, get) => ({
       const hasCode = files.some((f) => f.type === "verilog");
       const hasReport = files.some((f) => f.type === "report");
 
+      // Load content
       if (hasSpec) {
         await get().loadSpec();
       }
@@ -375,28 +382,36 @@ export const useStore = create<AppState>((set, get) => ({
         await get().loadReport();
       }
 
-      // Auto-switch to relevant artifact tab based on what changed
-      const state = get();
+      // Get updated state after loading
+      const newState = get();
       let newTab: ArtifactTab | null = null;
 
-      // Priority: report > waveform > code > schematic > spec
-      if (hasReport && !prevReport && state.report) {
+      // Detect what's new (priority: report > waveform > code > schematic > spec)
+      const specIsNew = hasSpec && newState.spec && !prevSpec;
+      const codeIsNew = newState.codeFiles.length > prevCodeCount;
+      const waveformIsNew = waveformFiles.length > prevWaveformCount;
+      const schematicIsNew = schematicFiles.length > prevSchematicCount;
+      const reportIsNew = hasReport && newState.report && !prevReport;
+
+      if (reportIsNew) {
         newTab = "report";
-      } else if (waveformFiles.length > prevWaveforms.length) {
+      } else if (waveformIsNew) {
         newTab = "waveform";
-      } else if (schematicFiles.length > prevSchematics.length) {
-        newTab = "schematic";
-      } else if (state.codeFiles.length > prevCodeFiles.length) {
+      } else if (codeIsNew) {
         newTab = "code";
-      } else if (hasSpec && !prevSpec && state.spec) {
+      } else if (schematicIsNew) {
+        newTab = "schematic";
+      } else if (specIsNew) {
         newTab = "spec";
       }
 
-      // Show artifacts panel and switch tab if we have new content
-      if (hasSpec || hasCode || hasReport || waveformFiles.length > 0 || schematicFiles.length > 0) {
+      // Show artifacts panel and switch tab if we have content
+      const hasContent = hasSpec || hasCode || hasReport || waveformFiles.length > 0 || schematicFiles.length > 0;
+      if (hasContent) {
         if (newTab) {
           set({ artifactsVisible: true, activeArtifactTab: newTab });
-        } else {
+        } else if (!newState.artifactsVisible) {
+          // Open panel if it's closed and we have content
           set({ artifactsVisible: true });
         }
       }
