@@ -124,13 +124,34 @@ class RTLDesignMCPServer:
         self.tool_filter_mode = "all"  # Options: "all", "essential", "custom"
         self.custom_tool_filter = None  # List of tool names or categories
         
-        # Register handlers
-        self.server.list_tools = self.list_tools
-        self.server.call_tool = self.call_tool
-        self.server.list_prompts = self.list_prompts
-        self.server.get_prompt = self.get_prompt
-        self.server.list_resources = self.list_resources
-        self.server.read_resource = self.read_resource
+        # Register handlers using decorators
+        self._setup_handlers()
+    
+    def _setup_handlers(self):
+        """Setup MCP protocol handlers"""
+        @self.server.list_tools()
+        async def handle_list_tools():
+            return await self.list_tools()
+        
+        @self.server.call_tool()
+        async def handle_call_tool(name: str, arguments: dict):
+            return await self.call_tool(name, arguments)
+        
+        @self.server.list_prompts()
+        async def handle_list_prompts():
+            return await self.list_prompts()
+        
+        @self.server.get_prompt()
+        async def handle_get_prompt(name: str, arguments: dict | None):
+            return await self.get_prompt(name, arguments)
+        
+        @self.server.list_resources()
+        async def handle_list_resources():
+            return await self.list_resources()
+        
+        @self.server.read_resource()
+        async def handle_read_resource(uri: str):
+            return await self.read_resource(uri)
         
     async def list_resources(self) -> list[Resource]:
         """
