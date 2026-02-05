@@ -32,6 +32,8 @@ This project investigates the following research questions:
 - **PPA Analysis**: Extracts area, timing (WNS/TNS), and power metrics
 - **Formal Verification**: Optional SymbiYosys integration for property checking
 - **Design Reports**: Generates comparison reports (specification vs. achieved metrics)
+- **MCP Protocol Support**: Accessible via Model Context Protocol (Claude Desktop, VS Code, etc.)
+- **Multi-Session Management**: Isolated workspaces for concurrent design projects
 
 ---
 
@@ -114,6 +116,7 @@ SiliconCrew uses a **ReAct (Reasoning + Acting)** agent pattern implemented with
 - Icarus Verilog (`iverilog`)
 - Docker (for synthesis features)
 - Google Gemini API key
+- (Optional) Claude Desktop for MCP access
 
 ### Setup
 
@@ -132,8 +135,15 @@ pip install -r requirements.txt
 # Configure API key
 echo "GOOGLE_API_KEY=your_key_here" > .env
 
-# Run the application
+# Run the web application
 streamlit run app.py
+
+# OR run the FastAPI backend + Next.js frontend
+python api.py  # Backend
+cd frontend && npm install && npm run dev  # Frontend
+
+# OR use via MCP (Claude Desktop, VS Code)
+# See MCP_SETUP.md for configuration
 ```
 
 ### Installing Icarus Verilog
@@ -154,9 +164,9 @@ docker pull openroad/orfs:latest
 
 ## Usage
 
-### Interactive Mode (Streamlit UI)
+### Web Interface (Streamlit/Next.js)
 
-1. Start the application: `streamlit run app.py`
+1. Start the application: `streamlit run app.py` or `python api.py` (FastAPI + Next.js)
 2. Create a new session with a descriptive name
 3. Describe your design in natural language:
    ```
@@ -166,6 +176,20 @@ docker pull openroad/orfs:latest
 4. Review the generated specification in the **Spec** tab
 5. Monitor RTL generation and verification in the **Code** and **Waveform** tabs
 6. Run synthesis and view results in the **Layout** and **Report** tabs
+
+### MCP Interface (Claude Desktop, VS Code, etc.)
+
+#### Claude Desktop Setup
+1. Configure MCP server (see [MCP_SETUP.md](MCP_SETUP.md))
+2. Load the "RTL Design Workflow" prompt in Claude Desktop
+3. Design hardware using natural language - your expert workflow is preserved!
+
+#### VS Code Setup  
+1. Install GitHub Copilot extension
+2. Configure MCP server (see [MCP_VSCODE_SETUP.md](MCP_VSCODE_SETUP.md))
+3. Use Copilot Chat with full RTL design tools and context
+
+**Key advantage:** Same backend, multiple frontends! Sessions are shared across all interfaces.
 
 ### YAML Specification Input
 
@@ -201,15 +225,13 @@ counter_4bit:
         input  logic enable,
         output logic [3:0] count
     );
-```
-
----
-
-## Project Structure
-
-```
-RTL_AGENT/
-├── app.py                      # Streamlit UI application
+```api.py                      # FastAPI backend for Next.js
+├── mcp_server.py              # MCP server for Claude Desktop/VS Code
+├── MCP_SETUP.md               # MCP configuration guide (Claude Desktop)
+├── MCP_VSCODE_SETUP.md        # MCP configuration guide (VS Code)
+├── MCP_SESSION_GUIDE.md       # Session management docs
+├── claude_desktop_config.example.json  # Example Claude Desktop config
+├── vscode_settings.example.json        # Example VS Code settings
 ├── src/
 │   ├── agents/
 │   │   └── architect.py        # ReAct agent with system prompt
@@ -217,6 +239,17 @@ RTL_AGENT/
 │   │   ├── wrappers.py         # LangChain tool definitions
 │   │   ├── spec_manager.py     # YAML specification handling
 │   │   ├── design_report.py    # Report generation
+│   │   ├── run_linter.py       # Icarus Verilog linting
+│   │   ├── run_simulation.py   # Simulation execution
+│   │   ├── run_synthesis.py    # OpenROAD integration
+│   │   ├── get_ppa.py          # PPA metric extraction
+│   │   └── read_waveform.py    # VCD analysis
+│   └── utils/
+│       ├── session_manager.py  # Session persistence (shared!)
+│       └── visualizers.py      # Waveform/GDS rendering
+├── frontend/                   # Next.js frontend
+├── workspace/                  # Agent working directory (shared!)
+├── state.db                    # SQLite database (shared!)
 │   │   ├── run_linter.py       # Icarus Verilog linting
 │   │   ├── run_simulation.py   # Simulation execution
 │   │   ├── run_synthesis.py    # OpenROAD integration

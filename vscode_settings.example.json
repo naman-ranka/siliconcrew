@@ -1,0 +1,11 @@
+{
+  "github.copilot.chat.mcp.servers": {
+    "rtl-design-agent": {
+      "command": "C:\\Users\\naman\\Desktop\\Projects\\RTL_AGENT\\.venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\naman\\Desktop\\Projects\\RTL_AGENT\\mcp_server.py"
+      ],
+      "cwd": "C:\\Users\\naman\\Desktop\\Projects\\RTL_AGENT"
+    }
+  }
+}
