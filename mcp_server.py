@@ -3,8 +3,20 @@ RTL Design Agent - MCP Server
 
 Exposes RTL design tools via Model Context Protocol (MCP).
 Provides individual tools + expert workflow prompts.
+
+Supports three transport modes:
+  - stdio (default): Local process communication (Claude Desktop, VS Code)
+  - sse:  Server-Sent Events over HTTP for remote access
+  - http: Streamable HTTP transport (newer MCP spec) for remote access
+
+Usage:
+  python mcp_server.py                     # stdio (default)
+  python mcp_server.py --transport sse     # SSE on http://0.0.0.0:8080
+  python mcp_server.py --transport http    # Streamable HTTP on http://0.0.0.0:8080
+  python mcp_server.py --transport sse --host 0.0.0.0 --port 9090
 """
 
+import argparse
 import asyncio
 import os
 import sys
@@ -652,14 +664,111 @@ Ready to design! What would you like to create?"""
         except Exception as e:
             return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
     
-    async def run(self):
-        """Run the MCP server."""
-        async with stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream,
-                write_stream,
-                self.server.create_initialization_options()
+    async def run(self, transport: str = "stdio", host: str = "0.0.0.0", port: int = 8080):
+        """Run the MCP server with the specified transport."""
+        if transport == "stdio":
+            async with stdio_server() as (read_stream, write_stream):
+                await self.server.run(
+                    read_stream,
+                    write_stream,
+                    self.server.create_initialization_options()
+                )
+        
+        elif transport == "sse":
+            from mcp.server.sse import SseServerTransport
+            from starlette.applications import Starlette
+            from starlette.routing import Route, Mount
+            from starlette.middleware import Middleware
+            from starlette.middleware.cors import CORSMiddleware
+            import uvicorn
+
+            sse = SseServerTransport("/messages/")
+
+            async def handle_sse(request):
+                async with sse.connect_sse(
+                    request.scope, request.receive, request._send
+                ) as streams:
+                    await self.server.run(
+                        streams[0],
+                        streams[1],
+                        self.server.create_initialization_options()
+                    )
+
+            app = Starlette(
+                debug=True,
+                routes=[
+                    Route("/sse", endpoint=handle_sse),
+                    Mount("/messages/", app=sse.handle_post_message),
+                ],
+                middleware=[
+                    Middleware(
+                        CORSMiddleware,
+                        allow_origins=["*"],
+                        allow_methods=["*"],
+                        allow_headers=["*"],
+                    )
+                ],
             )
+
+            print(f"🚀 MCP SSE server running on http://{host}:{port}")
+            print(f"   SSE endpoint:     http://{host}:{port}/sse")
+            print(f"   Messages endpoint: http://{host}:{port}/messages/")
+            print(f"   No authentication required")
+
+            config = uvicorn.Config(app, host=host, port=port, log_level="info")
+            server = uvicorn.Server(config)
+            await server.serve()
+
+        elif transport == "http":
+            from mcp.server.streamable_http import StreamableHTTPServerTransport
+            from starlette.applications import Starlette
+            from starlette.routing import Mount
+            from starlette.middleware import Middleware
+            from starlette.middleware.cors import CORSMiddleware
+            import uvicorn
+
+            # Create a session-less transport (no auth, stateless)
+            session_transport = StreamableHTTPServerTransport(
+                mcp_session_id=None,  # Stateless mode
+            )
+
+            async def handle_mcp(request):
+                async with session_transport.connect(
+                    request.scope, request.receive, request._send
+                ) as streams:
+                    await self.server.run(
+                        streams[0],
+                        streams[1],
+                        self.server.create_initialization_options()
+                    )
+
+            from starlette.routing import Route
+
+            app = Starlette(
+                debug=True,
+                routes=[
+                    Route("/mcp", endpoint=handle_mcp, methods=["GET", "POST", "DELETE"]),
+                ],
+                middleware=[
+                    Middleware(
+                        CORSMiddleware,
+                        allow_origins=["*"],
+                        allow_methods=["*"],
+                        allow_headers=["*"],
+                    )
+                ],
+            )
+
+            print(f"🚀 MCP Streamable HTTP server running on http://{host}:{port}")
+            print(f"   MCP endpoint: http://{host}:{port}/mcp")
+            print(f"   No authentication required")
+
+            config = uvicorn.Config(app, host=host, port=port, log_level="info")
+            server = uvicorn.Server(config)
+            await server.serve()
+
+        else:
+            raise ValueError(f"Unknown transport: {transport}. Use 'stdio', 'sse', or 'http'.")
 
 
 # =============================================================================
@@ -667,8 +776,28 @@ Ready to design! What would you like to create?"""
 # =============================================================================
 
 async def main():
+    parser = argparse.ArgumentParser(description="RTL Design Agent MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "http"],
+        default="stdio",
+        help="Transport mode: stdio (local, default), sse (remote SSE), http (remote Streamable HTTP)"
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind to for remote transports (default: 0.0.0.0)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port to listen on for remote transports (default: 8080)"
+    )
+    args = parser.parse_args()
+
     server = RTLDesignMCPServer()
-    await server.run()
+    await server.run(transport=args.transport, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

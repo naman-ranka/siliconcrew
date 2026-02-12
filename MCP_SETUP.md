@@ -329,9 +329,99 @@ Both MCP and FastAPI can share sessions safely!
 
 ---
 
-## Advanced: Cloud Desktop Setup
+## Advanced: Remote Access (SSE / Streamable HTTP)
 
-To use from a remote machine:
+The MCP server supports three transport modes — no authentication required:
+
+| Transport | Command | Use Case |
+|-----------|---------|----------|
+| `stdio` (default) | `python mcp_server.py` | Local (Claude Desktop, VS Code) |
+| `sse` | `python mcp_server.py --transport sse` | Remote via Server-Sent Events |
+| `http` | `python mcp_server.py --transport http` | Remote via Streamable HTTP |
+
+### Start Remote Server
+
+```bash
+# SSE transport (widely supported by MCP clients)
+python mcp_server.py --transport sse --host 0.0.0.0 --port 8080
+
+# Streamable HTTP transport (newer MCP spec)
+python mcp_server.py --transport http --host 0.0.0.0 --port 8080
+
+# Custom host/port
+python mcp_server.py --transport sse --host 0.0.0.0 --port 9090
+```
+
+### Connect from Claude Desktop (Remote SSE)
+
+```json
+{
+  "mcpServers": {
+    "rtl-design-agent-remote": {
+      "url": "http://<server-ip>:8080/sse"
+    }
+  }
+}
+```
+
+### Connect from VS Code (Remote SSE)
+
+In `.vscode/settings.json` or VS Code MCP config:
+```json
+{
+  "mcp": {
+    "servers": {
+      "rtl-design-agent-remote": {
+        "type": "sse",
+        "url": "http://<server-ip>:8080/sse"
+      }
+    }
+  }
+}
+```
+
+### Connect using Streamable HTTP
+
+```json
+{
+  "mcpServers": {
+    "rtl-design-agent-remote": {
+      "url": "http://<server-ip>:8080/mcp"
+    }
+  }
+}
+```
+
+### Deploy on Cloud / Docker
+
+```bash
+# On cloud machine
+cd /path/to/RTL_AGENT
+source .venv/bin/activate
+python mcp_server.py --transport sse --host 0.0.0.0 --port 8080
+```
+
+Or add to `docker-compose.yml`:
+```yaml
+services:
+  mcp-remote:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python mcp_server.py --transport sse --host 0.0.0.0 --port 8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./workspace:/app/workspace
+```
+
+> **Note**: No authentication is required. If you need to restrict access, use network-level controls (firewall rules, VPN, reverse proxy).
+
+---
+
+## Advanced: Cloud Desktop Setup (SSH/stdio)
+
+To use from a remote machine via SSH (alternative to SSE):
 
 ### 1. Run MCP Server on Cloud
 

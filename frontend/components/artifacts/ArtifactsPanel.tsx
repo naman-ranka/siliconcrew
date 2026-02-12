@@ -10,6 +10,7 @@ import { CodeViewer } from "./CodeViewer";
 import { WaveformViewer } from "./WaveformViewer";
 import { SchematicViewer } from "./SchematicViewer";
 import { ReportViewer } from "./ReportViewer";
+import { LayoutViewer } from "./LayoutViewer";
 import { cn } from "@/lib/utils";
 import type { ArtifactTab } from "@/types";
 
@@ -23,6 +24,7 @@ export function ArtifactsPanel() {
     codeFiles,
     waveformFiles,
     schematicFiles,
+    layoutFiles,
     report,
   } = useStore();
 
@@ -59,6 +61,7 @@ export function ArtifactsPanel() {
       id: "layout",
       label: "Layout",
       icon: <Layout className="h-3.5 w-3.5" />,
+      badge: layoutFiles.length,
     },
     {
       id: "report",
@@ -68,7 +71,7 @@ export function ArtifactsPanel() {
     },
   ];
 
-  const totalArtifacts = (spec ? 1 : 0) + codeFiles.length + waveformFiles.length + schematicFiles.length + (report ? 1 : 0);
+  const totalArtifacts = (spec ? 1 : 0) + codeFiles.length + waveformFiles.length + schematicFiles.length + layoutFiles.length + (report ? 1 : 0);
 
   return (
     <div className="flex flex-col h-full bg-surface-0 border-l border-border animate-slide-in-right">
@@ -148,15 +151,7 @@ export function ArtifactsPanel() {
         </TabsContent>
 
         <TabsContent value="layout" className="flex-1 m-0 data-[state=inactive]:hidden overflow-hidden">
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-8">
-            <div className="w-16 h-16 rounded-2xl bg-surface-2 flex items-center justify-center mb-4">
-              <Layout className="h-8 w-8" />
-            </div>
-            <p className="text-sm font-medium">Layout Viewer</p>
-            <p className="text-xs mt-1 text-center max-w-[200px]">
-              GDS layout files will be displayed here after running synthesis
-            </p>
-          </div>
+          <LayoutViewer />
         </TabsContent>
 
         <TabsContent value="report" className="flex-1 m-0 data-[state=inactive]:hidden overflow-hidden">

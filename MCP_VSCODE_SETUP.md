@@ -28,16 +28,41 @@
 
 ### 2. Configure MCP Server in VS Code
 
-VS Code MCP configuration is stored in your user settings. You have two options:
+VS Code MCP configuration can be done in two ways:
 
-#### Option A: Settings UI
+#### Option A: Workspace Configuration (Recommended)
 
-1. Open VS Code Settings (`Ctrl+,`)
-2. Search for "MCP"
-3. Look for "GitHub Copilot > MCP: Servers"
-4. Click "Edit in settings.json"
+Create a `.vscode/mcp.json` file in your workspace root:
 
-#### Option B: Direct settings.json Edit (Recommended)
+1. Open your RTL_AGENT workspace in VS Code
+2. Create `.vscode/mcp.json` file (or use the one already created)
+3. Add the following configuration:
+
+```json
+{
+  "servers": {
+    "rtl-design-agent": {
+      "type": "stdio",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "${workspaceFolder}\\mcp_server.py"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        
+      }
+    }
+  }
+}
+```
+
+**Benefits of workspace configuration:**
+- Server only loads when this workspace is open
+- Configuration is committed with your project
+- Easy to share with team members
+- VS Code shows helpful code lenses to start/stop/restart server
+
+#### Option B: User Settings (Global)
 
 1. Press `Ctrl+Shift+P`
 2. Type "Preferences: Open User Settings (JSON)"
@@ -186,21 +211,28 @@ Read the specification file from session "counter_design"
 
 ### Issue: MCP Server Not Showing Up
 
-**Solution 1**: Check the settings.json path
+**Solution 1**: Check MCP server list
+1. Press `Ctrl+Shift+P`
+2. Run command: `MCP: List Servers`
+3. Look for "rtl-design-agent" in the list
+4. Check server status (should show "running")
+
+**Solution 2**: Use workspace configuration (.vscode/mcp.json)
+- This is the preferred method
+- Easier to debug (VS Code shows code lenses to manage server)
+- Configuration is project-specific
+
+**Solution 3**: Check MCP Output Log
+1. Press `Ctrl+Shift+P`
+2. Run: `MCP: List Servers`
+3. Select your server
+4. Choose "Show Output"
+5. Look for error messages
+
+**Solution 4**: Verify paths in .vscode/mcp.json
 ```json
-// Ensure paths use double backslashes on Windows
-"command": "C:\\Users\\naman\\Desktop\\Projects\\RTL_AGENT\\.venv\\Scripts\\python.exe"
-```
-
-**Solution 2**: Check VS Code Output Panel
-1. Press `Ctrl+Shift+U`
-2. Select "GitHub Copilot" from dropdown
-3. Look for MCP server errors
-
-**Solution 3**: Verify Python Path
-```powershell
-# In VS Code terminal
-C:\Users\naman\Desktop\Projects\RTL_AGENT\.venv\Scripts\python.exe --version
+// Use ${workspaceFolder} variable instead of absolute paths
+"command": "${workspaceFolder}\\.venv\\Scripts\\python.exe"
 ```
 
 ### Issue: Tools Not Appearing
