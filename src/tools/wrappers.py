@@ -100,18 +100,20 @@ def simulation_tool(verilog_files: list[str], top_module: str) -> str:
 from src.tools.search_logs import search_logs
 
 @tool
-def synthesis_tool(verilog_files: list[str], top_module: str, clock_period_ns: float = 10.0,
-                   utilization: int = 5, aspect_ratio: float = 1.0, core_margin: float = 2.0) -> str:
+def synthesis_tool(verilog_files: list[str], top_module: str, platform: str = "sky130hd", 
+                   clock_period_ns: float = 10.0, utilization: int = 5, aspect_ratio: float = 1.0, 
+                   core_margin: float = 2.0) -> str:
     """
     Runs logic synthesis using OpenROAD Flow Scripts (ORFS).
     Returns a rich summary including generated files and key metrics.
     Args:
-        verilog_files: List of Verilog source files (e.g., ['cpu.v', 'alu.v']).
+        verilog_files: List of Verilog source files.
         top_module: Name of the top module to synthesize.
+        platform: Target technology platform. Options: 'sky130hd', 'asap7'. Default: 'sky130hd'.
         clock_period_ns: Target clock period in nanoseconds (default: 10.0).
-        utilization: Core utilization percentage (1-100). Higher = smaller area. Default: 5 (very safe).
-        aspect_ratio: Core aspect ratio (Height/Width). 1.0 = Square. Default: 1.0.
-        core_margin: Margin around core in microns. Default: 2.0.
+        utilization: Core utilization percentage (1-100). Higher = smaller area. Default: 5 (safe).
+        aspect_ratio: Core aspect ratio (Height/Width). 1.0 = Square.
+        core_margin: Margin around core in microns.
     """
     workspace = get_workspace_path()
     
@@ -126,8 +128,9 @@ def synthesis_tool(verilog_files: list[str], top_module: str, clock_period_ns: f
             return f"Error: File {f} does not exist."
         abs_files.append(abs_f)
         
-    result = run_synthesis(abs_files, top_module=top_module, clock_period_ns=clock_period_ns, 
-                           utilization=utilization, aspect_ratio=aspect_ratio, core_margin=core_margin,
+    result = run_synthesis(abs_files, top_module=top_module, platform=platform, 
+                           clock_period_ns=clock_period_ns, utilization=utilization, 
+                           aspect_ratio=aspect_ratio, core_margin=core_margin,
                            cwd=workspace)
     
     if result["success"]:
