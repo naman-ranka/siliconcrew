@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it as below."
+type: software
+title: "SiliconCrew: An Autonomous LLM Agent for RTL Design, Verification, and Synthesis"
+authors:
+  - family-names: Ranka
+    given-names: Naman
+date-released: 2026-02-20
+url: "https://github.com/naman-ranka/siliconcrew"
+license: MIT
+abstract: >
+  SiliconCrew is a research prototype that explores the use of Large Language Models
+  as autonomous agents for digital hardware design. Given a natural language specification,
+  the agent generates synthesizable RTL, writes self-checking testbenches, iterates on
+  verification failures using waveform and synthesis log analysis, and produces physical
+  design outputs through the OpenROAD flow targeting SkyWater 130nm.
+keywords:
+  - LLM agents
+  - RTL design automation
+  - hardware synthesis
+  - EDA automation
+  - LangGraph
+  - OpenROAD
+  - Verilog
+  - waveform debugging

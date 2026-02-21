@@ -154,6 +154,8 @@ workspace/*
 # Simulation outputs
 *.out
 *.vcd
+*.vvp
+sim_build/
 
 # SQLite WAL/SHM
 *.db-wal
@@ -164,3 +166,12 @@ state.db-wal
 
 # Hackathon reference repo
 ASU-Spec2Tapeout-ICLAD25-Hackathon/
+
+# Paper (not ready for public repo)
+paper/
+
+# Docs (internal, excluded from repo)
+docs/
+
+# Local reports / PDFs
+EEE_598_Team_9_Final_report.pdf
