@@ -131,7 +131,12 @@ def langchain_to_mcp_schema(langchain_tool) -> Tool:
 class RTLDesignMCPServer:
     def __init__(self):
         self.server = Server("rtl-design-agent")
-        self.session_manager = SessionManager()
+        # Use absolute paths relative to this script
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        workspace_dir = os.path.join(base_dir, "workspace")
+        db_path = os.path.join(base_dir, "state.db")
+        
+        self.session_manager = SessionManager(base_dir=workspace_dir, db_path=db_path)
         self.current_session = None  # Track active session
         self.tool_filter_mode = "all"  # Options: "all", "essential", "custom"
         self.custom_tool_filter = None  # List of tool names or categories
