@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   PanelLeftClose,
   PanelLeft,
   Plus,
   Trash2,
-  FolderOpen,
   Settings,
   BarChart3,
   Cpu,
@@ -33,7 +32,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Tooltip,
@@ -43,6 +41,96 @@ import {
 import { cn } from "@/lib/utils";
 import { formatTokens, formatCost, formatRelativeTime } from "@/lib/utils";
 import type { Session } from "@/types";
+
+// Shared dialog for creating a new session
+interface CreateSessionDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: () => void;
+}
+
+function CreateSessionDialog({ open, onOpenChange, onCreated }: CreateSessionDialogProps) {
+  const { createSession } = useStore();
+  const [name, setName] = useState("");
+  const [model, setModel] = useState("gemini-2.5-flash");
+  const [error, setError] = useState<string | null>(null);
+
+  const handleCreate = async () => {
+    if (!name.trim()) {
+      setError("Please enter a session name");
+      return;
+    }
+    try {
+      setError(null);
+      await createSession(name.trim(), model);
+      setName("");
+      onCreated();
+      onOpenChange(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create session");
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-surface-1 border-border">
+        <DialogHeader>
+          <DialogTitle>Create New Session</DialogTitle>
+          <DialogDescription className="text-muted-foreground">
+            Start a new design session with the RTL Agent.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-4">
+          <div>
+            <label className="text-sm font-medium mb-2 block">Session Name</label>
+            <Input
+              placeholder="e.g., counter_design"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+              className="bg-surface-2 border-border"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium mb-2 block">Model</label>
+            <Select value={model} onValueChange={setModel}>
+              <SelectTrigger className="bg-surface-2 border-border">
+                <SelectValue placeholder="Select model" />
+              </SelectTrigger>
+              <SelectContent className="bg-surface-1 border-border">
+                <SelectItem value="gemini-2.5-flash">
+                  <div className="flex items-center gap-2">
+                    <Zap className="h-3 w-3 text-yellow-500" />
+                    <div>
+                      <span>Gemini 2.5 Flash</span>
+                      <span className="text-xs text-muted-foreground ml-2">Fast &amp; efficient</span>
+                    </div>
+                  </div>
+                </SelectItem>
+                <SelectItem value="gemini-3-pro-preview">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-3 w-3 text-primary" />
+                    <div>
+                      <span>Gemini 3 Pro</span>
+                      <span className="text-xs text-muted-foreground ml-2">Most capable</span>
+                    </div>
+                  </div>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="border-border">
+            Cancel
+          </Button>
+          <Button onClick={handleCreate}>Create Session</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 // Group sessions by time period
 function groupSessionsByDate(sessions: Session[]) {
@@ -61,7 +149,7 @@ function groupSessionsByDate(sessions: Session[]) {
   ];
 
   sessions.forEach((session) => {
-    const date = session.created_at ? new Date(session.created_at) : new Date(0);
+    const date = new Date(session.updated_at ?? session.created_at ?? 0);
     if (date >= today) {
       groups[0].sessions.push(session);
     } else if (date >= yesterday) {
@@ -85,42 +173,21 @@ export function Sidebar() {
     sidebarCollapsed,
     sessionsLoading,
     loadSessions,
-    createSession,
     deleteSession,
     selectSession,
     toggleSidebar,
   } = useStore();
 
-  const [newSessionName, setNewSessionName] = useState("");
-  const [selectedModel, setSelectedModel] = useState("gemini-2.5-flash");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
-  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
 
-  const handleCreateSession = async () => {
-    if (!newSessionName.trim()) {
-      setCreateError("Please enter a session name");
-      return;
-    }
-
-    try {
-      setCreateError(null);
-      await createSession(newSessionName.trim(), selectedModel);
-      setNewSessionName("");
-      setIsCreateDialogOpen(false);
-    } catch (error) {
-      setCreateError(error instanceof Error ? error.message : "Failed to create session");
-    }
-  };
-
   const handleDeleteSession = async () => {
     if (!sessionToDelete) return;
-
     try {
       await deleteSession(sessionToDelete.id);
       setSessionToDelete(null);
@@ -136,7 +203,7 @@ export function Sidebar() {
     setIsDeleteDialogOpen(true);
   };
 
-  const sessionGroups = groupSessionsByDate(sessions);
+  const sessionGroups = useMemo(() => groupSessionsByDate(sessions), [sessions]);
 
   // Collapsed sidebar
   if (sidebarCollapsed) {
@@ -186,8 +253,8 @@ export function Sidebar() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="right" className="max-w-[200px]">
-                <p className="font-medium">{session.id}</p>
-                {session.created_at && <p className="text-xs text-muted-foreground">{formatRelativeTime(session.created_at)}</p>}
+                <p className="font-medium">{session.name ?? session.id}</p>
+                {(session.updated_at ?? session.created_at) && <p className="text-xs text-muted-foreground">{formatRelativeTime(session.updated_at ?? session.created_at ?? "")}</p>}
               </TooltipContent>
             </Tooltip>
           ))}
@@ -205,53 +272,11 @@ export function Sidebar() {
         </div>
 
         {/* Create Dialog */}
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-          <DialogContent className="bg-surface-1 border-border">
-            <DialogHeader>
-              <DialogTitle>Create New Session</DialogTitle>
-              <DialogDescription className="text-muted-foreground">
-                Start a new design session with the RTL Agent.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <Input
-                placeholder="Session name (e.g., counter_design)"
-                value={newSessionName}
-                onChange={(e) => setNewSessionName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleCreateSession()}
-                className="bg-surface-2 border-border"
-              />
-              <Select value={selectedModel} onValueChange={setSelectedModel}>
-                <SelectTrigger className="bg-surface-2 border-border">
-                  <SelectValue placeholder="Select model" />
-                </SelectTrigger>
-                <SelectContent className="bg-surface-1 border-border">
-                  <SelectItem value="gemini-2.5-flash">
-                    <div className="flex items-center gap-2">
-                      <Zap className="h-3 w-3 text-yellow-500" />
-                      Gemini 2.5 Flash
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="gemini-3-pro-preview">
-                    <div className="flex items-center gap-2">
-                      <Cpu className="h-3 w-3 text-primary" />
-                      Gemini 3 Pro (Preview)
-                    </div>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              {createError && (
-                <p className="text-sm text-destructive">{createError}</p>
-              )}
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)} className="border-border">
-                Cancel
-              </Button>
-              <Button onClick={handleCreateSession}>Create</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <CreateSessionDialog
+          open={isCreateDialogOpen}
+          onOpenChange={setIsCreateDialogOpen}
+          onCreated={() => {}}
+        />
       </div>
     );
   }
@@ -274,71 +299,15 @@ export function Sidebar() {
 
       {/* New Session Button */}
       <div className="p-3">
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className="w-full bg-primary hover:bg-primary/90" size="sm">
-              <Plus className="h-4 w-4 mr-2" />
-              New Session
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="bg-surface-1 border-border">
-            <DialogHeader>
-              <DialogTitle>Create New Session</DialogTitle>
-              <DialogDescription className="text-muted-foreground">
-                Start a new design session with the RTL Agent.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div>
-                <label className="text-sm font-medium mb-2 block">Session Name</label>
-                <Input
-                  placeholder="e.g., counter_design"
-                  value={newSessionName}
-                  onChange={(e) => setNewSessionName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleCreateSession()}
-                  className="bg-surface-2 border-border"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-2 block">Model</label>
-                <Select value={selectedModel} onValueChange={setSelectedModel}>
-                  <SelectTrigger className="bg-surface-2 border-border">
-                    <SelectValue placeholder="Select model" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-surface-1 border-border">
-                    <SelectItem value="gemini-2.5-flash">
-                      <div className="flex items-center gap-2">
-                        <Zap className="h-3 w-3 text-yellow-500" />
-                        <div>
-                          <span>Gemini 2.5 Flash</span>
-                          <span className="text-xs text-muted-foreground ml-2">Fast & efficient</span>
-                        </div>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="gemini-3-pro-preview">
-                      <div className="flex items-center gap-2">
-                        <Cpu className="h-3 w-3 text-primary" />
-                        <div>
-                          <span>Gemini 3 Pro</span>
-                          <span className="text-xs text-muted-foreground ml-2">Most capable</span>
-                        </div>
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              {createError && (
-                <p className="text-sm text-destructive">{createError}</p>
-              )}
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)} className="border-border">
-                Cancel
-              </Button>
-              <Button onClick={handleCreateSession}>Create Session</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <Button className="w-full bg-primary hover:bg-primary/90" size="sm" onClick={() => setIsCreateDialogOpen(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          New Session
+        </Button>
+        <CreateSessionDialog
+          open={isCreateDialogOpen}
+          onOpenChange={setIsCreateDialogOpen}
+          onCreated={() => {}}
+        />
       </div>
 
       <Separator className="bg-border" />
@@ -453,7 +422,7 @@ export function Sidebar() {
           <DialogHeader>
             <DialogTitle>Delete Session</DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              Are you sure you want to delete &quot;{sessionToDelete?.id}&quot;? This action
+              Are you sure you want to delete &quot;{sessionToDelete?.name ?? sessionToDelete?.id}&quot;? This action
               cannot be undone.
             </DialogDescription>
           </DialogHeader>

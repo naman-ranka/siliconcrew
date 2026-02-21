@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
 import {
   Panel,
   PanelGroup,
@@ -10,47 +9,17 @@ import { Sidebar } from "@/components/sidebar/Sidebar";
 import { ChatArea } from "@/components/chat/ChatArea";
 import { ArtifactsPanel } from "@/components/artifacts/ArtifactsPanel";
 import { useStore } from "@/lib/store";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { Button } from "@/components/ui/button";
 import { PanelRight } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 export default function Home() {
   const {
-    sidebarCollapsed,
     artifactsVisible,
-    toggleSidebar,
     toggleArtifacts,
-    loadSessions,
   } = useStore();
 
-  // Load sessions on mount
-  useEffect(() => {
-    loadSessions();
-  }, [loadSessions]);
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Cmd/Ctrl + B: Toggle sidebar
-      if ((e.metaKey || e.ctrlKey) && e.key === "b") {
-        e.preventDefault();
-        toggleSidebar();
-      }
-      // Cmd/Ctrl + ]: Toggle artifacts
-      if ((e.metaKey || e.ctrlKey) && e.key === "]") {
-        e.preventDefault();
-        toggleArtifacts();
-      }
-      // Cmd/Ctrl + N: New session (if dialog component supports it)
-      if ((e.metaKey || e.ctrlKey) && e.key === "n") {
-        // This could open the new session dialog
-        // For now, we'll leave this as a placeholder
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleSidebar, toggleArtifacts]);
+  useKeyboardShortcuts();
 
   return (
     <main className="h-screen w-screen overflow-hidden flex">
