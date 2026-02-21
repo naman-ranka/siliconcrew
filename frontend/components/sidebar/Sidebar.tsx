@@ -394,7 +394,7 @@ export function Sidebar() {
                           )} />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium truncate">{session.id}</p>
+                          <p className="text-sm font-medium truncate">{session.name ?? session.id}</p>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <span className={cn(
                               "inline-flex items-center gap-1",

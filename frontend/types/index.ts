@@ -1,8 +1,10 @@
 // Session types
 export interface Session {
   id: string;
+  name: string | null;
   model_name: string | null;
   created_at: string | null;
+  updated_at: string | null;
   total_tokens: number;
   total_cost: number;
 }
