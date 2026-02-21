@@ -97,10 +97,10 @@ export const useStore = create<AppState>((set, get) => ({
     set({ sessionsLoading: true, sessionsError: null });
     try {
       const sessions = await sessionsApi.list();
-      // Sort sessions by created_at (latest first)
+      // Sort sessions by updated_at (most recently used first), fallback to created_at
       const sortedSessions = [...sessions].sort((a, b) => {
-        const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        const dateA = new Date(a.updated_at ?? a.created_at ?? 0).getTime();
+        const dateB = new Date(b.updated_at ?? b.created_at ?? 0).getTime();
         return dateB - dateA;
       });
       set({ sessions: sortedSessions, sessionsLoading: false });
