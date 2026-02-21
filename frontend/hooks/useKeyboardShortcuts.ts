@@ -8,7 +8,9 @@ export function useKeyboardShortcuts() {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+      const isMac = (navigator as Navigator & { userAgentData?: { platform: string } }).userAgentData?.platform
+        ? (navigator as Navigator & { userAgentData?: { platform: string } }).userAgentData!.platform.toUpperCase().includes("MAC")
+        : navigator.platform.toUpperCase().includes("MAC");
       const cmdKey = isMac ? e.metaKey : e.ctrlKey;
 
       // Don't trigger shortcuts when typing in input

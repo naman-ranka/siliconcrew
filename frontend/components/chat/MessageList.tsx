@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { User, Bot, Loader2, Sparkles } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -25,8 +25,12 @@ function formatTimestamp(timestamp?: string): string {
 }
 
 function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
   const handleCopy = () => {
     navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   };
 
   return (
@@ -34,7 +38,7 @@ function CopyButton({ text }: { text: string }) {
       className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-surface-2 hover:bg-surface-3 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground"
       onClick={handleCopy}
     >
-      Copy
+      {copied ? "Copied!" : "Copy"}
     </button>
   );
 }
@@ -259,31 +263,31 @@ function StreamingMessage() {
   );
 }
 
+const WELCOME_SUGGESTIONS = [
+  {
+    title: "Design an 8-bit counter",
+    description: "with async reset and enable",
+    prompt: "Design an 8-bit counter with asynchronous reset and enable signals",
+  },
+  {
+    title: "Create a FIFO buffer",
+    description: "16 entries deep, 8-bit width",
+    prompt: "Create a synchronous FIFO with 16 entries depth and 8-bit data width",
+  },
+  {
+    title: "Design a simple ALU",
+    description: "add, sub, and, or operations",
+    prompt: "Design a simple ALU that supports add, subtract, AND, and OR operations on 8-bit operands",
+  },
+  {
+    title: "Build an FSM controller",
+    description: "for a traffic light system",
+    prompt: "Design a finite state machine controller for a traffic light system with red, yellow, and green states",
+  },
+];
+
 function WelcomeScreen() {
   const sendMessage = useStore((state) => state.sendMessage);
-
-  const suggestions = [
-    {
-      title: "Design an 8-bit counter",
-      description: "with async reset and enable",
-      prompt: "Design an 8-bit counter with asynchronous reset and enable signals",
-    },
-    {
-      title: "Create a FIFO buffer",
-      description: "16 entries deep, 8-bit width",
-      prompt: "Create a synchronous FIFO with 16 entries depth and 8-bit data width",
-    },
-    {
-      title: "Design a simple ALU",
-      description: "add, sub, and, or operations",
-      prompt: "Design a simple ALU that supports add, subtract, AND, and OR operations on 8-bit operands",
-    },
-    {
-      title: "Build an FSM controller",
-      description: "for a traffic light system",
-      prompt: "Design a finite state machine controller for a traffic light system with red, yellow, and green states",
-    },
-  ];
 
   return (
     <div className="flex-1 flex items-center justify-center px-4">
@@ -297,7 +301,7 @@ function WelcomeScreen() {
           specifications, implement RTL, and verify your designs.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg mx-auto">
-          {suggestions.map((suggestion, idx) => (
+          {WELCOME_SUGGESTIONS.map((suggestion, idx) => (
             <button
               key={idx}
               className="text-left p-4 rounded-lg bg-surface-1 hover:bg-surface-2 border border-border hover:border-primary/50 transition-all group"
