@@ -226,8 +226,10 @@ class RTLDesignMCPServer:
                 meta = self.session_manager.get_session_metadata(session_id)
                 session_data.append({
                     "id": session_id,
+                    "name": meta.get("session_name") if meta else session_id,
                     "model_name": meta.get("model_name") if meta else None,
                     "created_at": str(meta.get("created_at")) if meta else None,
+                    "updated_at": str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
                     "total_tokens": meta.get("total_tokens", 0) if meta else 0,
                     "total_cost": meta.get("total_cost", 0.0) if meta else 0.0
                 })

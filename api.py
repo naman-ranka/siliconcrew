@@ -59,8 +59,10 @@ class SessionCreate(BaseModel):
 
 class SessionResponse(BaseModel):
     id: str
+    name: Optional[str] = None
     model_name: Optional[str] = None
     created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     total_tokens: int = 0
     total_cost: float = 0.0
 
@@ -196,8 +198,10 @@ async def list_sessions():
         meta = session_manager.get_session_metadata(session_id)
         result.append(SessionResponse(
             id=session_id,
+            name=meta.get("session_name") if meta else None,
             model_name=meta.get("model_name") if meta else None,
             created_at=str(meta.get("created_at")) if meta else None,
+            updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
             total_tokens=meta.get("total_tokens", 0) if meta else 0,
             total_cost=meta.get("total_cost", 0.0) if meta else 0.0
         ))
@@ -214,8 +218,10 @@ async def create_session(data: SessionCreate):
 
         return SessionResponse(
             id=session_id,
+            name=meta.get("session_name") if meta else data.name,
             model_name=data.model,
             created_at=str(meta.get("created_at")) if meta else None,
+            updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
             total_tokens=0,
             total_cost=0.0
         )
@@ -234,8 +240,10 @@ async def get_session(session_id: str):
 
     return SessionResponse(
         id=session_id,
+        name=meta.get("session_name"),
         model_name=meta.get("model_name"),
         created_at=str(meta.get("created_at")),
+        updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
         total_tokens=meta.get("total_tokens", 0),
         total_cost=meta.get("total_cost", 0.0)
     )
