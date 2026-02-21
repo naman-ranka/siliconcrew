@@ -134,7 +134,9 @@ class RTLDesignMCPServer:
         # Use absolute paths relative to this script
         base_dir = os.path.dirname(os.path.abspath(__file__))
         workspace_dir = os.path.join(base_dir, "workspace")
-        db_path = os.path.join(base_dir, "state.db")
+        _data_dir = os.path.join(os.path.expanduser("~"), ".siliconcrew")
+        os.makedirs(_data_dir, exist_ok=True)
+        db_path = os.path.join(_data_dir, "state.db")
         
         self.session_manager = SessionManager(base_dir=workspace_dir, db_path=db_path)
         self.current_session = None  # Track active session
