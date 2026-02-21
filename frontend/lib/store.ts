@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Session, Message, ToolCall, ToolResult, ArtifactTab, SpecData, CodeFile, WaveformData, FileInfo } from "@/types";
+import type { Session, Message, ToolCall, ToolResult, ContentBlock, ArtifactTab, SpecData, CodeFile, WaveformData, FileInfo } from "@/types";
 import { sessionsApi, chatApi, workspaceApi } from "./api";
 import { generateId } from "./utils";
 
@@ -60,6 +60,23 @@ interface AppState {
   selectWaveform: (filename: string) => Promise<void>;
   loadReport: () => Promise<void>;
   generateReport: () => Promise<void>;
+}
+
+function buildBlocks(
+  content: string,
+  toolCalls?: ToolCall[],
+  toolResults?: ToolResult[]
+): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  if (content) blocks.push({ type: "text", content });
+  for (const tc of toolCalls ?? []) {
+    blocks.push({
+      type: "tool",
+      toolCall: tc,
+      result: toolResults?.find((r) => r.tool_call_id === tc.id),
+    });
+  }
+  return blocks;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -185,12 +202,13 @@ export const useStore = create<AppState>((set, get) => ({
 
     try {
       const history = await chatApi.getHistory(currentSession.id);
-      const messages: Message[] = history.map((msg, idx) => ({
+      const messages: Message[] = history.map((msg) => ({
         id: generateId(),
         role: msg.role as "user" | "assistant",
         content: msg.content,
         tool_calls: msg.tool_calls,
         tool_results: msg.tool_results,
+        blocks: buildBlocks(msg.content ?? "", msg.tool_calls, msg.tool_results),
       }));
       set({ messages, chatError: null });
     } catch (error) {
@@ -207,6 +225,7 @@ export const useStore = create<AppState>((set, get) => ({
       id: generateId(),
       role: "user",
       content: content.trim(),
+      blocks: [{ type: "text", content: content.trim() }],
       timestamp: new Date().toISOString(),
     };
 
@@ -232,6 +251,7 @@ export const useStore = create<AppState>((set, get) => ({
       content: "",
       tool_calls: [],
       tool_results: [],
+      blocks: [],
       timestamp: new Date().toISOString(),
     };
 
@@ -245,32 +265,46 @@ export const useStore = create<AppState>((set, get) => ({
 
       switch (data.type) {
         case "text_delta":
-        case "text":
-          // Text streaming - update content
-          set({
-            streamingMessage: { ...msg, content: data.content },
-          });
+        case "text": {
+          const updatedBlocks = [...(msg.blocks ?? [])];
+          const lastIdx = updatedBlocks.length - 1;
+          if (lastIdx >= 0 && updatedBlocks[lastIdx].type === "text") {
+            updatedBlocks[lastIdx] = { type: "text", content: data.content };
+          } else {
+            updatedBlocks.push({ type: "text", content: data.content });
+          }
+          set({ streamingMessage: { ...msg, content: data.content, blocks: updatedBlocks } });
           break;
+        }
 
-        case "tool_call":
+        case "tool_call": {
+          const newToolBlock: ContentBlock = { type: "tool", toolCall: data.tool as ToolCall };
           set({
             streamingMessage: {
               ...msg,
               tool_calls: [...(msg.tool_calls || []), data.tool as ToolCall],
+              blocks: [...(msg.blocks ?? []), newToolBlock],
             },
           });
           break;
+        }
 
-        case "tool_result":
+        case "tool_result": {
           const result: ToolResult = {
             tool_call_id: data.tool_call_id,
             status: data.status,
             content: data.content,
           };
+          const updatedBlocks = (msg.blocks ?? []).map((block) =>
+            block.type === "tool" && block.toolCall.id === data.tool_call_id
+              ? { ...block, result }
+              : block
+          );
           set({
             streamingMessage: {
               ...msg,
               tool_results: [...(msg.tool_results || []), result],
+              blocks: updatedBlocks,
             },
           });
           // Refresh workspace when file-writing tools complete to show artifacts immediately
@@ -279,6 +313,7 @@ export const useStore = create<AppState>((set, get) => ({
             get().refreshWorkspace();
           }
           break;
+        }
 
         case "done":
           const { streamingMessage: finalMsg, messages: finalMessages } = get();
@@ -318,12 +353,19 @@ export const useStore = create<AppState>((set, get) => ({
 
   stopStreaming: () => {
     const { ws, streamingMessage, messages } = get();
-    if (ws) {
-      ws.close();
-    }
+    if (ws) ws.close();
     if (streamingMessage) {
+      const stoppedText = "\n\n[Stopped]";
+      const blocks = [...(streamingMessage.blocks ?? [])];
+      const last = blocks.length - 1;
+      if (last >= 0 && blocks[last].type === "text") {
+        const prev = blocks[last] as { type: "text"; content: string };
+        blocks[last] = { type: "text", content: prev.content + stoppedText };
+      } else {
+        blocks.push({ type: "text", content: stoppedText });
+      }
       set({
-        messages: [...messages, { ...streamingMessage, content: streamingMessage.content + "\n\n[Stopped]" }],
+        messages: [...messages, { ...streamingMessage, content: streamingMessage.content + stoppedText, blocks }],
         isStreaming: false,
         streamingMessage: null,
         ws: null,

@@ -22,12 +22,17 @@ export interface ToolResult {
   content: string;
 }
 
+export type ContentBlock =
+  | { type: "text"; content: string }
+  | { type: "tool"; toolCall: ToolCall; result?: ToolResult };
+
 export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   tool_calls?: ToolCall[];
   tool_results?: ToolResult[];
+  blocks: ContentBlock[];
   timestamp?: string;
 }
 
