@@ -34,7 +34,9 @@ load_dotenv()
 
 BASE_DIR = os.path.dirname(__file__)
 WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
-DB_PATH = os.path.join(BASE_DIR, "state.db")
+_DATA_DIR = os.path.join(os.path.expanduser("~"), ".siliconcrew")
+os.makedirs(_DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(_DATA_DIR, "state.db")
 
 # Pricing Constants (Per 1M Tokens)
 PRICING = {
