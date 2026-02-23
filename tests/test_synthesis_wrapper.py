@@ -4,7 +4,7 @@ import sys
 # Add src to python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.tools.wrappers import synthesis_tool
+from src.tools.wrappers import start_synthesis
 
 def main():
     print("Testing Synthesis Tool Wrapper (Rich Output)...")
@@ -18,18 +18,17 @@ def main():
         with open(os.path.join(workspace_dir, design_file), "w") as f:
             f.write("module synth_counter(input clk, output reg [3:0] q); always @(posedge clk) q <= q + 1; endmodule")
 
-    print(f"Calling synthesis_tool('{design_file}', 'synth_counter')...")
+    print(f"Calling start_synthesis('{design_file}', 'synth_counter')...")
     
-    # This will run the actual Docker synthesis
-    # synthesis_tool is a LangChain StructuredTool, so we use .invoke
-    output = synthesis_tool.invoke({"design_file": design_file, "top_module": "synth_counter"})
+    # This script is informational; start_synthesis is async and returns job metadata.
+    output = start_synthesis.invoke({"verilog_files": [design_file], "top_module": "synth_counter"})
     
     print("\n--- Tool Output ---")
     print(output)
     print("-------------------")
     
-    if "Quick PPA Scan" in output and "Chip area" in output:
-        print("✅ Rich Output Verified!")
+    if "job_id" in output and "run_id" in output:
+        print("✅ Async synthesis start verified!")
     else:
         print("❌ Rich Output Missing or Synthesis Failed")
 

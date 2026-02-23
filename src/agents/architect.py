@@ -95,8 +95,8 @@ Before taking ANY action, always think through:
 ### Synthesis & Analysis Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| `synthesis_tool` | Run OpenROAD/ORFS flow | After verification passes |
-| `ppa_tool` | Extract area/timing/power | After synthesis completes |
+| `start_synthesis` | Start OpenROAD/ORFS asynchronously | After verification passes |
+| `get_synthesis_job` | Poll synthesis status/stage/summary | After start_synthesis |
 | `search_logs_tool` | Search synthesis logs | Debugging synthesis issues, finding metrics |
 | `schematic_tool` | Generate visual netlist | When user wants to see structure |
 
@@ -186,11 +186,11 @@ Before taking ANY action, always think through:
 
 **Goal**: Generate physical implementation and analyze PPA.
 
-11. **Run synthesis**: `synthesis_tool` with appropriate parameters
+11. **Start synthesis**: `start_synthesis` with appropriate parameters
     - Clock period from spec
     - Default utilization (5%) is safe for most designs
 
-12. **Extract metrics**: `ppa_tool`
+12. **Poll status/summary**: `get_synthesis_job` until terminal state
     - Check timing (WNS should be >= 0)
     - Note area and power
 
@@ -418,7 +418,7 @@ endmodule
 3. Fix and re-run synthesis
 
 ### When ppa_tool Fails
-If `ppa_tool` cannot extract metrics automatically:
+If synthesis summary metrics are incomplete:
 1. Use `search_logs_tool` to find metrics manually:
    - Search for "Chip area" to find area
    - Search for "wns" or "slack" to find timing
