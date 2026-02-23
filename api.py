@@ -24,6 +24,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from src.agents.architect import create_architect_agent, SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
 from src.tools.design_report import save_design_report
+from src.auth.manager import AuthManager
 
 # Load environment
 load_dotenv()
@@ -46,11 +47,17 @@ PRICING = {
 
 # Initialize Session Manager
 session_manager = SessionManager(base_dir=WORKSPACE_DIR, db_path=DB_PATH)
+auth_manager = AuthManager(db_path=DB_PATH)
 
 
 # =============================================================================
 # PYDANTIC MODELS
 # =============================================================================
+
+class AuthProfileCreate(BaseModel):
+    provider: str
+    key: str
+    profile_id: str = "default"
 
 class SessionCreate(BaseModel):
     name: str
@@ -182,6 +189,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# =============================================================================
+# AUTH ENDPOINTS
+# =============================================================================
+
+@app.get("/api/settings/auth/profiles")
+async def list_auth_profiles():
+    """List configured auth profiles."""
+    return auth_manager.list_profiles()
+
+@app.post("/api/settings/auth/profiles")
+async def add_auth_profile(data: AuthProfileCreate):
+    """Add a manual API key profile."""
+    try:
+        auth_manager.add_api_key(data.provider, data.key, data.profile_id)
+        return {"status": "success", "message": f"Added profile for {data.provider}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================
@@ -328,9 +354,21 @@ async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
 
 
 @app.websocket("/api/chat/{session_id}")
-async def chat_websocket(websocket: WebSocket, session_id: str):
+async def chat_websocket(
+    websocket: WebSocket,
+    session_id: str,
+    openai_api_key: Optional[str] = Query(None),
+    anthropic_api_key: Optional[str] = Query(None),
+    google_api_key: Optional[str] = Query(None)
+):
     """WebSocket endpoint for streaming chat."""
     await websocket.accept()
+
+    # Collect keys
+    api_keys = {}
+    if openai_api_key: api_keys["openai_api_key"] = openai_api_key
+    if anthropic_api_key: api_keys["anthropic_api_key"] = anthropic_api_key
+    if google_api_key: api_keys["google_api_key"] = google_api_key
 
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -357,7 +395,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 meta = session_manager.get_session_metadata(session_id)
                 model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
 
-                agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+                agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name, api_keys=api_keys)
                 config = {"configurable": {"thread_id": session_id}, "recursion_limit": 50}
 
                 # Check for corrupted state

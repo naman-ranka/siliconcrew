@@ -22,10 +22,13 @@ class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
 
 class OpenAIAdapter(BaseRuntimeAdapter):
-    def __init__(self, checkpointer=None, model_name="gpt-4o"):
+    def __init__(self, checkpointer=None, model_name="gpt-4o", api_keys=None):
         self.checkpointer = checkpointer
         self.model_name = model_name
-        self.client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+        # Get key from args or env
+        api_key = (api_keys or {}).get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
+        self.client = AsyncOpenAI(api_key=api_key)
 
         # Convert tools to OpenAI format
         self.openai_tools = [convert_to_openai_tool(t) for t in architect_tools]
@@ -49,40 +52,36 @@ class OpenAIAdapter(BaseRuntimeAdapter):
         messages = state["messages"]
         openai_msgs = self._convert_messages(messages)
 
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model_name,
-                messages=openai_msgs,
-                tools=self.openai_tools,
-                tool_choice="auto" if self.openai_tools else None
-            )
+        response = await self.client.chat.completions.create(
+            model=self.model_name,
+            messages=openai_msgs,
+            tools=self.openai_tools,
+            tool_choice="auto" if self.openai_tools else None
+        )
 
-            choice = response.choices[0]
-            message_data = choice.message
+        choice = response.choices[0]
+        message_data = choice.message
 
-            tool_calls = []
-            if message_data.tool_calls:
-                for tc in message_data.tool_calls:
-                    tool_calls.append({
-                        "name": tc.function.name,
-                        "args": json.loads(tc.function.arguments),
-                        "id": tc.id
-                    })
+        tool_calls = []
+        if message_data.tool_calls:
+            for tc in message_data.tool_calls:
+                tool_calls.append({
+                    "name": tc.function.name,
+                    "args": json.loads(tc.function.arguments),
+                    "id": tc.id
+                })
 
-            ai_message = AIMessage(
-                content=message_data.content or "",
-                tool_calls=tool_calls,
-                usage_metadata={
-                    "input_tokens": response.usage.prompt_tokens,
-                    "output_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens
-                } if response.usage else None
-            )
+        ai_message = AIMessage(
+            content=message_data.content or "",
+            tool_calls=tool_calls,
+            usage_metadata={
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens
+            } if response.usage else None
+        )
 
-            return {"messages": [ai_message]}
-
-        except Exception as e:
-            return {"messages": [AIMessage(content=f"Error calling OpenAI: {str(e)}")]}
+        return {"messages": [ai_message]}
 
     def should_continue(self, state: AgentState) -> Literal["tools", END]:
         last_message = state["messages"][-1]

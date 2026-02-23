@@ -532,15 +532,16 @@ Remember: You are an expert. Take pride in producing high-quality, working hardw
 """
 
 
-def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL):
+def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_keys=None):
     """
     Creates the Architect agent using the appropriate runtime.
     
     Args:
         checkpointer: Optional LangGraph checkpointer for persistence
         model_name: Name of the LLM model to use
+        api_keys: Optional dict of API keys
         
     Returns:
         A runtime adapter instance (behaving like a compiled graph)
     """
-    return RuntimeFactory.get_runtime(model_name, checkpointer)
+    return RuntimeFactory.get_runtime(model_name, checkpointer, api_keys=api_keys)

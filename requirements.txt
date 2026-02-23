@@ -25,3 +25,4 @@ cocotb-test
 pytest
 openai>=1.59.3
 anthropic>=0.42.0
+cryptography

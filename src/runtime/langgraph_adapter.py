@@ -8,16 +8,18 @@ from src.config import DEFAULT_MODEL
 from .base import BaseRuntimeAdapter
 
 class LangGraphAdapter(BaseRuntimeAdapter):
-    def __init__(self, checkpointer=None, model_name=DEFAULT_MODEL):
+    def __init__(self, checkpointer=None, model_name=DEFAULT_MODEL, api_keys=None):
         self.model_name = model_name
         self.checkpointer = checkpointer
 
         # Gemini 3 models require special configuration for proper tool calling
         is_gemini_3 = "gemini-3" in model_name.lower()
 
+        api_key = (api_keys or {}).get("google_api_key") or os.environ.get("GOOGLE_API_KEY")
+
         llm_kwargs = {
             "model": model_name,
-            "google_api_key": os.environ.get("GOOGLE_API_KEY"),
+            "google_api_key": api_key,
         }
 
         if is_gemini_3:

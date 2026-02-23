@@ -10,25 +10,27 @@ PRICING = {
     "gemini-3-pro-preview": {"input": 2.00, "output": 12.00}
 }
 
-def generate_markdown_report(session_id, db_path, model_name="gemini-2.5-flash"):
+import asyncio
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+async def generate_markdown_report(session_id, db_path, model_name="gemini-2.5-flash"):
     """
     Generates a Markdown report for a given session.
     """
     
     # 1. Connect to DB to get history
     try:
-        conn = sqlite3.connect(db_path, check_same_thread=False)
-        memory = SqliteSaver(conn)
-        config = {"configurable": {"thread_id": session_id}}
-        
-        # We need the agent graph to load the state
-        # We just need the state, no need to actually run agent
-        # Passing a dummy model_name since we won't invoke LLM
-        agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
-        
-        current_state = agent_graph.get_state(config)
-        messages = current_state.values.get("messages", [])
-        conn.close()
+        async with AsyncSqliteSaver.from_conn_string(db_path) as memory:
+            config = {"configurable": {"thread_id": session_id}}
+
+            # We need the agent graph to load the state
+            # We just need the state, no need to actually run agent
+            # Passing a dummy model_name since we won't invoke LLM
+            agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+
+            current_state = await agent_graph.aget_state(config)
+            messages = current_state.values.get("messages", [])
+
     except Exception as e:
         return f"# Error Generating Report\n\nCould not load session: {e}"
 

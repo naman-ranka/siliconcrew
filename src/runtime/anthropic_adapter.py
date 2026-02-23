@@ -21,10 +21,13 @@ class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
 
 class AnthropicAdapter(BaseRuntimeAdapter):
-    def __init__(self, checkpointer=None, model_name="claude-3-5-sonnet-20241022"):
+    def __init__(self, checkpointer=None, model_name="claude-3-5-sonnet-20241022", api_keys=None):
         self.checkpointer = checkpointer
         self.model_name = model_name
-        self.client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+
+        # Get key from args or env
+        api_key = (api_keys or {}).get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")
+        self.client = AsyncAnthropic(api_key=api_key)
 
         # Convert tools to Anthropic format
         self.anthropic_tools = [self._convert_tool(t) for t in architect_tools]
@@ -48,46 +51,42 @@ class AnthropicAdapter(BaseRuntimeAdapter):
         messages = state["messages"]
         system_prompt, anthropic_msgs = self._convert_messages(messages)
 
-        try:
-            # Anthropic max_tokens is required
-            kwargs = {
-                "model": self.model_name,
-                "messages": anthropic_msgs,
-                "max_tokens": 4096,
-                "tools": self.anthropic_tools
-            }
-            if system_prompt.strip():
-                kwargs["system"] = system_prompt.strip()
+        # Anthropic max_tokens is required
+        kwargs = {
+            "model": self.model_name,
+            "messages": anthropic_msgs,
+            "max_tokens": 4096,
+            "tools": self.anthropic_tools
+        }
+        if system_prompt.strip():
+            kwargs["system"] = system_prompt.strip()
 
-            response = await self.client.messages.create(**kwargs)
+        response = await self.client.messages.create(**kwargs)
 
-            content_text = ""
-            tool_calls = []
+        content_text = ""
+        tool_calls = []
 
-            for block in response.content:
-                if block.type == "text":
-                    content_text += block.text
-                elif block.type == "tool_use":
-                    tool_calls.append({
-                        "name": block.name,
-                        "args": block.input,
-                        "id": block.id
-                    })
+        for block in response.content:
+            if block.type == "text":
+                content_text += block.text
+            elif block.type == "tool_use":
+                tool_calls.append({
+                    "name": block.name,
+                    "args": block.input,
+                    "id": block.id
+                })
 
-            ai_message = AIMessage(
-                content=content_text,
-                tool_calls=tool_calls,
-                usage_metadata={
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                    "total_tokens": response.usage.input_tokens + response.usage.output_tokens
-                } if response.usage else None
-            )
+        ai_message = AIMessage(
+            content=content_text,
+            tool_calls=tool_calls,
+            usage_metadata={
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.input_tokens + response.usage.output_tokens
+            } if response.usage else None
+        )
 
-            return {"messages": [ai_message]}
-
-        except Exception as e:
-            return {"messages": [AIMessage(content=f"Error calling Anthropic: {str(e)}")]}
+        return {"messages": [ai_message]}
 
     def should_continue(self, state: AgentState) -> Literal["tools", END]:
         last_message = state["messages"][-1]
