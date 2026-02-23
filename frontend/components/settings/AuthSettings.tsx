@@ -58,6 +58,34 @@ export function AuthSettings() {
     }
   };
 
+  const handleOAuthConnect = async (provider: string) => {
+    try {
+        // Construct callback URL (current page + special route ideally, but here we assume handling)
+        // For simplicity, we redirect to a popup handler or same page
+        const redirectUri = window.location.origin + "/auth/callback?provider=" + provider;
+
+        const res = await fetch(`/api/auth/login/${provider}?redirect_uri=${encodeURIComponent(redirectUri)}`);
+        if (res.ok) {
+            const data = await res.json();
+            // Open popup
+            const width = 600;
+            const height = 700;
+            const left = window.screen.width / 2 - width / 2;
+            const top = window.screen.height / 2 - height / 2;
+            window.open(
+                data.url,
+                `Connect ${provider}`,
+                `width=${width},height=${height},left=${left},top=${top}`
+            );
+
+            // In a real app, we'd listen for postMessage from the popup
+            // For now, we assume user manually refreshes or we poll
+        }
+    } catch (e) {
+        console.error(e);
+    }
+  };
+
   return (
     <div className="space-y-6">
         <div>
@@ -98,6 +126,19 @@ export function AuthSettings() {
                         <option value="gemini">Google Gemini</option>
                     </select>
                 </div>
+
+                {selectedProvider === "gemini" ? (
+                    <div className="flex flex-col gap-2">
+                        <Button variant="outline" onClick={() => handleOAuthConnect("google")}>
+                            <Key className="h-4 w-4 mr-2" />
+                            Connect with Google
+                        </Button>
+                        <div className="relative flex justify-center text-xs uppercase">
+                            <span className="bg-surface-1 px-2 text-muted-foreground">Or using API Key</span>
+                        </div>
+                    </div>
+                ) : null}
+
                 <Input
                     type="password"
                     placeholder="API Key (sk-...)"

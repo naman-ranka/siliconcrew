@@ -532,7 +532,7 @@ Remember: You are an expert. Take pride in producing high-quality, working hardw
 """
 
 
-def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_keys=None):
+async def acreate_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_keys=None, db_path=None):
     """
     Creates the Architect agent using the appropriate runtime.
     
@@ -540,8 +540,14 @@ def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_keys
         checkpointer: Optional LangGraph checkpointer for persistence
         model_name: Name of the LLM model to use
         api_keys: Optional dict of API keys
+        db_path: Optional path to auth database
         
     Returns:
         A runtime adapter instance (behaving like a compiled graph)
     """
-    return RuntimeFactory.get_runtime(model_name, checkpointer, api_keys=api_keys)
+    return await RuntimeFactory.aget_runtime(model_name, checkpointer, api_keys=api_keys, db_path=db_path)
+
+# Backwards compatibility wrapper (deprecated, will fail if async needed)
+def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_keys=None, db_path=None):
+    import asyncio
+    return asyncio.run(acreate_architect_agent(checkpointer, model_name, api_keys, db_path))

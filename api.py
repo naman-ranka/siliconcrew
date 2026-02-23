@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from src.agents.architect import create_architect_agent, SYSTEM_PROMPT
+from src.agents.architect import acreate_architect_agent, create_architect_agent, SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
 from src.tools.design_report import save_design_report
 from src.auth.manager import AuthManager
@@ -209,6 +209,30 @@ async def add_auth_profile(data: AuthProfileCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/auth/login/{provider}")
+async def login_provider(provider: str, redirect_uri: str):
+    """Get OAuth redirect URL."""
+    try:
+        from src.auth.oauth import OAuthFactory
+        oauth = OAuthFactory.get_provider(provider)
+        url = oauth.get_auth_url(redirect_uri)
+        return {"url": url}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/auth/callback/{provider}")
+async def callback_provider(provider: str, code: str, redirect_uri: str, profile_id: str = "default"):
+    """Handle OAuth callback."""
+    try:
+        from src.auth.oauth import OAuthFactory
+        oauth = OAuthFactory.get_provider(provider)
+        token_data = await oauth.exchange_code(code, redirect_uri)
+
+        auth_manager.add_oauth_profile(provider, token_data, profile_id)
+        return {"status": "success", "message": f"Connected {provider}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # =============================================================================
 # SESSION ENDPOINTS
@@ -302,7 +326,7 @@ async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
             meta = session_manager.get_session_metadata(session_id)
             model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
 
-            agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+            agent_graph = await acreate_architect_agent(checkpointer=memory, model_name=model_name)
             config = {"configurable": {"thread_id": session_id}}
 
             current_state = await agent_graph.aget_state(config)
@@ -395,7 +419,7 @@ async def chat_websocket(
                 meta = session_manager.get_session_metadata(session_id)
                 model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
 
-                agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name, api_keys=api_keys)
+                agent_graph = await acreate_architect_agent(checkpointer=memory, model_name=model_name, api_keys=api_keys, db_path=DB_PATH)
                 config = {"configurable": {"thread_id": session_id}, "recursion_limit": 50}
 
                 # Check for corrupted state

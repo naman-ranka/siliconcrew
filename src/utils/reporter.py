@@ -26,7 +26,9 @@ async def generate_markdown_report(session_id, db_path, model_name="gemini-2.5-f
             # We need the agent graph to load the state
             # We just need the state, no need to actually run agent
             # Passing a dummy model_name since we won't invoke LLM
-            agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+            # Use async create to avoid resolving keys synchronously
+            from src.agents.architect import acreate_architect_agent
+            agent_graph = await acreate_architect_agent(checkpointer=memory, model_name=model_name)
 
             current_state = await agent_graph.aget_state(config)
             messages = current_state.values.get("messages", [])
