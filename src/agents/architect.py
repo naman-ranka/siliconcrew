@@ -80,7 +80,8 @@ Before taking ANY action, always think through:
 |------|---------|-------------|
 | `write_file` | Create/overwrite files | Writing RTL, testbenches |
 | `read_file` | Read file contents | Checking existing code |
-| `edit_file_tool` | Surgical text replacement | Small fixes (prefer over full rewrite) |
+| `apply_patch_tool` | Robust unified-diff edits | Preferred for iterative code changes |
+| `edit_file_tool` | Surgical text replacement | Fallback for simple exact replacements |
 | `list_files_tool` | List workspace contents | Exploring what exists |
 
 ### Verification Tools
@@ -97,6 +98,9 @@ Before taking ANY action, always think through:
 |------|---------|-------------|
 | `start_synthesis` | Start OpenROAD/ORFS asynchronously | After verification passes |
 | `get_synthesis_job` | Poll synthesis status/stage/summary | After start_synthesis |
+| `wait_for_synthesis` | Bounded synthesis wait helper | Use for MCP-safe reduced polling overhead |
+| `run_synthesis_and_wait` | Start + wait in one call | Prefer for non-MCP agent flow |
+| `get_synthesis_metrics` | Structured PPA extraction | After synthesis for report-ready metrics |
 | `search_logs_tool` | Search synthesis logs | Debugging synthesis issues, finding metrics |
 | `schematic_tool` | Generate visual netlist | When user wants to see structure |
 
@@ -190,7 +194,11 @@ Before taking ANY action, always think through:
     - Clock period from spec
     - Default utilization (5%) is safe for most designs
 
-12. **Poll status/summary**: `get_synthesis_job` until terminal state
+12. **Wait/poll status**:
+    - Non-MCP: prefer `run_synthesis_and_wait`
+    - MCP: use `wait_for_synthesis` (bounded) or `get_synthesis_job` loop
+
+13. **Fetch structured metrics**: `get_synthesis_metrics`
     - Check timing (WNS should be >= 0)
     - Note area and power
 
@@ -395,7 +403,7 @@ endmodule
    - "undeclared identifier" → Add wire/reg declaration
    - "width mismatch" → Check bit widths on both sides
    - "unknown module" → Check module name spelling, include file
-4. Use `edit_file_tool` for small fixes
+4. Prefer `apply_patch_tool`; use `edit_file_tool` for small exact replacements
 5. Re-run linter to verify fix
 
 ### When Simulation Fails
@@ -416,6 +424,13 @@ endmodule
    - "combinational loop" → Check always @(*) blocks
    - "timing violation" → Increase clock period or pipeline
 3. Fix and re-run synthesis
+
+### Timing Closure Guidance
+When synthesis completes but timing is not met (for example negative WNS/TNS or setup violations):
+1. Use `get_synthesis_metrics` to confirm the failure mode and severity.
+2. Use `search_logs_tool` to inspect path-level timing evidence (startpoint/endpoint, arrival vs required time, violated slack).
+3. Base optimization suggestions on observed paths and logic structure, not only generic advice.
+4. Keep optimization strategy flexible by design context (pipeline stages, arithmetic depth, bit-width/precision, control-path fanout, clock target).
 
 ### When ppa_tool Fails
 If synthesis summary metrics are incomplete:

@@ -63,3 +63,17 @@ def test_simulation_output_budget(monkeypatch):
     assert result["log_truncated"] is True
     assert len(result["stdout_tail"]) <= 4000
     assert len(result["stderr_tail"]) <= 4000
+
+
+def test_simulation_failure_type_assertion(monkeypatch):
+    monkeypatch.setattr(rs, "_compile", lambda **kwargs: {"returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"})
+    monkeypatch.setattr(
+        rs,
+        "_simulate",
+        lambda **kwargs: {"returncode": 1, "stdout": "ASSERTION FAILED at cycle 12\n", "stderr": "", "command": "vvp"},
+    )
+
+    result = rs.run_simulation(verilog_files=[], top_module="tb", mode="rtl")
+    assert result["status"] == "sim_failed"
+    assert result["failure_type"] == "assertion"
+    assert "assertion failed" in (result["first_failure_line"] or "").lower()

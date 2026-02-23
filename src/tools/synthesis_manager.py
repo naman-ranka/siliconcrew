@@ -786,3 +786,142 @@ def get_run_dir(workspace: str, run_id: Optional[str]) -> Optional[str]:
         rid = f.read().strip()
     path = os.path.join(_runs_root(workspace), rid)
     return path if os.path.exists(path) else None
+
+
+def _find_report_file(run_dir: str, name: str) -> Optional[str]:
+    reports_root = os.path.join(run_dir, "orfs_reports")
+    if not os.path.exists(reports_root):
+        return None
+    for root, _, files in os.walk(reports_root):
+        if name in files:
+            return os.path.join(root, name)
+    return None
+
+
+def _parse_finish_report(path: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "wns_ns": None,
+        "tns_ns": None,
+        "power_uw": None,
+        "violations": {
+            "setup": None,
+            "hold": None,
+            "max_slew": None,
+            "max_cap": None,
+            "max_fanout": None,
+        },
+    }
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception:
+        return out
+
+    def _mfloat(pattern: str) -> Optional[float]:
+        m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        if not m:
+            return None
+        try:
+            return float(m.group(1))
+        except Exception:
+            return None
+
+    def _mint(pattern: str) -> Optional[int]:
+        m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    out["wns_ns"] = _mfloat(r"^\s*wns\s+max\s+([0-9.eE+-]+)")
+    out["tns_ns"] = _mfloat(r"^\s*tns\s+max\s+([0-9.eE+-]+)")
+    out["violations"]["setup"] = _mint(r"setup\s+violation\s+count\s+([0-9]+)")
+    out["violations"]["hold"] = _mint(r"hold\s+violation\s+count\s+([0-9]+)")
+    out["violations"]["max_slew"] = _mint(r"max\s+slew\s+violation\s+count\s+([0-9]+)")
+    out["violations"]["max_cap"] = _mint(r"max\s+cap\s+violation\s+count\s+([0-9]+)")
+    out["violations"]["max_fanout"] = _mint(r"max\s+fanout\s+violation\s+count\s+([0-9]+)")
+
+    # Power table line shape:
+    # Total <internal> <switching> <leakage> <total> 100.0%
+    total_w = _mfloat(r"^\s*Total\s+[0-9.eE+-]+\s+[0-9.eE+-]+\s+[0-9.eE+-]+\s+([0-9.eE+-]+)\s+100")
+    if total_w is not None:
+        out["power_uw"] = total_w * 1e6
+    return out
+
+
+def _parse_synth_stat(path: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"area_um2": None, "cell_count": None}
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception:
+        return out
+
+    area_m = re.search(r"Chip area for module .*:\s*([0-9.]+)", text, re.IGNORECASE)
+    if area_m:
+        try:
+            out["area_um2"] = float(area_m.group(1))
+        except Exception:
+            pass
+
+    # Yosys stat summary row usually looks like: "814 7.33E+03 cells"
+    cells_m = re.search(r"^\s*([0-9]+)\s+[0-9.eE+-]+\s+cells\b", text, re.IGNORECASE | re.MULTILINE)
+    if cells_m:
+        try:
+            out["cell_count"] = int(cells_m.group(1))
+        except Exception:
+            pass
+    return out
+
+
+def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    run_dir = get_run_dir(workspace, run_id)
+    if run_dir is None:
+        return {
+            "status": "error",
+            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
+            "run_id": run_id,
+            "complete": False,
+        }
+
+    finish = _find_report_file(run_dir, "6_finish.rpt")
+    stat = _find_report_file(run_dir, "synth_stat.txt")
+    finish_data = _parse_finish_report(finish) if finish else {}
+    stat_data = _parse_synth_stat(stat) if stat else {}
+
+    metrics = {
+        "area_um2": stat_data.get("area_um2"),
+        "cell_count": stat_data.get("cell_count"),
+        "wns_ns": finish_data.get("wns_ns"),
+        "tns_ns": finish_data.get("tns_ns"),
+        "power_uw": finish_data.get("power_uw"),
+    }
+    sources = {
+        "area_um2": stat,
+        "cell_count": stat,
+        "wns_ns": finish,
+        "tns_ns": finish,
+        "power_uw": finish,
+    }
+    missing = [k for k, v in metrics.items() if v is None]
+    notes = []
+    if not finish:
+        notes.append("6_finish.rpt not found")
+    if not stat:
+        notes.append("synth_stat.txt not found")
+
+    run_meta = _read_run_meta(run_dir)
+    return {
+        "status": "ok",
+        "run_id": run_meta.get("run_id") or os.path.basename(run_dir),
+        "top_module": run_meta.get("top_module"),
+        "platform": run_meta.get("platform"),
+        "metrics": metrics,
+        "violations": finish_data.get("violations", {}),
+        "sources": sources,
+        "complete": len(missing) == 0,
+        "missing_fields": missing,
+        "parse_notes": notes,
+    }

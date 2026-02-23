@@ -31,3 +31,4 @@ def test_mcp_does_not_expose_sleep_tool():
     names = {t.name for t in tools}
 
     assert "sleep_tool" not in names
+    assert "wait_for_synthesis" in names
