@@ -18,6 +18,7 @@ interface AppState {
 
   // WebSocket
   ws: WebSocket | null;
+  wsSessionId: string | null;
 
   // Sidebar state
   sidebarCollapsed: boolean;
@@ -92,6 +93,7 @@ export const useStore = create<AppState>((set, get) => ({
   chatError: null,
 
   ws: null,
+  wsSessionId: null,
 
   sidebarCollapsed: false,
 
@@ -131,11 +133,16 @@ export const useStore = create<AppState>((set, get) => ({
 
   createSession: async (name: string, model: string) => {
     try {
+      const { ws } = get();
+      set({ ws: null, wsSessionId: null });
+      if (ws) ws.close();
       const session = await sessionsApi.create(name, model);
       set((state) => ({
         sessions: [session, ...state.sessions],
         currentSession: session,
         messages: [],
+        ws: null,
+        wsSessionId: null,
         files: [],
         spec: null,
         codeFiles: [],
@@ -170,6 +177,7 @@ export const useStore = create<AppState>((set, get) => ({
   selectSession: async (session: Session | null) => {
     // Close existing WebSocket
     const { ws } = get();
+    set({ ws: null, wsSessionId: null });
     if (ws) {
       ws.close();
     }
@@ -178,6 +186,7 @@ export const useStore = create<AppState>((set, get) => ({
       currentSession: session,
       messages: [],
       ws: null,
+      wsSessionId: null,
       spec: null,
       codeFiles: [],
       selectedCodeFile: null,
@@ -217,7 +226,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   sendMessage: (content: string) => {
-    const { currentSession, ws: existingWs, messages } = get();
+    const { currentSession, ws: existingWs, wsSessionId, messages } = get();
     if (!currentSession || !content.trim()) return;
 
     // Add user message
@@ -233,12 +242,21 @@ export const useStore = create<AppState>((set, get) => ({
 
     // Create or reuse WebSocket
     let ws = existingWs;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      ws = chatApi.createConnection(currentSession.id);
-      set({ ws });
+    const sessionMismatch = wsSessionId !== currentSession.id;
+    if (ws && (ws.readyState !== WebSocket.OPEN || sessionMismatch)) {
+      ws.close();
+      ws = null;
+    }
 
-      ws.onopen = () => {
-        ws!.send(JSON.stringify({ message: content.trim() }));
+    if (!ws) {
+      ws = chatApi.createConnection(currentSession.id);
+      const socket = ws;
+      set({ ws: socket, wsSessionId: currentSession.id });
+
+      socket.onopen = () => {
+        // Ignore stale socket opens after session/socket replacement.
+        if (get().ws !== socket) return;
+        socket.send(JSON.stringify({ message: content.trim() }));
       };
     } else {
       ws.send(JSON.stringify({ message: content.trim() }));
@@ -257,7 +275,9 @@ export const useStore = create<AppState>((set, get) => ({
 
     set({ isStreaming: true, streamingMessage, chatError: null });
 
-    ws.onmessage = (event) => {
+    const socket = ws;
+    socket.onmessage = (event) => {
+      if (get().ws !== socket) return;
       const data = JSON.parse(event.data);
       const { streamingMessage: msg, messages: currentMessages } = get();
 
@@ -338,7 +358,8 @@ export const useStore = create<AppState>((set, get) => ({
       }
     };
 
-    ws.onerror = () => {
+    socket.onerror = () => {
+      if (get().ws !== socket) return;
       set({
         chatError: "WebSocket connection error",
         isStreaming: false,
@@ -346,8 +367,9 @@ export const useStore = create<AppState>((set, get) => ({
       });
     };
 
-    ws.onclose = () => {
-      set({ ws: null });
+    socket.onclose = () => {
+      if (get().ws !== socket) return;
+      set({ ws: null, wsSessionId: null });
     };
   },
 
@@ -369,6 +391,7 @@ export const useStore = create<AppState>((set, get) => ({
         isStreaming: false,
         streamingMessage: null,
         ws: null,
+        wsSessionId: null,
       });
     }
   },

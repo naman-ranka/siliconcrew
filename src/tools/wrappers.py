@@ -1,13 +1,19 @@
 import os
 import json
 import time
+from typing import Any
 from langchain_core.tools import tool
 from src.tools.run_linter import run_linter
 from src.tools.run_simulation import run_simulation
 from src.tools.read_waveform import read_waveform
 from src.tools.run_cocotb import run_cocotb
 from src.tools.run_sby import run_sby
-from src.tools.synthesis_manager import start_synthesis_job, get_synthesis_job_status
+from src.tools.synthesis_manager import (
+    start_synthesis_job,
+    get_synthesis_job_status,
+    get_synthesis_metrics as collect_synthesis_metrics,
+)
+from src.tools.file_patch import apply_unified_patch
 
 # Helper to get workspace path
 def get_workspace_path():
@@ -178,6 +184,102 @@ def get_synthesis_job(job_id: str) -> str:
     result = get_synthesis_job_status(job_id, workspace=workspace)
     return json.dumps(result, indent=2)
 
+
+def _wait_for_synthesis_job(
+    workspace: str,
+    job_id: str,
+    max_wait_sec: int,
+    poll_interval_sec: int,
+) -> dict[str, Any]:
+    start = time.time()
+    max_wait = max(1, int(max_wait_sec))
+    poll_interval = max(1, int(poll_interval_sec))
+    last = None
+
+    while (time.time() - start) < max_wait:
+        status = get_synthesis_job_status(job_id, workspace=workspace)
+        last = status
+        if status.get("status") in {"completed", "failed"}:
+            status["waited_sec"] = round(time.time() - start, 2)
+            status["timed_out"] = False
+            return status
+
+        suggested = status.get("retry_after_sec")
+        if suggested is None:
+            suggested = status.get("poll_after_sec", poll_interval)
+        sleep_s = max(1, int(round(float(suggested))))
+        remaining = max_wait - (time.time() - start)
+        if remaining <= 0:
+            break
+        time.sleep(min(sleep_s, max(1, int(remaining))))
+
+    # timeout path returns latest known status with explicit timeout flag
+    if last is None:
+        last = {"job_id": job_id, "status": "running"}
+    last["waited_sec"] = round(time.time() - start, 2)
+    last["timed_out"] = True
+    last["next_action"] = "Call wait_for_synthesis again or poll with get_synthesis_job."
+    return last
+
+
+@tool
+def wait_for_synthesis(job_id: str, max_wait_sec: int = 30, poll_interval_sec: int = 2) -> str:
+    """
+    MCP-safe bounded wait for synthesis completion.
+    Internally polls synthesis for up to max_wait_sec, then returns either terminal or running status.
+    Args:
+        job_id: Synthesis job id from start_synthesis.
+        max_wait_sec: Max seconds to block in this call (default 30).
+        poll_interval_sec: Fallback poll interval when guidance is absent.
+    """
+    workspace = get_workspace_path()
+    result = _wait_for_synthesis_job(workspace, job_id, max_wait_sec, poll_interval_sec)
+    return json.dumps(result, indent=2)
+
+
+@tool
+def run_synthesis_and_wait(
+    verilog_files: list[str],
+    top_module: str,
+    platform: str = "sky130hd",
+    clock_period_ns: float = 10.0,
+    utilization: int = 5,
+    aspect_ratio: float = 1.0,
+    core_margin: float = 2.0,
+    run_equiv: bool = False,
+    constraints_mode: str = "auto",
+    max_wait_sec: int = 300,
+    poll_interval_sec: int = 2,
+) -> str:
+    """
+    Starts synthesis and waits (bounded) for completion.
+    Intended for non-MCP agent flows to reduce poll/sleep turn overhead.
+    """
+    started_json = start_synthesis.invoke(
+        {
+            "verilog_files": verilog_files,
+            "top_module": top_module,
+            "platform": platform,
+            "clock_period_ns": clock_period_ns,
+            "utilization": utilization,
+            "aspect_ratio": aspect_ratio,
+            "core_margin": core_margin,
+            "run_equiv": run_equiv,
+            "constraints_mode": constraints_mode,
+        }
+    )
+
+    try:
+        started = json.loads(started_json)
+    except Exception:
+        return started_json
+    if "job_id" not in started:
+        return started_json
+
+    workspace = get_workspace_path()
+    waited = _wait_for_synthesis_job(workspace, started["job_id"], max_wait_sec, poll_interval_sec)
+    return json.dumps({"start": started, "result": waited}, indent=2)
+
 @tool
 def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0, end_time: int = 1000) -> str:
     """
@@ -206,7 +308,29 @@ def search_logs_tool(query: str, run_id: str = None) -> str:
     return search_logs(query, workspace, run_id=run_id)
 
 
+@tool
+def get_synthesis_metrics(run_id: str = None) -> str:
+    """
+    Returns structured synthesis metrics for a run.
+    Parses standard ORFS outputs (6_finish.rpt + synth_stat.txt) and returns JSON.
+    """
+    workspace = get_workspace_path()
+    result = collect_synthesis_metrics(workspace=workspace, run_id=run_id)
+    return json.dumps(result, indent=2)
+
+
 from src.tools.edit_file import replace_in_file
+
+@tool
+def apply_patch_tool(unified_diff: str) -> str:
+    """
+    Applies a unified-diff patch inside the active workspace.
+    Prefer this for robust code edits over exact-text replacement.
+    """
+    workspace = get_workspace_path()
+    result = apply_unified_patch(workspace=workspace, unified_diff=unified_diff)
+    return json.dumps(result, indent=2)
+
 
 @tool
 def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> str:
@@ -611,6 +735,7 @@ mcp_tools = [
     # File management
     write_file,
     read_file,
+    apply_patch_tool,
     edit_file_tool,
     list_files_tool,
     # Verification tools
@@ -622,6 +747,8 @@ mcp_tools = [
     # Synthesis & Analysis
     start_synthesis,
     get_synthesis_job,
+    wait_for_synthesis,
+    get_synthesis_metrics,
     search_logs_tool,
     schematic_tool,
     # Reporting & Metrics
@@ -630,4 +757,4 @@ mcp_tools = [
 ]
 
 # Tools bound to the in-process architect agent.
-architect_tools = [*mcp_tools, sleep_tool]
+architect_tools = [*mcp_tools, run_synthesis_and_wait, sleep_tool]

@@ -78,6 +78,34 @@ def _simulate(output_executable: str, cwd: str, timeout: int) -> Dict[str, Any]:
     return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "command": " ".join(cmd)}
 
 
+def _detect_failure_info(status: str, stdout: str, stderr: str) -> Dict[str, Optional[str]]:
+    text = f"{stdout or ''}\n{stderr or ''}"
+    low = text.lower()
+
+    def _first_line(patterns: List[str]) -> Optional[str]:
+        for line in text.splitlines():
+            l = line.lower()
+            if any(p in l for p in patterns):
+                return line.strip()
+        return None
+
+    if status == "compile_failed":
+        return {"failure_type": "compile", "first_failure_line": _first_line(["error", "undefined", "unknown module"]), "first_failure_snippet": None}
+
+    if "timed out" in low:
+        return {"failure_type": "timeout", "first_failure_line": _first_line(["timed out"]), "first_failure_snippet": None}
+    if "$fatal" in low or "fatal" in low:
+        return {"failure_type": "fatal", "first_failure_line": _first_line(["$fatal", "fatal"]), "first_failure_snippet": None}
+    if "assert" in low:
+        return {"failure_type": "assertion", "first_failure_line": _first_line(["assert", "assertion"]), "first_failure_snippet": None}
+
+    if status == "sim_failed":
+        return {"failure_type": "runtime", "first_failure_line": _first_line(["error", "fail"]), "first_failure_snippet": None}
+    if status == "test_failed":
+        return {"failure_type": "test_failed", "first_failure_line": _first_line(["fail", "error"]), "first_failure_snippet": None}
+    return {"failure_type": None, "first_failure_line": None, "first_failure_snippet": None}
+
+
 def run_simulation(
     verilog_files: Optional[List[str]] = None,
     top_module: str = "tb",
@@ -119,6 +147,9 @@ def run_simulation(
             "log_truncated": False,
             "unresolved_cells": [],
             "success": False,
+            "failure_type": "compile",
+            "first_failure_line": f"Unsupported simulation mode: {mode}",
+            "first_failure_snippet": None,
         }
 
     if mode == "post_synth":
@@ -134,6 +165,9 @@ def run_simulation(
                 "log_truncated": False,
                 "unresolved_cells": [],
                 "success": False,
+                "failure_type": "compile",
+                "first_failure_line": f"Unknown run_id '{run_id}' and no latest run available.",
+                "first_failure_snippet": None,
             }
 
         resolved_netlist = netlist_file
@@ -158,6 +192,9 @@ def run_simulation(
                 "log_truncated": False,
                 "unresolved_cells": [],
                 "success": False,
+                "failure_type": "compile",
+                "first_failure_line": "Post-synth mode requires a valid synthesized netlist.",
+                "first_failure_snippet": None,
             }
 
         if not platform:
@@ -171,6 +208,9 @@ def run_simulation(
                 "log_truncated": False,
                 "unresolved_cells": [],
                 "success": False,
+                "failure_type": "compile",
+                "first_failure_line": "Post-synth mode requires platform metadata to resolve stdcell models.",
+                "first_failure_snippet": None,
             }
 
         try:
@@ -186,6 +226,9 @@ def run_simulation(
                 "log_truncated": False,
                 "unresolved_cells": [],
                 "success": False,
+                "failure_type": "compile",
+                "first_failure_line": str(exc),
+                "first_failure_snippet": None,
             }
 
         compile_files = compile_files + [os.path.abspath(resolved_netlist)] + stdcells
@@ -210,6 +253,7 @@ def run_simulation(
             "mode": mode,
             "compile_command": comp.get("command"),
             "sim_command": None,
+            **_detect_failure_info("compile_failed", comp.get("stdout", ""), comp.get("stderr", "")),
         }
 
     sim = _simulate(output_executable=output_exec, cwd=cwd, timeout=timeout)
@@ -238,4 +282,5 @@ def run_simulation(
         "mode": mode,
         "compile_command": comp.get("command"),
         "sim_command": sim.get("command"),
+        **_detect_failure_info(status, sim.get("stdout", ""), sim.get("stderr", "")),
     }

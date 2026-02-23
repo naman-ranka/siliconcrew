@@ -47,6 +47,7 @@ from src.tools.wrappers import (
     load_yaml_spec_file,
     write_file,
     read_file,
+    apply_patch_tool,
     edit_file_tool,
     list_files_tool,
     linter_tool,
@@ -56,6 +57,8 @@ from src.tools.wrappers import (
     sby_tool,
     start_synthesis,
     get_synthesis_job,
+    wait_for_synthesis,
+    get_synthesis_metrics,
     search_logs_tool,
     schematic_tool,
     save_metrics_tool,
@@ -82,10 +85,10 @@ TOOL_CATEGORIES = {
         "waveform_tool", "cocotb_tool", "sby_tool"
     ],
     "synthesis": [
-        "start_synthesis", "get_synthesis_job", "search_logs_tool", "schematic_tool"
+        "start_synthesis", "get_synthesis_job", "wait_for_synthesis", "get_synthesis_metrics", "search_logs_tool", "schematic_tool"
     ],
     "editing": [
-        "edit_file_tool", "load_yaml_spec_file"
+        "apply_patch_tool", "edit_file_tool", "load_yaml_spec_file"
     ],
     "reporting": [
         "save_metrics_tool", "generate_report_tool"
@@ -640,6 +643,7 @@ Ready to design! What would you like to create?"""
             "load_yaml_spec_file": load_yaml_spec_file,
             "write_file": write_file,
             "read_file": read_file,
+            "apply_patch_tool": apply_patch_tool,
             "edit_file_tool": edit_file_tool,
             "list_files_tool": list_files_tool,
             "linter_tool": linter_tool,
@@ -649,6 +653,8 @@ Ready to design! What would you like to create?"""
             "sby_tool": sby_tool,
             "start_synthesis": start_synthesis,
             "get_synthesis_job": get_synthesis_job,
+            "wait_for_synthesis": wait_for_synthesis,
+            "get_synthesis_metrics": get_synthesis_metrics,
             "search_logs_tool": search_logs_tool,
             "schematic_tool": schematic_tool,
             "save_metrics_tool": save_metrics_tool,
