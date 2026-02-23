@@ -7,11 +7,9 @@ and synthesis. Uses a ReAct pattern with comprehensive tool access.
 
 import os
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import SystemMessage
 from src.tools.wrappers import architect_tools
 from src.config import DEFAULT_MODEL
+from src.runtime.factory import RuntimeFactory
 
 load_dotenv()
 
@@ -536,44 +534,13 @@ Remember: You are an expert. Take pride in producing high-quality, working hardw
 
 def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL):
     """
-    Creates the Architect agent using ReAct pattern.
+    Creates the Architect agent using the appropriate runtime.
     
     Args:
         checkpointer: Optional LangGraph checkpointer for persistence
         model_name: Name of the LLM model to use
         
     Returns:
-        Compiled LangGraph agent
+        A runtime adapter instance (behaving like a compiled graph)
     """
-    # Gemini 3 models require special configuration for proper tool calling
-    # See: https://python.langchain.com/docs/integrations/chat/google_generative_ai
-    is_gemini_3 = "gemini-3" in model_name.lower()
-    
-    llm_kwargs = {
-        "model": model_name,
-        "google_api_key": os.environ.get("GOOGLE_API_KEY"),
-    }
-    
-    if is_gemini_3:
-        # WARNING: Gemini 3 has known issues with create_react_agent + many tools
-        # See: https://github.com/langchain-ai/langgraph/issues/6133
-        # The model returns empty responses. Use gemini-2.5-flash until LangChain fixes this.
-        import warnings
-        warnings.warn(
-            f"⚠️ {model_name} has known issues with LangChain's create_react_agent. "
-            "You may experience empty responses. Consider using 'gemini-2.5-flash' instead.",
-            UserWarning
-        )
-        # Gemini 3 specific settings (may not fully work due to LangChain bugs):
-        llm_kwargs["temperature"] = 1.0
-        llm_kwargs["include_thoughts"] = True
-    
-    llm = ChatGoogleGenerativeAI(**llm_kwargs)
-
-    agent_graph = create_react_agent(
-        model=llm,
-        tools=architect_tools,
-        checkpointer=checkpointer
-    )
-    
-    return agent_graph
+    return RuntimeFactory.get_runtime(model_name, checkpointer)

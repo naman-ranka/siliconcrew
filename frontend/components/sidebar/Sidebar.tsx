@@ -107,6 +107,24 @@ function CreateSessionDialog({ open, onOpenChange, onCreated }: CreateSessionDia
                     </div>
                   </div>
                 </SelectItem>
+                <SelectItem value="gpt-4o">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-3 w-3 text-green-500" />
+                    <div>
+                      <span>GPT-4o</span>
+                      <span className="text-xs text-muted-foreground ml-2">OpenAI</span>
+                    </div>
+                  </div>
+                </SelectItem>
+                <SelectItem value="claude-3-5-sonnet-20241022">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-3 w-3 text-purple-500" />
+                    <div>
+                      <span>Claude 3.5 Sonnet</span>
+                      <span className="text-xs text-muted-foreground ml-2">Anthropic</span>
+                    </div>
+                  </div>
+                </SelectItem>
                 <SelectItem value="gemini-3-pro-preview">
                   <div className="flex items-center gap-2">
                     <Cpu className="h-3 w-3 text-primary" />
@@ -367,14 +385,20 @@ export function Sidebar() {
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <span className={cn(
                               "inline-flex items-center gap-1",
+                              session.model_name?.includes("gpt") ? "text-green-500" :
+                              session.model_name?.includes("claude") ? "text-purple-500" :
                               session.model_name?.includes("pro") ? "text-primary" : "text-yellow-500"
                             )}>
-                              {session.model_name?.includes("pro") ? (
+                              {session.model_name?.includes("gpt") || session.model_name?.includes("claude") || session.model_name?.includes("pro") ? (
                                 <Cpu className="h-3 w-3" />
                               ) : (
                                 <Zap className="h-3 w-3" />
                               )}
-                              {session.model_name?.split("-").slice(1, 2).join("-") || "flash"}
+                              {
+                                session.model_name?.includes("gpt") ? "GPT-4o" :
+                                session.model_name?.includes("claude") ? "Claude 3.5" :
+                                session.model_name?.split("-").slice(1, 2).join("-") || "flash"
+                              }
                             </span>
                             {session.total_tokens > 0 && (
                               <>
