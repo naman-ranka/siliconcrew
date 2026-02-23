@@ -550,4 +550,11 @@ async def acreate_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, a
 # Backwards compatibility wrapper (deprecated, will fail if async needed)
 def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_keys=None, db_path=None):
     import asyncio
-    return asyncio.run(acreate_architect_agent(checkpointer, model_name, api_keys, db_path))
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(acreate_architect_agent(checkpointer, model_name, api_keys, db_path))
+    raise RuntimeError(
+        "create_architect_agent() cannot be called inside a running event loop. "
+        "Use await acreate_architect_agent(...) instead."
+    )

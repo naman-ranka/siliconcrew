@@ -39,10 +39,6 @@ interface AppState {
   layoutFiles: string[];
   schematicFiles: string[];
 
-  // API Keys
-  apiKeys: Record<string, string>;
-  setApiKey: (provider: string, key: string) => void;
-
   // Actions
   loadSessions: () => Promise<void>;
   createSession: (name: string, model: string) => Promise<void>;
@@ -91,12 +87,6 @@ export const useStore = create<AppState>((set, get) => ({
   sessionsLoading: false,
   sessionsError: null,
 
-  apiKeys: {
-    openai: "",
-    anthropic: "",
-    gemini: "",
-  },
-
   messages: [],
   isStreaming: false,
   streamingMessage: null,
@@ -120,13 +110,6 @@ export const useStore = create<AppState>((set, get) => ({
   report: null,
   layoutFiles: [],
   schematicFiles: [],
-
-  // API Keys
-  setApiKey: (provider: string, key: string) => {
-    set((state) => ({
-      apiKeys: { ...state.apiKeys, [provider]: key },
-    }));
-  },
 
   // Session actions
   loadSessions: async () => {
@@ -266,8 +249,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     if (!ws) {
-      const { apiKeys } = get();
-      ws = chatApi.createConnection(currentSession.id, apiKeys);
+      ws = chatApi.createConnection(currentSession.id);
       const socket = ws;
       set({ ws: socket, wsSessionId: currentSession.id });
 

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Trash2, Key, Check } from "lucide-react";
+import { ExternalLink, Plus, Key } from "lucide-react";
 
 interface AuthProfile {
   provider: string;
@@ -12,6 +12,45 @@ interface AuthProfile {
   is_active: boolean;
   updated_at: string;
 }
+
+const PROVIDER_META: Record<
+  string,
+  {
+    label: string;
+    keyLabel: string;
+    keyUrl: string;
+    keyPlaceholder: string;
+    step1Text: string;
+    step2Text: string;
+    helperText?: string;
+  }
+> = {
+  openai: {
+    label: "OpenAI",
+    keyLabel: "Get OpenAI API Key",
+    keyUrl: "https://platform.openai.com/api-keys",
+    keyPlaceholder: "OpenAI API key (sk-...)",
+    step1Text: "Open the OpenAI key page and create/retrieve your key.",
+    step2Text: "Paste the key below and connect.",
+  },
+  anthropic: {
+    label: "Anthropic",
+    keyLabel: "Get Claude Setup Token",
+    keyUrl: "https://docs.openclaw.ai/providers/anthropic",
+    keyPlaceholder: "Claude setup-token (or Anthropic API key)",
+    step1Text: "Follow the setup-token flow (OpenClaw-style) to link subscription and retrieve token.",
+    step2Text: "Paste the setup-token below and connect.",
+    helperText: "Alternative: use Anthropic API key from console.anthropic.com/settings/keys.",
+  },
+  gemini: {
+    label: "Google Gemini",
+    keyLabel: "Get Gemini API Key",
+    keyUrl: "https://aistudio.google.com/app/apikey",
+    keyPlaceholder: "Gemini API key",
+    step1Text: "Open AI Studio and create/retrieve your Gemini API key.",
+    step2Text: "Paste the key below and connect. Or use Google OAuth.",
+  },
+};
 
 export function AuthSettings() {
   const [profiles, setProfiles] = useState<AuthProfile[]>([]);
@@ -38,6 +77,17 @@ export function AuthSettings() {
     loadProfiles();
   }, []);
 
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const payload = event.data;
+      if (!payload || payload.type !== "oauth_complete") return;
+      loadProfiles();
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
   const handleAddKey = async () => {
     if (!newKey.trim()) return;
 
@@ -60,14 +110,18 @@ export function AuthSettings() {
 
   const handleOAuthConnect = async (provider: string) => {
     try {
-        // Construct callback URL (current page + special route ideally, but here we assume handling)
-        // For simplicity, we redirect to a popup handler or same page
         const redirectUri = window.location.origin + "/auth/callback?provider=" + provider;
 
-        const res = await fetch(`/api/auth/login/${provider}?redirect_uri=${encodeURIComponent(redirectUri)}`);
+        const res = await fetch(`/api/auth/login/${provider}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                redirect_uri: redirectUri,
+                profile_id: "default",
+            }),
+        });
         if (res.ok) {
             const data = await res.json();
-            // Open popup
             const width = 600;
             const height = 700;
             const left = window.screen.width / 2 - width / 2;
@@ -77,9 +131,6 @@ export function AuthSettings() {
                 `Connect ${provider}`,
                 `width=${width},height=${height},left=${left},top=${top}`
             );
-
-            // In a real app, we'd listen for postMessage from the popup
-            // For now, we assume user manually refreshes or we poll
         }
     } catch (e) {
         console.error(e);
@@ -127,6 +178,27 @@ export function AuthSettings() {
                     </select>
                 </div>
 
+                <div className="flex flex-col gap-2 rounded-md border border-border p-3 bg-surface-2/40">
+                    <div className="text-xs text-muted-foreground">
+                        Step 1: {PROVIDER_META[selectedProvider].step1Text}
+                    </div>
+                    <Button
+                        variant="outline"
+                        onClick={() => window.open(PROVIDER_META[selectedProvider].keyUrl, "_blank", "noopener,noreferrer")}
+                    >
+                        <ExternalLink className="h-4 w-4 mr-2" />
+                        {PROVIDER_META[selectedProvider].keyLabel}
+                    </Button>
+                    <div className="text-xs text-muted-foreground">
+                        Step 2: {PROVIDER_META[selectedProvider].step2Text}
+                    </div>
+                    {PROVIDER_META[selectedProvider].helperText ? (
+                        <div className="text-xs text-muted-foreground">
+                            {PROVIDER_META[selectedProvider].helperText}
+                        </div>
+                    ) : null}
+                </div>
+
                 {selectedProvider === "gemini" ? (
                     <div className="flex flex-col gap-2">
                         <Button variant="outline" onClick={() => handleOAuthConnect("google")}>
@@ -139,9 +211,21 @@ export function AuthSettings() {
                     </div>
                 ) : null}
 
+                {selectedProvider === "openai" ? (
+                    <div className="flex flex-col gap-2">
+                        <Button variant="outline" onClick={() => handleOAuthConnect("openai-codex")}>
+                            <Key className="h-4 w-4 mr-2" />
+                            Connect OpenAI Subscription
+                        </Button>
+                        <div className="relative flex justify-center text-xs uppercase">
+                            <span className="bg-surface-1 px-2 text-muted-foreground">Or using API Key</span>
+                        </div>
+                    </div>
+                ) : null}
+
                 <Input
                     type="password"
-                    placeholder="API Key (sk-...)"
+                    placeholder={PROVIDER_META[selectedProvider].keyPlaceholder}
                     value={newKey}
                     onChange={(e) => setNewKey(e.target.value)}
                     className="bg-surface-2"

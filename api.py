@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yaml
@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from src.agents.architect import acreate_architect_agent, create_architect_agent, SYSTEM_PROMPT
+from src.agents.architect import acreate_architect_agent, SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
 from src.tools.design_report import save_design_report
 from src.auth.manager import AuthManager
@@ -58,6 +58,14 @@ class AuthProfileCreate(BaseModel):
     provider: str
     key: str
     profile_id: str = "default"
+
+class OAuthLoginRequest(BaseModel):
+    redirect_uri: str
+    profile_id: str = "default"
+
+class OAuthCallbackRequest(BaseModel):
+    code: str
+    state: str
 
 class SessionCreate(BaseModel):
     name: str
@@ -209,27 +217,44 @@ async def add_auth_profile(data: AuthProfileCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/auth/login/{provider}")
-async def login_provider(provider: str, redirect_uri: str):
+@app.post("/api/auth/login/{provider}")
+async def login_provider(provider: str, data: OAuthLoginRequest):
     """Get OAuth redirect URL."""
     try:
         from src.auth.oauth import OAuthFactory
+        session = auth_manager.create_oauth_session(
+            provider=provider,
+            profile_id=data.profile_id,
+            redirect_uri=data.redirect_uri,
+        )
         oauth = OAuthFactory.get_provider(provider)
-        url = oauth.get_auth_url(redirect_uri)
-        return {"url": url}
+        url = oauth.get_auth_url(
+            redirect_uri=data.redirect_uri,
+            state=session["state"],
+            code_challenge=session["code_challenge"],
+            code_challenge_method=session["code_challenge_method"],
+        )
+        return {"url": url, "state": session["state"]}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/auth/callback/{provider}")
-async def callback_provider(provider: str, code: str, redirect_uri: str, profile_id: str = "default"):
+async def callback_provider(provider: str, data: OAuthCallbackRequest):
     """Handle OAuth callback."""
     try:
         from src.auth.oauth import OAuthFactory
+        session = auth_manager.consume_oauth_session(state=data.state, provider=provider)
         oauth = OAuthFactory.get_provider(provider)
-        token_data = await oauth.exchange_code(code, redirect_uri)
+        token_data = await oauth.exchange_code(
+            code=data.code,
+            redirect_uri=session["redirect_uri"],
+            code_verifier=session["code_verifier"],
+        )
 
-        auth_manager.add_oauth_profile(provider, token_data, profile_id)
+        auth_manager.add_oauth_profile(provider, token_data, session["profile_id"])
         return {"status": "success", "message": f"Connected {provider}"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -380,19 +405,10 @@ async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
 @app.websocket("/api/chat/{session_id}")
 async def chat_websocket(
     websocket: WebSocket,
-    session_id: str,
-    openai_api_key: Optional[str] = Query(None),
-    anthropic_api_key: Optional[str] = Query(None),
-    google_api_key: Optional[str] = Query(None)
+    session_id: str
 ):
     """WebSocket endpoint for streaming chat."""
     await websocket.accept()
-
-    # Collect keys
-    api_keys = {}
-    if openai_api_key: api_keys["openai_api_key"] = openai_api_key
-    if anthropic_api_key: api_keys["anthropic_api_key"] = anthropic_api_key
-    if google_api_key: api_keys["google_api_key"] = google_api_key
 
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -419,7 +435,11 @@ async def chat_websocket(
                 meta = session_manager.get_session_metadata(session_id)
                 model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
 
-                agent_graph = await acreate_architect_agent(checkpointer=memory, model_name=model_name, api_keys=api_keys, db_path=DB_PATH)
+                agent_graph = await acreate_architect_agent(
+                    checkpointer=memory,
+                    model_name=model_name,
+                    db_path=DB_PATH,
+                )
                 config = {"configurable": {"thread_id": session_id}, "recursion_limit": 50}
 
                 # Check for corrupted state

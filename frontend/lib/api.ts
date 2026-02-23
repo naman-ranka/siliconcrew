@@ -47,17 +47,10 @@ export const chatApi = {
     apiFetch<Message[]>(`/api/chat/${sessionId}/history`),
 
   // WebSocket connection for streaming
-  createConnection: (sessionId: string, apiKeys?: Record<string, string>): WebSocket => {
+  createConnection: (sessionId: string): WebSocket => {
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsHost = process.env.NEXT_PUBLIC_WS_URL || `${wsProtocol}//${window.location.hostname}:8000`;
-
-    const params = new URLSearchParams();
-    if (apiKeys?.openai) params.append("openai_api_key", apiKeys.openai);
-    if (apiKeys?.anthropic) params.append("anthropic_api_key", apiKeys.anthropic);
-    if (apiKeys?.gemini) params.append("google_api_key", apiKeys.gemini);
-
-    const queryString = params.toString() ? `?${params.toString()}` : "";
-    return new WebSocket(`${wsHost}/api/chat/${sessionId}${queryString}`);
+    return new WebSocket(`${wsHost}/api/chat/${sessionId}`);
   },
 };
 
