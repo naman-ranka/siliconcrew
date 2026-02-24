@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -16,6 +17,16 @@ SOURCE_PATHS = {
     "sky130hd": [
         "/OpenROAD-flow-scripts/flow/platforms/sky130hd",
     ],
+}
+
+MIRROR_MODEL_URLS = {
+    "asap7": {
+        # ORFS docker images may miss OA models needed by ASAP7 gate-level netlists.
+        "asap7sc7p5t_OA_RVT_TT_201020.v": [
+            "https://raw.githubusercontent.com/The-OpenROAD-Project/OpenROAD-flow-scripts/master/flow/platforms/asap7/verilog/stdcell/asap7sc7p5t_OA_RVT_TT_201020.v",
+            "https://raw.githubusercontent.com/The-OpenROAD-Project/asap7sc7p5t_28/main/Verilog/asap7sc7p5t_OA_RVT_TT_201020.v",
+        ],
+    },
 }
 
 
@@ -92,6 +103,44 @@ def _docker_cp(container_id: str, src: str, dst: str) -> bool:
     return False
 
 
+def _download_file(url: str, dst: str, timeout_sec: int = 20) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_sec) as r:
+            data = r.read()
+        if not data:
+            return False
+        with open(dst, "wb") as f:
+            f.write(data)
+        return True
+    except Exception:
+        return False
+
+
+def _populate_mirror_models(platform: str, cache_dir: str) -> Dict[str, List[str]]:
+    added: List[str] = []
+    failed: List[str] = []
+    attempted: List[str] = []
+    by_name = MIRROR_MODEL_URLS.get(platform, {})
+    existing = set(os.listdir(cache_dir)) if os.path.exists(cache_dir) else set()
+
+    for filename, urls in by_name.items():
+        if filename in existing:
+            continue
+        dst = os.path.join(cache_dir, filename)
+        downloaded = False
+        for url in urls:
+            attempted.append(url)
+            if _download_file(url, dst):
+                downloaded = True
+                added.append(filename)
+                existing.add(filename)
+                break
+        if not downloaded:
+            failed.append(filename)
+
+    return {"added": added, "failed": failed, "attempted_urls": attempted}
+
+
 def bootstrap_stdcells(workspace: str, platform: str, image: str = "openroad/orfs:latest") -> Dict:
     if platform not in SOURCE_PATHS:
         raise ValueError(f"Unsupported platform '{platform}'. Supported: {sorted(SOURCE_PATHS)}")
@@ -129,6 +178,11 @@ def bootstrap_stdcells(workspace: str, platform: str, image: str = "openroad/orf
 
     shutil.rmtree(tmp_root, ignore_errors=True)
 
+    mirror_result = _populate_mirror_models(platform=platform, cache_dir=cache_dir)
+    if mirror_result["added"]:
+        for name in mirror_result["added"]:
+            found.append(os.path.join(cache_dir, name))
+
     if not found:
         raise FileNotFoundError(f"Bootstrap completed but found no .v files for platform '{platform}'")
 
@@ -146,6 +200,9 @@ def bootstrap_stdcells(workspace: str, platform: str, image: str = "openroad/orf
         "source_image": image,
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
+        "mirror_urls_attempted": mirror_result["attempted_urls"],
+        "mirror_files_added": mirror_result["added"],
+        "mirror_files_missing": mirror_result["failed"],
         "files": manifest_files,
     }
 

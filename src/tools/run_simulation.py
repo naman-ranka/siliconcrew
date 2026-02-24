@@ -3,11 +3,20 @@ import re
 import subprocess
 from typing import Any, Dict, List, Optional
 
-from src.tools.stdcells import resolve_stdcell_models
+from src.tools.stdcells import bootstrap_stdcells, resolve_stdcell_models
 from src.tools.synthesis_manager import get_run_dir
 
 
 PASS_MARKER_DEFAULT = "TEST PASSED"
+
+
+def _auto_bootstrap_enabled() -> bool:
+    return os.environ.get("NO_AUTO_BOOTSTRAP", "").strip().lower() not in {"1", "true", "yes"}
+
+
+def _is_stdcell_cache_error(exc: Exception) -> bool:
+    msg = str(exc or "")
+    return ("Standard-cell cache missing" in msg) or ("No stdcell model files found" in msg)
 
 
 def _tail_text(text: str, max_lines: int, max_chars: int) -> Dict[str, Any]:
@@ -135,6 +144,8 @@ def run_simulation(
     compile_files = [os.path.abspath(p) for p in verilog_files]
     status = "compile_failed"
     unresolved_cells: List[str] = []
+    stdcell_bootstrap_attempted = False
+    stdcell_bootstrap_result: Optional[Dict[str, Any]] = None
 
     if mode not in {"rtl", "post_synth"}:
         return {
@@ -216,20 +227,46 @@ def run_simulation(
         try:
             stdcells, manifest = resolve_stdcell_models(cwd, platform)
         except Exception as exc:
-            return {
-                "status": "compile_failed",
-                "compile_returncode": -1,
-                "sim_returncode": None,
-                "pass_marker_found": False,
-                "stdout_tail": "",
-                "stderr_tail": str(exc),
-                "log_truncated": False,
-                "unresolved_cells": [],
-                "success": False,
-                "failure_type": "compile",
-                "first_failure_line": str(exc),
-                "first_failure_snippet": None,
-            }
+            stdcells = []
+            if _auto_bootstrap_enabled() and _is_stdcell_cache_error(exc):
+                stdcell_bootstrap_attempted = True
+                try:
+                    stdcell_bootstrap_result = bootstrap_stdcells(workspace=cwd, platform=platform)
+                    stdcells, manifest = resolve_stdcell_models(cwd, platform)
+                except Exception as bootstrap_exc:
+                    return {
+                        "status": "compile_failed",
+                        "compile_returncode": -1,
+                        "sim_returncode": None,
+                        "pass_marker_found": False,
+                        "stdout_tail": "",
+                        "stderr_tail": str(bootstrap_exc),
+                        "log_truncated": False,
+                        "unresolved_cells": [],
+                        "success": False,
+                        "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
+                        "stdcell_bootstrap_result": stdcell_bootstrap_result,
+                        "failure_type": "compile",
+                        "first_failure_line": str(bootstrap_exc),
+                        "first_failure_snippet": None,
+                    }
+            else:
+                return {
+                    "status": "compile_failed",
+                    "compile_returncode": -1,
+                    "sim_returncode": None,
+                    "pass_marker_found": False,
+                    "stdout_tail": "",
+                    "stderr_tail": str(exc),
+                    "log_truncated": False,
+                    "unresolved_cells": [],
+                    "success": False,
+                    "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
+                    "stdcell_bootstrap_result": stdcell_bootstrap_result,
+                    "failure_type": "compile",
+                    "first_failure_line": str(exc),
+                    "first_failure_snippet": None,
+                }
 
         compile_files = compile_files + [os.path.abspath(resolved_netlist)] + stdcells
 
@@ -251,6 +288,8 @@ def run_simulation(
             "unresolved_cells": unresolved_cells,
             "success": False,
             "mode": mode,
+            "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
+            "stdcell_bootstrap_result": stdcell_bootstrap_result,
             "compile_command": comp.get("command"),
             "sim_command": None,
             **_detect_failure_info("compile_failed", comp.get("stdout", ""), comp.get("stderr", "")),
@@ -280,6 +319,8 @@ def run_simulation(
         "unresolved_cells": unresolved_cells,
         "success": status == "test_passed",
         "mode": mode,
+        "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
+        "stdcell_bootstrap_result": stdcell_bootstrap_result,
         "compile_command": comp.get("command"),
         "sim_command": sim.get("command"),
         **_detect_failure_info(status, sim.get("stdout", ""), sim.get("stderr", "")),
