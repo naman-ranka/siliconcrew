@@ -107,6 +107,24 @@ function CreateSessionDialog({ open, onOpenChange, onCreated }: CreateSessionDia
                     </div>
                   </div>
                 </SelectItem>
+                <SelectItem value="gpt-4o">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-3 w-3 text-green-500" />
+                    <div>
+                      <span>GPT-4o</span>
+                      <span className="text-xs text-muted-foreground ml-2">OpenAI</span>
+                    </div>
+                  </div>
+                </SelectItem>
+                <SelectItem value="claude-3-5-sonnet-20241022">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-3 w-3 text-purple-500" />
+                    <div>
+                      <span>Claude 3.5 Sonnet</span>
+                      <span className="text-xs text-muted-foreground ml-2">Anthropic</span>
+                    </div>
+                  </div>
+                </SelectItem>
                 <SelectItem value="gemini-3-pro-preview">
                   <div className="flex items-center gap-2">
                     <Cpu className="h-3 w-3 text-primary" />
@@ -126,6 +144,32 @@ function CreateSessionDialog({ open, onOpenChange, onCreated }: CreateSessionDia
             Cancel
           </Button>
           <Button onClick={handleCreate}>Create Session</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+import { AuthSettings } from "@/components/settings/AuthSettings";
+
+// Settings Dialog
+function SettingsDialog({ open, onOpenChange }: { open: boolean, onOpenChange: (open: boolean) => void }) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-surface-1 border-border sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle>Settings</DialogTitle>
+          <DialogDescription className="text-muted-foreground">
+            Manage your authentication profiles.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="py-4">
+            <AuthSettings />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="border-border">
+            Close
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -180,6 +224,7 @@ export function Sidebar() {
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
 
   useEffect(() => {
@@ -263,7 +308,12 @@ export function Sidebar() {
         <div className="flex flex-col items-center py-4 gap-2 border-t border-border">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="hover:bg-surface-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="hover:bg-surface-2"
+                onClick={() => setIsSettingsOpen(true)}
+              >
                 <Settings className="h-5 w-5" />
               </Button>
             </TooltipTrigger>
@@ -277,6 +327,7 @@ export function Sidebar() {
           onOpenChange={setIsCreateDialogOpen}
           onCreated={() => {}}
         />
+        <SettingsDialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen} />
       </div>
     );
   }
@@ -367,14 +418,20 @@ export function Sidebar() {
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <span className={cn(
                               "inline-flex items-center gap-1",
+                              session.model_name?.includes("gpt") ? "text-green-500" :
+                              session.model_name?.includes("claude") ? "text-purple-500" :
                               session.model_name?.includes("pro") ? "text-primary" : "text-yellow-500"
                             )}>
-                              {session.model_name?.includes("pro") ? (
+                              {session.model_name?.includes("gpt") || session.model_name?.includes("claude") || session.model_name?.includes("pro") ? (
                                 <Cpu className="h-3 w-3" />
                               ) : (
                                 <Zap className="h-3 w-3" />
                               )}
-                              {session.model_name?.split("-").slice(1, 2).join("-") || "flash"}
+                              {
+                                session.model_name?.includes("gpt") ? "GPT-4o" :
+                                session.model_name?.includes("claude") ? "Claude 3.5" :
+                                session.model_name?.split("-").slice(1, 2).join("-") || "flash"
+                              }
                             </span>
                             {session.total_tokens > 0 && (
                               <>
@@ -405,7 +462,12 @@ export function Sidebar() {
       {/* Footer */}
       <div className="border-t border-border p-2">
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" className="flex-1 justify-start text-muted-foreground hover:text-foreground hover:bg-surface-2 h-9">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="flex-1 justify-start text-muted-foreground hover:text-foreground hover:bg-surface-2 h-9"
+            onClick={() => setIsSettingsOpen(true)}
+          >
             <Settings className="h-4 w-4 mr-2" />
             Settings
           </Button>
@@ -440,6 +502,7 @@ export function Sidebar() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <SettingsDialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen} />
     </div>
   );
 }

@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yaml
@@ -21,9 +21,10 @@ from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from src.agents.architect import create_architect_agent, SYSTEM_PROMPT
+from src.agents.architect import acreate_architect_agent, SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
 from src.tools.design_report import save_design_report
+from src.auth.manager import AuthManager
 
 # Load environment
 load_dotenv()
@@ -46,11 +47,25 @@ PRICING = {
 
 # Initialize Session Manager
 session_manager = SessionManager(base_dir=WORKSPACE_DIR, db_path=DB_PATH)
+auth_manager = AuthManager(db_path=DB_PATH)
 
 
 # =============================================================================
 # PYDANTIC MODELS
 # =============================================================================
+
+class AuthProfileCreate(BaseModel):
+    provider: str
+    key: str
+    profile_id: str = "default"
+
+class OAuthLoginRequest(BaseModel):
+    redirect_uri: str
+    profile_id: str = "default"
+
+class OAuthCallbackRequest(BaseModel):
+    code: str
+    state: str
 
 class SessionCreate(BaseModel):
     name: str
@@ -185,6 +200,66 @@ app.add_middleware(
 
 
 # =============================================================================
+# AUTH ENDPOINTS
+# =============================================================================
+
+@app.get("/api/settings/auth/profiles")
+async def list_auth_profiles():
+    """List configured auth profiles."""
+    return auth_manager.list_profiles()
+
+@app.post("/api/settings/auth/profiles")
+async def add_auth_profile(data: AuthProfileCreate):
+    """Add a manual API key profile."""
+    try:
+        auth_manager.add_api_key(data.provider, data.key, data.profile_id)
+        return {"status": "success", "message": f"Added profile for {data.provider}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/login/{provider}")
+async def login_provider(provider: str, data: OAuthLoginRequest):
+    """Get OAuth redirect URL."""
+    try:
+        from src.auth.oauth import OAuthFactory
+        session = auth_manager.create_oauth_session(
+            provider=provider,
+            profile_id=data.profile_id,
+            redirect_uri=data.redirect_uri,
+        )
+        oauth = OAuthFactory.get_provider(provider)
+        url = oauth.get_auth_url(
+            redirect_uri=data.redirect_uri,
+            state=session["state"],
+            code_challenge=session["code_challenge"],
+            code_challenge_method=session["code_challenge_method"],
+        )
+        return {"url": url, "state": session["state"]}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/auth/callback/{provider}")
+async def callback_provider(provider: str, data: OAuthCallbackRequest):
+    """Handle OAuth callback."""
+    try:
+        from src.auth.oauth import OAuthFactory
+        session = auth_manager.consume_oauth_session(state=data.state, provider=provider)
+        oauth = OAuthFactory.get_provider(provider)
+        token_data = await oauth.exchange_code(
+            code=data.code,
+            redirect_uri=session["redirect_uri"],
+            code_verifier=session["code_verifier"],
+        )
+
+        auth_manager.add_oauth_profile(provider, token_data, session["profile_id"])
+        return {"status": "success", "message": f"Connected {provider}"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
 # SESSION ENDPOINTS
 # =============================================================================
 
@@ -276,7 +351,7 @@ async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
             meta = session_manager.get_session_metadata(session_id)
             model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
 
-            agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+            agent_graph = await acreate_architect_agent(checkpointer=memory, model_name=model_name)
             config = {"configurable": {"thread_id": session_id}}
 
             current_state = await agent_graph.aget_state(config)
@@ -328,7 +403,10 @@ async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
 
 
 @app.websocket("/api/chat/{session_id}")
-async def chat_websocket(websocket: WebSocket, session_id: str):
+async def chat_websocket(
+    websocket: WebSocket,
+    session_id: str
+):
     """WebSocket endpoint for streaming chat."""
     await websocket.accept()
 
@@ -357,7 +435,11 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 meta = session_manager.get_session_metadata(session_id)
                 model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
 
-                agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+                agent_graph = await acreate_architect_agent(
+                    checkpointer=memory,
+                    model_name=model_name,
+                    db_path=DB_PATH,
+                )
                 config = {"configurable": {"thread_id": session_id}, "recursion_limit": 50}
 
                 # Check for corrupted state
