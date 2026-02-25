@@ -208,7 +208,8 @@ def _populate_sky130_pinned(cache_dir: str) -> Dict[str, List[str]]:
                 cell_dir = os.path.join(cells_root, cell_name)
                 if not os.path.isdir(cell_dir):
                     continue
-                for name in sorted(os.listdir(cell_dir)):
+                cell_files = sorted(os.listdir(cell_dir))
+                for name in cell_files:
                     src = os.path.join(cell_dir, name)
                     if not os.path.isfile(src):
                         continue
@@ -221,12 +222,30 @@ def _populate_sky130_pinned(cache_dir: str) -> Dict[str, List[str]]:
                         existing.add(name)
                         continue
 
-                    if name.endswith(".behavioral.v") and ".pp." not in name:
-                        dst_name = name.replace(".behavioral.v", ".v")
-                        if dst_name in existing:
-                            continue
+                # Base cell model preference for Icarus:
+                # functional.v is generally more robust than behavioral.v.
+                functional_src = None
+                behavioral_src = None
+                for name in cell_files:
+                    if name.endswith(".functional.v") and ".pp." not in name:
+                        functional_src = os.path.join(cell_dir, name)
+                        break
+                if functional_src is None:
+                    for name in cell_files:
+                        if name.endswith(".behavioral.v") and ".pp." not in name:
+                            behavioral_src = os.path.join(cell_dir, name)
+                            break
+
+                chosen_src = functional_src or behavioral_src
+                if chosen_src:
+                    src_name = os.path.basename(chosen_src)
+                    if src_name.endswith(".functional.v"):
+                        dst_name = src_name.replace(".functional.v", ".v")
+                    else:
+                        dst_name = src_name.replace(".behavioral.v", ".v")
+                    if dst_name not in existing:
                         try:
-                            with open(src, "r", encoding="utf-8") as f:
+                            with open(chosen_src, "r", encoding="utf-8") as f:
                                 text = f.read()
                             text = _rewrite_sky130_includes(text)
                             with open(os.path.join(cache_dir, dst_name), "w", encoding="utf-8") as out:
