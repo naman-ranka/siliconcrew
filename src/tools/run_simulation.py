@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional
 
-from src.tools.stdcells import resolve_stdcell_models
+from src.tools.stdcells import get_asap7_compat_model_files, resolve_stdcell_models
 from src.tools.synthesis_manager import get_run_dir
 
 
@@ -18,9 +18,10 @@ def _is_stdcell_cache_error(exc: Exception) -> bool:
 
 def _stdcell_bootstrap_hint(cwd: str, platform: Optional[str]) -> str:
     pf = platform or "<platform>"
+    stdcell_ws = _stdcell_workspace(cwd)
     return (
         "Standard-cell cache is missing or incomplete for post-synthesis simulation. "
-        f"Bootstrap with: PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace \"{cwd}\" --platform {pf}. "
+        f"Bootstrap with: PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace \"{stdcell_ws}\" --platform {pf}. "
         'See README section "First-Run Standard-Cell Bootstrap".'
     )
 
@@ -57,6 +58,59 @@ def _extract_sky130_required_modules(netlist_path: str) -> List[str]:
         return []
     names = sorted(set(re.findall(r"\b(sky130_fd_sc_hd__[A-Za-z0-9_]+)\b", text)))
     return names
+
+
+def _extract_asap7_required_modules(netlist_path: str) -> List[str]:
+    try:
+        with open(netlist_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception:
+        return []
+    return sorted(set(re.findall(r"\b([A-Za-z0-9_]+_ASAP7_75t_R)\b", text)))
+
+
+def _collect_defined_modules(file_paths: List[str]) -> set[str]:
+    mods: set[str] = set()
+    pat = re.compile(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b")
+    for fpath in file_paths:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                txt = f.read()
+        except Exception:
+            continue
+        for m in pat.finditer(txt):
+            mods.add(m.group(1))
+    return mods
+
+
+def _stdcell_workspace(cwd: str) -> str:
+    env_path = os.environ.get("RTL_STDCELL_WORKSPACE")
+    if env_path:
+        return os.path.abspath(env_path)
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    return os.path.join(repo_root, "workspace")
+
+
+def _asap7_compat_stdcell_files(stdcells: List[str], netlist_path: str) -> List[str]:
+    compat = get_asap7_compat_model_files()
+    seq_file = None
+    base = []
+    for fpath in stdcells:
+        name = os.path.basename(fpath)
+        if name == "asap7sc7p5t_SEQ_RVT_TT_220101.v":
+            seq_file = fpath
+            continue
+        if name in {"dff.v", "empty.v"}:
+            continue
+        base.append(fpath)
+
+    required = set(_extract_asap7_required_modules(netlist_path))
+    available = _collect_defined_modules(base + compat)
+    missing = sorted([m for m in required if m not in available])
+    if missing and seq_file:
+        # If required modules are not covered by compat+base, fall back to full SEQ file.
+        base.append(seq_file)
+    return base + compat
 
 
 def _compile(
@@ -180,6 +234,7 @@ def run_simulation(
     run_id: Optional[str] = None,
     netlist_file: Optional[str] = None,
     platform: Optional[str] = None,
+    sim_profile: str = "auto",
     pass_marker: str = PASS_MARKER_DEFAULT,
     max_lines_per_stream: int = 40,
     max_chars_per_stream: int = 4000,
@@ -218,6 +273,22 @@ def run_simulation(
             "first_failure_line": f"Unsupported simulation mode: {mode}",
             "first_failure_snippet": None,
         }
+    if sim_profile not in {"auto", "pinned", "compat"}:
+        return {
+            "status": "compile_failed",
+            "compile_returncode": -1,
+            "sim_returncode": None,
+            "pass_marker_found": False,
+            "stdout_tail": "",
+            "stderr_tail": f"Unsupported sim_profile: {sim_profile}. Supported: auto, pinned, compat.",
+            "log_truncated": False,
+            "unresolved_cells": [],
+            "success": False,
+            "failure_type": "compile",
+            "first_failure_line": f"Unsupported sim_profile: {sim_profile}. Supported: auto, pinned, compat.",
+            "first_failure_snippet": None,
+        }
+    effective_sim_profile = sim_profile
 
     if mode == "post_synth":
         resolved_netlist = netlist_file
@@ -281,9 +352,11 @@ def run_simulation(
                 "first_failure_line": "Post-synth mode requires platform metadata to resolve stdcell models.",
                 "first_failure_snippet": None,
             }
+        if effective_sim_profile == "auto":
+            effective_sim_profile = "compat" if platform == "asap7" else "pinned"
 
         try:
-            stdcells, manifest = resolve_stdcell_models(cwd, platform)
+            stdcells, manifest = resolve_stdcell_models(_stdcell_workspace(cwd), platform)
         except Exception as exc:
             stdcells = []
             hint = _stdcell_bootstrap_hint(cwd, platform) if _is_stdcell_cache_error(exc) else ""
@@ -307,13 +380,18 @@ def run_simulation(
                 "first_failure_snippet": None,
             }
 
-        compile_files = compile_files + [os.path.abspath(resolved_netlist)] + stdcells
+        stdcells_for_compile = list(stdcells)
+        netlist_abs = os.path.abspath(resolved_netlist)
+        if platform == "asap7" and effective_sim_profile == "compat":
+            stdcells_for_compile = _asap7_compat_stdcell_files(stdcells_for_compile, netlist_abs)
+
+        compile_files = compile_files + [netlist_abs] + stdcells_for_compile
 
         if platform == "sky130hd":
-            required = set(_extract_sky130_required_modules(os.path.abspath(resolved_netlist)))
+            required = set(_extract_sky130_required_modules(netlist_abs))
             if required:
                 selected = []
-                for fpath in stdcells:
+                for fpath in stdcells_for_compile:
                     mod_name = os.path.splitext(os.path.basename(fpath))[0]
                     if mod_name in required:
                         selected.append(fpath)
@@ -338,6 +416,7 @@ def run_simulation(
             "unresolved_cells": unresolved_cells,
             "success": False,
             "mode": mode,
+            "sim_profile": effective_sim_profile,
             "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
             "stdcell_bootstrap_result": stdcell_bootstrap_result,
             "compile_command": comp.get("command"),
@@ -369,6 +448,7 @@ def run_simulation(
         "unresolved_cells": unresolved_cells,
         "success": status == "test_passed",
         "mode": mode,
+        "sim_profile": effective_sim_profile,
         "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
         "stdcell_bootstrap_result": stdcell_bootstrap_result,
         "compile_command": comp.get("command"),

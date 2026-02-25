@@ -106,3 +106,74 @@ def test_post_synth_missing_cache_includes_bootstrap_hint(monkeypatch):
         assert result["status"] == "compile_failed"
         assert "bootstrap_stdcells.py" in result["stderr_tail"]
         assert "First-Run Standard-Cell Bootstrap" in result["stderr_tail"]
+
+
+def test_post_synth_asap7_compat_profile_uses_compat_selection(monkeypatch):
+    with tempfile.TemporaryDirectory() as workspace:
+        netlist = os.path.join(workspace, "netlist.v")
+        tb = os.path.join(workspace, "tb.v")
+        stdcell = os.path.join(workspace, "_stdcells", "asap7", "sim", "dummy.v")
+        compat_stdcell = os.path.join(workspace, "_stdcells", "asap7", "sim", "compat_dff.v")
+        os.makedirs(os.path.dirname(stdcell), exist_ok=True)
+        open(netlist, "w", encoding="utf-8").write("module top; endmodule")
+        open(tb, "w", encoding="utf-8").write("module tb; top u0(); endmodule")
+        open(stdcell, "w", encoding="utf-8").write("module dummy; endmodule")
+        open(compat_stdcell, "w", encoding="utf-8").write("module compat_dff; endmodule")
+
+        monkeypatch.setattr(rs, "resolve_stdcell_models", lambda workspace_arg, platform_arg: ([stdcell], {"files": []}))
+        monkeypatch.setattr(rs, "_asap7_compat_stdcell_files", lambda stdcells, netlist_path: [compat_stdcell])
+
+        captured = {}
+
+        def fake_compile(**kwargs):
+            captured["compile_files"] = kwargs["compile_files"]
+            return {"returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"}
+
+        monkeypatch.setattr(rs, "_compile", fake_compile)
+        monkeypatch.setattr(rs, "_simulate", lambda **kwargs: {"returncode": 0, "stdout": "TEST PASSED\n", "stderr": "", "command": "vvp"})
+
+        result = rs.run_simulation(
+            verilog_files=[tb],
+            top_module="tb",
+            cwd=workspace,
+            mode="post_synth",
+            netlist_file=netlist,
+            platform="asap7",
+            sim_profile="compat",
+        )
+
+        assert result["status"] == "test_passed"
+        assert result["sim_profile"] == "compat"
+        assert compat_stdcell in captured["compile_files"]
+
+
+def test_post_synth_asap7_auto_profile_defaults_to_compat(monkeypatch):
+    with tempfile.TemporaryDirectory() as workspace:
+        netlist = os.path.join(workspace, "netlist.v")
+        tb = os.path.join(workspace, "tb.v")
+        stdcell = os.path.join(workspace, "_stdcells", "asap7", "sim", "dummy.v")
+        compat_stdcell = os.path.join(workspace, "_stdcells", "asap7", "sim", "compat_dff.v")
+        os.makedirs(os.path.dirname(stdcell), exist_ok=True)
+        open(netlist, "w", encoding="utf-8").write("module top; endmodule")
+        open(tb, "w", encoding="utf-8").write("module tb; top u0(); endmodule")
+        open(stdcell, "w", encoding="utf-8").write("module dummy; endmodule")
+        open(compat_stdcell, "w", encoding="utf-8").write("module compat_dff; endmodule")
+
+        monkeypatch.setattr(rs, "resolve_stdcell_models", lambda workspace_arg, platform_arg: ([stdcell], {"files": []}))
+        monkeypatch.setattr(rs, "_asap7_compat_stdcell_files", lambda stdcells, netlist_path: [compat_stdcell])
+        monkeypatch.setattr(rs, "_compile", lambda **kwargs: {"returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"})
+        monkeypatch.setattr(rs, "_simulate", lambda **kwargs: {"returncode": 0, "stdout": "TEST PASSED\n", "stderr": "", "command": "vvp"})
+
+        result = rs.run_simulation(
+            verilog_files=[tb],
+            top_module="tb",
+            cwd=workspace,
+            mode="post_synth",
+            netlist_file=netlist,
+            platform="asap7",
+            sim_profile="auto",
+        )
+
+        assert result["status"] == "test_passed"
+        assert result["sim_profile"] == "compat"
+

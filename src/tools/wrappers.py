@@ -94,6 +94,7 @@ def simulation_tool(
     run_id: str = None,
     netlist_file: str = None,
     platform: str = None,
+    sim_profile: str = "auto",
     pass_marker: str = "TEST PASSED",
 ) -> str:
     """
@@ -105,6 +106,7 @@ def simulation_tool(
         run_id: Optional synthesis run ID for post-synth mode.
         netlist_file: Optional explicit netlist path.
         platform: Optional platform override for post-synth mode.
+        sim_profile: 'auto' (default), 'pinned', or 'compat'. Auto selects 'compat' for ASAP7 post-synth.
         pass_marker: Explicit pass marker required for test_passed status.
     """
     workspace = get_workspace_path()
@@ -128,6 +130,7 @@ def simulation_tool(
         run_id=run_id,
         netlist_file=abs_netlist,
         platform=platform,
+        sim_profile=sim_profile,
         pass_marker=pass_marker,
     )
     return json.dumps(result, indent=2)
