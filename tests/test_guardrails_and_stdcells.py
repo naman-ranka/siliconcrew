@@ -1,7 +1,6 @@
 import json
 import os
 import tempfile
-import shutil
 
 import pytest
 
@@ -51,21 +50,40 @@ def test_resolve_stdcell_models_from_manifest_cache():
 
 def test_bootstrap_stdcells_writes_manifest(monkeypatch):
     with tempfile.TemporaryDirectory() as workspace:
-        copied_tree = tempfile.mkdtemp()
-        src_dir = os.path.join(copied_tree, "stdcell")
-        os.makedirs(src_dir, exist_ok=True)
-        with open(os.path.join(src_dir, "NAND2X1.v"), "w", encoding="utf-8") as f:
-            f.write("module NAND2X1; endmodule")
+        def fake_pinned(cache_dir):
+            p = os.path.join(cache_dir, "asap7sc7p5t_AO_RVT_TT_201020.v")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("module AO; endmodule")
+            return {"added": ["asap7sc7p5t_AO_RVT_TT_201020.v"], "failed": [], "attempted_urls": ["fake://pinned"]}
 
-        monkeypatch.setattr(std, "_docker_container_create", lambda image: "cid-test")
-        monkeypatch.setattr(std.subprocess, "run", lambda *a, **k: type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})())
-
-        def fake_cp(container_id, src, dst):
-            shutil.copytree(src_dir, os.path.join(dst, "stdcell"), dirs_exist_ok=True)
-            return True
-
-        monkeypatch.setattr(std, "_docker_cp", fake_cp)
+        monkeypatch.setattr(std, "_populate_asap7_pinned", fake_pinned)
 
         result = std.bootstrap_stdcells(workspace=workspace, platform="asap7", image="fake:image")
         assert result["file_count"] >= 1
         assert os.path.exists(result["manifest"])
+
+
+def test_bootstrap_stdcells_successful_and_resolvable(monkeypatch):
+    with tempfile.TemporaryDirectory() as workspace:
+        def fake_pinned(cache_dir):
+            names = [
+                "asap7sc7p5t_AO_RVT_TT_201020.v",
+                "asap7sc7p5t_INVBUF_RVT_TT_201020.v",
+                "asap7sc7p5t_OA_RVT_TT_201020.v",
+                "asap7sc7p5t_SEQ_RVT_TT_220101.v",
+                "asap7sc7p5t_SIMPLE_RVT_TT_201020.v",
+                "dff.v",
+                "empty.v",
+            ]
+            for name in names:
+                with open(os.path.join(cache_dir, name), "w", encoding="utf-8") as f:
+                    f.write(f"module {name.replace('.v', '')}; endmodule")
+            return {"added": names, "failed": [], "attempted_urls": ["fake://pinned"]}
+
+        monkeypatch.setattr(std, "_populate_asap7_pinned", fake_pinned)
+
+        result = std.bootstrap_stdcells(workspace=workspace, platform="asap7", image="fake:image")
+        files, manifest = resolve_stdcell_models(workspace, "asap7")
+        assert result["file_count"] >= 5
+        assert len(files) >= 5
+        assert manifest["platform"] == "asap7"
