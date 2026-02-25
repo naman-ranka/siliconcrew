@@ -37,6 +37,24 @@ def _sha256(path: str) -> str:
     return h.hexdigest()
 
 
+def _clear_cached_sim_models(cache_dir: str) -> None:
+    """
+    Remove previously cached top-level simulation model files.
+
+    This keeps bootstrap deterministic across reruns by preventing stale model
+    variants from surviving when source selection policy changes.
+    """
+    if not os.path.isdir(cache_dir):
+        return
+    for name in os.listdir(cache_dir):
+        path = os.path.join(cache_dir, name)
+        if os.path.isfile(path) and name.endswith(".v"):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+
 def stdcell_cache_dir(workspace: str, platform: str) -> str:
     return os.path.join(workspace, STDROOT, platform, "sim")
 
@@ -293,6 +311,7 @@ def bootstrap_stdcells(workspace: str, platform: str, image: str = "openroad/orf
 
     cache_dir = stdcell_cache_dir(workspace, platform)
     os.makedirs(cache_dir, exist_ok=True)
+    _clear_cached_sim_models(cache_dir)
 
     source_details: Dict[str, Dict[str, List[str]]] = {}
     pinned_result = {"added": [], "failed": [], "attempted_urls": []}
