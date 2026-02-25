@@ -6,10 +6,10 @@ from src.tools.stdcells import bootstrap_stdcells
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Bootstrap managed stdcell simulation models from ORFS docker image")
+    parser = argparse.ArgumentParser(description="Bootstrap managed stdcell simulation models from pinned upstream sources")
     parser.add_argument("--workspace", required=True, help="Workspace path where _stdcells cache will be created")
     parser.add_argument("--platform", required=True, choices=["asap7", "sky130hd"], help="Target platform")
-    parser.add_argument("--image", default="openroad/orfs:latest", help="Docker image tag")
+    parser.add_argument("--image", default="openroad/orfs:latest", help="Deprecated (kept for CLI compatibility; ignored in pinned-only mode)")
     args = parser.parse_args()
 
     workspace = os.path.abspath(args.workspace)

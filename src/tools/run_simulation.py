@@ -1,22 +1,28 @@
 import os
 import re
 import subprocess
+import tempfile
 from typing import Any, Dict, List, Optional
 
-from src.tools.stdcells import bootstrap_stdcells, resolve_stdcell_models
+from src.tools.stdcells import resolve_stdcell_models
 from src.tools.synthesis_manager import get_run_dir
 
 
 PASS_MARKER_DEFAULT = "TEST PASSED"
 
 
-def _auto_bootstrap_enabled() -> bool:
-    return os.environ.get("NO_AUTO_BOOTSTRAP", "").strip().lower() not in {"1", "true", "yes"}
-
-
 def _is_stdcell_cache_error(exc: Exception) -> bool:
     msg = str(exc or "")
     return ("Standard-cell cache missing" in msg) or ("No stdcell model files found" in msg)
+
+
+def _stdcell_bootstrap_hint(cwd: str, platform: Optional[str]) -> str:
+    pf = platform or "<platform>"
+    return (
+        "Standard-cell cache is missing or incomplete for post-synthesis simulation. "
+        f"Bootstrap with: PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace \"{cwd}\" --platform {pf}. "
+        'See README section "First-Run Standard-Cell Bootstrap".'
+    )
 
 
 def _tail_text(text: str, max_lines: int, max_chars: int) -> Dict[str, Any]:
@@ -43,16 +49,56 @@ def _extract_unresolved_cells(stderr: str) -> List[str]:
     return sorted(found)
 
 
+def _extract_sky130_required_modules(netlist_path: str) -> List[str]:
+    try:
+        with open(netlist_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception:
+        return []
+    names = sorted(set(re.findall(r"\b(sky130_fd_sc_hd__[A-Za-z0-9_]+)\b", text)))
+    return names
+
+
 def _compile(
     compile_files: List[str],
     output_executable: str,
     cwd: str,
     timeout: int,
 ) -> Dict[str, Any]:
-    cmd = ["iverilog", "-g2012", "-o", output_executable] + compile_files
+    include_dirs = sorted({os.path.dirname(os.path.abspath(p)) for p in compile_files if p})
+    include_args: List[str] = []
+    for inc in include_dirs:
+        include_args.extend(["-I", inc])
+    filelist = None
+    try:
+        fd, filelist = tempfile.mkstemp(prefix="iverilog_", suffix=".f", dir=cwd, text=True)
+        os.close(fd)
+        with open(filelist, "w", encoding="utf-8") as f:
+            for src in compile_files:
+                # Normalize slashes for portable filelist parsing on Windows.
+                f.write(os.path.abspath(src).replace("\\", "/") + "\n")
+    except Exception as exc:
+        if filelist:
+            try:
+                os.remove(filelist)
+            except Exception:
+                pass
+        return {
+            "returncode": -1,
+            "stdout": "",
+            "stderr": f"Failed to prepare compile file list: {exc}",
+            "command": "iverilog (filelist generation)",
+        }
+
+    cmd = ["iverilog", "-g2012"] + include_args + ["-o", output_executable, "-f", filelist]
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
+        if filelist:
+            try:
+                os.remove(filelist)
+            except Exception:
+                pass
         return {
             "returncode": -1,
             "stdout": "",
@@ -60,12 +106,22 @@ def _compile(
             "command": " ".join(cmd),
         }
     except Exception as exc:
+        if filelist:
+            try:
+                os.remove(filelist)
+            except Exception:
+                pass
         return {
             "returncode": -1,
             "stdout": "",
             "stderr": f"Compilation execution error: {exc}",
             "command": " ".join(cmd),
         }
+    if filelist:
+        try:
+            os.remove(filelist)
+        except Exception:
+            pass
 
     return {
         "returncode": proc.returncode,
@@ -164,25 +220,27 @@ def run_simulation(
         }
 
     if mode == "post_synth":
-        run_dir = get_run_dir(cwd, run_id)
-        if run_dir is None:
-            return {
-                "status": "compile_failed",
-                "compile_returncode": -1,
-                "sim_returncode": None,
-                "pass_marker_found": False,
-                "stdout_tail": "",
-                "stderr_tail": f"Unknown run_id '{run_id}' and no latest run available.",
-                "log_truncated": False,
-                "unresolved_cells": [],
-                "success": False,
-                "failure_type": "compile",
-                "first_failure_line": f"Unknown run_id '{run_id}' and no latest run available.",
-                "first_failure_snippet": None,
-            }
-
         resolved_netlist = netlist_file
-        if resolved_netlist is None:
+        run_dir = None
+        if run_id is not None or resolved_netlist is None or not platform:
+            run_dir = get_run_dir(cwd, run_id)
+            if run_dir is None and (resolved_netlist is None or not platform):
+                return {
+                    "status": "compile_failed",
+                    "compile_returncode": -1,
+                    "sim_returncode": None,
+                    "pass_marker_found": False,
+                    "stdout_tail": "",
+                    "stderr_tail": f"Unknown run_id '{run_id}' and no latest run available.",
+                    "log_truncated": False,
+                    "unresolved_cells": [],
+                    "success": False,
+                    "failure_type": "compile",
+                    "first_failure_line": f"Unknown run_id '{run_id}' and no latest run available.",
+                    "first_failure_snippet": None,
+                }
+
+        if resolved_netlist is None and run_dir is not None:
             meta_path = os.path.join(run_dir, "run_meta.json")
             if os.path.exists(meta_path):
                 import json
@@ -228,47 +286,39 @@ def run_simulation(
             stdcells, manifest = resolve_stdcell_models(cwd, platform)
         except Exception as exc:
             stdcells = []
-            if _auto_bootstrap_enabled() and _is_stdcell_cache_error(exc):
-                stdcell_bootstrap_attempted = True
-                try:
-                    stdcell_bootstrap_result = bootstrap_stdcells(workspace=cwd, platform=platform)
-                    stdcells, manifest = resolve_stdcell_models(cwd, platform)
-                except Exception as bootstrap_exc:
-                    return {
-                        "status": "compile_failed",
-                        "compile_returncode": -1,
-                        "sim_returncode": None,
-                        "pass_marker_found": False,
-                        "stdout_tail": "",
-                        "stderr_tail": str(bootstrap_exc),
-                        "log_truncated": False,
-                        "unresolved_cells": [],
-                        "success": False,
-                        "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
-                        "stdcell_bootstrap_result": stdcell_bootstrap_result,
-                        "failure_type": "compile",
-                        "first_failure_line": str(bootstrap_exc),
-                        "first_failure_snippet": None,
-                    }
-            else:
-                return {
-                    "status": "compile_failed",
-                    "compile_returncode": -1,
-                    "sim_returncode": None,
-                    "pass_marker_found": False,
-                    "stdout_tail": "",
-                    "stderr_tail": str(exc),
-                    "log_truncated": False,
-                    "unresolved_cells": [],
-                    "success": False,
-                    "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
-                    "stdcell_bootstrap_result": stdcell_bootstrap_result,
-                    "failure_type": "compile",
-                    "first_failure_line": str(exc),
-                    "first_failure_snippet": None,
-                }
+            hint = _stdcell_bootstrap_hint(cwd, platform) if _is_stdcell_cache_error(exc) else ""
+            msg = str(exc)
+            if hint:
+                msg = f"{msg}\n{hint}"
+            return {
+                "status": "compile_failed",
+                "compile_returncode": -1,
+                "sim_returncode": None,
+                "pass_marker_found": False,
+                "stdout_tail": "",
+                "stderr_tail": msg,
+                "log_truncated": False,
+                "unresolved_cells": [],
+                "success": False,
+                "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
+                "stdcell_bootstrap_result": stdcell_bootstrap_result,
+                "failure_type": "compile",
+                "first_failure_line": msg,
+                "first_failure_snippet": None,
+            }
 
         compile_files = compile_files + [os.path.abspath(resolved_netlist)] + stdcells
+
+        if platform == "sky130hd":
+            required = set(_extract_sky130_required_modules(os.path.abspath(resolved_netlist)))
+            if required:
+                selected = []
+                for fpath in stdcells:
+                    mod_name = os.path.splitext(os.path.basename(fpath))[0]
+                    if mod_name in required:
+                        selected.append(fpath)
+                if selected:
+                    compile_files = compile_files[: len(verilog_files) + 1] + selected
 
     output_exec = os.path.join(cwd, f"{top_module}.out")
     comp = _compile(compile_files=compile_files, output_executable=output_exec, cwd=cwd, timeout=timeout)

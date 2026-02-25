@@ -1,31 +1,26 @@
 import hashlib
 import json
 import os
+import re
 import shutil
-import subprocess
+import tarfile
+import tempfile
 import urllib.request
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, List, Tuple
 
 STDROOT = "_stdcells"
 
-SOURCE_PATHS = {
-    "asap7": [
-        "/OpenROAD-flow-scripts/flow/platforms/asap7/verilog/stdcell",
-    ],
-    "sky130hd": [
-        "/OpenROAD-flow-scripts/flow/platforms/sky130hd",
-    ],
-}
-
-MIRROR_MODEL_URLS = {
+PINNED_GITHUB_SOURCES = {
     "asap7": {
-        # ORFS docker images may miss OA models needed by ASAP7 gate-level netlists.
-        "asap7sc7p5t_OA_RVT_TT_201020.v": [
-            "https://raw.githubusercontent.com/The-OpenROAD-Project/OpenROAD-flow-scripts/master/flow/platforms/asap7/verilog/stdcell/asap7sc7p5t_OA_RVT_TT_201020.v",
-            "https://raw.githubusercontent.com/The-OpenROAD-Project/asap7sc7p5t_28/main/Verilog/asap7sc7p5t_OA_RVT_TT_201020.v",
-        ],
+        "orfs_repo": "The-OpenROAD-Project/OpenROAD-flow-scripts",
+        "orfs_ref": "5f96c41ce70550f4b264c7a2680cf15301a454ff",
+        "asap7_repo": "The-OpenROAD-Project/asap7sc7p5t_28",
+        "asap7_ref": "f970bd3c3292b79ae4d022a3ec80533534614066",
+    },
+    "sky130hd": {
+        "repo": "google/skywater-pdk-libs-sky130_fd_sc_hd",
+        "ref": "ac7fb61f06e6470b94e8afdf7c25268f62fbd7b1",
     },
 }
 
@@ -71,7 +66,7 @@ def resolve_stdcell_models(workspace: str, platform: str) -> Tuple[List[str], Di
 
     files = []
     for name in sorted(os.listdir(sim_dir)):
-        if name.endswith(".v"):
+        if name.endswith(".v") and _is_sim_model_file(platform, name):
             files.append(os.path.join(sim_dir, name))
 
     if not files:
@@ -82,25 +77,16 @@ def resolve_stdcell_models(workspace: str, platform: str) -> Tuple[List[str], Di
     return files, manifest
 
 
-def _docker_container_create(image: str) -> str:
-    proc = subprocess.run(["docker", "create", image], capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "docker create failed")
-    return proc.stdout.strip()
-
-
-def _docker_cp(container_id: str, src: str, dst: str) -> bool:
-    proc = subprocess.run(["docker", "cp", f"{container_id}:{src}", dst], capture_output=True, text=True)
-    if proc.returncode == 0:
-        return True
-
-    # Windows commonly fails copying container symlinks (privilege issue),
-    # while still copying regular files successfully.
-    if "A required privilege is not held by the client" in (proc.stderr or ""):
-        for _, _, files in os.walk(dst):
-            if files:
-                return True
-    return False
+def _is_sim_model_file(platform: str, filename: str) -> bool:
+    if not filename.endswith(".v"):
+        return False
+    if platform == "sky130hd":
+        return filename.startswith("sky130_fd_sc_hd__")
+    if platform == "asap7":
+        # ORFS dff/empty collide with definitions already present in ASAP7 SEQ views for Icarus runs.
+        if filename in {"dff.v", "empty.v"}:
+            return False
+    return True
 
 
 def _download_file(url: str, dst: str, timeout_sec: int = 20) -> bool:
@@ -116,78 +102,191 @@ def _download_file(url: str, dst: str, timeout_sec: int = 20) -> bool:
         return False
 
 
-def _populate_mirror_models(platform: str, cache_dir: str) -> Dict[str, List[str]]:
+def _download_text(url: str, timeout_sec: int = 20) -> str:
+    with urllib.request.urlopen(url, timeout=timeout_sec) as r:
+        return r.read().decode("utf-8")
+
+
+def _github_raw(repo: str, ref: str, path: str) -> str:
+    return f"https://raw.githubusercontent.com/{repo}/{ref}/{path}"
+
+
+def _populate_asap7_pinned(cache_dir: str) -> Dict[str, List[str]]:
+    cfg = PINNED_GITHUB_SOURCES["asap7"]
     added: List[str] = []
     failed: List[str] = []
     attempted: List[str] = []
-    by_name = MIRROR_MODEL_URLS.get(platform, {})
     existing = set(os.listdir(cache_dir)) if os.path.exists(cache_dir) else set()
 
-    for filename, urls in by_name.items():
+    required = [
+        "asap7sc7p5t_AO_RVT_TT_201020.v",
+        "asap7sc7p5t_INVBUF_RVT_TT_201020.v",
+        "asap7sc7p5t_OA_RVT_TT_201020.v",
+        "asap7sc7p5t_SEQ_RVT_TT_220101.v",
+        "asap7sc7p5t_SIMPLE_RVT_TT_201020.v",
+        "dff.v",
+        "empty.v",
+    ]
+
+    for filename in required:
         if filename in existing:
             continue
+
+        urls: List[str] = []
+        urls.append(
+            _github_raw(
+                cfg["orfs_repo"],
+                cfg["orfs_ref"],
+                f"flow/platforms/asap7/verilog/stdcell/{filename}",
+            )
+        )
+        if filename.startswith("asap7sc7p5t_"):
+            urls.append(_github_raw(cfg["asap7_repo"], cfg["asap7_ref"], f"Verilog/{filename}"))
         dst = os.path.join(cache_dir, filename)
-        downloaded = False
+        ok = False
         for url in urls:
             attempted.append(url)
             if _download_file(url, dst):
-                downloaded = True
+                ok = True
                 added.append(filename)
                 existing.add(filename)
                 break
-        if not downloaded:
+        if not ok:
             failed.append(filename)
 
     return {"added": added, "failed": failed, "attempted_urls": attempted}
 
 
+def _rewrite_sky130_includes(text: str) -> str:
+    return re.sub(
+        r'`include\s+"(?:\.\./)+models/[^/]+/([^"]+)"',
+        r'`include "\1"',
+        text,
+    )
+
+
+def _populate_sky130_pinned(cache_dir: str) -> Dict[str, List[str]]:
+    cfg = PINNED_GITHUB_SOURCES["sky130hd"]
+    repo = cfg["repo"]
+    ref = cfg["ref"]
+
+    added: List[str] = []
+    failed: List[str] = []
+    attempted: List[str] = []
+    existing = set(os.listdir(cache_dir)) if os.path.exists(cache_dir) else set()
+
+    tar_url = f"https://codeload.github.com/{repo}/tar.gz/{ref}"
+    attempted.append(tar_url)
+    with tempfile.TemporaryDirectory(prefix="sky130hd_src_") as tmp:
+        tar_path = os.path.join(tmp, "sky130hd.tar.gz")
+        if not _download_file(tar_url, tar_path, timeout_sec=60):
+            return {"added": [], "failed": ["tarball_download_failed"], "attempted_urls": attempted}
+
+        extract_root = os.path.join(tmp, "extract")
+        os.makedirs(extract_root, exist_ok=True)
+        try:
+            with tarfile.open(tar_path, "r:gz") as tf:
+                tf.extractall(extract_root)
+        except Exception:
+            return {"added": [], "failed": ["tarball_extract_failed"], "attempted_urls": attempted}
+
+        repo_root = None
+        for item in os.listdir(extract_root):
+            full = os.path.join(extract_root, item)
+            if os.path.isdir(full):
+                repo_root = full
+                break
+        if not repo_root:
+            return {"added": [], "failed": ["tarball_root_missing"], "attempted_urls": attempted}
+
+        cells_root = os.path.join(repo_root, "cells")
+        models_root = os.path.join(repo_root, "models")
+        wrapper_re = re.compile(r"^sky130_fd_sc_hd__.*_[0-9]+\.v$")
+
+        if os.path.isdir(cells_root):
+            for cell_name in sorted(os.listdir(cells_root)):
+                cell_dir = os.path.join(cells_root, cell_name)
+                if not os.path.isdir(cell_dir):
+                    continue
+                for name in sorted(os.listdir(cell_dir)):
+                    src = os.path.join(cell_dir, name)
+                    if not os.path.isfile(src):
+                        continue
+
+                    if wrapper_re.match(name):
+                        if name in existing:
+                            continue
+                        shutil.copy2(src, os.path.join(cache_dir, name))
+                        added.append(name)
+                        existing.add(name)
+                        continue
+
+                    if name.endswith(".behavioral.v") and ".pp." not in name:
+                        dst_name = name.replace(".behavioral.v", ".v")
+                        if dst_name in existing:
+                            continue
+                        try:
+                            with open(src, "r", encoding="utf-8") as f:
+                                text = f.read()
+                            text = _rewrite_sky130_includes(text)
+                            with open(os.path.join(cache_dir, dst_name), "w", encoding="utf-8") as out:
+                                out.write(text)
+                            added.append(dst_name)
+                            existing.add(dst_name)
+                        except Exception:
+                            failed.append(dst_name)
+
+        if os.path.isdir(models_root):
+            for model_name in sorted(os.listdir(models_root)):
+                model_dir = os.path.join(models_root, model_name)
+                if not os.path.isdir(model_dir):
+                    continue
+                for name in sorted(os.listdir(model_dir)):
+                    src = os.path.join(model_dir, name)
+                    if not os.path.isfile(src):
+                        continue
+                    if not name.endswith(".v"):
+                        continue
+                    if name.endswith(".tb.v") or name.endswith(".symbol.v") or name.endswith(".blackbox.v"):
+                        continue
+                    if name in existing:
+                        continue
+                    shutil.copy2(src, os.path.join(cache_dir, name))
+                    added.append(name)
+                    existing.add(name)
+
+    return {"added": added, "failed": failed, "attempted_urls": attempted}
+
+
 def bootstrap_stdcells(workspace: str, platform: str, image: str = "openroad/orfs:latest") -> Dict:
-    if platform not in SOURCE_PATHS:
-        raise ValueError(f"Unsupported platform '{platform}'. Supported: {sorted(SOURCE_PATHS)}")
+    supported = sorted(PINNED_GITHUB_SOURCES)
+    if platform not in PINNED_GITHUB_SOURCES:
+        raise ValueError(f"Unsupported platform '{platform}'. Supported: {supported}")
 
     cache_dir = stdcell_cache_dir(workspace, platform)
     os.makedirs(cache_dir, exist_ok=True)
 
-    tmp_root = os.path.join(cache_dir, ".tmp_extract")
-    if os.path.exists(tmp_root):
-        shutil.rmtree(tmp_root)
-    os.makedirs(tmp_root, exist_ok=True)
-
-    container_id = _docker_container_create(image)
-    copied_any = False
+    source_details: Dict[str, Dict[str, List[str]]] = {}
+    pinned_result = {"added": [], "failed": [], "attempted_urls": []}
     try:
-        for idx, src in enumerate(SOURCE_PATHS[platform]):
-            dst = os.path.join(tmp_root, f"src_{idx}")
-            os.makedirs(dst, exist_ok=True)
-            if _docker_cp(container_id, src, dst):
-                copied_any = True
-    finally:
-        subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, text=True)
+        if platform == "asap7":
+            pinned_result = _populate_asap7_pinned(cache_dir)
+        elif platform == "sky130hd":
+            pinned_result = _populate_sky130_pinned(cache_dir)
+    except Exception as exc:
+        pinned_result = {"added": [], "failed": [str(exc)], "attempted_urls": []}
+    source_details["pinned_source"] = pinned_result
 
-    if not copied_any:
-        raise FileNotFoundError(f"Could not copy stdcell source paths from docker image for platform '{platform}'")
+    all_cached = []
+    for name in sorted(os.listdir(cache_dir)):
+        if name.endswith(".v"):
+            all_cached.append(os.path.join(cache_dir, name))
 
-    found = []
-    for root, _, files in os.walk(tmp_root):
-        for name in files:
-            if name.endswith(".v"):
-                src = os.path.join(root, name)
-                dst = os.path.join(cache_dir, name)
-                shutil.copy2(src, dst)
-                found.append(dst)
-
-    shutil.rmtree(tmp_root, ignore_errors=True)
-
-    mirror_result = _populate_mirror_models(platform=platform, cache_dir=cache_dir)
-    if mirror_result["added"]:
-        for name in mirror_result["added"]:
-            found.append(os.path.join(cache_dir, name))
-
-    if not found:
+    if not all_cached:
         raise FileNotFoundError(f"Bootstrap completed but found no .v files for platform '{platform}'")
 
     manifest_files = []
-    for fpath in sorted(found):
+    for fpath in all_cached:
         manifest_files.append(
             {
                 "name": os.path.basename(fpath),
@@ -198,11 +297,13 @@ def bootstrap_stdcells(workspace: str, platform: str, image: str = "openroad/orf
     manifest = {
         "platform": platform,
         "source_image": image,
+        "source_policy": "pinned_only",
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
-        "mirror_urls_attempted": mirror_result["attempted_urls"],
-        "mirror_files_added": mirror_result["added"],
-        "mirror_files_missing": mirror_result["failed"],
+        "mirror_urls_attempted": [],
+        "mirror_files_added": [],
+        "mirror_files_missing": [],
+        "sources": source_details,
         "files": manifest_files,
     }
 
@@ -212,6 +313,6 @@ def bootstrap_stdcells(workspace: str, platform: str, image: str = "openroad/orf
     return {
         "platform": platform,
         "cache_dir": cache_dir,
-        "file_count": len(found),
+        "file_count": len(all_cached),
         "manifest": stdcell_manifest_path(workspace, platform),
     }
