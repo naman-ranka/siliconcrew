@@ -45,6 +45,15 @@ def stdcell_manifest_path(workspace: str, platform: str) -> str:
     return os.path.join(stdcell_cache_dir(workspace, platform), "manifest.json")
 
 
+def get_asap7_compat_model_files() -> List[str]:
+    """Behavioral ASAP7 compatibility models for Icarus gate-level simulation."""
+    base_dir = os.path.join(os.path.dirname(__file__), "asap7_compat_models")
+    files = [
+        os.path.join(base_dir, "DFFASRHQNx1_behavioral.v"),
+    ]
+    return [f for f in files if os.path.exists(f)]
+
+
 def read_stdcell_manifest(workspace: str, platform: str) -> Dict:
     path = stdcell_manifest_path(workspace, platform)
     if not os.path.exists(path):
