@@ -148,8 +148,7 @@ state.db
 workspace/*
 !workspace/.gitkeep
 !workspace/README.md
-!workspace/*.v
-!workspace/*.sby
+workspace_tmp_refresh/
 
 # Simulation outputs
 *.out
