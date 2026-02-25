@@ -202,7 +202,14 @@ Before taking ANY action, always think through:
     - Check timing (WNS should be >= 0)
     - Note area and power
 
-13. **Generate report**: `generate_report_tool`
+14. **Run post-synthesis simulation**: `simulation_tool` in `mode="post_synth"`
+    - Trigger this after successful synthesis completion
+    - Use the synthesis `run_id` so the tool resolves the synthesized netlist from run metadata
+    - Set `top_module` to the TESTBENCH module (not the DUT module)
+    - Pass only testbench/source stimulus files in `verilog_files`
+    - **Do NOT include original RTL DUT `.v` files** in post-synth simulation inputs
+
+15. **Generate report**: `generate_report_tool`
     - Summarizes spec vs actual results
 
 ---
