@@ -132,7 +132,7 @@ def langchain_to_mcp_schema(langchain_tool) -> Tool:
 # =============================================================================
 
 class RTLDesignMCPServer:
-    def __init__(self):
+    def __init__(self, codex_tools: bool = False):
         self.server = Server("rtl-design-agent")
         # Use absolute paths relative to this script
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -145,6 +145,7 @@ class RTLDesignMCPServer:
         self.current_session = None  # Track active session
         self.tool_filter_mode = "all"  # Options: "all", "essential", "custom"
         self.custom_tool_filter = None  # List of tool names or categories
+        self.codex_tools = codex_tools  # Expose Codex-only MCP helpers when enabled
         
         # Register handlers using decorators
         self._setup_handlers()
@@ -504,6 +505,24 @@ Ready to design! What would you like to create?"""
                 }
             )
         )
+
+        # Codex-only helper tools (disabled by default for other MCP clients)
+        if self.codex_tools:
+            tools_out.append(
+                Tool(
+                    name="inject_architect_prompt",
+                    description="Return the Architect system prompt for Codex clients. Optional session_id also sets active session/workspace.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Optional existing session to activate before returning the prompt"
+                            }
+                        }
+                    }
+                )
+            )
         
         # AUTO-DISCOVER all LangChain tools from mcp_tools (with filtering)
         for langchain_tool in mcp_tools:
@@ -630,6 +649,31 @@ Ready to design! What would you like to create?"""
             response += "\n\n⚠️  Note: Client may need to refresh tool list to see changes."
             
             return [TextContent(type="text", text=response)]
+
+        elif name == "inject_architect_prompt":
+            session_id = arguments.get("session_id")
+            workspace = None
+
+            if session_id:
+                workspace = self.session_manager.get_workspace_path(session_id)
+                if not os.path.exists(workspace):
+                    return [TextContent(type="text", text=f"❌ Session '{session_id}' not found.")]
+                self.current_session = session_id
+                os.environ["RTL_WORKSPACE"] = workspace
+            elif self.current_session:
+                workspace = self.session_manager.get_workspace_path(self.current_session)
+                os.environ["RTL_WORKSPACE"] = workspace
+
+            payload = f"{SYSTEM_PROMPT}"
+            if self.current_session and workspace:
+                payload += (
+                    "\n\n---\n"
+                    f"CURRENT_SESSION: {self.current_session}\n"
+                    f"WORKSPACE: {workspace}\n"
+                    "All tool calls should operate inside this workspace."
+                )
+
+            return [TextContent(type="text", text=payload)]
         
         # Ensure workspace is set for regular tools
         if self.current_session:
@@ -809,9 +853,14 @@ async def main():
         default=8080,
         help="Port to listen on for remote transports (default: 8080)"
     )
+    parser.add_argument(
+        "--codex-tools",
+        action="store_true",
+        help="Expose Codex-only helper tools (e.g., inject_architect_prompt)."
+    )
     args = parser.parse_args()
 
-    server = RTLDesignMCPServer()
+    server = RTLDesignMCPServer(codex_tools=args.codex_tools)
     await server.run(transport=args.transport, host=args.host, port=args.port)
 
 

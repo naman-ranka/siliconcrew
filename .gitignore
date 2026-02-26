@@ -172,5 +172,8 @@ paper/
 # Docs (internal, excluded from repo)
 docs/
 
+# Local Codex automation (system-only)
+codex-automate/
+
 # Local reports / PDFs
 EEE_598_Team_9_Final_report.pdf
