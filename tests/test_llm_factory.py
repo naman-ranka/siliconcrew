@@ -41,3 +41,16 @@ def test_openai_codex_force_fallback(monkeypatch):
     monkeypatch.setenv("OPENAI_FALLBACK_MODEL", "gpt-5-mini")
     llm = create_llm(model_name="gpt-5.3-codex")
     assert getattr(llm, "model_name", None) == "gpt-5-mini"
+
+
+def test_openai_gpt5_uses_responses_and_skips_temperature(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = create_llm(model_name="gpt-5-mini", temperature=0.0)
+    assert getattr(llm, "use_responses_api", None) is True
+    assert getattr(llm, "temperature", None) is None
+
+
+def test_openai_non_gpt5_keeps_temperature(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = create_llm(model_name="gpt-4o-mini", temperature=0.2)
+    assert getattr(llm, "temperature", None) == 0.2
