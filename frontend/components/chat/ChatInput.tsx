@@ -96,7 +96,7 @@ export function ChatInput() {
               <Sparkles className="h-3 w-3" />
               <span>
                 {currentSession
-                  ? `Using ${currentSession.model_name || "gemini-2.5-flash"}`
+                  ? `Using ${currentSession.model_name || "gemini-3-flash-preview"}`
                   : "AI-powered RTL design assistant"
                 }
               </span>

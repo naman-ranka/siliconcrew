@@ -52,7 +52,7 @@ interface CreateSessionDialogProps {
 function CreateSessionDialog({ open, onOpenChange, onCreated }: CreateSessionDialogProps) {
   const { createSession } = useStore();
   const [name, setName] = useState("");
-  const [model, setModel] = useState("gemini-2.5-flash");
+  const [model, setModel] = useState("gemini-3-flash-preview");
   const [error, setError] = useState<string | null>(null);
 
   const handleCreate = async () => {
@@ -98,21 +98,57 @@ function CreateSessionDialog({ open, onOpenChange, onCreated }: CreateSessionDia
                 <SelectValue placeholder="Select model" />
               </SelectTrigger>
               <SelectContent className="bg-surface-1 border-border">
-                <SelectItem value="gemini-2.5-flash">
+                <SelectItem value="gemini-3-flash-preview">
                   <div className="flex items-center gap-2">
                     <Zap className="h-3 w-3 text-yellow-500" />
                     <div>
-                      <span>Gemini 2.5 Flash</span>
-                      <span className="text-xs text-muted-foreground ml-2">Fast &amp; efficient</span>
+                      <span>Gemini 3 Flash</span>
+                      <span className="text-xs text-muted-foreground ml-2">Google mid-tier</span>
                     </div>
                   </div>
                 </SelectItem>
-                <SelectItem value="gemini-3-pro-preview">
+                <SelectItem value="gemini-3.1-pro-preview">
                   <div className="flex items-center gap-2">
                     <Cpu className="h-3 w-3 text-primary" />
                     <div>
-                      <span>Gemini 3 Pro</span>
-                      <span className="text-xs text-muted-foreground ml-2">Most capable</span>
+                      <span>Gemini 3.1 Pro</span>
+                      <span className="text-xs text-muted-foreground ml-2">Google top-tier</span>
+                    </div>
+                  </div>
+                </SelectItem>
+                <SelectItem value="gpt-5-mini">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-3 w-3 text-green-500" />
+                    <div>
+                      <span>GPT-5 Mini</span>
+                      <span className="text-xs text-muted-foreground ml-2">OpenAI mid-tier</span>
+                    </div>
+                  </div>
+                </SelectItem>
+                <SelectItem value="gpt-5.3-codex">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-3 w-3 text-emerald-500" />
+                    <div>
+                      <span>GPT-5.3 Codex</span>
+                      <span className="text-xs text-muted-foreground ml-2">OpenAI top-tier coding</span>
+                    </div>
+                  </div>
+                </SelectItem>
+                <SelectItem value="claude-sonnet-4-6">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-3 w-3 text-orange-500" />
+                    <div>
+                      <span>Claude Sonnet 4.6</span>
+                      <span className="text-xs text-muted-foreground ml-2">Anthropic mid-tier</span>
+                    </div>
+                  </div>
+                </SelectItem>
+                <SelectItem value="claude-opus-4-6">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-3 w-3 text-amber-500" />
+                    <div>
+                      <span>Claude Opus 4.6</span>
+                      <span className="text-xs text-muted-foreground ml-2">Anthropic top-tier</span>
                     </div>
                   </div>
                 </SelectItem>

@@ -27,7 +27,7 @@ async function apiFetch<T>(
 export const sessionsApi = {
   list: () => apiFetch<Session[]>("/api/sessions"),
 
-  create: (name: string, model: string = "gemini-2.5-flash") =>
+  create: (name: string, model: string = "gemini-3-flash-preview") =>
     apiFetch<Session>("/api/sessions", {
       method: "POST",
       body: JSON.stringify({ name, model }),

@@ -158,8 +158,14 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Configure API key
-echo "GOOGLE_API_KEY=your_key_here" > .env
+# Configure API keys (set at least one provider)
+cat > .env <<EOF
+GOOGLE_API_KEY=your_google_key_here
+OPENAI_API_KEY=your_openai_key_here
+ANTHROPIC_API_KEY=your_anthropic_key_here
+# Optional default model (provider inferred from model prefix)
+DEFAULT_MODEL=gemini-3-flash-preview
+EOF
 
 # Install frontend dependencies
 cd frontend && npm install && cd ..

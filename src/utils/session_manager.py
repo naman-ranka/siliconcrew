@@ -53,7 +53,7 @@ class SessionManager:
         result.sort(key=lambda x: x.get("updated_at") or x.get("created_at") or "", reverse=True)
         return [r["session_id"] for r in result]
 
-    def create_session(self, tag, model_name="gemini-2.5-flash"):
+    def create_session(self, tag, model_name="gemini-3-flash-preview"):
         """Creates a new session directory using the tag. Raises FileExistsError if it exists."""
         if not tag:
             raise ValueError("Tag is required.")

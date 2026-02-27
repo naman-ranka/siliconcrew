@@ -16,6 +16,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Quer
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yaml
+import aiosqlite
 
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -40,8 +41,12 @@ DB_PATH = os.path.join(_DATA_DIR, "state.db")
 
 # Pricing Constants (Per 1M Tokens)
 PRICING = {
-    "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
-    "gemini-3-pro-preview": {"input": 2.00, "output": 12.00}
+    "gemini-3-flash-preview": {"input": 0.30, "output": 2.50},
+    "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00},
+    "gpt-5-mini": {"input": 0.30, "output": 2.50},
+    "gpt-5.3-codex": {"input": 2.00, "output": 12.00},
+    "claude-sonnet-4-6": {"input": 0.30, "output": 2.50},
+    "claude-opus-4-6": {"input": 2.00, "output": 12.00},
 }
 
 # Initialize Session Manager
@@ -54,7 +59,7 @@ session_manager = SessionManager(base_dir=WORKSPACE_DIR, db_path=DB_PATH)
 
 class SessionCreate(BaseModel):
     name: str
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3-flash-preview"
 
 
 class SessionResponse(BaseModel):
@@ -115,7 +120,7 @@ def get_clean_content(msg) -> str:
 
 def calculate_cost(input_tokens: int, output_tokens: int, model_name: str) -> float:
     """Calculate cost based on token usage."""
-    rates = PRICING.get(model_name, PRICING["gemini-2.5-flash"])
+    rates = PRICING.get(model_name, PRICING["gemini-3-flash-preview"])
     return (input_tokens / 1_000_000 * rates["input"]) + (output_tokens / 1_000_000 * rates["output"])
 
 
@@ -140,6 +145,27 @@ def format_tool_result_for_api(content: str) -> dict:
         "status": status,
         "content": content[:5000] if len(content) > 5000 else content
     }
+
+
+@asynccontextmanager
+async def open_checkpointer(db_path: str):
+    """
+    Open AsyncSqliteSaver with compatibility for aiosqlite variants that do not
+    expose Connection.is_alive().
+    """
+    conn = await aiosqlite.connect(db_path)
+
+    # langgraph.checkpoint.sqlite.aio.AsyncSqliteSaver expects this method.
+    if not hasattr(conn, "is_alive"):
+        def _is_alive() -> bool:
+            return bool(getattr(conn, "_running", False))
+        setattr(conn, "is_alive", _is_alive)
+
+    memory = AsyncSqliteSaver(conn)
+    try:
+        yield memory
+    finally:
+        await conn.close()
 
 
 # =============================================================================
@@ -272,9 +298,9 @@ async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        async with AsyncSqliteSaver.from_conn_string(DB_PATH) as memory:
+        async with open_checkpointer(DB_PATH) as memory:
             meta = session_manager.get_session_metadata(session_id)
-            model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
+            model_name = meta.get("model_name", "gemini-3-flash-preview") if meta else "gemini-3-flash-preview"
 
             agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
             config = {"configurable": {"thread_id": session_id}}
@@ -353,9 +379,9 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             print(f"[CHAT] Session: {session_id} | Message: {message[:50]}...")
 
             # Initialize agent with AsyncSqliteSaver (supports async streaming/state)
-            async with AsyncSqliteSaver.from_conn_string(DB_PATH) as memory:
+            async with open_checkpointer(DB_PATH) as memory:
                 meta = session_manager.get_session_metadata(session_id)
-                model_name = meta.get("model_name", "gemini-2.5-flash") if meta else "gemini-2.5-flash"
+                model_name = meta.get("model_name", "gemini-3-flash-preview") if meta else "gemini-3-flash-preview"
 
                 agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
                 config = {"configurable": {"thread_id": session_id}, "recursion_limit": 50}

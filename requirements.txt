@@ -1,7 +1,8 @@
 langchain>=0.3.7
 langchain-community>=0.3.7
-langchain-google-genai>=4.0.0
-google-generativeai>=0.8.5
+langchain-google-genai>=2.1.12,<3.0.0
+langchain-openai>=0.2.14,<0.3.0
+langchain-anthropic>=0.3.22,<0.4.0
 langgraph>=0.2.53
 langgraph-checkpoint-sqlite
 aiosqlite>=0.19.0
