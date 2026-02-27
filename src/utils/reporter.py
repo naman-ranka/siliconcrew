@@ -6,11 +6,15 @@ from src.agents.architect import create_architect_agent
 
 # Reuse pricing logic logic if possible, or duplicate for independence
 PRICING = {
-    "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
-    "gemini-3-pro-preview": {"input": 2.00, "output": 12.00}
+    "gemini-3-flash-preview": {"input": 0.30, "output": 2.50},
+    "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00},
+    "gpt-5-mini": {"input": 0.30, "output": 2.50},
+    "gpt-5.3-codex": {"input": 2.00, "output": 12.00},
+    "claude-sonnet-4-6": {"input": 0.30, "output": 2.50},
+    "claude-opus-4-6": {"input": 2.00, "output": 12.00},
 }
 
-def generate_markdown_report(session_id, db_path, model_name="gemini-2.5-flash"):
+def generate_markdown_report(session_id, db_path, model_name="gemini-3-flash-preview"):
     """
     Generates a Markdown report for a given session.
     """
@@ -99,7 +103,7 @@ def generate_markdown_report(session_id, db_path, model_name="gemini-2.5-flash")
              transcript.append(f"## ⚙️ Tool Output\n\n```\n{content[:500]}...\n```\n")
 
     # 3. Calculate Cost
-    rates = PRICING.get(model_name, PRICING["gemini-2.5-flash"])
+    rates = PRICING.get(model_name, PRICING["gemini-3-flash-preview"])
     cost = (input_tokens / 1_000_000 * rates["input"]) + (output_tokens / 1_000_000 * rates["output"])
     
     # 4. Build Report

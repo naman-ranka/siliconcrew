@@ -27,7 +27,7 @@ export function ChatArea() {
               <div>
                 <h1 className="font-semibold text-sm">{currentSession.name ?? currentSession.id}</h1>
                 <p className="text-xs text-muted-foreground">
-                  {currentSession.model_name || "gemini-2.5-flash"}
+                  {currentSession.model_name || "gemini-3-flash-preview"}
                 </p>
               </div>
             </>

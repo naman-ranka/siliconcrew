@@ -5,13 +5,12 @@ This module creates the main agent responsible for hardware design, verification
 and synthesis. Uses a ReAct pattern with comprehensive tool access.
 """
 
-import os
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
 from pathlib import Path
 from src.tools.wrappers import architect_tools
 from src.config import DEFAULT_MODEL
+from src.llm import create_llm
 
 load_dotenv()
 
@@ -573,30 +572,7 @@ def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL):
     Returns:
         Compiled LangGraph agent
     """
-    # Gemini 3 models require special configuration for proper tool calling
-    # See: https://python.langchain.com/docs/integrations/chat/google_generative_ai
-    is_gemini_3 = "gemini-3" in model_name.lower()
-    
-    llm_kwargs = {
-        "model": model_name,
-        "google_api_key": os.environ.get("GOOGLE_API_KEY"),
-    }
-    
-    if is_gemini_3:
-        # WARNING: Gemini 3 has known issues with create_react_agent + many tools
-        # See: https://github.com/langchain-ai/langgraph/issues/6133
-        # The model returns empty responses. Use gemini-2.5-flash until LangChain fixes this.
-        import warnings
-        warnings.warn(
-            f"âš ï¸ {model_name} has known issues with LangChain's create_react_agent. "
-            "You may experience empty responses. Consider using 'gemini-2.5-flash' instead.",
-            UserWarning
-        )
-        # Gemini 3 specific settings (may not fully work due to LangChain bugs):
-        llm_kwargs["temperature"] = 1.0
-        llm_kwargs["include_thoughts"] = True
-    
-    llm = ChatGoogleGenerativeAI(**llm_kwargs)
+    llm = create_llm(model_name=model_name, temperature=0.0)
     runtime_prompt = load_system_prompt()
 
     # Prefer passing prompt explicitly; keep backward compatibility for older LangGraph signatures.
