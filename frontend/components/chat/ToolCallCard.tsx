@@ -23,13 +23,16 @@ const toolLabelMap: Record<string, string> = {
   read_spec: "Reading Specification",
   write_file: "Writing File",
   read_file: "Reading File",
+  apply_patch_tool: "Applying Patch",
   edit_file_tool: "Editing File",
   list_files_tool: "Listing Files",
   linter_tool: "Running Linter",
   simulation_tool: "Running Simulation",
   waveform_tool: "Generating Waveform",
-  synthesis_tool: "Running Synthesis",
-  ppa_tool: "Analyzing PPA",
+  start_synthesis: "Starting Synthesis",
+  get_synthesis_job: "Checking Synthesis Status",
+  wait_for_synthesis: "Waiting for Synthesis",
+  get_synthesis_metrics: "Collecting Synthesis Metrics",
   generate_report_tool: "Generating Report",
 };
 

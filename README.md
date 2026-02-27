@@ -83,8 +83,8 @@ This project investigates the following research questions:
      ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
      │ Spec & Files   │  │  Verification  │  │   Synthesis    │
      ├────────────────┤  ├────────────────┤  ├────────────────┤
-     │ write_spec     │  │ linter_tool    │  │ synthesis_tool │
-     │ read_spec      │  │ simulation_tool│  │ ppa_tool       │
+     │ write_spec     │  │ linter_tool    │  │ start_synthesis│
+     │ read_spec      │  │ simulation_tool│  │ get_synthesis_metrics│
      │ load_yaml_spec │  │ waveform_tool  │  │ search_logs    │
      │ write_file     │  │ cocotb_tool    │  │ schematic_tool │
      │ read_file      │  │ sby_tool       │  │ save_metrics   │
