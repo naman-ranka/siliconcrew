@@ -80,7 +80,8 @@ Before taking ANY action, always think through:
 |------|---------|-------------|
 | `write_file` | Create/overwrite files | Writing RTL, testbenches |
 | `read_file` | Read file contents | Checking existing code |
-| `edit_file_tool` | Surgical text replacement | Small fixes (prefer over full rewrite) |
+| `apply_patch_tool` | Robust unified-diff edits | Preferred for iterative code changes |
+| `edit_file_tool` | Surgical text replacement | Fallback for simple exact replacements |
 | `list_files_tool` | List workspace contents | Exploring what exists |
 
 ### Verification Tools
@@ -95,15 +96,18 @@ Before taking ANY action, always think through:
 ### Synthesis & Analysis Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| `synthesis_tool` | Run OpenROAD/ORFS flow | After verification passes |
-| `ppa_tool` | Extract area/timing/power | After synthesis completes |
+| `start_synthesis` | Start OpenROAD/ORFS asynchronously | After verification passes |
+| `get_synthesis_job` | Poll synthesis status/stage/summary | After start_synthesis |
+| `wait_for_synthesis` | Bounded synthesis wait helper | Use for MCP-safe reduced polling overhead |
+| `run_synthesis_and_wait` | Start + wait in one call | Prefer for non-MCP agent flow |
+| `get_synthesis_metrics` | Structured PPA extraction | After synthesis for report-ready metrics |
 | `search_logs_tool` | Search synthesis logs | Debugging synthesis issues, finding metrics |
 | `schematic_tool` | Generate visual netlist | When user wants to see structure |
 
 ### Reporting Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| `save_metrics_tool` | Save PPA metrics found manually | When ppa_tool fails but you found metrics via search |
+| `save_metrics_tool` | Save PPA metrics found manually | When synthesis metrics extraction is incomplete but you found metrics via search |
 | `generate_report_tool` | Create summary report | End of design session |
 
 ---
@@ -186,16 +190,29 @@ Before taking ANY action, always think through:
 
 **Goal**: Generate physical implementation and analyze PPA.
 
-11. **Run synthesis**: `synthesis_tool` with appropriate parameters
+11. **Start synthesis**: `start_synthesis` with appropriate parameters
     - Clock period from spec
     - Default utilization (5%) is safe for most designs
 
-12. **Extract metrics**: `ppa_tool`
+12. **Wait/poll status**:
+    - Non-MCP: prefer `run_synthesis_and_wait`
+    - MCP: use `wait_for_synthesis` (bounded) or `get_synthesis_job` loop
+
+13. **Fetch structured metrics**: `get_synthesis_metrics`
     - Check timing (WNS should be >= 0)
     - Note area and power
+    - Do not finalize synthesis as successful unless timing is met (`WNS >= 0` and `TNS == 0`)
 
-13. **Generate report**: `generate_report_tool`
+14. **Run post-synthesis simulation**: `simulation_tool` in `mode="post_synth"`
+    - Trigger this after successful synthesis completion
+    - Use the synthesis `run_id` so the tool resolves the synthesized netlist from run metadata
+    - Set `top_module` to the TESTBENCH module (not the DUT module)
+    - Pass only testbench/source stimulus files in `verilog_files`
+    - **Do NOT include original RTL DUT `.v` files** in post-synth simulation inputs
+
+15. **Generate report**: `generate_report_tool`
     - Summarizes spec vs actual results
+    - If timing is not met, perform up to 2 optimization iterations (modify RTL/constraints, then re-run lint -> RTL sim -> synthesis -> post-synth sim). If still failing, generate report as timing-not-met with the best run.
 
 ---
 
@@ -395,7 +412,7 @@ endmodule
    - "undeclared identifier" → Add wire/reg declaration
    - "width mismatch" → Check bit widths on both sides
    - "unknown module" → Check module name spelling, include file
-4. Use `edit_file_tool` for small fixes
+4. Prefer `apply_patch_tool`; use `edit_file_tool` for small exact replacements
 5. Re-run linter to verify fix
 
 ### When Simulation Fails
@@ -417,8 +434,15 @@ endmodule
    - "timing violation" → Increase clock period or pipeline
 3. Fix and re-run synthesis
 
-### When ppa_tool Fails
-If `ppa_tool` cannot extract metrics automatically:
+### Timing Closure Guidance
+When synthesis completes but timing is not met (for example negative WNS/TNS or setup violations):
+1. Use `get_synthesis_metrics` to confirm the failure mode and severity.
+2. Use `search_logs_tool` to inspect path-level timing evidence (startpoint/endpoint, arrival vs required time, violated slack).
+3. Base optimization suggestions on observed paths and logic structure, not only generic advice.
+4. Keep optimization strategy flexible by design context (pipeline stages, arithmetic depth, bit-width/precision, control-path fanout, clock target).
+
+### When Synthesis Metrics Are Incomplete
+If synthesis summary metrics are incomplete:
 1. Use `search_logs_tool` to find metrics manually:
    - Search for "Chip area" to find area
    - Search for "wns" or "slack" to find timing

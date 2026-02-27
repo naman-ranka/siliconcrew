@@ -5,14 +5,17 @@ Test script to verify MCP server functionality
 import asyncio
 import sys
 import os
+import pytest
 
 # Add src to path
 sys.path.insert(0, os.path.dirname(__file__))
 
+pytest.importorskip("langgraph")
+
 from mcp_server import RTLDesignMCPServer
 
 
-async def test_mcp_server():
+async def _run_mcp_server_test():
     """Test that the MCP server initializes correctly."""
     print("Testing MCP Server initialization...")
     
@@ -27,9 +30,9 @@ async def test_mcp_server():
     expected_tools = [
         "create_session_tool", "list_sessions_tool", "set_active_session", "get_current_session",
         "write_spec", "read_spec", "load_yaml_spec_file",
-        "write_file", "read_file", "edit_file_tool", "list_files_tool",
+        "write_file", "read_file", "apply_patch_tool", "edit_file_tool", "list_files_tool",
         "linter_tool", "simulation_tool", "waveform_tool",
-        "synthesis_tool", "ppa_tool", "search_logs_tool",
+        "start_synthesis", "get_synthesis_job", "wait_for_synthesis", "get_synthesis_metrics", "search_logs_tool",
         "generate_report_tool"
     ]
     
@@ -98,5 +101,9 @@ async def test_mcp_server():
     print("4. Load 'RTL Design Workflow' prompt in Claude")
 
 
+def test_mcp_server():
+    asyncio.run(_run_mcp_server_test())
+
+
 if __name__ == "__main__":
-    asyncio.run(test_mcp_server())
+    asyncio.run(_run_mcp_server_test())

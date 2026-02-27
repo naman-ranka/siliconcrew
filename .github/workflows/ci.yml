@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install system deps
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y iverilog
+
+    - name: Install Python deps
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Unit tests for stdcells + simulation contract
+      env:
+        PYTHONPATH: .
+      run: |
+        pytest -q tests/test_guardrails_and_stdcells.py tests/test_simulation_contract.py
+
+    - name: First-run stdcell bootstrap
+      env:
+        PYTHONPATH: .
+      run: |
+        python scripts/bootstrap_stdcells.py --workspace workspace --platform asap7
+        python scripts/bootstrap_stdcells.py --workspace workspace --platform sky130hd
+
+    - name: Post-synth smoke (one per platform)
+      env:
+        PYTHONPATH: .
+      run: |
+        python scripts/ci_postsynth_smoke.py

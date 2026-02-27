@@ -148,8 +148,7 @@ state.db
 workspace/*
 !workspace/.gitkeep
 !workspace/README.md
-!workspace/*.v
-!workspace/*.sby
+workspace_tmp_refresh/
 
 # Simulation outputs
 *.out
@@ -172,6 +171,9 @@ paper/
 
 # Docs (internal, excluded from repo)
 docs/
+
+# Local Codex automation (system-only)
+codex-automate/
 
 # Local reports / PDFs
 EEE_598_Team_9_Final_report.pdf

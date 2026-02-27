@@ -1,12 +1,19 @@
 import os
+import json
+import time
+from typing import Any
 from langchain_core.tools import tool
 from src.tools.run_linter import run_linter
 from src.tools.run_simulation import run_simulation
-from src.tools.run_synthesis import run_synthesis
-from src.tools.get_ppa import get_ppa_metrics
 from src.tools.read_waveform import read_waveform
 from src.tools.run_cocotb import run_cocotb
 from src.tools.run_sby import run_sby
+from src.tools.synthesis_manager import (
+    start_synthesis_job,
+    get_synthesis_job_status,
+    get_synthesis_metrics as collect_synthesis_metrics,
+)
+from src.tools.file_patch import apply_unified_patch
 
 # Helper to get workspace path
 def get_workspace_path():
@@ -55,19 +62,24 @@ def read_file(filename: str) -> str:
         return f.read()
 
 @tool
-def linter_tool(verilog_file: str) -> str:
+def linter_tool(verilog_files: list[str] | str) -> str:
     """
-    Checks the syntax of a Verilog file using iverilog.
+    Checks syntax using iverilog. Supports single-file or multi-file linting.
     Args:
-        verilog_file: Name of the file to lint (e.g., 'design.v').
+        verilog_files: Filename string or list of filenames (e.g., 'design.v' or ['design.v','tb.v']).
     """
     workspace = get_workspace_path()
-    filepath = os.path.join(workspace, verilog_file)
-    
-    if not os.path.exists(filepath):
-        return f"Error: File {verilog_file} does not exist."
-        
-    result = run_linter([filepath], cwd=workspace)
+    if isinstance(verilog_files, str):
+        verilog_files = [verilog_files]
+
+    filepaths = []
+    for item in verilog_files:
+        fp = item if os.path.isabs(item) else os.path.join(workspace, item)
+        if not os.path.exists(fp):
+            return f"Error: File {item} does not exist."
+        filepaths.append(fp)
+
+    result = run_linter(filepaths, cwd=workspace)
     
     if result["success"]:
         return "Syntax OK."
@@ -75,101 +87,201 @@ def linter_tool(verilog_file: str) -> str:
         return f"Syntax Error:\n{result['stderr']}"
 
 @tool
-def simulation_tool(verilog_files: list[str], top_module: str) -> str:
+def simulation_tool(
+    verilog_files: list[str],
+    top_module: str,
+    mode: str = "rtl",
+    run_id: str = None,
+    netlist_file: str = None,
+    platform: str = None,
+    sim_profile: str = "auto",
+    pass_marker: str = "TEST PASSED",
+) -> str:
     """
-    Runs a Verilog simulation.
+    Runs RTL or post-synthesis simulation with strict status contracts.
     Args:
-        verilog_files: List of filenames to compile (e.g., ['design.v', 'tb.v']).
-        top_module: Name of the top-level module in the testbench (e.g., 'tb').
+        verilog_files: List of filenames to compile (usually includes testbench).
+        top_module: Name of the top-level module in the testbench.
+        mode: 'rtl' or 'post_synth'.
+        run_id: Optional synthesis run ID for post-synth mode.
+        netlist_file: Optional explicit netlist path.
+        platform: Optional platform override for post-synth mode.
+        sim_profile: 'auto' (default), 'pinned', or 'compat'. Auto selects 'compat' for ASAP7 post-synth.
+        pass_marker: Explicit pass marker required for test_passed status.
     """
     workspace = get_workspace_path()
-    abs_files = [os.path.join(workspace, f) for f in verilog_files]
-    
-    # Check existence
+    abs_files = []
+    for f in verilog_files or []:
+        abs_files.append(f if os.path.isabs(f) else os.path.join(workspace, f))
+
     for f in abs_files:
         if not os.path.exists(f):
             return f"Error: File {f} does not exist."
-            
-    result = run_simulation(abs_files, top_module=top_module, cwd=workspace)
-    
-    if result["success"]:
-        return "Simulation PASSED."
-    else:
-        return f"Simulation FAILED.\nStdout: {result['stdout']}\nStderr: {result['stderr']}"
+
+    abs_netlist = None
+    if netlist_file:
+        abs_netlist = netlist_file if os.path.isabs(netlist_file) else os.path.join(workspace, netlist_file)
+
+    result = run_simulation(
+        verilog_files=abs_files,
+        top_module=top_module,
+        cwd=workspace,
+        mode=mode,
+        run_id=run_id,
+        netlist_file=abs_netlist,
+        platform=platform,
+        sim_profile=sim_profile,
+        pass_marker=pass_marker,
+    )
+    return json.dumps(result, indent=2)
 
 from src.tools.search_logs import search_logs
 
 @tool
-def synthesis_tool(verilog_files: list[str], top_module: str, platform: str = "sky130hd", 
-                   clock_period_ns: float = 10.0, utilization: int = 5, aspect_ratio: float = 1.0, 
-                   core_margin: float = 2.0) -> str:
+def start_synthesis(
+    verilog_files: list[str],
+    top_module: str,
+    platform: str = "sky130hd",
+    clock_period_ns: float = 10.0,
+    utilization: int = 5,
+    aspect_ratio: float = 1.0,
+    core_margin: float = 2.0,
+    run_equiv: bool = False,
+    constraints_mode: str = "auto",
+) -> str:
     """
-    Runs logic synthesis using OpenROAD Flow Scripts (ORFS).
-    Returns a rich summary including generated files and key metrics.
-    Args:
-        verilog_files: List of Verilog source files.
-        top_module: Name of the top module to synthesize.
-        platform: Target technology platform. Options: 'sky130hd', 'asap7'. Default: 'sky130hd'.
-        clock_period_ns: Target clock period in nanoseconds (default: 10.0).
-        utilization: Core utilization percentage (1-100). Higher = smaller area. Default: 5 (safe).
-        aspect_ratio: Core aspect ratio (Height/Width). 1.0 = Square.
-        core_margin: Margin around core in microns.
+    Starts synthesis asynchronously and returns quickly with job_id and run_id.
     """
     workspace = get_workspace_path()
-    
-    # Handle single string input if agent forgets list
+
     if isinstance(verilog_files, str):
         verilog_files = [verilog_files]
-        
+
     abs_files = []
     for f in verilog_files:
-        abs_f = os.path.join(workspace, f)
+        abs_f = f if os.path.isabs(f) else os.path.join(workspace, f)
         if not os.path.exists(abs_f):
             return f"Error: File {f} does not exist."
         abs_files.append(abs_f)
-        
-    result = run_synthesis(abs_files, top_module=top_module, platform=platform, 
-                           clock_period_ns=clock_period_ns, utilization=utilization, 
-                           aspect_ratio=aspect_ratio, core_margin=core_margin,
-                           cwd=workspace)
-    
-    if result["success"]:
-        # 1. Auto-Grep for Metrics
-        area_info = search_logs("Chip area", workspace)
-        wns_info = search_logs("WNS", workspace)
-        if "No matches" in wns_info: wns_info = search_logs("slack", workspace)
-        
-        # 2. List Generated Files (GDS, Reports)
-        results_dir = os.path.join(workspace, "orfs_results", "sky130hd", top_module, "base")
-        files_summary = ""
-        if os.path.exists(results_dir):
-            files = [f for f in os.listdir(results_dir) if f.endswith(('.gds', '.v', '.rpt'))]
-            files_summary = ", ".join(files[:5]) # List first 5 relevant files
-            
-        return f"""Synthesis Command Successful! ✅
-        
-🔍 Quick PPA Scan:
-{area_info.splitlines()[0] if "File:" in area_info else "Area: Not found"}
-{wns_info.splitlines()[0] if "File:" in wns_info else "Timing: Not found"}
 
-📂 Output Files (in orfs_results):
-{files_summary} ...
-
-(Use 'ppa_tool' for full detailed metrics)"""
-    else:
-        return f"Synthesis Command Finished. Output:\n{result['stderr'][-1000:]}"
+    result = start_synthesis_job(
+        workspace=workspace,
+        verilog_files=abs_files,
+        top_module=top_module,
+        platform=platform,
+        clock_period_ns=clock_period_ns,
+        utilization=utilization,
+        aspect_ratio=aspect_ratio,
+        core_margin=core_margin,
+        run_equiv=run_equiv,
+        constraints_mode=constraints_mode,
+    )
+    return json.dumps(result, indent=2)
 
 @tool
-def ppa_tool() -> str:
+def get_synthesis_job(job_id: str) -> str:
     """
-    Extracts PPA (Power, Performance, Area) metrics from the latest synthesis run.
-    Returns a dictionary string of metrics.
+    Gets synthesis job status including stage, auto-check summaries, and best-effort metrics.
     """
     workspace = get_workspace_path()
-    logs_dir = os.path.join(workspace, "orfs_logs")
-    
-    metrics = get_ppa_metrics(logs_dir)
-    return str(metrics)
+    result = get_synthesis_job_status(job_id, workspace=workspace)
+    return json.dumps(result, indent=2)
+
+
+def _wait_for_synthesis_job(
+    workspace: str,
+    job_id: str,
+    max_wait_sec: int,
+    poll_interval_sec: int,
+) -> dict[str, Any]:
+    start = time.time()
+    max_wait = max(1, int(max_wait_sec))
+    poll_interval = max(1, int(poll_interval_sec))
+    last = None
+
+    while (time.time() - start) < max_wait:
+        status = get_synthesis_job_status(job_id, workspace=workspace)
+        last = status
+        if status.get("status") in {"completed", "failed"}:
+            status["waited_sec"] = round(time.time() - start, 2)
+            status["timed_out"] = False
+            return status
+
+        suggested = status.get("retry_after_sec")
+        if suggested is None:
+            suggested = status.get("poll_after_sec", poll_interval)
+        sleep_s = max(1, int(round(float(suggested))))
+        remaining = max_wait - (time.time() - start)
+        if remaining <= 0:
+            break
+        time.sleep(min(sleep_s, max(1, int(remaining))))
+
+    # timeout path returns latest known status with explicit timeout flag
+    if last is None:
+        last = {"job_id": job_id, "status": "running"}
+    last["waited_sec"] = round(time.time() - start, 2)
+    last["timed_out"] = True
+    last["next_action"] = "Call wait_for_synthesis again or poll with get_synthesis_job."
+    return last
+
+
+@tool
+def wait_for_synthesis(job_id: str, max_wait_sec: int = 30, poll_interval_sec: int = 2) -> str:
+    """
+    MCP-safe bounded wait for synthesis completion.
+    Internally polls synthesis for up to max_wait_sec, then returns either terminal or running status.
+    Args:
+        job_id: Synthesis job id from start_synthesis.
+        max_wait_sec: Max seconds to block in this call (default 30).
+        poll_interval_sec: Fallback poll interval when guidance is absent.
+    """
+    workspace = get_workspace_path()
+    result = _wait_for_synthesis_job(workspace, job_id, max_wait_sec, poll_interval_sec)
+    return json.dumps(result, indent=2)
+
+
+@tool
+def run_synthesis_and_wait(
+    verilog_files: list[str],
+    top_module: str,
+    platform: str = "sky130hd",
+    clock_period_ns: float = 10.0,
+    utilization: int = 5,
+    aspect_ratio: float = 1.0,
+    core_margin: float = 2.0,
+    run_equiv: bool = False,
+    constraints_mode: str = "auto",
+    max_wait_sec: int = 300,
+    poll_interval_sec: int = 2,
+) -> str:
+    """
+    Starts synthesis and waits (bounded) for completion.
+    Intended for non-MCP agent flows to reduce poll/sleep turn overhead.
+    """
+    started_json = start_synthesis.invoke(
+        {
+            "verilog_files": verilog_files,
+            "top_module": top_module,
+            "platform": platform,
+            "clock_period_ns": clock_period_ns,
+            "utilization": utilization,
+            "aspect_ratio": aspect_ratio,
+            "core_margin": core_margin,
+            "run_equiv": run_equiv,
+            "constraints_mode": constraints_mode,
+        }
+    )
+
+    try:
+        started = json.loads(started_json)
+    except Exception:
+        return started_json
+    if "job_id" not in started:
+        return started_json
+
+    workspace = get_workspace_path()
+    waited = _wait_for_synthesis_job(workspace, started["job_id"], max_wait_sec, poll_interval_sec)
+    return json.dumps({"start": started, "result": waited}, indent=2)
 
 @tool
 def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0, end_time: int = 1000) -> str:
@@ -187,17 +299,41 @@ def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0, end_ti
     return read_waveform(abs_file, signals, start_time, end_time)
 
 @tool
-def search_logs_tool(query: str) -> str:
+def search_logs_tool(query: str, run_id: str = None) -> str:
     """
-    Searches for a keyword in all OpenROAD logs and reports.
+    Searches for a keyword in OpenROAD logs and reports.
     Useful for finding specific errors, warnings, or metrics (e.g. "slack", "error", "area").
     Args:
         query: The string to search for.
+        run_id: Optional run ID for deterministic lookup.
     """
     workspace = get_workspace_path()
-    return search_logs(query, workspace)
+    return search_logs(query, workspace, run_id=run_id)
+
+
+@tool
+def get_synthesis_metrics(run_id: str = None) -> str:
+    """
+    Returns structured synthesis metrics for a run.
+    Parses standard ORFS outputs (6_finish.rpt + synth_stat.txt) and returns JSON.
+    """
+    workspace = get_workspace_path()
+    result = collect_synthesis_metrics(workspace=workspace, run_id=run_id)
+    return json.dumps(result, indent=2)
+
 
 from src.tools.edit_file import replace_in_file
+
+@tool
+def apply_patch_tool(unified_diff: str) -> str:
+    """
+    Applies a unified-diff patch inside the active workspace.
+    Prefer this for robust code edits over exact-text replacement.
+    """
+    workspace = get_workspace_path()
+    result = apply_unified_patch(workspace=workspace, unified_diff=unified_diff)
+    return json.dumps(result, indent=2)
+
 
 @tool
 def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> str:
@@ -581,8 +717,20 @@ def list_files_tool() -> str:
         
     return "Files in workspace:\n" + "\n".join(sorted(files))
 
-# List of tools to bind to the agent
-architect_tools = [
+@tool
+def sleep_tool(seconds: int) -> str:
+    """
+    Blocks briefly before the next action.
+    Use this to honor synthesis polling guidance from get_synthesis_job.
+    Args:
+        seconds: Requested sleep time (clamped to 1..30 seconds).
+    """
+    wait_s = max(1, min(int(seconds), 30))
+    time.sleep(wait_s)
+    return f"Slept for {wait_s} second(s)."
+
+# Tools exposed over MCP (no blocking wait tool).
+mcp_tools = [
     # Specification tools (use FIRST)
     write_spec,
     read_spec,
@@ -590,6 +738,7 @@ architect_tools = [
     # File management
     write_file,
     read_file,
+    apply_patch_tool,
     edit_file_tool,
     list_files_tool,
     # Verification tools
@@ -599,11 +748,16 @@ architect_tools = [
     cocotb_tool,
     sby_tool,
     # Synthesis & Analysis
-    synthesis_tool,
-    ppa_tool,
+    start_synthesis,
+    get_synthesis_job,
+    wait_for_synthesis,
+    get_synthesis_metrics,
     search_logs_tool,
     schematic_tool,
     # Reporting & Metrics
     save_metrics_tool,
     generate_report_tool,
 ]
+
+# Tools bound to the in-process architect agent.
+architect_tools = [*mcp_tools, run_synthesis_and_wait, sleep_tool]
