@@ -47,6 +47,7 @@ from src.tools.wrappers import (
     load_yaml_spec_file,
     write_file,
     read_file,
+    apply_patch_tool,
     edit_file_tool,
     list_files_tool,
     linter_tool,
@@ -54,14 +55,16 @@ from src.tools.wrappers import (
     waveform_tool,
     cocotb_tool,
     sby_tool,
-    synthesis_tool,
-    ppa_tool,
+    start_synthesis,
+    get_synthesis_job,
+    wait_for_synthesis,
+    get_synthesis_metrics,
     search_logs_tool,
     schematic_tool,
     save_metrics_tool,
     generate_report_tool,
     get_workspace_path,
-    architect_tools,  # Import the full list for auto-discovery
+    mcp_tools,
 )
 from src.agents.architect import SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
@@ -82,10 +85,10 @@ TOOL_CATEGORIES = {
         "waveform_tool", "cocotb_tool", "sby_tool"
     ],
     "synthesis": [
-        "synthesis_tool", "ppa_tool", "search_logs_tool", "schematic_tool"
+        "start_synthesis", "get_synthesis_job", "wait_for_synthesis", "get_synthesis_metrics", "search_logs_tool", "schematic_tool"
     ],
     "editing": [
-        "edit_file_tool", "load_yaml_spec_file"
+        "apply_patch_tool", "edit_file_tool", "load_yaml_spec_file"
     ],
     "reporting": [
         "save_metrics_tool", "generate_report_tool"
@@ -129,7 +132,7 @@ def langchain_to_mcp_schema(langchain_tool) -> Tool:
 # =============================================================================
 
 class RTLDesignMCPServer:
-    def __init__(self):
+    def __init__(self, codex_tools: bool = False):
         self.server = Server("rtl-design-agent")
         # Use absolute paths relative to this script
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -142,6 +145,7 @@ class RTLDesignMCPServer:
         self.current_session = None  # Track active session
         self.tool_filter_mode = "all"  # Options: "all", "essential", "custom"
         self.custom_tool_filter = None  # List of tool names or categories
+        self.codex_tools = codex_tools  # Expose Codex-only MCP helpers when enabled
         
         # Register handlers using decorators
         self._setup_handlers()
@@ -432,10 +436,10 @@ Ready to design! What would you like to create?"""
         - self.tool_filter_mode: "all" | "essential" | "custom"
         - self.custom_tool_filter: List of tool names or categories
         """
-        mcp_tools = []
+        tools_out = []
         
         # Session management tools (always included)
-        mcp_tools.extend([
+        tools_out.extend([
             Tool(
                 name="create_session_tool",
                 description="Create a new isolated session workspace for a design project.",
@@ -479,7 +483,7 @@ Ready to design! What would you like to create?"""
         ])
         
         # Add tool filtering control tool
-        mcp_tools.append(
+        tools_out.append(
             Tool(
                 name="configure_tool_filter",
                 description="Control which tools are visible to reduce cognitive load. Use 'essential' for basic workflow, 'all' for everything, or specify custom categories.",
@@ -501,20 +505,38 @@ Ready to design! What would you like to create?"""
                 }
             )
         )
+
+        # Codex-only helper tools (disabled by default for other MCP clients)
+        if self.codex_tools:
+            tools_out.append(
+                Tool(
+                    name="inject_architect_prompt",
+                    description="Return the Architect system prompt for Codex clients. Optional session_id also sets active session/workspace.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Optional existing session to activate before returning the prompt"
+                            }
+                        }
+                    }
+                )
+            )
         
-        # AUTO-DISCOVER all LangChain tools from architect_tools (with filtering)
-        for langchain_tool in architect_tools:
+        # AUTO-DISCOVER all LangChain tools from mcp_tools (with filtering)
+        for langchain_tool in mcp_tools:
             try:
                 # Apply filter
                 if not self._should_include_tool(langchain_tool.name):
                     continue
                 
                 mcp_tool = langchain_to_mcp_schema(langchain_tool)
-                mcp_tools.append(mcp_tool)
+                tools_out.append(mcp_tool)
             except Exception as e:
                 print(f"Warning: Could not convert tool {langchain_tool.name}: {e}")
         
-        return mcp_tools
+        return tools_out
     
     async def call_tool(self, name: str, arguments: dict[str, Any] | None) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
         """
@@ -609,7 +631,7 @@ Ready to design! What would you like to create?"""
             
             # Count how many tools will be visible
             visible_count = 0
-            for tool in architect_tools:
+            for tool in mcp_tools:
                 if self._should_include_tool(tool.name):
                     visible_count += 1
             
@@ -627,6 +649,31 @@ Ready to design! What would you like to create?"""
             response += "\n\n⚠️  Note: Client may need to refresh tool list to see changes."
             
             return [TextContent(type="text", text=response)]
+
+        elif name == "inject_architect_prompt":
+            session_id = arguments.get("session_id")
+            workspace = None
+
+            if session_id:
+                workspace = self.session_manager.get_workspace_path(session_id)
+                if not os.path.exists(workspace):
+                    return [TextContent(type="text", text=f"❌ Session '{session_id}' not found.")]
+                self.current_session = session_id
+                os.environ["RTL_WORKSPACE"] = workspace
+            elif self.current_session:
+                workspace = self.session_manager.get_workspace_path(self.current_session)
+                os.environ["RTL_WORKSPACE"] = workspace
+
+            payload = f"{SYSTEM_PROMPT}"
+            if self.current_session and workspace:
+                payload += (
+                    "\n\n---\n"
+                    f"CURRENT_SESSION: {self.current_session}\n"
+                    f"WORKSPACE: {workspace}\n"
+                    "All tool calls should operate inside this workspace."
+                )
+
+            return [TextContent(type="text", text=payload)]
         
         # Ensure workspace is set for regular tools
         if self.current_session:
@@ -640,6 +687,7 @@ Ready to design! What would you like to create?"""
             "load_yaml_spec_file": load_yaml_spec_file,
             "write_file": write_file,
             "read_file": read_file,
+            "apply_patch_tool": apply_patch_tool,
             "edit_file_tool": edit_file_tool,
             "list_files_tool": list_files_tool,
             "linter_tool": linter_tool,
@@ -647,8 +695,10 @@ Ready to design! What would you like to create?"""
             "waveform_tool": waveform_tool,
             "cocotb_tool": cocotb_tool,
             "sby_tool": sby_tool,
-            "synthesis_tool": synthesis_tool,
-            "ppa_tool": ppa_tool,
+            "start_synthesis": start_synthesis,
+            "get_synthesis_job": get_synthesis_job,
+            "wait_for_synthesis": wait_for_synthesis,
+            "get_synthesis_metrics": get_synthesis_metrics,
             "search_logs_tool": search_logs_tool,
             "schematic_tool": schematic_tool,
             "save_metrics_tool": save_metrics_tool,
@@ -803,9 +853,14 @@ async def main():
         default=8080,
         help="Port to listen on for remote transports (default: 8080)"
     )
+    parser.add_argument(
+        "--codex-tools",
+        action="store_true",
+        help="Expose Codex-only helper tools (e.g., inject_architect_prompt)."
+    )
     args = parser.parse_args()
 
-    server = RTLDesignMCPServer()
+    server = RTLDesignMCPServer(codex_tools=args.codex_tools)
     await server.run(transport=args.transport, host=args.host, port=args.port)
 
 

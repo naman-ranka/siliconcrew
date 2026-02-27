@@ -83,8 +83,8 @@ This project investigates the following research questions:
      ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
      │ Spec & Files   │  │  Verification  │  │   Synthesis    │
      ├────────────────┤  ├────────────────┤  ├────────────────┤
-     │ write_spec     │  │ linter_tool    │  │ synthesis_tool │
-     │ read_spec      │  │ simulation_tool│  │ ppa_tool       │
+     │ write_spec     │  │ linter_tool    │  │ start_synthesis│
+     │ read_spec      │  │ simulation_tool│  │ get_synthesis_metrics│
      │ load_yaml_spec │  │ waveform_tool  │  │ search_logs    │
      │ write_file     │  │ cocotb_tool    │  │ schematic_tool │
      │ read_file      │  │ sby_tool       │  │ save_metrics   │
@@ -178,6 +178,32 @@ cd frontend && npm install && cd ..
 ```bash
 docker pull openroad/orfs:latest
 ```
+
+### First-Run Standard-Cell Bootstrap (Required for Post-Synthesis Simulation)
+
+Post-synthesis simulation needs managed standard-cell model caches under:
+- `workspace/_stdcells/asap7/sim`
+- `workspace/_stdcells/sky130hd/sim`
+
+Bootstrap uses pinned upstream sources (not ORFS Docker extraction), so Docker is not required for this step.
+
+Run this once after clone (or whenever you clear `workspace/_stdcells`):
+
+```bash
+# from repo root
+PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace workspace --platform asap7
+PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace workspace --platform sky130hd
+```
+
+PowerShell:
+
+```powershell
+$env:PYTHONPATH='.'
+python scripts/bootstrap_stdcells.py --workspace workspace --platform asap7
+python scripts/bootstrap_stdcells.py --workspace workspace --platform sky130hd
+```
+
+If post-synthesis simulation reports missing stdcells, run the same commands and see this section.
 
 ---
 
