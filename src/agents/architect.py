@@ -5,6 +5,7 @@ This module creates the main agent responsible for hardware design, verification
 and synthesis. Uses a ReAct pattern with comprehensive tool access.
 """
 
+import os
 from dotenv import load_dotenv
 from langgraph.prebuilt import create_react_agent
 from pathlib import Path
@@ -541,8 +542,15 @@ Before presenting testbench, verify:
 Remember: You are an expert. Take pride in producing high-quality, working hardware designs.
 """
 
+DEFAULT_ARCHITECT_PROMPT_VERSION = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v1") or "v1").strip().lower()
+if not DEFAULT_ARCHITECT_PROMPT_VERSION:
+    DEFAULT_ARCHITECT_PROMPT_VERSION = "v1"
+
 PROMPT_FILE_DEFAULT = (
-    Path(__file__).resolve().parents[2] / "prompts" / "architect" / "architect_prompt_v1.md"
+    Path(__file__).resolve().parents[2]
+    / "prompts"
+    / "architect"
+    / f"architect_prompt_{DEFAULT_ARCHITECT_PROMPT_VERSION}.md"
 )
 
 

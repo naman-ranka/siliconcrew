@@ -28,6 +28,32 @@ def get_workspace_path():
         
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
 
+
+def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
+    """
+    Normalize verilog_files argument from tool-calling models.
+    Accepts list[str], single filename str, or JSON-stringified list.
+    """
+    if isinstance(verilog_files, list):
+        return [str(x) for x in verilog_files]
+
+    if not isinstance(verilog_files, str):
+        return [str(verilog_files)]
+
+    raw = verilog_files.strip()
+    if not raw:
+        return []
+
+    if raw.startswith("[") and raw.endswith("]"):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed]
+        except Exception:
+            pass
+
+    return [raw]
+
 @tool
 def write_file(filename: str, content: str) -> str:
     """
@@ -67,10 +93,11 @@ def linter_tool(verilog_files: list[str] | str) -> str:
     Checks syntax using iverilog. Supports single-file or multi-file linting.
     Args:
         verilog_files: Filename string or list of filenames (e.g., 'design.v' or ['design.v','tb.v']).
+        When linting a testbench, include all dependent RTL files in the same call
+        (for example ['seq_detector.v', 'seq_detector_tb.v']) so module references resolve.
     """
     workspace = get_workspace_path()
-    if isinstance(verilog_files, str):
-        verilog_files = [verilog_files]
+    verilog_files = _normalize_verilog_files_arg(verilog_files)
 
     filepaths = []
     for item in verilog_files:
@@ -110,6 +137,7 @@ def simulation_tool(
         pass_marker: Explicit pass marker required for test_passed status.
     """
     workspace = get_workspace_path()
+    verilog_files = _normalize_verilog_files_arg(verilog_files)
     abs_files = []
     for f in verilog_files or []:
         abs_files.append(f if os.path.isabs(f) else os.path.join(workspace, f))
@@ -153,9 +181,7 @@ def start_synthesis(
     Starts synthesis asynchronously and returns quickly with job_id and run_id.
     """
     workspace = get_workspace_path()
-
-    if isinstance(verilog_files, str):
-        verilog_files = [verilog_files]
+    verilog_files = _normalize_verilog_files_arg(verilog_files)
 
     abs_files = []
     for f in verilog_files:

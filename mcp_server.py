@@ -73,19 +73,18 @@ from src.utils.session_manager import SessionManager
 load_dotenv()
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts" / "architect"
-DEFAULT_ARCHITECT_PROMPT_VERSION = "v1"
+DEFAULT_ARCHITECT_PROMPT_VERSION = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v1") or "v1").strip().lower()
+if not DEFAULT_ARCHITECT_PROMPT_VERSION:
+    DEFAULT_ARCHITECT_PROMPT_VERSION = "v1"
 
 
-def _load_architect_prompt(version: str | None = None) -> tuple[str, str, str]:
+def _load_architect_prompt() -> tuple[str, str, str]:
     """
     Load a versioned architect prompt from prompts/architect.
     Falls back to SYSTEM_PROMPT if the file is unavailable.
     Returns: (prompt_text, source_label, resolved_version)
     """
-    resolved = (version or DEFAULT_ARCHITECT_PROMPT_VERSION).strip().lower()
-    if not resolved:
-        resolved = DEFAULT_ARCHITECT_PROMPT_VERSION
-
+    resolved = DEFAULT_ARCHITECT_PROMPT_VERSION
     prompt_file = PROMPTS_DIR / f"architect_prompt_{resolved}.md"
     if prompt_file.exists():
         try:
@@ -393,6 +392,7 @@ class RTLDesignMCPServer:
             
             # Set workspace for tools
             os.environ["RTL_WORKSPACE"] = workspace
+            prompt_text, prompt_source, resolved_version = _load_architect_prompt()
             
             return GetPromptResult(
                 description="RTL Design Expert System Prompt",
@@ -403,12 +403,14 @@ class RTLDesignMCPServer:
                             type="text",
                             text=f"""You are now equipped with RTL design tools. Please follow this expert workflow:
 
-{SYSTEM_PROMPT}
+{prompt_text}
 
 ---
 
 **CURRENT SESSION**: {session_id}
 **WORKSPACE**: {workspace}
+**PROMPT_VERSION**: {resolved_version}
+**PROMPT_SOURCE**: {prompt_source}
 
 All tools will operate in this workspace. Files you create will be stored here.
 
@@ -536,17 +538,13 @@ Ready to design! What would you like to create?"""
             tools_out.append(
                 Tool(
                     name="inject_architect_prompt",
-                    description="Return a versioned Architect prompt for Codex clients. Optional session_id also sets active session/workspace.",
+                    description="Return the configured Architect prompt for Codex clients. Optional session_id also sets active session/workspace.",
                     inputSchema={
                         "type": "object",
                         "properties": {
                             "session_id": {
                                 "type": "string",
                                 "description": "Optional existing session to activate before returning the prompt"
-                            },
-                            "version": {
-                                "type": "string",
-                                "description": "Prompt version to inject (e.g., 'v1'). Defaults to v1."
                             }
                         }
                     }
@@ -681,7 +679,6 @@ Ready to design! What would you like to create?"""
 
         elif name == "inject_architect_prompt":
             session_id = arguments.get("session_id")
-            version = arguments.get("version", DEFAULT_ARCHITECT_PROMPT_VERSION)
             workspace = None
 
             if session_id:
@@ -694,7 +691,7 @@ Ready to design! What would you like to create?"""
                 workspace = self.session_manager.get_workspace_path(self.current_session)
                 os.environ["RTL_WORKSPACE"] = workspace
 
-            prompt_text, prompt_source, resolved_version = _load_architect_prompt(version)
+            prompt_text, prompt_source, resolved_version = _load_architect_prompt()
             payload = f"{prompt_text}"
             if self.current_session and workspace:
                 payload += (
