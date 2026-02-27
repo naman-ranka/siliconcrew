@@ -41,7 +41,7 @@ def write_file(filename: str, content: str) -> str:
         os.makedirs(workspace)
     
     filepath = os.path.join(workspace, filename)
-    with open(filepath, "w") as f:
+    with open(filepath, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
     return f"Successfully wrote to {filename}"
 
@@ -58,7 +58,7 @@ def read_file(filename: str) -> str:
     if not os.path.exists(filepath):
         return f"Error: File {filename} does not exist."
         
-    with open(filepath, "r") as f:
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
         return f.read()
 
 @tool
