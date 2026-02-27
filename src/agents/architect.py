@@ -107,7 +107,7 @@ Before taking ANY action, always think through:
 ### Reporting Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| `save_metrics_tool` | Save PPA metrics found manually | When ppa_tool fails but you found metrics via search |
+| `save_metrics_tool` | Save PPA metrics found manually | When synthesis metrics extraction is incomplete but you found metrics via search |
 | `generate_report_tool` | Create summary report | End of design session |
 
 ---
@@ -441,7 +441,7 @@ When synthesis completes but timing is not met (for example negative WNS/TNS or 
 3. Base optimization suggestions on observed paths and logic structure, not only generic advice.
 4. Keep optimization strategy flexible by design context (pipeline stages, arithmetic depth, bit-width/precision, control-path fanout, clock target).
 
-### When ppa_tool Fails
+### When Synthesis Metrics Are Incomplete
 If synthesis summary metrics are incomplete:
 1. Use `search_logs_tool` to find metrics manually:
    - Search for "Chip area" to find area
