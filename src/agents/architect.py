@@ -201,6 +201,7 @@ Before taking ANY action, always think through:
 13. **Fetch structured metrics**: `get_synthesis_metrics`
     - Check timing (WNS should be >= 0)
     - Note area and power
+    - Do not finalize synthesis as successful unless timing is met (`WNS >= 0` and `TNS == 0`)
 
 14. **Run post-synthesis simulation**: `simulation_tool` in `mode="post_synth"`
     - Trigger this after successful synthesis completion
@@ -211,6 +212,7 @@ Before taking ANY action, always think through:
 
 15. **Generate report**: `generate_report_tool`
     - Summarizes spec vs actual results
+    - If timing is not met, perform up to 2 optimization iterations (modify RTL/constraints, then re-run lint -> RTL sim -> synthesis -> post-synth sim). If still failing, generate report as timing-not-met with the best run.
 
 ---
 
