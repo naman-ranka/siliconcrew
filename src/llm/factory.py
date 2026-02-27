@@ -39,6 +39,25 @@ def _require_env(var_name: str, provider: str) -> str:
     return value
 
 
+def _prefer_openai_responses_api(model_name: str) -> bool:
+    name = (model_name or "").strip().lower()
+    return (
+        name.startswith("gpt-5")
+        or "codex" in name
+        or name.startswith("o1")
+        or name.startswith("o3")
+        or name.startswith("o4")
+    )
+
+
+def _openai_temperature_supported(model_name: str) -> bool:
+    """
+    GPT-5/Codex/o-series are typically constrained and may reject explicit
+    temperature overrides. Keep requests compatible by omitting temperature.
+    """
+    return not _prefer_openai_responses_api(model_name)
+
+
 def create_llm(model_name: str, temperature: float = 0.0):
     """
     Create a LangChain chat model for the inferred provider.
@@ -84,11 +103,24 @@ def create_llm(model_name: str, temperature: float = 0.0):
                 )
                 openai_model = fallback
 
-        return ChatOpenAI(
-            model=openai_model,
-            api_key=api_key,
-            temperature=temperature,
-        )
+        openai_kwargs = {
+            "model": openai_model,
+            "api_key": api_key,
+        }
+
+        if _prefer_openai_responses_api(openai_model):
+            openai_kwargs["use_responses_api"] = True
+
+        if _openai_temperature_supported(openai_model):
+            openai_kwargs["temperature"] = temperature
+        elif temperature is not None and temperature != 1:
+            warnings.warn(
+                f"Skipping explicit temperature={temperature} for model '{openai_model}' "
+                "to avoid unsupported parameter errors.",
+                UserWarning,
+            )
+
+        return ChatOpenAI(**openai_kwargs)
 
     # provider == "anthropic"
     api_key = _require_env("ANTHROPIC_API_KEY", provider)

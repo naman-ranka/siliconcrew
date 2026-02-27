@@ -42,12 +42,17 @@ export function ToolCallCard({ toolCall, result, isRunning }: ToolCallCardProps)
   const toolLabel = toolLabelMap[toolCall.name] || toolCall.name;
 
   const getToolSummary = () => {
-    const args = toolCall.args;
+    const args = toolCall.args as Record<string, unknown>;
     if (args.filename) return args.filename as string;
     if (args.target_file) return args.target_file as string;
     if (args.design_file) return args.design_file as string;
     if (args.module_name) return args.module_name as string;
-    if (args.verilog_files) return (args.verilog_files as string[]).join(", ");
+    if (args.verilog_files) {
+      const files = args.verilog_files;
+      if (Array.isArray(files)) return files.join(", ");
+      if (typeof files === "string") return files;
+      return JSON.stringify(files);
+    }
     return null;
   };
 
