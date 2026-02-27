@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from src.agents.architect import create_architect_agent, SYSTEM_PROMPT
+from src.agents.architect import create_architect_agent, load_system_prompt
 from src.utils.session_manager import SessionManager
 from src.tools.design_report import save_design_report
 
@@ -411,7 +411,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             input_messages.append(fake_response)
 
                 if not snapshot.values or not snapshot.values.get("messages"):
-                    input_messages.append(SystemMessage(content=SYSTEM_PROMPT))
+                    input_messages.append(SystemMessage(content=load_system_prompt()))
                 input_messages.append(("user", message))
 
                 # Stream using LangGraph's astream()
