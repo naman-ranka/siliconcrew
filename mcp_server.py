@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import Any, Sequence
 
 # Add src to path
@@ -70,6 +71,30 @@ from src.agents.architect import SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
 
 load_dotenv()
+
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts" / "architect"
+DEFAULT_ARCHITECT_PROMPT_VERSION = "v1"
+
+
+def _load_architect_prompt(version: str | None = None) -> tuple[str, str, str]:
+    """
+    Load a versioned architect prompt from prompts/architect.
+    Falls back to SYSTEM_PROMPT if the file is unavailable.
+    Returns: (prompt_text, source_label, resolved_version)
+    """
+    resolved = (version or DEFAULT_ARCHITECT_PROMPT_VERSION).strip().lower()
+    if not resolved:
+        resolved = DEFAULT_ARCHITECT_PROMPT_VERSION
+
+    prompt_file = PROMPTS_DIR / f"architect_prompt_{resolved}.md"
+    if prompt_file.exists():
+        try:
+            return prompt_file.read_text(encoding="utf-8"), str(prompt_file), resolved
+        except Exception:
+            # Fall through to SYSTEM_PROMPT fallback.
+            pass
+
+    return SYSTEM_PROMPT, "src.agents.architect.SYSTEM_PROMPT", "legacy"
 
 # =============================================================================
 # TOOL AUTO-DISCOVERY HELPERS
@@ -511,13 +536,17 @@ Ready to design! What would you like to create?"""
             tools_out.append(
                 Tool(
                     name="inject_architect_prompt",
-                    description="Return the Architect system prompt for Codex clients. Optional session_id also sets active session/workspace.",
+                    description="Return a versioned Architect prompt for Codex clients. Optional session_id also sets active session/workspace.",
                     inputSchema={
                         "type": "object",
                         "properties": {
                             "session_id": {
                                 "type": "string",
                                 "description": "Optional existing session to activate before returning the prompt"
+                            },
+                            "version": {
+                                "type": "string",
+                                "description": "Prompt version to inject (e.g., 'v1'). Defaults to v1."
                             }
                         }
                     }
@@ -652,6 +681,7 @@ Ready to design! What would you like to create?"""
 
         elif name == "inject_architect_prompt":
             session_id = arguments.get("session_id")
+            version = arguments.get("version", DEFAULT_ARCHITECT_PROMPT_VERSION)
             workspace = None
 
             if session_id:
@@ -664,13 +694,22 @@ Ready to design! What would you like to create?"""
                 workspace = self.session_manager.get_workspace_path(self.current_session)
                 os.environ["RTL_WORKSPACE"] = workspace
 
-            payload = f"{SYSTEM_PROMPT}"
+            prompt_text, prompt_source, resolved_version = _load_architect_prompt(version)
+            payload = f"{prompt_text}"
             if self.current_session and workspace:
                 payload += (
                     "\n\n---\n"
                     f"CURRENT_SESSION: {self.current_session}\n"
                     f"WORKSPACE: {workspace}\n"
+                    f"PROMPT_VERSION: {resolved_version}\n"
+                    f"PROMPT_SOURCE: {prompt_source}\n"
                     "All tool calls should operate inside this workspace."
+                )
+            else:
+                payload += (
+                    "\n\n---\n"
+                    f"PROMPT_VERSION: {resolved_version}\n"
+                    f"PROMPT_SOURCE: {prompt_source}\n"
                 )
 
             return [TextContent(type="text", text=payload)]
