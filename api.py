@@ -24,6 +24,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from src.agents.architect import create_architect_agent, load_system_prompt
 from src.utils.session_manager import SessionManager
+from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.tools.design_report import save_design_report
 
 # Load environment
@@ -419,6 +420,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
                 total_input_tokens = 0
                 total_output_tokens = 0
+                pending_tool_calls: Dict[str, Dict[str, Any]] = {}
 
                 try:
                     async for event in agent_graph.astream(
@@ -445,6 +447,19 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             # Send tool calls
                             if hasattr(msg, "tool_calls") and msg.tool_calls:
                                 for tc in msg.tool_calls:
+                                    tc_id = tc.get("id", "")
+                                    tc_name = tc.get("name", "unknown")
+                                    tc_args = tc.get("args", {}) if isinstance(tc.get("args"), dict) else {}
+                                    if tc_id:
+                                        pending_tool_calls[tc_id] = {"name": tc_name, "args": tc_args}
+                                    log_tool_call(
+                                        workspace=workspace,
+                                        session_id=session_id,
+                                        source="api_ws",
+                                        tool=tc_name,
+                                        arguments=tc_args,
+                                        tool_call_id=tc_id or None,
+                                    )
                                     await websocket.send_json({
                                         "type": "tool_call",
                                         "tool": format_tool_call_for_api(tc)
@@ -453,6 +468,17 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         elif "tools" in event:
                             msg = event["tools"]["messages"][-1]
                             result = format_tool_result_for_api(msg.content)
+                            call_meta = pending_tool_calls.pop(msg.tool_call_id, {})
+                            log_tool_result(
+                                workspace=workspace,
+                                session_id=session_id,
+                                source="api_ws",
+                                tool=call_meta.get("name", "unknown"),
+                                result=msg.content,
+                                status="success" if result.get("status") == "success" else "error",
+                                tool_call_id=msg.tool_call_id,
+                                arguments=call_meta.get("args", {}),
+                            )
                             await websocket.send_json({
                                 "type": "tool_result",
                                 "tool_call_id": msg.tool_call_id,
