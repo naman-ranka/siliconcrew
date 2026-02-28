@@ -71,7 +71,7 @@ This project investigates the following research questions:
 │                      Architect Agent (LangGraph ReAct)                      │
 │                                                                            │
 │   System prompt (500+ lines of RTL design methodology)                     │
-│   + Google Gemini LLM (2.5 Flash / 3 Pro)                                 │
+│   + Provider-selected LLM (Gemini / OpenAI / Anthropic)                                 │
 │   + 18 LangChain tools                                                     │
 │                                                                            │
 │   Workflow: Spec → RTL → Testbench → Lint → Simulate → Debug → Synthesize │
@@ -120,7 +120,7 @@ If any phase fails, the agent analyzes errors and iterates on the design.
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | Agent framework | LangGraph | ReAct agent with tool calling and checkpointing |
-| LLM backend | Google Gemini (2.5 Flash, 3 Pro) | Code generation, reasoning, debugging |
+| LLM backend | Provider-selected (Gemini, OpenAI, Anthropic) | Code generation, reasoning, debugging |
 | Backend API | FastAPI | REST endpoints + WebSocket streaming |
 | Frontend | Next.js 14, TypeScript, Tailwind CSS, Zustand | Chat UI, state management, artifact viewers |
 | MCP server | MCP Python SDK | Model Context Protocol (stdio, SSE, HTTP) |
@@ -141,7 +141,7 @@ If any phase fails, the agent analyzes errors and iterates on the design.
 - Node.js 18+ and npm (for the frontend)
 - Icarus Verilog (`iverilog`)
 - Docker (for synthesis features)
-- Google Gemini API key
+- At least one LLM provider API key (Gemini, OpenAI, or Anthropic)
 - (Optional) Claude Desktop or VS Code for MCP access
 
 ### Setup
@@ -159,13 +159,8 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 # Configure API keys (set at least one provider)
-cat > .env <<EOF
-GOOGLE_API_KEY=your_google_key_here
-OPENAI_API_KEY=your_openai_key_here
-ANTHROPIC_API_KEY=your_anthropic_key_here
-# Optional default model (provider inferred from model prefix)
-DEFAULT_MODEL=gemini-3-flash-preview
-EOF
+cp .env.example .env
+# Then edit .env with your keys and desired DEFAULT_MODEL
 
 # Install frontend dependencies
 cd frontend && npm install && cd ..
@@ -372,7 +367,7 @@ counter_4bit:
 
 - RTL quality depends on the underlying LLM's Verilog knowledge; complex designs may require multiple iterations or manual guidance
 - Synthesis runs in Docker and can take several minutes for non-trivial designs
-- Currently supports Google Gemini models only; other LLM backends would require adapting the agent constructor
+- Multi-provider support is available (Gemini, OpenAI, Anthropic); model-specific behavior may still require tuning
 - The system targets SkyWater 130nm; other PDKs require OpenROAD configuration changes
 - No authentication on the remote MCP server — network-level access control is expected
 
@@ -399,7 +394,7 @@ counter_4bit:
 - [ ] Constraint-driven optimization loops
 
 ### Planned
-- [ ] Alternative LLM backends (Claude, GPT-4, local models)
+- [ ] Additional provider/runtime integrations (local/self-hosted models)
 - [ ] Design space exploration
 - [ ] Benchmark suite for evaluation
 
@@ -412,7 +407,7 @@ Contributions are welcome. Areas where help is particularly needed:
 - **Prompt engineering**: Improving agent reliability for complex designs
 - **Tool integration**: Adding support for additional EDA tools or PDKs
 - **Benchmarking**: Creating test cases and evaluation metrics
-- **LLM backends**: Adapting the agent to work with other models
+- **LLM backends**: Improving model-specific behavior and adding local/self-hosted runtimes
 - **Documentation**: Tutorials and example designs
 
 Please open an issue to discuss proposed changes before submitting a pull request.
@@ -454,3 +449,4 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 ## Acknowledgments
 
 This project builds on the open-source EDA ecosystem, particularly the OpenROAD project and the SkyWater PDK. The agent framework relies on LangGraph and the LangChain tool abstraction. The MCP integration uses the Model Context Protocol SDK.
+
