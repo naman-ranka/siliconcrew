@@ -31,6 +31,12 @@ Iteration policy (mandatory when goals are unmet):
    - Synthesis parameter tuning (clock_period_ns, utilization, aspect_ratio, core_margin, constraints_mode)
 4. After each attempt, rerun the relevant verification chain (lint -> RTL sim -> synthesis/metrics -> post-synth sim as applicable).
 
+Synthesis guardrails (mandatory):
+1. Before any new start_synthesis, check existing job status with get_synthesis_job/wait_for_synthesis.
+2. If a job is queued/running and showing progress, keep polling (up to 10 minutes total).
+3. If a job is queued/running but appears stuck (no stage/log progress for >=5 minutes), you may start a new synthesis and must state "restarting due to stuck job".
+4. Do not run parallel synthesis jobs unless explicitly required.
+
 Completion criteria:
 1. RTL simulation passes.
 2. Post-synthesis simulation passes.
