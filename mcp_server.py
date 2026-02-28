@@ -69,6 +69,7 @@ from src.tools.wrappers import (
 )
 from src.agents.architect import SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
+from src.utils.attempt_logger import log_tool_call, log_tool_result
 
 load_dotenv()
 
@@ -746,17 +747,45 @@ Ready to design! What would you like to create?"""
         
         # Execute the tool
         tool_func = tool_map[name]
+        active_workspace = os.environ.get("RTL_WORKSPACE") or (self.session_manager.get_workspace_path(self.current_session) if self.current_session else "")
+        active_session = self.current_session
         
         try:
+            log_tool_call(
+                workspace=active_workspace,
+                session_id=active_session,
+                source="mcp",
+                tool=name,
+                arguments=arguments,
+            )
             # LangChain tools are sync, so we run in executor for async
             result = await asyncio.get_event_loop().run_in_executor(
                 None, 
                 lambda: tool_func.invoke(arguments)
             )
+            log_tool_result(
+                workspace=active_workspace,
+                session_id=active_session,
+                source="mcp",
+                tool=name,
+                result=str(result),
+                status="success",
+                arguments=arguments,
+            )
             
             return [TextContent(type="text", text=str(result))]
             
         except Exception as e:
+            log_tool_result(
+                workspace=active_workspace,
+                session_id=active_session,
+                source="mcp",
+                tool=name,
+                result=None,
+                status="error",
+                error=str(e),
+                arguments=arguments,
+            )
             return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
     
     async def run(self, transport: str = "stdio", host: str = "0.0.0.0", port: int = 8080):
