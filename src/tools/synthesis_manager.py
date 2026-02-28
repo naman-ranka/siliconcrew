@@ -23,9 +23,13 @@ _JOB_LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=2)
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _POLL_CACHE: Dict[str, Dict[str, Any]] = {}
+_POLL_BACKOFF_STATE: Dict[str, Dict[str, Any]] = {}
 
 # Prevent aggressive status polling loops from burning recursion/context.
 POLL_MIN_INTERVAL_SEC = 1.0
+POLL_BACKOFF_START_SEC = 30
+POLL_BACKOFF_MAX_SEC = 600
+SYNTH_HARD_TIMEOUT_SEC = 1200
 
 
 @dataclass
@@ -567,7 +571,7 @@ def start_synthesis_job(
     utilization: int = 5,
     aspect_ratio: float = 1.0,
     core_margin: float = 2.0,
-    timeout: int = 3600,
+    timeout: int = SYNTH_HARD_TIMEOUT_SEC,
     run_equiv: bool = False,
     constraints_mode: str = "auto",
 ) -> Dict[str, Any]:
@@ -575,6 +579,9 @@ def start_synthesis_job(
     run_id = _next_run_id(workspace)
     run_dir = _ensure_dir(os.path.join(_runs_root(workspace), run_id))
     job_id = f"job_{uuid.uuid4().hex[:10]}"
+
+    # Enforce global safety cap so synthesis jobs do not run unbounded.
+    timeout_sec = max(60, min(int(timeout), SYNTH_HARD_TIMEOUT_SEC))
 
     args = {
         "run_id": run_id,
@@ -585,7 +592,7 @@ def start_synthesis_job(
         "utilization": utilization,
         "aspect_ratio": aspect_ratio,
         "core_margin": core_margin,
-        "timeout": timeout,
+        "timeout": timeout_sec,
         "run_equiv": run_equiv,
         "constraints_mode": constraints_mode,
     }
@@ -606,6 +613,7 @@ def start_synthesis_job(
         "run_id": run_id,
         "status": "queued",
         "stage": "unknown",
+        "timeout_sec": timeout_sec,
     }
 
 
@@ -619,31 +627,23 @@ def _read_run_meta(run_dir: str) -> Dict[str, Any]:
         return {}
 
 
-def _recommended_poll_after_sec(status: str, last_log_lines: List[str], created_at_iso: Optional[str] = None) -> int:
-    if status == "queued":
-        return 2
-    if status != "running":
+def _recommended_poll_after_sec(job_id: str, status: str, stage: str, last_log_lines: List[str]) -> int:
+    if status not in {"queued", "running"}:
+        _POLL_BACKOFF_STATE.pop(job_id, None)
         return 0
-    if last_log_lines:
-        return 6
-    if not created_at_iso:
-        return 3
-    try:
-        created = datetime.fromisoformat(created_at_iso.replace("Z", "+00:00"))
-        age = (datetime.now(timezone.utc) - created).total_seconds()
-    except Exception:
-        return 3
-    if age < 20:
-        return 2
-    if age < 120:
-        return 5
-    return 10
+
+    state = _POLL_BACKOFF_STATE.get(job_id, {"count": 0})
+    state["count"] = int(state.get("count", 0)) + 1
+    _POLL_BACKOFF_STATE[job_id] = state
+
+    poll_after = POLL_BACKOFF_START_SEC * (2 ** (state["count"] - 1))
+    return min(POLL_BACKOFF_MAX_SEC, max(POLL_BACKOFF_START_SEC, poll_after))
 
 
 def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, meta: Dict[str, Any], recovered: bool = False) -> Dict[str, Any]:
     last_log_lines = _collect_log_tail(run_dir)
     stage = _infer_stage(last_log_lines)
-    poll_after = _recommended_poll_after_sec(status, last_log_lines, meta.get("created_at"))
+    poll_after = _recommended_poll_after_sec(job_id, status, stage, last_log_lines)
 
     next_action = (
         "Use search_logs_tool for detailed PPA/error verification."
@@ -666,7 +666,10 @@ def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, 
         "check_notes": meta.get("check_notes", ""),
         "next_action": next_action,
         "poll_after_sec": poll_after,
-        "poll_hint": "Use exponential or staged backoff to avoid excessive polling recursion.",
+        "poll_hint": (
+            f"Polling backoff for this job: start {POLL_BACKOFF_START_SEC}s, "
+            f"double each subsequent poll, cap {POLL_BACKOFF_MAX_SEC}s."
+        ),
     }
     if recovered:
         resp["recovered_from_index"] = True
@@ -695,6 +698,8 @@ def _maybe_cache_poll_response(job_id: str, response: Dict[str, Any]) -> None:
         _POLL_CACHE[job_id] = {"ts": time.time(), "response": dict(response)}
     elif job_id in _POLL_CACHE:
         del _POLL_CACHE[job_id]
+    if status not in {"running", "queued"} and job_id in _POLL_BACKOFF_STATE:
+        del _POLL_BACKOFF_STATE[job_id]
 
 
 def _recover_job_from_index(workspace: str, job_id: str) -> Optional[Dict[str, str]]:
