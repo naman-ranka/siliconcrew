@@ -245,9 +245,47 @@ python mcp_server.py --transport sse --host 0.0.0.0 --port 8080
 python mcp_server.py --transport http --host 0.0.0.0 --port 8080
 ```
 
-**Claude Desktop**: Configure the MCP server in `claude_desktop_config.json`, then load the "RTL Design Workflow" prompt. See [MCP_SETUP.md](MCP_SETUP.md).
+**Claude Desktop**: Configure the MCP server in `claude_desktop_config.json`, then load the "RTL Design Workflow" prompt. See [docs/MCP_SETUP.md](docs/MCP_SETUP.md).
 
-**VS Code**: Configure via settings and use Copilot Chat with full tool access. See [MCP_VSCODE_SETUP.md](MCP_VSCODE_SETUP.md).
+**VS Code**: Configure via settings and use Copilot Chat with full tool access. See [docs/MCP_VSCODE_SETUP.md](docs/MCP_VSCODE_SETUP.md).
+
+**Quick setup (all OS)**
+
+```bash
+# Codex CLI (macOS/Linux)
+codex mcp add rtl-codex -- <REPO_ROOT>/.venv/bin/python <REPO_ROOT>/mcp_server.py --codex-tools
+```
+
+```powershell
+# Codex CLI (Windows)
+codex mcp add rtl-codex -- <REPO_ROOT>\.venv\Scripts\python.exe <REPO_ROOT>\mcp_server.py --codex-tools
+```
+
+```json
+// Claude Desktop (macOS/Linux config)
+{
+  "mcpServers": {
+    "rtl-codex": {
+      "command": "/absolute/path/to/RTL_AGENT/.venv/bin/python",
+      "args": ["/absolute/path/to/RTL_AGENT/mcp_server.py", "--codex-tools"]
+    }
+  }
+}
+```
+
+```json
+// Claude Desktop (Windows config)
+{
+  "mcpServers": {
+    "rtl-codex": {
+      "command": "C:\\<path-to-RTL_AGENT>\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\<path-to-RTL_AGENT>\\mcp_server.py", "--codex-tools"]
+    }
+  }
+}
+```
+
+Detailed guides: [docs/MCP_SETUP.md](docs/MCP_SETUP.md), [docs/MCP_VSCODE_SETUP.md](docs/MCP_VSCODE_SETUP.md).
 
 Sessions are shared across all interfaces — a design started in Claude Desktop can be resumed in the web UI and vice versa.
 
