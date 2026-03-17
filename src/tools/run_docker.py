@@ -2,19 +2,25 @@ import subprocess
 import os
 import sys
 
+# When running inside a container (DooD mode), WORKSPACE_VOLUME holds the
+# Docker named-volume name so sibling ORFS containers can mount the same data.
+_WORKSPACE_VOLUME = os.environ.get("WORKSPACE_VOLUME")
+
+
 def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flow-scripts/flow", workspace_path=None, volumes=None, timeout=3600):
     """
     Executes a command inside the OpenROAD Docker container.
-    
+
     Args:
         command (str or list): The command to run inside the container.
         image (str): The Docker image to use.
         cwd (str): Working directory inside the container.
-        workspace_path (str): Absolute path to the local workspace directory. 
+        workspace_path (str): Absolute path to the local workspace directory.
                               If None, defaults to ../../workspace relative to this file.
         volumes (list): Optional list of volume mappings ["host_path:container_path"].
-        timeout (int): Timeout in seconds (default 600s = 10m).
-        
+                        Ignored in named-volume (DooD) mode.
+        timeout (int): Timeout in seconds (default 3600s).
+
     Returns:
         dict: {
             "success": bool,
@@ -23,13 +29,13 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
             "command": str
         }
     """
-    
+
     # Resolve workspace path
     if workspace_path is None:
         # Assuming this file is in src/tools/
         base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         workspace_path = os.path.join(base_path, "workspace")
-    
+
     # Ensure workspace exists
     if not os.path.exists(workspace_path):
         os.makedirs(workspace_path)
@@ -40,16 +46,22 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
 
     # Construct Docker command
     # We use --rm to clean up the container after exit
-    # We mount the workspace to /workspace
-    docker_cmd = [
-        "docker", "run", "--rm",
-        "-v", f"{workspace_path}:/workspace"
-    ]
-    
-    # Add custom volumes
-    if volumes:
-        for vol in volumes:
-            docker_cmd.extend(["-v", vol])
+    docker_cmd = ["docker", "run", "--rm"]
+
+    if _WORKSPACE_VOLUME:
+        # DooD mode: mount the shared named volume so the sibling ORFS
+        # container sees the same /workspace tree as the main container.
+        docker_cmd.extend(["-v", f"{_WORKSPACE_VOLUME}:/workspace"])
+        # Extra bind-mount volumes are skipped — both containers share the
+        # full workspace via the named volume, and _run_orfs() redirects
+        # ORFS output dirs into /workspace/... paths via config.mk overrides.
+    else:
+        # Host mode: bind-mount the workspace directory directly.
+        docker_cmd.extend(["-v", f"{workspace_path}:/workspace"])
+        # Add custom sub-directory volumes (results, logs, reports).
+        if volumes:
+            for vol in volumes:
+                docker_cmd.extend(["-v", vol])
 
     docker_cmd.extend([
         "-w", cwd,
@@ -67,14 +79,14 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
             text=True
         )
         stdout, stderr = proc.communicate(timeout=timeout)
-        
+
         return {
             "success": proc.returncode == 0,
             "stdout": stdout,
             "stderr": stderr,
             "command": " ".join(docker_cmd)
         }
-        
+
     except subprocess.TimeoutExpired:
         if proc: proc.kill()
         return {

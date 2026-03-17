@@ -1,0 +1,16 @@
+services:
+  siliconcrew:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - sc-workspace:/workspace
+    environment:
+      - RTL_WORKSPACE=/workspace
+      - WORKSPACE_VOLUME=sc-workspace
+    env_file:
+      - .env
+
+volumes:
+  sc-workspace:
