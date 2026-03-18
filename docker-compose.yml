@@ -2,11 +2,12 @@ services:
   siliconcrew:
     build: .
     ports:
-      - "3000:3000"
-      - "8000:8000"
+      - "${PORT_FRONTEND:-3000}:3000"
+      - "${PORT_BACKEND:-8000}:8000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOST_WORKSPACE}:/workspace
+      - ${HOST_DATA_DIR}:/root/.siliconcrew
     environment:
       - RTL_WORKSPACE=/workspace
       - HOST_WORKSPACE=${HOST_WORKSPACE}
