@@ -11,7 +11,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from src.tools.run_docker import run_docker_command, _WORKSPACE_VOLUME
+from src.tools.run_docker import run_docker_command
 from src.tools.spec_manager import load_yaml_file
 
 RUNS_DIRNAME = "synth_runs"
@@ -392,61 +392,32 @@ def _run_orfs(
     logs_dir = _ensure_dir(os.path.join(run_dir, "orfs_logs"))
     reports_dir = _ensure_dir(os.path.join(run_dir, "orfs_reports"))
 
+    rel_files = [f"/workspace/inputs/{os.path.basename(x)}" for x in input_files]
     config_mk = os.path.join(run_dir, "config.mk")
+    config = (
+        f"export DESIGN_NAME = {top_module}\n"
+        f"export PLATFORM = {platform}\n"
+        f"export VERILOG_FILES = {' '.join(rel_files)}\n"
+        "export SDC_FILE = /workspace/constraints.sdc\n"
+        f"export CORE_UTILIZATION = {utilization}\n"
+        f"export CORE_ASPECT_RATIO = {aspect_ratio}\n"
+        f"export CORE_MARGIN = {core_margin}\n"
+    )
+    with open(config_mk, "w", encoding="utf-8") as f:
+        f.write(config)
 
-    if _WORKSPACE_VOLUME:
-        # DooD mode: ORFS container mounts the same named volume at /workspace.
-        # run_dir is already under /workspace/... so use absolute paths.
-        container_run_dir = run_dir  # e.g. /workspace/{session}/synth_runs/synth_0001
-        rel_files = [f"{container_run_dir}/inputs/{os.path.basename(x)}" for x in input_files]
-        config = (
-            f"export DESIGN_NAME = {top_module}\n"
-            f"export PLATFORM = {platform}\n"
-            f"export VERILOG_FILES = {' '.join(rel_files)}\n"
-            f"export SDC_FILE = {container_run_dir}/constraints.sdc\n"
-            f"export CORE_UTILIZATION = {utilization}\n"
-            f"export CORE_ASPECT_RATIO = {aspect_ratio}\n"
-            f"export CORE_MARGIN = {core_margin}\n"
-            f"export RESULTS_DIR = {container_run_dir}/orfs_results\n"
-            f"export LOGS_DIR = {container_run_dir}/orfs_logs\n"
-            f"export REPORTS_DIR = {container_run_dir}/orfs_reports\n"
-        )
-        with open(config_mk, "w", encoding="utf-8") as f:
-            f.write(config)
+    volumes = [
+        f"{results_dir}:/OpenROAD-flow-scripts/flow/results",
+        f"{logs_dir}:/OpenROAD-flow-scripts/flow/logs",
+        f"{reports_dir}:/OpenROAD-flow-scripts/flow/reports",
+    ]
 
-        return run_docker_command(
-            command=f"make -B DESIGN_CONFIG={container_run_dir}/config.mk",
-            workspace_path=run_dir,
-            volumes=None,
-            timeout=timeout,
-        )
-    else:
-        # Host mode: run_dir is bind-mounted as /workspace in the ORFS container.
-        rel_files = [f"/workspace/inputs/{os.path.basename(x)}" for x in input_files]
-        config = (
-            f"export DESIGN_NAME = {top_module}\n"
-            f"export PLATFORM = {platform}\n"
-            f"export VERILOG_FILES = {' '.join(rel_files)}\n"
-            "export SDC_FILE = /workspace/constraints.sdc\n"
-            f"export CORE_UTILIZATION = {utilization}\n"
-            f"export CORE_ASPECT_RATIO = {aspect_ratio}\n"
-            f"export CORE_MARGIN = {core_margin}\n"
-        )
-        with open(config_mk, "w", encoding="utf-8") as f:
-            f.write(config)
-
-        volumes = [
-            f"{results_dir}:/OpenROAD-flow-scripts/flow/results",
-            f"{logs_dir}:/OpenROAD-flow-scripts/flow/logs",
-            f"{reports_dir}:/OpenROAD-flow-scripts/flow/reports",
-        ]
-
-        return run_docker_command(
-            command="make -B DESIGN_CONFIG=/workspace/config.mk",
-            workspace_path=run_dir,
-            volumes=volumes,
-            timeout=timeout,
-        )
+    return run_docker_command(
+        command="make -B DESIGN_CONFIG=/workspace/config.mk",
+        workspace_path=run_dir,
+        volumes=volumes,
+        timeout=timeout,
+    )
 
 
 def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, Any]) -> Dict[str, str]:

@@ -2,15 +2,13 @@ services:
   siliconcrew:
     build: .
     ports:
+      - "3000:3000"
       - "8000:8000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - sc-workspace:/workspace
+      - ${HOST_WORKSPACE}:/workspace
     environment:
       - RTL_WORKSPACE=/workspace
-      - WORKSPACE_VOLUME=sc-workspace
+      - HOST_WORKSPACE=${HOST_WORKSPACE}
     env_file:
-      - .env
-
-volumes:
-  sc-workspace:
+      - .env.docker
