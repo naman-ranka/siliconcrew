@@ -2,9 +2,10 @@ import subprocess
 import os
 import sys
 
-# When running inside a container (DooD mode), WORKSPACE_VOLUME holds the
-# Docker named-volume name so sibling ORFS containers can mount the same data.
-_WORKSPACE_VOLUME = os.environ.get("WORKSPACE_VOLUME")
+# When running inside a container (DooD mode), HOST_WORKSPACE holds the
+# host-side path to the workspace bind mount so sibling ORFS containers
+# can mount the same directory via the host Docker daemon.
+_HOST_WORKSPACE = os.environ.get("HOST_WORKSPACE")
 
 
 def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flow-scripts/flow", workspace_path=None, volumes=None, timeout=3600):
@@ -18,7 +19,6 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
         workspace_path (str): Absolute path to the local workspace directory.
                               If None, defaults to ../../workspace relative to this file.
         volumes (list): Optional list of volume mappings ["host_path:container_path"].
-                        Ignored in named-volume (DooD) mode.
         timeout (int): Timeout in seconds (default 3600s).
 
     Returns:
@@ -44,24 +44,25 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
     if isinstance(command, list):
         command = " ".join(command)
 
+    # In DooD mode, translate container paths (/workspace/...) to host paths
+    # so the sibling ORFS container mounts the correct host directory.
+    if _HOST_WORKSPACE:
+        workspace_path = workspace_path.replace("/workspace", _HOST_WORKSPACE, 1)
+        if volumes:
+            volumes = [v.replace("/workspace", _HOST_WORKSPACE, 1) for v in volumes]
+
     # Construct Docker command
     # We use --rm to clean up the container after exit
-    docker_cmd = ["docker", "run", "--rm"]
+    # We mount the workspace to /workspace
+    docker_cmd = [
+        "docker", "run", "--rm",
+        "-v", f"{workspace_path}:/workspace"
+    ]
 
-    if _WORKSPACE_VOLUME:
-        # DooD mode: mount the shared named volume so the sibling ORFS
-        # container sees the same /workspace tree as the main container.
-        docker_cmd.extend(["-v", f"{_WORKSPACE_VOLUME}:/workspace"])
-        # Extra bind-mount volumes are skipped — both containers share the
-        # full workspace via the named volume, and _run_orfs() redirects
-        # ORFS output dirs into /workspace/... paths via config.mk overrides.
-    else:
-        # Host mode: bind-mount the workspace directory directly.
-        docker_cmd.extend(["-v", f"{workspace_path}:/workspace"])
-        # Add custom sub-directory volumes (results, logs, reports).
-        if volumes:
-            for vol in volumes:
-                docker_cmd.extend(["-v", vol])
+    # Add custom volumes
+    if volumes:
+        for vol in volumes:
+            docker_cmd.extend(["-v", vol])
 
     docker_cmd.extend([
         "-w", cwd,
