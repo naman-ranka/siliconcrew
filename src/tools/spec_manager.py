@@ -92,7 +92,8 @@ class DesignSpec:
         param_str = ""
         if self.parameters:
             param_list = [f"parameter {k} = {v}" for k, v in self.parameters.items()]
-            param_str = f" #(\n    {',\n    '.join(param_list)}\n)"
+            sep = ',\n    '
+            param_str = f" #(\n    {sep.join(param_list)}\n)"
         
         # Build port list
         port_lines = []
