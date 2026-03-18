@@ -24,8 +24,8 @@ fi
 
 echo "Starting SiliconCrew..."
 
-# Start backend, frontend, and MCP server
+# Start backend, frontend, and MCP server (Streamable HTTP)
 uvicorn api:app --host 0.0.0.0 --port 8000 &
 cd /app/frontend && npm run dev -- -p 3000 &
-cd /app && python mcp_server.py --transport sse --host 0.0.0.0 --port 8080 &
+cd /app && python mcp_server.py --transport http --host 0.0.0.0 --port 8080 --codex-tools &
 wait

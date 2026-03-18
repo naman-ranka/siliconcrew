@@ -159,9 +159,11 @@ def langchain_to_mcp_schema(langchain_tool) -> Tool:
 class RTLDesignMCPServer:
     def __init__(self, codex_tools: bool = False):
         self.server = Server("rtl-design-agent")
-        # Use absolute paths relative to this script
+        # Respect mounted workspace path when running in Docker.
+        # Falls back to repo-local workspace for non-container/local usage.
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        workspace_dir = os.path.join(base_dir, "workspace")
+        workspace_dir = os.environ.get("RTL_WORKSPACE") or os.path.join(base_dir, "workspace")
+        workspace_dir = os.path.abspath(workspace_dir)
         _data_dir = os.path.join(os.path.expanduser("~"), ".siliconcrew")
         os.makedirs(_data_dir, exist_ok=True)
         db_path = os.path.join(_data_dir, "state.db")
@@ -850,28 +852,20 @@ Ready to design! What would you like to create?"""
             from starlette.middleware import Middleware
             from starlette.middleware.cors import CORSMiddleware
             import uvicorn
+            from contextlib import suppress
 
             # Create a session-less transport (no auth, stateless)
             session_transport = StreamableHTTPServerTransport(
                 mcp_session_id=None,  # Stateless mode
             )
 
-            async def handle_mcp(request):
-                async with session_transport.connect(
-                    request.scope, request.receive, request._send
-                ) as streams:
-                    await self.server.run(
-                        streams[0],
-                        streams[1],
-                        self.server.create_initialization_options()
-                    )
-
-            from starlette.routing import Route
+            async def handle_mcp(scope, receive, send):
+                await session_transport.handle_request(scope, receive, send)
 
             app = Starlette(
                 debug=True,
                 routes=[
-                    Route("/mcp", endpoint=handle_mcp, methods=["GET", "POST", "DELETE"]),
+                    Mount("/mcp", app=handle_mcp),
                 ],
                 middleware=[
                     Middleware(
@@ -888,8 +882,24 @@ Ready to design! What would you like to create?"""
             print(f"   No authentication required")
 
             config = uvicorn.Config(app, host=host, port=port, log_level="info")
-            server = uvicorn.Server(config)
-            await server.serve()
+            web_server = uvicorn.Server(config)
+
+            # Streamable HTTP transport needs an active connect() context before
+            # handling requests.
+            async with session_transport.connect() as streams:
+                mcp_task = asyncio.create_task(
+                    self.server.run(
+                        streams[0],
+                        streams[1],
+                        self.server.create_initialization_options()
+                    )
+                )
+                try:
+                    await web_server.serve()
+                finally:
+                    mcp_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await mcp_task
 
         else:
             raise ValueError(f"Unknown transport: {transport}. Use 'stdio', 'sse', or 'http'.")
