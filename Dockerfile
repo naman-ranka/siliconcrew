@@ -36,7 +36,7 @@ WORKDIR /app
 
 ENV RTL_WORKSPACE=/workspace
 
-EXPOSE 3000 8000
+EXPOSE 3000 8000 8080
 
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
