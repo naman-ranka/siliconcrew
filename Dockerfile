@@ -35,9 +35,10 @@ RUN npm install
 WORKDIR /app
 
 ENV RTL_WORKSPACE=/workspace
-ENV WORKSPACE_VOLUME=sc-workspace
 
 EXPOSE 3000 8000
 
-# Start both backend and frontend
-CMD bash -c "uvicorn api:app --host 0.0.0.0 --port 8000 & cd frontend && npm run dev -- -p 3000 & wait"
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
