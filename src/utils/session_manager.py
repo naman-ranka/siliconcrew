@@ -40,32 +40,42 @@ class SessionManager:
             conn.commit()
 
     def get_all_sessions(self):
-        """Returns session metadata dicts sorted by updated_at/created_at (newest first)."""
+        """Returns session IDs sorted by updated_at/created_at (newest first).
+        Supports both flat (my_counter) and nested (exp1/counter_4bit) sessions."""
         if not os.path.exists(self.base_dir):
             return []
-        # Get all session dirs that exist on disk
-        dirs = {d for d in os.listdir(self.base_dir) if os.path.isdir(os.path.join(self.base_dir, d))}
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT * FROM session_metadata").fetchall()
-        # Only return sessions that have a folder on disk
-        result = [dict(r) for r in rows if r["session_id"] in dirs]
+        # Only return sessions whose directory still exists on disk
+        result = [dict(r) for r in rows
+                  if os.path.isdir(os.path.join(self.base_dir, r["session_id"]))]
         result.sort(key=lambda x: x.get("updated_at") or x.get("created_at") or "", reverse=True)
         return [r["session_id"] for r in result]
 
     def create_session(self, tag, model_name="gemini-3-flash-preview"):
-        """Creates a new session directory using the tag. Raises FileExistsError if it exists."""
+        """Creates a new session directory using the tag.
+        Supports nested tags like 'exp1/counter_4bit'.
+        Raises FileExistsError if it exists."""
         if not tag:
             raise ValueError("Tag is required.")
-            
-        # Sanitize tag for use as folder/ID
-        safe_tag = "".join(c for c in tag if c.isalnum() or c in ('-', '_'))
-        if not safe_tag:
+
+        # Sanitize tag for use as folder/ID — allow / for nesting
+        safe_tag = "".join(c for c in tag if c.isalnum() or c in ('-', '_', '/'))
+        # Normalize: collapse repeated slashes, strip leading/trailing slashes
+        while '//' in safe_tag:
+            safe_tag = safe_tag.replace('//', '/')
+        safe_tag = safe_tag.strip('/')
+        if not safe_tag or '..' in safe_tag:
              raise ValueError("Invalid tag format.")
              
         session_id = safe_tag
         path = os.path.join(self.base_dir, session_id)
-        
+
+        # Safety: ensure resolved path stays inside workspace
+        if not os.path.realpath(path).startswith(os.path.realpath(self.base_dir)):
+            raise ValueError("Invalid tag format.")
+
         if os.path.exists(path):
             raise FileExistsError(f"Session '{session_id}' already exists.")
             
