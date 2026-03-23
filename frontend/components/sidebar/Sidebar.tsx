@@ -9,9 +9,11 @@ import {
   Settings,
   BarChart3,
   Cpu,
-  Clock,
   Zap,
   MessageSquare,
+  FolderOpen,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -39,10 +41,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { formatTokens, formatCost, formatRelativeTime } from "@/lib/utils";
+import { formatTokens, formatRelativeTime } from "@/lib/utils";
 import type { Session } from "@/types";
 
-// Shared dialog for creating a new session
 interface CreateSessionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -51,18 +52,25 @@ interface CreateSessionDialogProps {
 
 function CreateSessionDialog({ open, onOpenChange, onCreated }: CreateSessionDialogProps) {
   const { createSession } = useStore();
+  const [project, setProject] = useState("");
   const [name, setName] = useState("");
   const [model, setModel] = useState("gemini-3-flash-preview");
   const [error, setError] = useState<string | null>(null);
 
   const handleCreate = async () => {
-    if (!name.trim()) {
+    const trimmedName = name.trim();
+    const trimmedProject = project.trim().replace(/^\/+|\/+$/g, "");
+
+    if (!trimmedName) {
       setError("Please enter a session name");
       return;
     }
+
     try {
       setError(null);
-      await createSession(name.trim(), model);
+      const sessionName = trimmedProject ? `${trimmedProject}/${trimmedName}` : trimmedName;
+      await createSession(sessionName, model);
+      setProject("");
       setName("");
       onCreated();
       onOpenChange(false);
@@ -82,14 +90,27 @@ function CreateSessionDialog({ open, onOpenChange, onCreated }: CreateSessionDia
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div>
+            <label className="text-sm font-medium mb-2 block">Project</label>
+            <Input
+              placeholder="e.g., asu_visible"
+              value={project}
+              onChange={(e) => setProject(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+              className="bg-surface-2 border-border"
+            />
+          </div>
+          <div>
             <label className="text-sm font-medium mb-2 block">Session Name</label>
             <Input
-              placeholder="e.g., counter_design"
+              placeholder="e.g., p5_run1"
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
               className="bg-surface-2 border-border"
             />
+            <p className="mt-2 text-xs text-muted-foreground">
+              Leave project empty to create a flat session. Existing flat sessions remain supported.
+            </p>
           </div>
           <div>
             <label className="text-sm font-medium mb-2 block">Model</label>
@@ -168,38 +189,44 @@ function CreateSessionDialog({ open, onOpenChange, onCreated }: CreateSessionDia
   );
 }
 
-// Group sessions by time period
-function groupSessionsByDate(sessions: Session[]) {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
-  const lastWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const lastMonth = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+function getSessionProject(session: Session): string {
+  const slashIndex = session.id.indexOf("/");
+  return slashIndex === -1 ? "ungrouped" : session.id.slice(0, slashIndex);
+}
 
-  const groups: { label: string; sessions: Session[] }[] = [
-    { label: "Today", sessions: [] },
-    { label: "Yesterday", sessions: [] },
-    { label: "Last 7 days", sessions: [] },
-    { label: "Last 30 days", sessions: [] },
-    { label: "Older", sessions: [] },
-  ];
+function getSessionDisplayName(session: Session): string {
+  const label = session.name ?? session.id;
+  const slashIndex = label.indexOf("/");
+  return slashIndex === -1 ? label : label.slice(slashIndex + 1);
+}
 
-  sessions.forEach((session) => {
-    const date = new Date(session.updated_at ?? session.created_at ?? 0);
-    if (date >= today) {
-      groups[0].sessions.push(session);
-    } else if (date >= yesterday) {
-      groups[1].sessions.push(session);
-    } else if (date >= lastWeek) {
-      groups[2].sessions.push(session);
-    } else if (date >= lastMonth) {
-      groups[3].sessions.push(session);
-    } else {
-      groups[4].sessions.push(session);
-    }
+function groupSessionsByProject(sessions: Session[]) {
+  const grouped = new Map<string, Session[]>();
+  const sortedSessions = [...sessions].sort((a, b) => {
+    const aDate = new Date(a.updated_at ?? a.created_at ?? 0).getTime();
+    const bDate = new Date(b.updated_at ?? b.created_at ?? 0).getTime();
+    return bDate - aDate;
   });
 
-  return groups.filter((g) => g.sessions.length > 0);
+  for (const session of sortedSessions) {
+    const project = getSessionProject(session);
+    if (!grouped.has(project)) {
+      grouped.set(project, []);
+    }
+    grouped.get(project)?.push(session);
+  }
+
+  return Array.from(grouped.entries())
+    .sort(([a], [b]) => {
+      if (a === "ungrouped") {
+        return 1;
+      }
+      if (b === "ungrouped") {
+        return -1;
+      }
+      return a.localeCompare(b);
+    })
+    .map(([label, projectSessions]) => ({ label, sessions: projectSessions }));
 }
 
 export function Sidebar() {
@@ -217,6 +244,7 @@ export function Sidebar() {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     loadSessions();
@@ -239,9 +267,35 @@ export function Sidebar() {
     setIsDeleteDialogOpen(true);
   };
 
-  const sessionGroups = useMemo(() => groupSessionsByDate(sessions), [sessions]);
+  const sessionGroups = useMemo(() => groupSessionsByProject(sessions), [sessions]);
 
-  // Collapsed sidebar
+  useEffect(() => {
+    setCollapsedGroups((prev) => {
+      const next = { ...prev };
+
+      for (const group of sessionGroups) {
+        if (!(group.label in next)) {
+          next[group.label] = false;
+        }
+      }
+
+      for (const key of Object.keys(next)) {
+        if (!sessionGroups.some((group) => group.label === key)) {
+          delete next[key];
+        }
+      }
+
+      return next;
+    });
+  }, [sessionGroups]);
+
+  const toggleGroup = (label: string) => {
+    setCollapsedGroups((prev) => ({
+      ...prev,
+      [label]: !prev[label],
+    }));
+  };
+
   if (sidebarCollapsed) {
     return (
       <div className="flex flex-col h-full w-14 bg-surface-1 border-r border-border">
@@ -252,7 +306,7 @@ export function Sidebar() {
                 <PanelLeft className="h-5 w-5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="right">Expand sidebar (⌘B)</TooltipContent>
+            <TooltipContent side="right">Expand sidebar (Ctrl+B)</TooltipContent>
           </Tooltip>
         </div>
 
@@ -290,7 +344,11 @@ export function Sidebar() {
               </TooltipTrigger>
               <TooltipContent side="right" className="max-w-[200px]">
                 <p className="font-medium">{session.name ?? session.id}</p>
-                {(session.updated_at ?? session.created_at) && <p className="text-xs text-muted-foreground">{formatRelativeTime(session.updated_at ?? session.created_at ?? "")}</p>}
+                {(session.updated_at ?? session.created_at) && (
+                  <p className="text-xs text-muted-foreground">
+                    {formatRelativeTime(session.updated_at ?? session.created_at ?? "")}
+                  </p>
+                )}
               </TooltipContent>
             </Tooltip>
           ))}
@@ -307,7 +365,6 @@ export function Sidebar() {
           </Tooltip>
         </div>
 
-        {/* Create Dialog */}
         <CreateSessionDialog
           open={isCreateDialogOpen}
           onOpenChange={setIsCreateDialogOpen}
@@ -317,10 +374,8 @@ export function Sidebar() {
     );
   }
 
-  // Expanded sidebar
   return (
     <div className="flex flex-col h-full w-64 bg-surface-1 border-r border-border">
-      {/* Header */}
       <div className="flex items-center justify-between h-14 px-4 border-b border-border">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -333,7 +388,6 @@ export function Sidebar() {
         </Button>
       </div>
 
-      {/* New Session Button */}
       <div className="p-3">
         <Button className="w-full bg-primary hover:bg-primary/90" size="sm" onClick={() => setIsCreateDialogOpen(true)}>
           <Plus className="h-4 w-4 mr-2" />
@@ -348,7 +402,6 @@ export function Sidebar() {
 
       <Separator className="bg-border" />
 
-      {/* Sessions List */}
       <div className="flex-1 overflow-hidden">
         <ScrollArea className="h-full">
           <div className="px-2 py-2">
@@ -369,11 +422,23 @@ export function Sidebar() {
             ) : (
               sessionGroups.map((group) => (
                 <div key={group.label} className="mb-4">
-                  <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider px-3 py-2 flex items-center gap-2">
-                    <Clock className="h-3 w-3" />
-                    {group.label}
-                  </h3>
-                  {group.sessions.map((session) => (
+                  <button
+                    type="button"
+                    className="w-full text-xs font-medium text-muted-foreground uppercase tracking-wider px-3 py-2 flex items-center gap-2 hover:text-foreground transition-colors"
+                    onClick={() => toggleGroup(group.label)}
+                  >
+                    {collapsedGroups[group.label] ? (
+                      <ChevronRight className="h-3 w-3 shrink-0" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3 shrink-0" />
+                    )}
+                    <FolderOpen className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{group.label === "ungrouped" ? "Ungrouped" : group.label}</span>
+                    <span className="text-[10px] text-muted-foreground/70 normal-case tracking-normal ml-auto">
+                      {group.sessions.length}
+                    </span>
+                  </button>
+                  {!collapsedGroups[group.label] && group.sessions.map((session) => (
                     <div
                       key={session.id}
                       className={cn(
@@ -399,7 +464,7 @@ export function Sidebar() {
                           )} />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium truncate">{session.name ?? session.id}</p>
+                          <p className="text-sm font-medium truncate">{getSessionDisplayName(session)}</p>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <span className={cn(
                               "inline-flex items-center gap-1",
@@ -412,6 +477,12 @@ export function Sidebar() {
                               )}
                               {session.model_name?.split("-").slice(1, 2).join("-") || "flash"}
                             </span>
+                            {(session.updated_at ?? session.created_at) && (
+                              <>
+                                <span className="text-border">•</span>
+                                <span>{formatRelativeTime(session.updated_at ?? session.created_at ?? "")}</span>
+                              </>
+                            )}
                             {session.total_tokens > 0 && (
                               <>
                                 <span className="text-border">•</span>
@@ -438,7 +509,6 @@ export function Sidebar() {
         </ScrollArea>
       </div>
 
-      {/* Footer */}
       <div className="border-t border-border p-2">
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="sm" className="flex-1 justify-start text-muted-foreground hover:text-foreground hover:bg-surface-2 h-9">
@@ -452,7 +522,6 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Delete Confirmation Dialog */}
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent className="bg-surface-1 border-border">
           <DialogHeader>
