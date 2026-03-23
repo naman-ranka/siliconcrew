@@ -229,6 +229,19 @@ class TestSaveDesignReport(unittest.TestCase):
         self.assertIn("# Design Report", content)
         self.assertIn("---", content)  # Markdown separator
 
+    def test_save_report_to_synthesis_run(self):
+        run_dir = os.path.join(self.test_dir, "synth_runs", "synth_0001")
+        os.makedirs(run_dir, exist_ok=True)
+        with open(os.path.join(self.test_dir, "synth_runs", "LATEST"), "w", encoding="utf-8") as f:
+            f.write("synth_0001")
+        with open(os.path.join(run_dir, "run_meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"run_id": "synth_0001", "top_module": "my_design", "platform": "sky130hd"}, f)
+
+        path = save_design_report(self.test_dir, run_id="synth_0001")
+
+        self.assertTrue(os.path.exists(path))
+        self.assertTrue(path.endswith(os.path.join("synth_0001", "design_report.md")))
+
 
 class TestReportWithSimulationResults(unittest.TestCase):
     """Tests for report with simulation log parsing."""
@@ -263,6 +276,53 @@ class TestReportWithSimulationResults(unittest.TestCase):
         report = generate_design_report(self.test_dir)
         
         self.assertIn("❌ Fail", report)
+
+class TestRunScopedMetrics(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        spec = DesignSpec(
+            module_name="run_demo",
+            description="Run scoped report",
+            ports=[PortSpec(name="clk", direction="input")]
+        )
+        save_yaml_file(spec, os.path.join(self.test_dir, "run_demo_spec.yaml"))
+
+        self.run_dir = os.path.join(self.test_dir, "synth_runs", "synth_0002")
+        report_dir = os.path.join(self.run_dir, "orfs_reports", "sky130hd", "run_demo", "base")
+        os.makedirs(report_dir, exist_ok=True)
+
+        with open(os.path.join(self.test_dir, "synth_runs", "LATEST"), "w", encoding="utf-8") as f:
+            f.write("synth_0002")
+        with open(os.path.join(self.run_dir, "run_meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"run_id": "synth_0002", "top_module": "run_demo", "platform": "sky130hd"}, f)
+
+        with open(os.path.join(report_dir, "6_finish.rpt"), "w", encoding="utf-8") as f:
+            f.write(
+                "tns max 0.00\n"
+                "wns max 0.25\n"
+                "setup violation count 0\n"
+                "hold violation count 0\n"
+                "Total                  1.00e-03   1.00e-03   1.00e-09   2.00e-03 100.0%\n"
+            )
+        with open(os.path.join(report_dir, "synth_stat.txt"), "w", encoding="utf-8") as f:
+            f.write(
+                "      100 1.23E+03 cells\n"
+                "Chip area for module '\\run_demo': 1234.000000\n"
+            )
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir)
+
+    def test_load_metrics_for_run(self):
+        metrics = load_metrics(self.test_dir, run_id="synth_0002")
+        self.assertEqual(metrics["area_um2"], 1234.0)
+        self.assertEqual(metrics["cell_count"], 100)
+        self.assertEqual(metrics["wns_ns"], 0.25)
+
+    def test_generate_report_for_run(self):
+        report = generate_design_report(self.test_dir, run_id="synth_0002")
+        self.assertIn("synth_0002", report)
+        self.assertIn("1234.00", report)
 
 
 if __name__ == "__main__":

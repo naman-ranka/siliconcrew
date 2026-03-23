@@ -1,5 +1,18 @@
 import { create } from "zustand";
-import type { Session, Message, ToolCall, ToolResult, ContentBlock, ArtifactTab, SpecData, CodeFile, WaveformData, FileInfo } from "@/types";
+import type {
+  Session,
+  Message,
+  ToolCall,
+  ToolResult,
+  ContentBlock,
+  ArtifactTab,
+  SpecData,
+  CodeFile,
+  WaveformData,
+  FileInfo,
+  ReportData,
+  SynthesisRun,
+} from "@/types";
 import { sessionsApi, chatApi, workspaceApi } from "./api";
 import { generateId } from "./utils";
 
@@ -35,7 +48,9 @@ interface AppState {
   waveformFiles: string[];
   selectedWaveform: string | null;
   waveformData: WaveformData | null;
-  report: { filename: string; content: string } | null;
+  synthesisRuns: SynthesisRun[];
+  selectedSynthesisRunId: string | null;
+  report: ReportData | null;
   layoutFiles: string[];
   schematicFiles: string[];
 
@@ -59,8 +74,10 @@ interface AppState {
   selectCodeFile: (filename: string) => void;
   loadWaveforms: () => Promise<void>;
   selectWaveform: (filename: string) => Promise<void>;
-  loadReport: () => Promise<void>;
-  generateReport: () => Promise<void>;
+  loadSynthesisRuns: () => Promise<void>;
+  selectSynthesisRun: (runId: string | null) => Promise<void>;
+  loadReport: (runId?: string | null) => Promise<void>;
+  generateReport: (runId?: string | null) => Promise<void>;
 }
 
 function buildBlocks(
@@ -107,6 +124,8 @@ export const useStore = create<AppState>((set, get) => ({
   waveformFiles: [],
   selectedWaveform: null,
   waveformData: null,
+  synthesisRuns: [],
+  selectedSynthesisRunId: null,
   report: null,
   layoutFiles: [],
   schematicFiles: [],
@@ -146,6 +165,8 @@ export const useStore = create<AppState>((set, get) => ({
         files: [],
         spec: null,
         codeFiles: [],
+        synthesisRuns: [],
+        selectedSynthesisRunId: null,
         report: null,
         artifactsVisible: false,
       }));
@@ -193,6 +214,8 @@ export const useStore = create<AppState>((set, get) => ({
       waveformFiles: [],
       selectedWaveform: null,
       waveformData: null,
+      synthesisRuns: [],
+      selectedSynthesisRunId: null,
       report: null,
       files: [],
     });
@@ -454,21 +477,28 @@ export const useStore = create<AppState>((set, get) => ({
     const prevReport = get().report;
 
     try {
-      const [files, waveformFiles, layoutFiles, schematicFiles] = await Promise.all([
+      const [files, waveformFiles, layoutFiles, schematicFiles, synthesisRuns] = await Promise.all([
         workspaceApi.listFiles(currentSession.id).catch(() => []),
         workspaceApi.listWaveforms(currentSession.id).catch(() => []),
         workspaceApi.listLayouts(currentSession.id).catch(() => []),
         workspaceApi.listSchematics(currentSession.id).catch(() => []),
+        workspaceApi.listSynthesisRuns(currentSession.id).catch(() => []),
       ]);
 
-      set({ files, waveformFiles, layoutFiles, schematicFiles });
+      const currentRunId = get().selectedSynthesisRunId;
+      const nextRunId =
+        synthesisRuns.find((run) => run.run_id === currentRunId)?.run_id ??
+        synthesisRuns[0]?.run_id ??
+        null;
+
+      set({ files, waveformFiles, layoutFiles, schematicFiles, synthesisRuns, selectedSynthesisRunId: nextRunId });
 
       const newNewestArtifact = getNewestArtifactFromFiles(files);
 
       // Auto-load spec and code if they exist
       const hasSpec = files.some((f) => f.type === "spec");
       const hasCode = files.some((f) => f.type === "verilog");
-      const hasReport = files.some((f) => f.type === "report");
+      const hasReport = files.some((f) => f.type === "report") || synthesisRuns.some((run) => run.report_available);
 
       // Load content
       if (hasSpec) {
@@ -478,7 +508,7 @@ export const useStore = create<AppState>((set, get) => ({
         await get().loadCodeFiles();
       }
       if (hasReport) {
-        await get().loadReport();
+        await get().loadReport(nextRunId);
       }
 
       // Get updated state after loading
@@ -586,25 +616,51 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  loadReport: async () => {
+  loadSynthesisRuns: async () => {
     const { currentSession } = get();
     if (!currentSession) return;
 
     try {
-      const report = await workspaceApi.getReport(currentSession.id);
+      const synthesisRuns = await workspaceApi.listSynthesisRuns(currentSession.id);
+      set((state) => ({
+        synthesisRuns,
+        selectedSynthesisRunId:
+          synthesisRuns.find((run) => run.run_id === state.selectedSynthesisRunId)?.run_id ??
+          synthesisRuns[0]?.run_id ??
+          null,
+      }));
+    } catch {
+      set({ synthesisRuns: [], selectedSynthesisRunId: null });
+    }
+  },
+
+  selectSynthesisRun: async (runId: string | null) => {
+    set({ selectedSynthesisRunId: runId });
+    await get().loadReport(runId);
+  },
+
+  loadReport: async (runId?: string | null) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+
+    try {
+      const targetRunId = runId === undefined ? get().selectedSynthesisRunId : runId;
+      const report = await workspaceApi.getReport(currentSession.id, targetRunId);
       set({ report });
     } catch {
       set({ report: null });
     }
   },
 
-  generateReport: async () => {
+  generateReport: async (runId?: string | null) => {
     const { currentSession } = get();
     if (!currentSession) return;
 
     try {
-      const report = await workspaceApi.generateReport(currentSession.id);
-      set({ report });
+      const targetRunId = runId === undefined ? get().selectedSynthesisRunId : runId;
+      const report = await workspaceApi.generateReport(currentSession.id, targetRunId);
+      set({ report, selectedSynthesisRunId: report.run_id ?? targetRunId ?? null });
+      await get().loadSynthesisRuns();
     } catch (error) {
       throw error;
     }

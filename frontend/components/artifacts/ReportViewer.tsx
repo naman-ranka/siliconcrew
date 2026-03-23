@@ -8,15 +8,32 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export function ReportViewer() {
-  const { report, loadReport, generateReport, currentSession } = useStore();
+  const {
+    report,
+    loadReport,
+    generateReport,
+    currentSession,
+    synthesisRuns,
+    selectedSynthesisRunId,
+    selectSynthesisRun,
+    loadSynthesisRuns,
+  } = useStore();
 
   useEffect(() => {
     if (currentSession) {
+      loadSynthesisRuns();
       loadReport();
     }
-  }, [currentSession, loadReport]);
+  }, [currentSession, loadReport, loadSynthesisRuns]);
 
   const handleDownload = () => {
     if (report) {
@@ -32,7 +49,7 @@ export function ReportViewer() {
 
   const handleGenerate = async () => {
     try {
-      await generateReport();
+      await generateReport(selectedSynthesisRunId);
     } catch (error) {
       console.error("Failed to generate report:", error);
     }
@@ -46,8 +63,24 @@ export function ReportViewer() {
         </div>
         <p className="text-sm font-medium">No report yet</p>
         <p className="text-xs mt-1 mb-6 text-center max-w-[200px]">
-          Generate a report to get a summary of your design with metrics and analysis
+          Generate a report for the latest synthesis run to get a summary with metrics and analysis
         </p>
+        {synthesisRuns.length > 0 && (
+          <div className="mb-4 w-full max-w-[260px]">
+            <Select value={selectedSynthesisRunId || synthesisRuns[0]?.run_id} onValueChange={selectSynthesisRun}>
+              <SelectTrigger className="h-9 text-xs">
+                <SelectValue placeholder="Select synthesis run" />
+              </SelectTrigger>
+              <SelectContent>
+                {synthesisRuns.map((run) => (
+                  <SelectItem key={run.run_id} value={run.run_id} className="text-xs">
+                    {run.run_id} · {run.status}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <Button onClick={handleGenerate} size="sm" className="gap-2">
           <FileOutput className="h-4 w-4" />
           Generate Report
@@ -60,16 +93,38 @@ export function ReportViewer() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-surface-1">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <FileText className="h-4 w-4 text-primary" />
-          <span className="text-sm font-medium">{report.filename}</span>
+          <span className="text-sm font-medium truncate">{report.filename}</span>
+          {report.run_id && (
+            <span className="text-[11px] text-muted-foreground bg-surface-2 px-2 py-0.5 rounded-full">
+              {report.run_id}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
+          {synthesisRuns.length > 0 && (
+            <Select value={selectedSynthesisRunId || synthesisRuns[0]?.run_id} onValueChange={selectSynthesisRun}>
+              <SelectTrigger className="h-7 w-[170px] text-xs mr-1">
+                <SelectValue placeholder="Select synthesis run" />
+              </SelectTrigger>
+              <SelectContent>
+                {synthesisRuns.map((run) => (
+                  <SelectItem key={run.run_id} value={run.run_id} className="text-xs">
+                    {run.run_id} · {run.status}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Button
             variant="ghost"
             size="icon"
             className="h-7 w-7 hover:bg-surface-2"
-            onClick={() => loadReport()}
+            onClick={() => {
+              loadSynthesisRuns();
+              loadReport(selectedSynthesisRunId);
+            }}
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
