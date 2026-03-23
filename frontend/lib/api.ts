@@ -1,4 +1,13 @@
-import type { Session, Message, FileInfo, SpecData, CodeFile, WaveformData } from "@/types";
+import type {
+  Session,
+  Message,
+  FileInfo,
+  SpecData,
+  CodeFile,
+  WaveformData,
+  ReportData,
+  SynthesisRun,
+} from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -74,12 +83,17 @@ export const workspaceApi = {
   getWaveform: (sessionId: string, filename: string) =>
     apiFetch<WaveformData>(`/api/workspace/${sessionId}/waveform/${filename}`),
 
-  getReport: (sessionId: string) =>
-    apiFetch<{ filename: string; content: string }>(`/api/workspace/${sessionId}/report`),
+  listSynthesisRuns: (sessionId: string) =>
+    apiFetch<SynthesisRun[]>(`/api/workspace/${sessionId}/synthesis-runs`),
 
-  generateReport: (sessionId: string) =>
-    apiFetch<{ filename: string; content: string }>(
-      `/api/workspace/${sessionId}/report/generate`,
+  getReport: (sessionId: string, runId?: string | null) =>
+    apiFetch<ReportData>(
+      `/api/workspace/${sessionId}/report${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`
+    ),
+
+  generateReport: (sessionId: string, runId?: string | null) =>
+    apiFetch<ReportData>(
+      `/api/workspace/${sessionId}/report/generate${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`,
       { method: "POST" }
     ),
 

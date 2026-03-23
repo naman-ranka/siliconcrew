@@ -70,6 +70,27 @@ export interface WaveformData {
   signals: WaveformSignal[];
 }
 
+export interface SynthesisRun {
+  run_id: string;
+  status: string;
+  updated_at: string | null;
+  created_at: string | null;
+  finished_at: string | null;
+  top_module: string | null;
+  platform: string | null;
+  elapsed_sec: number | null;
+  summary_metrics: Record<string, unknown> | null;
+  auto_checks: Record<string, unknown> | null;
+  report_available: boolean;
+  report_filename: string | null;
+}
+
+export interface ReportData {
+  filename: string;
+  content: string;
+  run_id: string | null;
+}
+
 // WebSocket message types
 export type WSMessageType =
   | { type: "start" }

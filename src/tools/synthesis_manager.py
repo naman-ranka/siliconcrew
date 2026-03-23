@@ -793,6 +793,46 @@ def get_run_dir(workspace: str, run_id: Optional[str]) -> Optional[str]:
     return path if os.path.exists(path) else None
 
 
+def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
+    index = _load_index(workspace)
+    items: List[Dict[str, Any]] = []
+
+    runs = sorted(
+        index.get("runs", []),
+        key=lambda x: x.get("updated_at") or "",
+        reverse=True,
+    )
+
+    for item in runs:
+        run_id = item.get("run_id")
+        if not run_id:
+            continue
+        run_dir = os.path.join(_runs_root(workspace), run_id)
+        if not os.path.exists(run_dir):
+            continue
+
+        meta = _read_run_meta(run_dir)
+        report_path = os.path.join(run_dir, "design_report.md")
+        items.append(
+            {
+                "run_id": run_id,
+                "status": meta.get("status", item.get("status", "unknown")),
+                "updated_at": item.get("updated_at"),
+                "created_at": meta.get("created_at"),
+                "finished_at": meta.get("finished_at"),
+                "top_module": meta.get("top_module"),
+                "platform": meta.get("platform"),
+                "elapsed_sec": meta.get("elapsed_sec"),
+                "summary_metrics": meta.get("summary_metrics"),
+                "auto_checks": meta.get("auto_checks"),
+                "report_available": os.path.exists(report_path),
+                "report_filename": os.path.basename(report_path) if os.path.exists(report_path) else None,
+            }
+        )
+
+    return items
+
+
 def _find_report_file(run_dir: str, name: str) -> Optional[str]:
     reports_root = os.path.join(run_dir, "orfs_reports")
     if not os.path.exists(reports_root):

@@ -5,9 +5,10 @@ Design Report Generator - Creates comprehensive reports comparing spec vs actual
 import os
 import json
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from src.tools.spec_manager import load_yaml_file, DesignSpec
 from src.tools.get_ppa import get_ppa_metrics
+from src.tools.synthesis_manager import get_run_dir, get_synthesis_metrics
 
 
 # =============================================================================
@@ -17,9 +18,25 @@ from src.tools.get_ppa import get_ppa_metrics
 # The report generator reads from this file first, then falls back to parsing.
 
 METRICS_FILENAME = "design_metrics.json"
+RUN_REPORT_FILENAME = "design_report.md"
 
 
-def save_metrics(workspace_path: str, metrics: Dict[str, Any]) -> str:
+def _resolve_report_scope(workspace_path: str, run_id: str = None) -> Tuple[str, Optional[str]]:
+    if run_id:
+        resolved_run_dir = get_run_dir(workspace_path, run_id)
+        if resolved_run_dir:
+            return resolved_run_dir, os.path.basename(resolved_run_dir)
+        return workspace_path, None
+
+    latest_marker = os.path.join(workspace_path, "synth_runs", "LATEST")
+    if os.path.exists(latest_marker):
+        resolved_run_dir = get_run_dir(workspace_path, None)
+        if resolved_run_dir:
+            return resolved_run_dir, os.path.basename(resolved_run_dir)
+    return workspace_path, None
+
+
+def save_metrics(workspace_path: str, metrics: Dict[str, Any], run_id: str = None) -> str:
     """
     Save PPA metrics to a JSON file in the workspace.
     Called by the agent when it finds metrics through any means.
@@ -31,7 +48,8 @@ def save_metrics(workspace_path: str, metrics: Dict[str, Any]) -> str:
     Returns:
         Path to saved file
     """
-    metrics_path = os.path.join(workspace_path, METRICS_FILENAME)
+    target_dir, _ = _resolve_report_scope(workspace_path, run_id)
+    metrics_path = os.path.join(target_dir, METRICS_FILENAME)
     
     # Merge with existing metrics (don't overwrite if new value is None)
     existing = {}
@@ -55,7 +73,7 @@ def save_metrics(workspace_path: str, metrics: Dict[str, Any]) -> str:
     return metrics_path
 
 
-def load_metrics(workspace_path: str) -> Dict[str, Any]:
+def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
     """
     Load metrics from the workspace, trying multiple sources:
     1. First: design_metrics.json (saved by agent)
@@ -67,31 +85,44 @@ def load_metrics(workspace_path: str) -> Dict[str, Any]:
     metrics = {}
     
     # Source 1: Saved metrics file (highest priority - agent may have found these manually)
-    metrics_path = os.path.join(workspace_path, METRICS_FILENAME)
+    target_dir, resolved_run_id = _resolve_report_scope(workspace_path, run_id)
+    metrics_path = os.path.join(target_dir, METRICS_FILENAME)
     if os.path.exists(metrics_path):
         try:
             with open(metrics_path, 'r') as f:
                 metrics = json.load(f)
         except:
             pass
-    
-    # Source 2: Parse ORFS logs (fill in missing values)
-    orfs_logs = os.path.join(workspace_path, "orfs_logs")
-    if os.path.exists(orfs_logs):
+
+    # Source 2: Structured parsing from the synthesis run
+    if resolved_run_id:
         try:
-            parsed_metrics = get_ppa_metrics(orfs_logs)
-            # Only fill in values that aren't already set
+            parsed = get_synthesis_metrics(workspace_path, resolved_run_id)
+            parsed_metrics = parsed.get("metrics", {}) if parsed.get("status") == "ok" else {}
             for key in ["area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw"]:
                 if key not in metrics or metrics.get(key) is None:
                     if parsed_metrics.get(key) is not None:
                         metrics[key] = parsed_metrics[key]
         except:
             pass
+
+    # Source 3: Legacy workspace-root parsing fallback
+    if not resolved_run_id:
+        orfs_logs = os.path.join(workspace_path, "orfs_logs")
+        if os.path.exists(orfs_logs):
+            try:
+                parsed_metrics = get_ppa_metrics(orfs_logs)
+                for key in ["area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw"]:
+                    if key not in metrics or metrics.get(key) is None:
+                        if parsed_metrics.get(key) is not None:
+                            metrics[key] = parsed_metrics[key]
+            except:
+                pass
     
     return metrics
 
 
-def generate_design_report(workspace_path: str, spec_filename: str = None) -> str:
+def generate_design_report(workspace_path: str, spec_filename: str = None, run_id: str = None) -> str:
     """
     Generate a comprehensive design report comparing spec vs actual results.
     
@@ -103,11 +134,14 @@ def generate_design_report(workspace_path: str, spec_filename: str = None) -> st
         Markdown formatted report string
     """
     report_lines = []
+    report_dir, resolved_run_id = _resolve_report_scope(workspace_path, run_id)
     
     # Header
     report_lines.append("# Design Report")
     report_lines.append(f"\n*Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
     report_lines.append(f"\n*Workspace: `{os.path.basename(workspace_path)}`*\n")
+    if resolved_run_id:
+        report_lines.append(f"*Synthesis Run: `{resolved_run_id}`*\n")
     
     # Find spec file
     spec = None
@@ -174,13 +208,18 @@ def generate_design_report(workspace_path: str, spec_filename: str = None) -> st
         report_lines.append(f"| Waveforms | {', '.join(vcd_files) if vcd_files else '-'} |")
         
         # Check for ORFS outputs
-        orfs_results = os.path.join(workspace_path, "orfs_results")
+        orfs_results = os.path.join(report_dir, "orfs_results")
         if os.path.exists(orfs_results):
             import glob
             gds_files = glob.glob(os.path.join(orfs_results, "**", "*.gds"), recursive=True)
             odb_files = glob.glob(os.path.join(orfs_results, "**", "6_final.odb"), recursive=True)
             report_lines.append(f"| GDS Layout | {len(gds_files)} file(s) |")
             report_lines.append(f"| ODB Database | {len(odb_files)} file(s) |")
+        if resolved_run_id:
+            inputs_dir = os.path.join(report_dir, "inputs")
+            if os.path.exists(inputs_dir):
+                input_files = sorted(os.listdir(inputs_dir))
+                report_lines.append(f"| Synthesis Inputs | {', '.join(input_files) if input_files else '-'} |")
     
     # Verification Results
     report_lines.append("\n---\n## ✅ Verification Results\n")
@@ -223,7 +262,7 @@ def generate_design_report(workspace_path: str, spec_filename: str = None) -> st
     report_lines.append("\n---\n## 🔧 Synthesis Results (PPA)\n")
     
     # Load metrics from saved file OR parse from logs
-    metrics = load_metrics(workspace_path)
+    metrics = load_metrics(workspace_path, run_id=resolved_run_id)
     
     if metrics:
         
@@ -276,7 +315,7 @@ def generate_design_report(workspace_path: str, spec_filename: str = None) -> st
                 report_lines.append(f"\n❌ **Timing requirement NOT MET** - Max achievable: {max_freq:.1f} MHz")
         
         # Note the source of metrics
-        metrics_path = os.path.join(workspace_path, METRICS_FILENAME)
+        metrics_path = os.path.join(report_dir, METRICS_FILENAME)
         if os.path.exists(metrics_path):
             report_lines.append("\n*Metrics loaded from saved data.*")
     else:
@@ -285,31 +324,37 @@ def generate_design_report(workspace_path: str, spec_filename: str = None) -> st
     # Footer
     report_lines.append("\n---\n## 📝 Notes\n")
     report_lines.append("- This report was auto-generated by SiliconCrew")
-    report_lines.append("- For detailed synthesis logs, check `orfs_logs/` directory")
+    if resolved_run_id:
+        report_lines.append(f"- For detailed synthesis logs, check `synth_runs/{resolved_run_id}/orfs_logs/`")
+    else:
+        report_lines.append("- For detailed synthesis logs, check `orfs_logs/` directory")
     report_lines.append("- For waveform debugging, open `.vcd` files in the Waveform tab")
     
     return "\n".join(report_lines)
 
 
-def save_design_report(workspace_path: str, spec_filename: str = None) -> str:
+def save_design_report(workspace_path: str, spec_filename: str = None, run_id: str = None) -> str:
     """
     Generate and save a design report to the workspace.
     
     Returns:
         Path to the saved report file
     """
-    report_content = generate_design_report(workspace_path, spec_filename)
+    report_content = generate_design_report(workspace_path, spec_filename, run_id=run_id)
+    target_dir, resolved_run_id = _resolve_report_scope(workspace_path, run_id)
     
     # Find module name for filename
     module_name = "design"
-    if spec_filename:
+    if resolved_run_id:
+        report_path = os.path.join(target_dir, RUN_REPORT_FILENAME)
+    elif spec_filename:
         module_name = spec_filename.replace("_spec.yaml", "")
+        report_path = os.path.join(target_dir, f"{module_name}_report.md")
     else:
         spec_files = [f for f in os.listdir(workspace_path) if f.endswith("_spec.yaml")]
         if spec_files:
             module_name = spec_files[0].replace("_spec.yaml", "")
-    
-    report_path = os.path.join(workspace_path, f"{module_name}_report.md")
+        report_path = os.path.join(target_dir, f"{module_name}_report.md")
     
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(report_content)

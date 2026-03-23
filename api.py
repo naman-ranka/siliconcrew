@@ -26,6 +26,7 @@ from src.agents.architect import create_architect_agent, load_system_prompt
 from src.utils.session_manager import SessionManager
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.tools.design_report import save_design_report
+from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
 
 # Load environment
 load_dotenv()
@@ -100,6 +101,27 @@ class CodeFile(BaseModel):
     language: str = "verilog"
 
 
+class SynthesisRunResponse(BaseModel):
+    run_id: str
+    status: str
+    updated_at: Optional[str] = None
+    created_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    top_module: Optional[str] = None
+    platform: Optional[str] = None
+    elapsed_sec: Optional[float] = None
+    summary_metrics: Optional[Dict[str, Any]] = None
+    auto_checks: Optional[Dict[str, Any]] = None
+    report_available: bool = False
+    report_filename: Optional[str] = None
+
+
+class ReportResponse(BaseModel):
+    filename: str
+    content: str
+    run_id: Optional[str] = None
+
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
@@ -146,6 +168,33 @@ def format_tool_result_for_api(content: str) -> dict:
         "status": status,
         "content": content[:5000] if len(content) > 5000 else content
     }
+
+
+def resolve_report_path(workspace: str, run_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+    if run_id:
+        run_dir = get_run_dir(workspace, run_id)
+        if run_dir:
+            report_path = os.path.join(run_dir, "design_report.md")
+            if os.path.exists(report_path):
+                return report_path, run_id
+            return None, run_id
+        return None, None
+
+    latest_run_dir = get_run_dir(workspace, None)
+    if latest_run_dir:
+        report_path = os.path.join(latest_run_dir, "design_report.md")
+        if os.path.exists(report_path):
+            return report_path, os.path.basename(latest_run_dir)
+
+    report_files = sorted(
+        [f for f in os.listdir(workspace) if f.endswith("_report.md")],
+        key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
+        reverse=True
+    )
+    if report_files:
+        return os.path.join(workspace, report_files[0]), None
+
+    return None, None
 
 
 @asynccontextmanager
@@ -705,41 +754,51 @@ async def get_waveform_data(session_id: str, filename: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/workspace/{session_id}/report")
-async def get_report(session_id: str) -> Dict[str, str]:
-    """Get the design report."""
+@app.get("/api/workspace/{session_id}/synthesis-runs", response_model=List[SynthesisRunResponse])
+async def get_synthesis_runs(session_id: str):
+    """List synthesis runs for a workspace."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    report_files = sorted(
-        [f for f in os.listdir(workspace) if f.endswith("_report.md")],
-        key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
-        reverse=True
-    )
+    return [SynthesisRunResponse(**item) for item in list_synthesis_runs(workspace)]
 
-    if not report_files:
+
+@app.get("/api/workspace/{session_id}/report", response_model=ReportResponse)
+async def get_report(session_id: str, run_id: Optional[str] = Query(default=None)) -> ReportResponse:
+    """Get the latest available report or a report for a specific synthesis run."""
+    workspace = session_manager.get_workspace_path(session_id)
+    if not os.path.exists(workspace):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    report_path, resolved_run_id = resolve_report_path(workspace, run_id=run_id)
+    if not report_path:
         raise HTTPException(status_code=404, detail="No report found")
 
-    with open(os.path.join(workspace, report_files[0]), "r", encoding="utf-8") as f:
+    with open(report_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    return {"filename": report_files[0], "content": content}
+    return ReportResponse(filename=os.path.basename(report_path), content=content, run_id=resolved_run_id)
 
 
-@app.post("/api/workspace/{session_id}/report/generate")
-async def generate_report(session_id: str) -> Dict[str, str]:
-    """Generate a new design report."""
+@app.post("/api/workspace/{session_id}/report/generate", response_model=ReportResponse)
+async def generate_report(session_id: str, run_id: Optional[str] = Query(default=None)) -> ReportResponse:
+    """Generate a design report for the selected synthesis run or latest available run."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        report_path = save_design_report(workspace)
+        report_path = save_design_report(workspace, run_id=run_id)
         with open(report_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        return {"filename": os.path.basename(report_path), "content": content}
+        resolved_run_id = None
+        report_dir = os.path.dirname(report_path)
+        if os.path.basename(report_path) == "design_report.md" and os.path.basename(os.path.dirname(report_path)) != session_id:
+            resolved_run_id = os.path.basename(report_dir)
+
+        return ReportResponse(filename=os.path.basename(report_path), content=content, run_id=resolved_run_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -598,7 +598,8 @@ def save_metrics_tool(
     cell_count: int = None,
     wns_ns: float = None,
     tns_ns: float = None,
-    power_uw: float = None
+    power_uw: float = None,
+    run_id: str = None
 ) -> str:
     """
     Saves PPA metrics that you found (e.g., via search_logs_tool) for the design report.
@@ -632,7 +633,7 @@ def save_metrics_tool(
         return "Error: No metrics provided. Please specify at least one metric."
     
     try:
-        save_metrics(workspace, metrics)
+        save_metrics(workspace, metrics, run_id=run_id)
         
         saved_str = ", ".join([f"{k}={v}" for k, v in metrics.items()])
         return f"""Metrics saved successfully! 📊
@@ -645,7 +646,7 @@ These will be included in the design report when you call `generate_report_tool`
 
 
 @tool
-def generate_report_tool() -> str:
+def generate_report_tool(run_id: str = None) -> str:
     """
     Generates a comprehensive design report comparing the specification vs actual results.
     Call this at the end of a design session to summarize verification and synthesis outcomes.
@@ -662,8 +663,8 @@ def generate_report_tool() -> str:
         return "Error: Workspace does not exist."
     
     try:
-        report_path = save_design_report(workspace)
-        report_content = generate_design_report(workspace)
+        report_path = save_design_report(workspace, run_id=run_id)
+        report_content = generate_design_report(workspace, run_id=run_id)
         
         return f"""Design Report Generated! 📊
 

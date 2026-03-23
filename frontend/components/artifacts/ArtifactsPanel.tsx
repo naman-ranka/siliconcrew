@@ -26,6 +26,7 @@ export function ArtifactsPanel() {
     schematicFiles,
     layoutFiles,
     report,
+    synthesisRuns,
   } = useStore();
 
   if (!artifactsVisible) {
@@ -67,11 +68,17 @@ export function ArtifactsPanel() {
       id: "report",
       label: "Report",
       icon: <BarChart3 className="h-3.5 w-3.5" />,
-      badge: report ? 1 : 0,
+      badge: synthesisRuns.filter((run) => run.report_available).length || (report ? 1 : 0),
     },
   ];
 
-  const totalArtifacts = (spec ? 1 : 0) + codeFiles.length + waveformFiles.length + schematicFiles.length + layoutFiles.length + (report ? 1 : 0);
+  const totalArtifacts =
+    (spec ? 1 : 0) +
+    codeFiles.length +
+    waveformFiles.length +
+    schematicFiles.length +
+    layoutFiles.length +
+    (synthesisRuns.filter((run) => run.report_available).length || (report ? 1 : 0));
 
   return (
     <div className="flex flex-col h-full bg-surface-0 border-l border-border animate-slide-in-right">
