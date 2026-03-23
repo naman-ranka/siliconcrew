@@ -307,7 +307,7 @@ async def create_session(data: SessionCreate):
         raise HTTPException(status_code=409, detail=str(e))
 
 
-@app.get("/api/sessions/{session_id}", response_model=SessionResponse)
+@app.get("/api/sessions/{session_id:path}", response_model=SessionResponse)
 async def get_session(session_id: str):
     """Get session details."""
     meta = session_manager.get_session_metadata(session_id)
@@ -325,7 +325,7 @@ async def get_session(session_id: str):
     )
 
 
-@app.delete("/api/sessions/{session_id}")
+@app.delete("/api/sessions/{session_id:path}")
 async def delete_session(session_id: str):
     """Delete a session."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -340,7 +340,7 @@ async def delete_session(session_id: str):
 # CHAT ENDPOINTS
 # =============================================================================
 
-@app.get("/api/chat/{session_id}/history")
+@app.get("/api/chat/{session_id:path}/history")
 async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
     """Get chat history for a session."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -403,7 +403,7 @@ async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.websocket("/api/chat/{session_id}")
+@app.websocket("/api/chat/{session_id:path}")
 async def chat_websocket(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for streaming chat."""
     await websocket.accept()
@@ -573,7 +573,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 # WORKSPACE/ARTIFACTS ENDPOINTS
 # =============================================================================
 
-@app.get("/api/workspace/{session_id}/files")
+@app.get("/api/workspace/{session_id:path}/files")
 async def list_workspace_files(session_id: str) -> List[FileInfo]:
     """List all files in the workspace."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -613,7 +613,7 @@ async def list_workspace_files(session_id: str) -> List[FileInfo]:
     return sorted(files, key=lambda f: f.modified, reverse=True)
 
 
-@app.get("/api/workspace/{session_id}/spec")
+@app.get("/api/workspace/{session_id:path}/spec")
 async def get_spec(session_id: str) -> SpecResponse:
     """Get the latest spec file."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -647,7 +647,7 @@ async def get_spec(session_id: str) -> SpecResponse:
     )
 
 
-@app.get("/api/workspace/{session_id}/code")
+@app.get("/api/workspace/{session_id:path}/code")
 async def get_code_files(session_id: str) -> List[CodeFile]:
     """Get all Verilog/SystemVerilog files."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -670,7 +670,7 @@ async def get_code_files(session_id: str) -> List[CodeFile]:
     return result
 
 
-@app.get("/api/workspace/{session_id}/code/{filename}")
+@app.get("/api/workspace/{session_id:path}/code/{filename:path}")
 async def get_code_file(session_id: str, filename: str) -> CodeFile:
     """Get a specific code file."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -679,6 +679,11 @@ async def get_code_file(session_id: str, filename: str) -> CodeFile:
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
+    real_workspace = os.path.realpath(workspace)
+    real_file = os.path.realpath(file_path)
+    if not real_file.startswith(real_workspace):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     with open(file_path, "r", errors='ignore') as f:
         content = f.read()
 
@@ -686,7 +691,7 @@ async def get_code_file(session_id: str, filename: str) -> CodeFile:
     return CodeFile(filename=filename, content=content, language=lang)
 
 
-@app.get("/api/workspace/{session_id}/waveforms")
+@app.get("/api/workspace/{session_id:path}/waveforms")
 async def list_waveform_files(session_id: str) -> List[str]:
     """List VCD files in the workspace."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -696,7 +701,7 @@ async def list_waveform_files(session_id: str) -> List[str]:
     return [f for f in os.listdir(workspace) if f.endswith(".vcd")]
 
 
-@app.get("/api/workspace/{session_id}/waveform/{filename}")
+@app.get("/api/workspace/{session_id:path}/waveform/{filename:path}")
 async def get_waveform_data(session_id: str, filename: str):
     """Get parsed VCD waveform data."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -704,6 +709,11 @@ async def get_waveform_data(session_id: str, filename: str):
 
     if not os.path.exists(vcd_path):
         raise HTTPException(status_code=404, detail="File not found")
+
+    real_workspace = os.path.realpath(workspace)
+    real_vcd = os.path.realpath(vcd_path)
+    if not real_vcd.startswith(real_workspace):
+        raise HTTPException(status_code=403, detail="Access denied")
 
     try:
         from vcdvcd import VCDVCD
@@ -754,7 +764,7 @@ async def get_waveform_data(session_id: str, filename: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/workspace/{session_id}/synthesis-runs", response_model=List[SynthesisRunResponse])
+@app.get("/api/workspace/{session_id:path}/synthesis-runs", response_model=List[SynthesisRunResponse])
 async def get_synthesis_runs(session_id: str):
     """List synthesis runs for a workspace."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -764,7 +774,7 @@ async def get_synthesis_runs(session_id: str):
     return [SynthesisRunResponse(**item) for item in list_synthesis_runs(workspace)]
 
 
-@app.get("/api/workspace/{session_id}/report", response_model=ReportResponse)
+@app.get("/api/workspace/{session_id:path}/report", response_model=ReportResponse)
 async def get_report(session_id: str, run_id: Optional[str] = Query(default=None)) -> ReportResponse:
     """Get the latest available report or a report for a specific synthesis run."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -781,7 +791,7 @@ async def get_report(session_id: str, run_id: Optional[str] = Query(default=None
     return ReportResponse(filename=os.path.basename(report_path), content=content, run_id=resolved_run_id)
 
 
-@app.post("/api/workspace/{session_id}/report/generate", response_model=ReportResponse)
+@app.post("/api/workspace/{session_id:path}/report/generate", response_model=ReportResponse)
 async def generate_report(session_id: str, run_id: Optional[str] = Query(default=None)) -> ReportResponse:
     """Generate a design report for the selected synthesis run or latest available run."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -795,7 +805,7 @@ async def generate_report(session_id: str, run_id: Optional[str] = Query(default
 
         resolved_run_id = None
         report_dir = os.path.dirname(report_path)
-        if os.path.basename(report_path) == "design_report.md" and os.path.basename(os.path.dirname(report_path)) != session_id:
+        if os.path.basename(report_path) == "design_report.md" and os.path.realpath(report_dir) != os.path.realpath(workspace):
             resolved_run_id = os.path.basename(report_dir)
 
         return ReportResponse(filename=os.path.basename(report_path), content=content, run_id=resolved_run_id)
@@ -803,7 +813,7 @@ async def generate_report(session_id: str, run_id: Optional[str] = Query(default
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/workspace/{session_id}/layouts")
+@app.get("/api/workspace/{session_id:path}/layouts")
 async def list_layout_files(session_id: str) -> List[str]:
     """List GDS files in the workspace."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -820,7 +830,7 @@ async def list_layout_files(session_id: str) -> List[str]:
     return gds_files
 
 
-@app.get("/api/workspace/{session_id}/schematics")
+@app.get("/api/workspace/{session_id:path}/schematics")
 async def list_schematic_files(session_id: str) -> List[str]:
     """List SVG schematic files in the workspace."""
     workspace = session_manager.get_workspace_path(session_id)
@@ -830,7 +840,7 @@ async def list_schematic_files(session_id: str) -> List[str]:
     return [f for f in os.listdir(workspace) if f.endswith(".svg") and not f.endswith(".gds.svg")]
 
 
-@app.get("/api/workspace/{session_id}/file/{filename:path}")
+@app.get("/api/workspace/{session_id:path}/file/{filename:path}")
 async def get_file_content(session_id: str, filename: str):
     """Get raw file content."""
     workspace = session_manager.get_workspace_path(session_id)

@@ -10,6 +10,8 @@ import type {
 } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+const encodeSessionId = (sessionId: string): string => encodeURIComponent(sessionId);
+const encodeFilePath = (filename: string): string => encodeURIComponent(filename);
 
 // Generic fetch wrapper with error handling
 async function apiFetch<T>(
@@ -42,10 +44,10 @@ export const sessionsApi = {
       body: JSON.stringify({ name, model }),
     }),
 
-  get: (sessionId: string) => apiFetch<Session>(`/api/sessions/${sessionId}`),
+  get: (sessionId: string) => apiFetch<Session>(`/api/sessions/${encodeSessionId(sessionId)}`),
 
   delete: (sessionId: string) =>
-    apiFetch<{ status: string }>(`/api/sessions/${sessionId}`, {
+    apiFetch<{ status: string }>(`/api/sessions/${encodeSessionId(sessionId)}`, {
       method: "DELETE",
     }),
 };
@@ -53,59 +55,59 @@ export const sessionsApi = {
 // Chat API
 export const chatApi = {
   getHistory: (sessionId: string) =>
-    apiFetch<Message[]>(`/api/chat/${sessionId}/history`),
+    apiFetch<Message[]>(`/api/chat/${encodeSessionId(sessionId)}/history`),
 
   // WebSocket connection for streaming
   createConnection: (sessionId: string): WebSocket => {
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsHost = process.env.NEXT_PUBLIC_WS_URL || `${wsProtocol}//${window.location.hostname}:8000`;
-    return new WebSocket(`${wsHost}/api/chat/${sessionId}`);
+    return new WebSocket(`${wsHost}/api/chat/${encodeSessionId(sessionId)}`);
   },
 };
 
 // Workspace API
 export const workspaceApi = {
   listFiles: (sessionId: string) =>
-    apiFetch<FileInfo[]>(`/api/workspace/${sessionId}/files`),
+    apiFetch<FileInfo[]>(`/api/workspace/${encodeSessionId(sessionId)}/files`),
 
   getSpec: (sessionId: string) =>
-    apiFetch<SpecData>(`/api/workspace/${sessionId}/spec`),
+    apiFetch<SpecData>(`/api/workspace/${encodeSessionId(sessionId)}/spec`),
 
   getCodeFiles: (sessionId: string) =>
-    apiFetch<CodeFile[]>(`/api/workspace/${sessionId}/code`),
+    apiFetch<CodeFile[]>(`/api/workspace/${encodeSessionId(sessionId)}/code`),
 
   getCodeFile: (sessionId: string, filename: string) =>
-    apiFetch<CodeFile>(`/api/workspace/${sessionId}/code/${filename}`),
+    apiFetch<CodeFile>(`/api/workspace/${encodeSessionId(sessionId)}/code/${encodeFilePath(filename)}`),
 
   listWaveforms: (sessionId: string) =>
-    apiFetch<string[]>(`/api/workspace/${sessionId}/waveforms`),
+    apiFetch<string[]>(`/api/workspace/${encodeSessionId(sessionId)}/waveforms`),
 
   getWaveform: (sessionId: string, filename: string) =>
-    apiFetch<WaveformData>(`/api/workspace/${sessionId}/waveform/${filename}`),
+    apiFetch<WaveformData>(`/api/workspace/${encodeSessionId(sessionId)}/waveform/${encodeFilePath(filename)}`),
 
   listSynthesisRuns: (sessionId: string) =>
-    apiFetch<SynthesisRun[]>(`/api/workspace/${sessionId}/synthesis-runs`),
+    apiFetch<SynthesisRun[]>(`/api/workspace/${encodeSessionId(sessionId)}/synthesis-runs`),
 
   getReport: (sessionId: string, runId?: string | null) =>
     apiFetch<ReportData>(
-      `/api/workspace/${sessionId}/report${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`
+      `/api/workspace/${encodeSessionId(sessionId)}/report${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`
     ),
 
   generateReport: (sessionId: string, runId?: string | null) =>
     apiFetch<ReportData>(
-      `/api/workspace/${sessionId}/report/generate${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`,
+      `/api/workspace/${encodeSessionId(sessionId)}/report/generate${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`,
       { method: "POST" }
     ),
 
   listLayouts: (sessionId: string) =>
-    apiFetch<string[]>(`/api/workspace/${sessionId}/layouts`),
+    apiFetch<string[]>(`/api/workspace/${encodeSessionId(sessionId)}/layouts`),
 
   listSchematics: (sessionId: string) =>
-    apiFetch<string[]>(`/api/workspace/${sessionId}/schematics`),
+    apiFetch<string[]>(`/api/workspace/${encodeSessionId(sessionId)}/schematics`),
 
   getFile: (sessionId: string, filename: string) =>
     apiFetch<{ filename: string; content: string }>(
-      `/api/workspace/${sessionId}/file/${encodeURIComponent(filename)}`
+      `/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(filename)}`
     ),
 };
 

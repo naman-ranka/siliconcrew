@@ -22,6 +22,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Sequence
+from urllib.parse import quote, unquote
 
 # Add src to path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -220,10 +221,11 @@ class RTLDesignMCPServer:
         sessions = self.session_manager.get_all_sessions()
         for session_id in sessions:
             workspace = self.session_manager.get_workspace_path(session_id)
+            encoded_session_id = quote(session_id, safe="")
             
             # Session info resource
             resources.append(Resource(
-                uri=f"rtl://session/{session_id}",
+                uri=f"rtl://session/{encoded_session_id}",
                 name=f"Session: {session_id}",
                 description=f"Workspace and metadata for session {session_id}",
                 mimeType="application/json"
@@ -235,7 +237,7 @@ class RTLDesignMCPServer:
                     filepath = os.path.join(workspace, filename)
                     if os.path.isfile(filepath):
                         resources.append(Resource(
-                            uri=f"rtl://session/{session_id}/file/{filename}",
+                            uri=f"rtl://session/{encoded_session_id}/file/{quote(filename, safe='')}",
                             name=f"{session_id}/{filename}",
                             description=f"File from session {session_id}",
                             mimeType=self._get_mime_type(filename)
@@ -277,10 +279,40 @@ class RTLDesignMCPServer:
             )
         
         elif uri.startswith("rtl://session/"):
-            parts = uri.replace("rtl://session/", "").split("/")
-            session_id = parts[0]
-            
-            if len(parts) == 1:
+            remainder = uri.replace("rtl://session/", "", 1)
+
+            if "/file/" in remainder:
+                encoded_session_id, encoded_filename = remainder.split("/file/", 1)
+                session_id = unquote(encoded_session_id)
+                filename = unquote(encoded_filename)
+                workspace = self.session_manager.get_workspace_path(session_id)
+                filepath = os.path.join(workspace, filename)
+
+                if not os.path.exists(filepath):
+                    raise ValueError(f"File not found: {filename}")
+
+                real_workspace = os.path.realpath(workspace)
+                real_file = os.path.realpath(filepath)
+                if not real_file.startswith(real_workspace):
+                    raise ValueError("Access denied")
+
+                with open(filepath, "r", errors="ignore") as f:
+                    content = f.read()
+
+                return ReadResourceResult(
+                    contents=[
+                        TextContent(
+                            type="text",
+                            text=content,
+                            uri=uri,
+                            mimeType=self._get_mime_type(filename)
+                        )
+                    ]
+                )
+
+            session_id = unquote(remainder)
+
+            if session_id:
                 # Session metadata
                 meta = self.session_manager.get_session_metadata(session_id)
                 workspace = self.session_manager.get_workspace_path(session_id)
@@ -303,29 +335,6 @@ class RTLDesignMCPServer:
                             text=json.dumps(session_info, indent=2),
                             uri=uri,
                             mimeType="application/json"
-                        )
-                    ]
-                )
-            
-            elif len(parts) == 3 and parts[1] == "file":
-                # Read specific file
-                filename = parts[2]
-                workspace = self.session_manager.get_workspace_path(session_id)
-                filepath = os.path.join(workspace, filename)
-                
-                if not os.path.exists(filepath):
-                    raise ValueError(f"File not found: {filename}")
-                
-                with open(filepath, "r", errors="ignore") as f:
-                    content = f.read()
-                
-                return ReadResourceResult(
-                    contents=[
-                        TextContent(
-                            type="text",
-                            text=content,
-                            uri=uri,
-                            mimeType=self._get_mime_type(filename)
                         )
                     ]
                 )
