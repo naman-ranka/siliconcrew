@@ -116,6 +116,15 @@ def _find_latest_spec(workspace: str) -> Optional[str]:
     return os.path.join(workspace, specs[0])
 
 
+def _copy_active_spec(workspace: str, run_dir: str) -> Optional[str]:
+    spec_path = _find_latest_spec(workspace)
+    if not spec_path or not os.path.exists(spec_path):
+        return None
+    dst = os.path.join(run_dir, os.path.basename(spec_path))
+    shutil.copy2(spec_path, dst)
+    return dst
+
+
 def _write_default_sdc(sdc_path: str, clock_period_ns: float, clock_port: str = "clk") -> None:
     # Guarded SDC so missing ports do not hard-fail synthesis scripts.
     content = (
@@ -473,6 +482,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
 
     inputs_dir = _ensure_dir(os.path.join(run_dir, "inputs"))
     copied_inputs = _copy_inputs(args["verilog_files"], inputs_dir)
+    copied_spec = _copy_active_spec(workspace, run_dir)
 
     constraints = _constraints_guardrail(
         workspace,
@@ -491,6 +501,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "platform": platform,
         "top_module": top_module,
         "input_files": [os.path.basename(x) for x in copied_inputs],
+        "spec_file": os.path.basename(copied_spec) if copied_spec else None,
         "clock_period_ns": constraints.get("clock_period_ns"),
         "constraints_mode": args.get("constraints_mode", "auto"),
         "auto_checks": asdict(auto_checks),

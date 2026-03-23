@@ -323,6 +323,22 @@ class TestRunScopedMetrics(unittest.TestCase):
         report = generate_design_report(self.test_dir, run_id="synth_0002")
         self.assertIn("synth_0002", report)
         self.assertIn("1234.00", report)
+        self.assertIn("Run Spec Snapshot", report)
+
+    def test_run_local_spec_is_preferred(self):
+        root_spec = os.path.join(self.test_dir, "run_demo_spec.yaml")
+        run_spec = os.path.join(self.run_dir, "run_demo_spec.yaml")
+
+        root = load_yaml_file(root_spec)
+        root.description = "workspace root spec"
+        save_yaml_file(root, root_spec)
+
+        scoped = load_yaml_file(run_spec)
+        scoped.description = "run-local spec"
+        save_yaml_file(scoped, run_spec)
+
+        report = generate_design_report(self.test_dir, run_id="synth_0002")
+        self.assertIn("run-local spec", report)
 
 
 if __name__ == "__main__":
