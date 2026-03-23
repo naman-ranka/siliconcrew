@@ -36,6 +36,35 @@ def _resolve_report_scope(workspace_path: str, run_id: str = None) -> Tuple[str,
     return workspace_path, None
 
 
+def _resolve_spec_for_report(workspace_path: str, report_dir: str, spec_filename: str = None) -> Optional[DesignSpec]:
+    candidate_paths = []
+    if spec_filename:
+        candidate_paths.append(os.path.join(report_dir, spec_filename))
+        if report_dir != workspace_path:
+            candidate_paths.append(os.path.join(workspace_path, spec_filename))
+    else:
+        if os.path.exists(report_dir):
+            report_specs = [f for f in os.listdir(report_dir) if f.endswith("_spec.yaml")]
+            report_specs.sort(key=lambda x: os.path.getmtime(os.path.join(report_dir, x)), reverse=True)
+            candidate_paths.extend([os.path.join(report_dir, f) for f in report_specs])
+        if report_dir != workspace_path and os.path.exists(workspace_path):
+            workspace_specs = [f for f in os.listdir(workspace_path) if f.endswith("_spec.yaml")]
+            workspace_specs.sort(key=lambda x: os.path.getmtime(os.path.join(workspace_path, x)), reverse=True)
+            candidate_paths.extend([os.path.join(workspace_path, f) for f in workspace_specs])
+
+    seen = set()
+    for path in candidate_paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        if os.path.exists(path):
+            try:
+                return load_yaml_file(path)
+            except:
+                pass
+    return None
+
+
 def save_metrics(workspace_path: str, metrics: Dict[str, Any], run_id: str = None) -> str:
     """
     Save PPA metrics to a JSON file in the workspace.
@@ -144,23 +173,7 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
         report_lines.append(f"*Synthesis Run: `{resolved_run_id}`*\n")
     
     # Find spec file
-    spec = None
-    if spec_filename:
-        spec_path = os.path.join(workspace_path, spec_filename)
-        if os.path.exists(spec_path):
-            try:
-                spec = load_yaml_file(spec_path)
-            except:
-                pass
-    else:
-        # Find most recent spec
-        spec_files = [f for f in os.listdir(workspace_path) if f.endswith("_spec.yaml")]
-        if spec_files:
-            spec_files.sort(key=lambda x: os.path.getmtime(os.path.join(workspace_path, x)), reverse=True)
-            try:
-                spec = load_yaml_file(os.path.join(workspace_path, spec_files[0]))
-            except:
-                pass
+    spec = _resolve_spec_for_report(workspace_path, report_dir, spec_filename)
     
     # Specification Summary
     report_lines.append("---\n## 📋 Specification Summary\n")
@@ -220,6 +233,9 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
             if os.path.exists(inputs_dir):
                 input_files = sorted(os.listdir(inputs_dir))
                 report_lines.append(f"| Synthesis Inputs | {', '.join(input_files) if input_files else '-'} |")
+            run_spec_files = sorted([f for f in os.listdir(report_dir) if f.endswith("_spec.yaml")]) if os.path.exists(report_dir) else []
+            if run_spec_files:
+                report_lines.append(f"| Run Spec Snapshot | {', '.join(run_spec_files)} |")
     
     # Verification Results
     report_lines.append("\n---\n## ✅ Verification Results\n")
