@@ -79,6 +79,22 @@ def _load_run_meta_for_report(workspace_path: str, run_id: str = None) -> Dict[s
         return {}
 
 
+def _resolve_run_clock_fields(run_meta: Dict[str, Any], spec: Optional[DesignSpec]) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+    requested_clock = run_meta.get("requested_clock_period_ns")
+    effective_clock = run_meta.get("effective_clock_period_ns")
+    if effective_clock is None:
+        effective_clock = run_meta.get("clock_period_ns")
+
+    if effective_clock is not None:
+        source = run_meta.get("clock_source") or "run metadata"
+        return requested_clock, effective_clock, source
+
+    if spec:
+        return requested_clock, spec.clock_period_ns, "specification"
+
+    return requested_clock, None, None
+
+
 def save_metrics(workspace_path: str, metrics: Dict[str, Any], run_id: str = None) -> str:
     """
     Save PPA metrics to a JSON file in the workspace.
@@ -332,20 +348,18 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
         # Spec vs Actual comparison
         if wns is not None:
             report_lines.append("\n### Timing Comparison\n")
-            target_period = run_meta.get("clock_period_ns")
-            if target_period is None and spec:
-                target_period = spec.clock_period_ns
+            requested_clock, target_period, target_source = _resolve_run_clock_fields(run_meta, spec)
             if target_period is None:
                 target_period = 0
             achieved_period = target_period - wns if wns < 0 else target_period
             slack_pct = (wns / target_period) * 100 if target_period > 0 else 0
             
+            if requested_clock is not None:
+                report_lines.append(f"| Requested Clock | {requested_clock} ns |")
             report_lines.append(f"| Target Clock | {target_period} ns |")
             report_lines.append(f"| Achieved Slack | {wns:.3f} ns ({slack_pct:+.1f}%) |")
-            if run_meta.get("clock_period_ns") is not None:
-                report_lines.append("| Timing Target Source | run metadata |")
-            elif spec:
-                report_lines.append("| Timing Target Source | specification |")
+            if target_source:
+                report_lines.append(f"| Timing Target Source | {target_source} |")
             
             if wns >= 0:
                 if target_period > 0:
