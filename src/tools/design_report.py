@@ -65,6 +65,20 @@ def _resolve_spec_for_report(workspace_path: str, report_dir: str, spec_filename
     return None
 
 
+def _load_run_meta_for_report(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
+    report_dir, resolved_run_id = _resolve_report_scope(workspace_path, run_id)
+    if not resolved_run_id:
+        return {}
+    meta_path = os.path.join(report_dir, "run_meta.json")
+    if not os.path.exists(meta_path):
+        return {}
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
+
+
 def save_metrics(workspace_path: str, metrics: Dict[str, Any], run_id: str = None) -> str:
     """
     Save PPA metrics to a JSON file in the workspace.
@@ -164,6 +178,7 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
     """
     report_lines = []
     report_dir, resolved_run_id = _resolve_report_scope(workspace_path, run_id)
+    run_meta = _load_run_meta_for_report(workspace_path, resolved_run_id)
     
     # Header
     report_lines.append("# Design Report")
@@ -315,17 +330,28 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
             report_lines.append("| Total Power | N/A | - |")
         
         # Spec vs Actual comparison
-        if spec and wns is not None:
+        if wns is not None:
             report_lines.append("\n### Timing Comparison\n")
-            target_period = spec.clock_period_ns
+            target_period = run_meta.get("clock_period_ns")
+            if target_period is None and spec:
+                target_period = spec.clock_period_ns
+            if target_period is None:
+                target_period = 0
             achieved_period = target_period - wns if wns < 0 else target_period
             slack_pct = (wns / target_period) * 100 if target_period > 0 else 0
             
             report_lines.append(f"| Target Clock | {target_period} ns |")
             report_lines.append(f"| Achieved Slack | {wns:.3f} ns ({slack_pct:+.1f}%) |")
+            if run_meta.get("clock_period_ns") is not None:
+                report_lines.append("| Timing Target Source | run metadata |")
+            elif spec:
+                report_lines.append("| Timing Target Source | specification |")
             
             if wns >= 0:
-                report_lines.append(f"\n✅ **Timing requirement MET** - Design can run at {1000/target_period:.1f} MHz")
+                if target_period > 0:
+                    report_lines.append(f"\n✅ **Timing requirement MET** - Design can run at {1000/target_period:.1f} MHz")
+                else:
+                    report_lines.append("\n✅ **Timing requirement MET**")
             else:
                 max_freq = 1000 / achieved_period if achieved_period > 0 else 0
                 report_lines.append(f"\n❌ **Timing requirement NOT MET** - Max achievable: {max_freq:.1f} MHz")
