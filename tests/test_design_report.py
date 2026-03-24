@@ -340,6 +340,29 @@ class TestRunScopedMetrics(unittest.TestCase):
         report = generate_design_report(self.test_dir, run_id="synth_0002")
         self.assertIn("run-local spec", report)
 
+    def test_run_clock_is_preferred_over_spec_clock(self):
+        meta_path = os.path.join(self.run_dir, "run_meta.json")
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["clock_period_ns"] = 7.5
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+
+        root_spec = os.path.join(self.test_dir, "run_demo_spec.yaml")
+        run_spec = os.path.join(self.run_dir, "run_demo_spec.yaml")
+
+        root = load_yaml_file(root_spec)
+        root.clock_period_ns = 20.0
+        save_yaml_file(root, root_spec)
+
+        scoped = load_yaml_file(run_spec)
+        scoped.clock_period_ns = 15.0
+        save_yaml_file(scoped, run_spec)
+
+        report = generate_design_report(self.test_dir, run_id="synth_0002")
+        self.assertIn("| Target Clock | 7.5 ns |", report)
+        self.assertIn("| Timing Target Source | run metadata |", report)
+
 
 if __name__ == "__main__":
     unittest.main()
