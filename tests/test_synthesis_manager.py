@@ -118,6 +118,65 @@ def test_constraints_guardrail_blocks_unsafe_success(monkeypatch):
         assert called["value"] is False
 
 
+def test_explicit_clock_overrides_spec_clock(monkeypatch):
+    with tempfile.TemporaryDirectory() as workspace:
+        design = os.path.join(workspace, "counter.v")
+        _write_file(
+            design,
+            "module counter(input clk, input rst, output reg [3:0] q); always @(posedge clk) if(rst) q<=0; else q<=q+1; endmodule",
+        )
+
+        spec = DesignSpec(
+            module_name="counter",
+            description="counter",
+            clock_period_ns=10.0,
+            ports=[PortSpec(name="clk", direction="input"), PortSpec(name="rst", direction="input")],
+        )
+        save_yaml_file(spec, os.path.join(workspace, "counter_spec.yaml"))
+
+        seen = {}
+
+        def fake_orfs(**kwargs):
+            seen["clock_period_ns"] = kwargs["clock_period_ns"]
+            run_dir = kwargs["run_dir"]
+            os.makedirs(os.path.join(run_dir, "orfs_reports", "sky130hd", "counter", "base"), exist_ok=True)
+            os.makedirs(os.path.join(run_dir, "orfs_results", "sky130hd", "counter", "base"), exist_ok=True)
+            with open(os.path.join(run_dir, "orfs_reports", "sky130hd", "counter", "base", "x.rpt"), "w", encoding="utf-8") as f:
+                f.write("Chip area for module 'counter': 5.0\n")
+            with open(os.path.join(run_dir, "orfs_results", "sky130hd", "counter", "base", "6_final.v"), "w", encoding="utf-8") as f:
+                f.write("module counter(input clk,input rst,output [3:0] q);endmodule")
+            return {"success": True, "stdout": "", "stderr": "", "command": "fake"}
+
+        monkeypatch.setattr(sm, "_run_orfs", fake_orfs)
+
+        started = sm.start_synthesis_job(
+            workspace=workspace,
+            verilog_files=[design],
+            top_module="counter",
+            platform="sky130hd",
+            clock_period_ns=3.5,
+        )
+
+        final = None
+        for _ in range(40):
+            status = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
+            if status["status"] in {"completed", "failed"}:
+                final = status
+                break
+            time.sleep(0.05)
+
+        assert final is not None
+        assert final["status"] == "completed"
+        assert seen["clock_period_ns"] == 3.5
+
+        run_meta = os.path.join(workspace, "synth_runs", "synth_0001", "run_meta.json")
+        data = json.loads(open(run_meta, "r", encoding="utf-8").read())
+        assert data["requested_clock_period_ns"] == 3.5
+        assert data["effective_clock_period_ns"] == 3.5
+        assert data["clock_period_ns"] == 3.5
+        assert data["clock_source"] == "requested"
+
+
 def test_constraints_guardrail_allows_combinational_default_clock(monkeypatch):
     with tempfile.TemporaryDirectory() as workspace:
         design = os.path.join(workspace, "and2.v")

@@ -148,7 +148,10 @@ def _constraints_guardrail(
         "status": "fail",
         "note": "No specification file found.",
         "sdc_path": None,
+        "requested_clock_period_ns": fallback_clock_period_ns,
+        "effective_clock_period_ns": fallback_clock_period_ns,
         "clock_period_ns": fallback_clock_period_ns,
+        "clock_source": "requested" if fallback_clock_period_ns and fallback_clock_period_ns > 0 else None,
     }
     constraints_mode = (constraints_mode or "auto").lower().strip()
     if constraints_mode not in {"auto", "strict", "bypass"}:
@@ -165,6 +168,7 @@ def _constraints_guardrail(
             "status": "pass",
             "note": "No spec found; generated fallback constraints.sdc from explicit clock period.",
             "sdc_path": sdc_path,
+            "effective_clock_period_ns": fallback_clock_period_ns,
         })
         return result
 
@@ -188,14 +192,23 @@ def _constraints_guardrail(
             )
             return result
         fallback_port = input_ports[0] if input_ports else "clk"
-        period = spec.clock_period_ns if spec.clock_period_ns > 0 else (fallback_clock_period_ns or 10.0)
+        requested_clock = fallback_clock_period_ns if fallback_clock_period_ns and fallback_clock_period_ns > 0 else None
+        period = requested_clock if requested_clock is not None else (
+            spec.clock_period_ns if spec.clock_period_ns > 0 else 10.0
+        )
         sdc_path = os.path.join(run_dir, "constraints.sdc")
         _write_default_sdc(sdc_path=sdc_path, clock_period_ns=period, clock_port=fallback_port)
         result.update({
             "status": "pass",
-            "note": f"No explicit clock in spec. Applied default clock fallback on port '{fallback_port}'.",
+            "note": (
+                f"No explicit clock in spec. Applied explicit requested clock on port '{fallback_port}'."
+                if requested_clock is not None
+                else f"No explicit clock in spec. Applied default clock fallback on port '{fallback_port}'."
+            ),
             "sdc_path": sdc_path,
+            "effective_clock_period_ns": period,
             "clock_period_ns": period,
+            "clock_source": "requested" if requested_clock is not None else "spec_fallback_port",
         })
         return result
 
@@ -203,12 +216,26 @@ def _constraints_guardrail(
         result["note"] = "Spec clock period must be > 0."
         return result
 
+    sdc_path = os.path.join(run_dir, "constraints.sdc")
+    requested_clock = fallback_clock_period_ns if fallback_clock_period_ns and fallback_clock_period_ns > 0 else None
+    if requested_clock is not None:
+        clock_port = clock_ports[0]
+        _write_default_sdc(sdc_path=sdc_path, clock_period_ns=requested_clock, clock_port=clock_port)
+        result.update({
+            "status": "pass",
+            "note": f"Explicit requested clock override applied on spec clock port '{clock_port}'.",
+            "sdc_path": sdc_path,
+            "effective_clock_period_ns": requested_clock,
+            "clock_period_ns": requested_clock,
+            "clock_source": "requested",
+        })
+        return result
+
     sdc_content = spec.generate_sdc()
     if "create_clock" not in sdc_content:
         result["note"] = "Generated SDC missing create_clock."
         return result
 
-    sdc_path = os.path.join(run_dir, "constraints.sdc")
     with open(sdc_path, "w", encoding="utf-8") as f:
         f.write(sdc_content)
 
@@ -216,7 +243,9 @@ def _constraints_guardrail(
         "status": "pass",
         "note": "Spec-driven constraints validated.",
         "sdc_path": sdc_path,
+        "effective_clock_period_ns": spec.clock_period_ns,
         "clock_period_ns": spec.clock_period_ns,
+        "clock_source": "spec",
     })
     return result
 
@@ -502,7 +531,10 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "top_module": top_module,
         "input_files": [os.path.basename(x) for x in copied_inputs],
         "spec_file": os.path.basename(copied_spec) if copied_spec else None,
+        "requested_clock_period_ns": args.get("clock_period_ns"),
+        "effective_clock_period_ns": constraints.get("effective_clock_period_ns"),
         "clock_period_ns": constraints.get("clock_period_ns"),
+        "clock_source": constraints.get("clock_source"),
         "constraints_mode": args.get("constraints_mode", "auto"),
         "auto_checks": asdict(auto_checks),
         "check_notes": constraints["note"],

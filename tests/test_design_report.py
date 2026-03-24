@@ -344,7 +344,10 @@ class TestRunScopedMetrics(unittest.TestCase):
         meta_path = os.path.join(self.run_dir, "run_meta.json")
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
+        meta["requested_clock_period_ns"] = 6.0
+        meta["effective_clock_period_ns"] = 7.5
         meta["clock_period_ns"] = 7.5
+        meta["clock_source"] = "requested"
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f)
 
@@ -360,8 +363,9 @@ class TestRunScopedMetrics(unittest.TestCase):
         save_yaml_file(scoped, run_spec)
 
         report = generate_design_report(self.test_dir, run_id="synth_0002")
+        self.assertIn("| Requested Clock | 6.0 ns |", report)
         self.assertIn("| Target Clock | 7.5 ns |", report)
-        self.assertIn("| Timing Target Source | run metadata |", report)
+        self.assertIn("| Timing Target Source | requested |", report)
 
 
 if __name__ == "__main__":
