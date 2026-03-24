@@ -388,16 +388,9 @@ class RTLDesignMCPServer:
                 import datetime
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 session_id = f"mcp_session_{timestamp}"
-                try:
-                    session_id = self.session_manager.create_session(tag=session_id, model_name="claude-via-mcp")
-                except FileExistsError:
-                    # Session already exists, use it
-                    pass
+            session_id = self.session_manager.ensure_session(tag=session_id, model_name="claude-via-mcp")
             
-            # Ensure session exists
             workspace = self.session_manager.get_workspace_path(session_id)
-            if not os.path.exists(workspace):
-                os.makedirs(workspace)
             
             # Set as current session
             self.current_session = session_id
