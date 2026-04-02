@@ -542,9 +542,9 @@ Before presenting testbench, verify:
 Remember: You are an expert. Take pride in producing high-quality, working hardware designs.
 """
 
-DEFAULT_ARCHITECT_PROMPT_VERSION = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v1") or "v1").strip().lower()
+DEFAULT_ARCHITECT_PROMPT_VERSION = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v2") or "v2").strip().lower()
 if not DEFAULT_ARCHITECT_PROMPT_VERSION:
-    DEFAULT_ARCHITECT_PROMPT_VERSION = "v1"
+    DEFAULT_ARCHITECT_PROMPT_VERSION = "v2"
 
 PROMPT_FILE_DEFAULT = (
     Path(__file__).resolve().parents[2]
