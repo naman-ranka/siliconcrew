@@ -75,9 +75,9 @@ from src.utils.attempt_logger import log_tool_call, log_tool_result
 load_dotenv()
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts" / "architect"
-DEFAULT_ARCHITECT_PROMPT_VERSION = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v1") or "v1").strip().lower()
+DEFAULT_ARCHITECT_PROMPT_VERSION = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v2") or "v2").strip().lower()
 if not DEFAULT_ARCHITECT_PROMPT_VERSION:
-    DEFAULT_ARCHITECT_PROMPT_VERSION = "v1"
+    DEFAULT_ARCHITECT_PROMPT_VERSION = "v2"
 
 
 def _load_architect_prompt() -> tuple[str, str, str]:
