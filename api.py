@@ -167,10 +167,22 @@ def format_tool_call_for_api(tool_call: dict) -> dict:
 def format_tool_result_for_api(content: str) -> dict:
     """Format a tool result for API response."""
     status = "success"
-    if "Error" in content or "FAILED" in content or "Fail" in content:
-        status = "error"
-    elif "Success" in content or "PASSED" in content or "Pass" in content:
-        status = "success"
+
+    # Prefer structured tool statuses when the tool returned JSON.
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            parsed_status = parsed.get("status")
+            parsed_success = parsed.get("success")
+            if isinstance(parsed_status, str) and parsed_status.strip():
+                status = parsed_status.strip()
+            elif isinstance(parsed_success, bool):
+                status = "success" if parsed_success else "error"
+    except Exception:
+        if "Error" in content or "FAILED" in content or "Fail" in content:
+            status = "error"
+        elif "Success" in content or "PASSED" in content or "Pass" in content:
+            status = "success"
 
     return {
         "status": status,

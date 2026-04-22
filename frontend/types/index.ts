@@ -26,7 +26,7 @@ export interface ToolCall {
 
 export interface ToolResult {
   tool_call_id: string;
-  status: "success" | "error";
+  status: string;
   content: string;
 }
 

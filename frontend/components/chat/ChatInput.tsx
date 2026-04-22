@@ -22,7 +22,7 @@ export function ChatInput() {
 
   const handleSubmit = () => {
     if (!input.trim() || isStreaming || !currentSession) return;
-    sendMessage(input.trim());
+    sendMessage(input);
     setInput("");
   };
 
