@@ -1,4 +1,5 @@
 import type {
+  Project,
   Session,
   Message,
   FileInfo,
@@ -34,17 +35,39 @@ async function apiFetch<T>(
   return response.json();
 }
 
+// Project API
+export const projectsApi = {
+  list: () => apiFetch<Project[]>("/api/projects"),
+
+  create: (name: string) =>
+    apiFetch<Project>("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
+  delete: (projectId: string) =>
+    apiFetch<{ status: string }>(`/api/projects/${encodeURIComponent(projectId)}`, {
+      method: "DELETE",
+    }),
+};
+
 // Session API
 export const sessionsApi = {
   list: () => apiFetch<Session[]>("/api/sessions"),
 
-  create: (name: string, model: string = "gemini-3-flash-preview") =>
+  create: (name: string, model: string = "gemini-3-flash-preview", projectId?: string | null) =>
     apiFetch<Session>("/api/sessions", {
       method: "POST",
-      body: JSON.stringify({ name, model }),
+      body: JSON.stringify({ name, model, project_id: projectId ?? null }),
     }),
 
   get: (sessionId: string) => apiFetch<Session>(`/api/sessions/${encodeSessionId(sessionId)}`),
+
+  patch: (sessionId: string, projectId: string | null) =>
+    apiFetch<Session>(`/api/sessions/${encodeSessionId(sessionId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ project_id: projectId }),
+    }),
 
   delete: (sessionId: string) =>
     apiFetch<{ status: string }>(`/api/sessions/${encodeSessionId(sessionId)}`, {

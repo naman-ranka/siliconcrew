@@ -47,6 +47,8 @@ PRICING = {
     "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00},
     "gpt-5-mini": {"input": 0.30, "output": 2.50},
     "gpt-5.3-codex": {"input": 2.00, "output": 12.00},
+    "gpt-5.4": {"input": 2.00, "output": 12.00},
+    "gpt-5.4-mini": {"input": 0.30, "output": 2.50},
     "claude-sonnet-4-6": {"input": 0.30, "output": 2.50},
     "claude-opus-4-6": {"input": 2.00, "output": 12.00},
 }
@@ -59,15 +61,31 @@ session_manager = SessionManager(base_dir=WORKSPACE_DIR, db_path=DB_PATH)
 # PYDANTIC MODELS
 # =============================================================================
 
+class ProjectCreate(BaseModel):
+    name: str
+
+
+class ProjectResponse(BaseModel):
+    id: str
+    name: str
+    created_at: Optional[str] = None
+
+
 class SessionCreate(BaseModel):
     name: str
     model: str = "gemini-3-flash-preview"
+    project_id: Optional[str] = None
+
+
+class SessionPatch(BaseModel):
+    project_id: Optional[str] = None  # None = remove from project
 
 
 class SessionResponse(BaseModel):
     id: str
     name: Optional[str] = None
     model_name: Optional[str] = None
+    project_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     total_tokens: int = 0
@@ -276,6 +294,7 @@ async def list_sessions():
             id=session_id,
             name=meta.get("session_name") if meta else None,
             model_name=meta.get("model_name") if meta else None,
+            project_id=meta.get("project_id") if meta else None,
             created_at=str(meta.get("created_at")) if meta else None,
             updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
             total_tokens=meta.get("total_tokens", 0) if meta else 0,
@@ -289,13 +308,16 @@ async def list_sessions():
 async def create_session(data: SessionCreate):
     """Create a new session."""
     try:
-        session_id = session_manager.create_session(tag=data.name, model_name=data.model)
+        session_id = session_manager.create_session(
+            tag=data.name, model_name=data.model, project_id=data.project_id
+        )
         meta = session_manager.get_session_metadata(session_id)
 
         return SessionResponse(
             id=session_id,
             name=meta.get("session_name") if meta else data.name,
             model_name=data.model,
+            project_id=data.project_id,
             created_at=str(meta.get("created_at")) if meta else None,
             updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
             total_tokens=0,
@@ -318,6 +340,7 @@ async def get_session(session_id: str):
         id=session_id,
         name=meta.get("session_name"),
         model_name=meta.get("model_name"),
+        project_id=meta.get("project_id"),
         created_at=str(meta.get("created_at")),
         updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
         total_tokens=meta.get("total_tokens", 0),
@@ -334,6 +357,59 @@ async def delete_session(session_id: str):
 
     session_manager.delete_session(session_id)
     return {"status": "deleted", "session_id": session_id}
+
+
+@app.patch("/api/sessions/{session_id:path}", response_model=SessionResponse)
+async def patch_session(session_id: str, data: SessionPatch):
+    """Move a session to a different project (or remove from project)."""
+    meta = session_manager.get_session_metadata(session_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        session_manager.move_session_to_project(session_id, data.project_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    meta = session_manager.get_session_metadata(session_id)
+    return SessionResponse(
+        id=session_id,
+        name=meta.get("session_name"),
+        model_name=meta.get("model_name"),
+        project_id=meta.get("project_id"),
+        created_at=str(meta.get("created_at")),
+        updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
+        total_tokens=meta.get("total_tokens", 0),
+        total_cost=meta.get("total_cost", 0.0),
+    )
+
+
+# =============================================================================
+# PROJECT ENDPOINTS
+# =============================================================================
+
+@app.get("/api/projects", response_model=List[ProjectResponse])
+async def list_projects():
+    """List all projects."""
+    projects = session_manager.get_all_projects()
+    return [ProjectResponse(id=p["id"], name=p["name"], created_at=str(p.get("created_at") or "")) for p in projects]
+
+
+@app.post("/api/projects", response_model=ProjectResponse, status_code=201)
+async def create_project(data: ProjectCreate):
+    """Create a new project."""
+    try:
+        project = session_manager.create_project(data.name)
+        return ProjectResponse(id=project["id"], name=project["name"], created_at=str(project["created_at"]))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Delete a project (sessions are kept, unassigned)."""
+    if not session_manager.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    session_manager.delete_project(project_id)
+    return {"status": "deleted", "project_id": project_id}
 
 
 # =============================================================================
