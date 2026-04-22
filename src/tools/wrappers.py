@@ -3,6 +3,7 @@ import json
 import time
 from typing import Any
 from langchain_core.tools import tool
+from pydantic import BaseModel, Field
 from src.tools.run_linter import run_linter
 from src.tools.run_simulation import run_simulation
 from src.tools.read_waveform import read_waveform
@@ -12,6 +13,7 @@ from src.tools.synthesis_manager import (
     start_synthesis_job,
     get_synthesis_job_status,
     get_synthesis_metrics as collect_synthesis_metrics,
+    read_stage_report as collect_stage_report,
 )
 from src.tools.file_patch import apply_unified_patch
 
@@ -54,14 +56,42 @@ def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
 
     return [raw]
 
-@tool
-def write_file(filename: str, content: str) -> str:
+
+class WriteFileArgs(BaseModel):
+    filename: str = Field(
+        description="Relative filename inside the active workspace, such as 'design.v' or 'dot_product_tb.v'."
+    )
+    content: str | None = Field(
+        default=None,
+        description=(
+            "Complete file contents to write. Always include the full text of the file body, "
+            "not just a summary or filename."
+        ),
+        json_schema_extra={
+            "input_examples": [
+                {
+                    "filename": "hello.txt",
+                    "content": "line 1\nline 2\n",
+                }
+            ]
+        },
+    )
+
+
+@tool(args_schema=WriteFileArgs)
+def write_file(filename: str, content: str | None = None) -> str:
     """
     Writes content to a file in the workspace.
     Args:
         filename: Name of the file (e.g., 'design.v', 'tb.v').
         content: The text content to write.
     """
+    if content is None:
+        return (
+            "Error: Missing required argument 'content' for write_file. "
+            "Retry the tool call with both 'filename' and the complete file text in 'content'."
+        )
+
     workspace = get_workspace_path()
     if not os.path.exists(workspace):
         os.makedirs(workspace)
@@ -345,6 +375,17 @@ def get_synthesis_metrics(run_id: str = None) -> str:
     """
     workspace = get_workspace_path()
     result = collect_synthesis_metrics(workspace=workspace, run_id=run_id)
+    return json.dumps(result, indent=2)
+
+
+@tool
+def read_stage_report(stage: str, run_id: str = None) -> str:
+    """
+    Reads the main ORFS artifact for a physical-design stage.
+    Supported stages currently include floorplan, place, cts, grt, route, and finish.
+    """
+    workspace = get_workspace_path()
+    result = collect_stage_report(workspace=workspace, stage=stage, run_id=run_id)
     return json.dumps(result, indent=2)
 
 
@@ -779,6 +820,7 @@ mcp_tools = [
     get_synthesis_job,
     wait_for_synthesis,
     get_synthesis_metrics,
+    read_stage_report,
     search_logs_tool,
     schematic_tool,
     # Reporting & Metrics

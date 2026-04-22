@@ -1,9 +1,16 @@
 import json
 import os
+import shutil
 import tempfile
 
 from src.tools import wrappers
-from src.tools.synthesis_manager import get_synthesis_metrics
+from src.tools.synthesis_manager import get_synthesis_metrics, read_stage_report
+
+
+def _repo_local_tempdir(test_name: str) -> str:
+    root = os.path.join(os.path.dirname(__file__), "_tmp")
+    os.makedirs(root, exist_ok=True)
+    return tempfile.mkdtemp(prefix=f"{test_name}_", dir=root)
 
 
 def test_wait_for_synthesis_bounded_loop(monkeypatch):
@@ -67,6 +74,53 @@ def test_get_synthesis_metrics_parses_finish_and_stat_reports():
         assert metrics["metrics"]["tns_ns"] == 0.0
         assert round(metrics["metrics"]["power_uw"], 1) == 2750.0
         assert metrics["complete"] is True
+
+
+def test_read_stage_report_reads_floorplan_report():
+    workspace = _repo_local_tempdir("stage_floorplan")
+    try:
+        run_dir = os.path.join(workspace, "synth_runs", "synth_0003")
+        report_dir = os.path.join(run_dir, "orfs_reports", "sky130hd", "demo_top", "base")
+        os.makedirs(report_dir, exist_ok=True)
+
+        with open(os.path.join(workspace, "synth_runs", "LATEST"), "w", encoding="utf-8") as f:
+            f.write("synth_0003")
+        with open(os.path.join(run_dir, "run_meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"run_id": "synth_0003", "top_module": "demo_top", "platform": "sky130hd"}, f)
+        with open(os.path.join(report_dir, "2_floorplan_final.rpt"), "w", encoding="utf-8") as f:
+            f.write("floorplan summary\ncore_area 123.4\n")
+
+        report = read_stage_report(workspace=workspace, run_id="synth_0003", stage="floorplan")
+        assert report["status"] == "ok"
+        assert report["stage"] == "floorplan"
+        assert report["artifact_name"] == "2_floorplan_final.rpt"
+        assert "floorplan summary" in report["content_excerpt"]
+        assert report["content_truncated"] is False
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def test_read_stage_report_reads_place_log():
+    workspace = _repo_local_tempdir("stage_place")
+    try:
+        run_dir = os.path.join(workspace, "synth_runs", "synth_0004")
+        log_dir = os.path.join(run_dir, "orfs_logs", "sky130hd", "demo_top", "base")
+        os.makedirs(log_dir, exist_ok=True)
+
+        with open(os.path.join(workspace, "synth_runs", "LATEST"), "w", encoding="utf-8") as f:
+            f.write("synth_0004")
+        with open(os.path.join(run_dir, "run_meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"run_id": "synth_0004", "top_module": "demo_top", "platform": "sky130hd"}, f)
+        with open(os.path.join(log_dir, "3_3_place_gp.json"), "w", encoding="utf-8") as f:
+            f.write("{\"stage\":\"place\",\"overflow\":0}")
+
+        report = read_stage_report(workspace=workspace, run_id="synth_0004", stage="place")
+        assert report["status"] == "ok"
+        assert report["artifact_scope"] == "orfs_logs"
+        assert report["artifact_name"] == "3_3_place_gp.json"
+        assert "\"overflow\":0" in report["content_excerpt"]
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
 
 
 def test_run_synthesis_and_wait_combines_start_and_wait(monkeypatch):

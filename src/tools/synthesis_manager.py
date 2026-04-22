@@ -587,7 +587,21 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
     run_meta["stdcell_manifest_version"] = manifest.get("updated_at") if manifest else None
     run_meta["stdcell_files_used"] = manifest.get("files", []) if manifest else []
 
-    summary_metrics = _extract_summary_metrics(run_dir)
+    # Use the same targeted parsers as get_synthesis_metrics so that WNS/TNS/power
+    # are always correctly stored. _extract_summary_metrics uses a broad regex scan
+    # that misses the "wns max <value>" format in 6_finish.rpt (the word "max" sits
+    # between "wns" and the number), leaving wns_ns=null. Agents rely on this field.
+    finish_path = _find_report_file(run_dir, "6_finish.rpt")
+    stat_path = _find_report_file(run_dir, "synth_stat.txt")
+    finish_data = _parse_finish_report(finish_path) if finish_path else {}
+    stat_data = _parse_synth_stat(stat_path) if stat_path else {}
+    summary_metrics = {
+        "area_um2": stat_data.get("area_um2"),
+        "cell_count": stat_data.get("cell_count"),
+        "wns_ns": finish_data.get("wns_ns"),
+        "tns_ns": finish_data.get("tns_ns"),
+        "power_uw": finish_data.get("power_uw"),
+    }
     run_meta["summary_metrics"] = summary_metrics
 
     final_ok = docker_result.get("success", False) and auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
@@ -884,6 +898,108 @@ def _find_report_file(run_dir: str, name: str) -> Optional[str]:
         if name in files:
             return os.path.join(root, name)
     return None
+
+
+def _find_artifact_file(run_dir: str, subdir: str, name: str) -> Optional[str]:
+    root_dir = os.path.join(run_dir, subdir)
+    if not os.path.exists(root_dir):
+        return None
+    for root, _, files in os.walk(root_dir):
+        if name in files:
+            return os.path.join(root, name)
+    return None
+
+
+_STAGE_REPORT_CANDIDATES: Dict[str, List[tuple[str, str]]] = {
+    "floorplan": [("orfs_reports", "2_floorplan_final.rpt")],
+    "place": [("orfs_logs", "3_3_place_gp.json")],
+    "placement": [("orfs_logs", "3_3_place_gp.json")],
+    "cts": [("orfs_reports", "4_cts_final.rpt")],
+    "grt": [("orfs_reports", "congestion.rpt")],
+    "global_route": [("orfs_reports", "congestion.rpt")],
+    "route": [("orfs_reports", "5_route_drc.rpt")],
+    "finish": [("orfs_reports", "6_finish.rpt")],
+    "final": [("orfs_reports", "6_finish.rpt")],
+}
+
+
+def read_stage_report(workspace: str, stage: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    run_dir = get_run_dir(workspace, run_id)
+    requested_stage = (stage or "").strip().lower()
+    if run_dir is None:
+        return {
+            "status": "error",
+            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
+            "run_id": run_id,
+            "stage": requested_stage or stage,
+        }
+
+    if requested_stage not in _STAGE_REPORT_CANDIDATES:
+        return {
+            "status": "error",
+            "message": f"Unsupported stage '{stage}'.",
+            "supported_stages": sorted(_STAGE_REPORT_CANDIDATES.keys()),
+            "run_id": run_id,
+            "stage": requested_stage or stage,
+        }
+
+    selected_path = None
+    selected_scope = None
+    selected_name = None
+    checked = []
+    for scope, filename in _STAGE_REPORT_CANDIDATES[requested_stage]:
+        checked.append({"scope": scope, "filename": filename})
+        selected_path = _find_artifact_file(run_dir, scope, filename)
+        if selected_path:
+            selected_scope = scope
+            selected_name = filename
+            break
+
+    run_meta = _read_run_meta(run_dir)
+    resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
+    if not selected_path:
+        return {
+            "status": "error",
+            "message": f"No report artifact found for stage '{requested_stage}'.",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": requested_stage,
+            "checked_candidates": checked,
+        }
+
+    try:
+        with open(selected_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Failed to read stage artifact: {exc}",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": requested_stage,
+            "artifact_path": selected_path,
+            "artifact_scope": selected_scope,
+            "artifact_name": selected_name,
+        }
+
+    max_chars = 12000
+    excerpt = content[:max_chars]
+    return {
+        "status": "ok",
+        "run_id": resolved_run_id,
+        "top_module": run_meta.get("top_module"),
+        "platform": run_meta.get("platform"),
+        "stage": requested_stage,
+        "artifact_scope": selected_scope,
+        "artifact_name": selected_name,
+        "artifact_path": selected_path,
+        "content_excerpt": excerpt,
+        "content_truncated": len(content) > max_chars,
+        "content_length": len(content),
+        "checked_candidates": checked,
+    }
 
 
 def _parse_finish_report(path: str) -> Dict[str, Any]:
