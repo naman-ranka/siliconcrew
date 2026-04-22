@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  Project,
   Session,
   Message,
   ToolCall,
@@ -13,10 +14,17 @@ import type {
   ReportData,
   SynthesisRun,
 } from "@/types";
-import { sessionsApi, chatApi, workspaceApi } from "./api";
+import { projectsApi, sessionsApi, chatApi, workspaceApi } from "./api";
 import { generateId } from "./utils";
 
 interface AppState {
+  // Project state
+  projects: Project[];
+  loadProjects: () => Promise<void>;
+  createProject: (name: string) => Promise<Project>;
+  deleteProject: (projectId: string) => Promise<void>;
+  moveSession: (sessionId: string, projectId: string | null) => Promise<void>;
+
   // Session state
   sessions: Session[];
   currentSession: Session | null;
@@ -56,7 +64,7 @@ interface AppState {
 
   // Actions
   loadSessions: () => Promise<void>;
-  createSession: (name: string, model: string) => Promise<void>;
+  createSession: (name: string, model: string, projectId?: string | null) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
   selectSession: (session: Session | null) => Promise<void>;
 
@@ -99,6 +107,7 @@ function buildBlocks(
 
 export const useStore = create<AppState>((set, get) => ({
   // Initial state
+  projects: [],
   sessions: [],
   currentSession: null,
   sessionsLoading: false,
@@ -130,6 +139,40 @@ export const useStore = create<AppState>((set, get) => ({
   layoutFiles: [],
   schematicFiles: [],
 
+  // Project actions
+  loadProjects: async () => {
+    try {
+      const projects = await projectsApi.list();
+      set({ projects });
+    } catch {
+      // non-fatal — sidebar still works without projects
+    }
+  },
+
+  createProject: async (name: string) => {
+    const project = await projectsApi.create(name);
+    set((state) => ({ projects: [...state.projects, project] }));
+    return project;
+  },
+
+  deleteProject: async (projectId: string) => {
+    await projectsApi.delete(projectId);
+    set((state) => ({
+      projects: state.projects.filter((p) => p.id !== projectId),
+      // Unassign sessions that belonged to this project
+      sessions: state.sessions.map((s) =>
+        s.project_id === projectId ? { ...s, project_id: null } : s
+      ),
+    }));
+  },
+
+  moveSession: async (sessionId: string, projectId: string | null) => {
+    const updated = await sessionsApi.patch(sessionId, projectId);
+    set((state) => ({
+      sessions: state.sessions.map((s) => (s.id === sessionId ? updated : s)),
+    }));
+  },
+
   // Session actions
   loadSessions: async () => {
     set({ sessionsLoading: true, sessionsError: null });
@@ -150,12 +193,12 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  createSession: async (name: string, model: string) => {
+  createSession: async (name: string, model: string, projectId?: string | null) => {
     try {
       const { ws } = get();
       set({ ws: null, wsSessionId: null });
       if (ws) ws.close();
-      const session = await sessionsApi.create(name, model);
+      const session = await sessionsApi.create(name, model, projectId);
       set((state) => ({
         sessions: [session, ...state.sessions],
         currentSession: session,
