@@ -52,8 +52,10 @@ import type { Project, Session } from "@/types";
 // ---------------------------------------------------------------------------
 
 const MODELS = [
-  { value: "gemini-3-flash-preview",  label: "Gemini 3 Flash",   sub: "Google mid-tier",         icon: <Zap  className="h-3 w-3 text-yellow-500" /> },
-  { value: "gemini-3.1-pro-preview",  label: "Gemini 3.1 Pro",   sub: "Google top-tier",          icon: <Cpu  className="h-3 w-3 text-primary" /> },
+  { value: "gemini-3.1-flash",        label: "Gemini 3.1 Flash", sub: "Compat alias to Gemini 3 Flash", icon: <Zap  className="h-3 w-3 text-yellow-500" /> },
+  { value: "gemini-3-flash-preview",  label: "Gemini 3 Flash",   sub: "Google latest 3-series Flash",   icon: <Zap  className="h-3 w-3 text-yellow-400" /> },
+  { value: "gemini-3.1-flash-lite-preview", label: "Gemini 3.1 Flash-Lite", sub: "Google fastest & cheapest", icon: <Zap  className="h-3 w-3 text-lime-500" /> },
+  { value: "gemini-3.1-pro-preview",  label: "Gemini 3.1 Pro",   sub: "Google top-tier reasoning",      icon: <Cpu  className="h-3 w-3 text-primary" /> },
   { value: "gpt-5-mini",              label: "GPT-5 Mini",        sub: "OpenAI mid-tier",          icon: <Cpu  className="h-3 w-3 text-green-500" /> },
   { value: "gpt-5.3-codex",           label: "GPT-5.3 Codex",    sub: "OpenAI top-tier coding",   icon: <Cpu  className="h-3 w-3 text-emerald-500" /> },
   { value: "gpt-5.4",                 label: "GPT-5.4",           sub: "OpenAI flagship",          icon: <Cpu  className="h-3 w-3 text-emerald-400" /> },
@@ -61,6 +63,7 @@ const MODELS = [
   { value: "claude-sonnet-4-6",       label: "Claude Sonnet 4.6", sub: "Anthropic mid-tier",       icon: <Cpu  className="h-3 w-3 text-orange-500" /> },
   { value: "claude-opus-4-6",         label: "Claude Opus 4.6",   sub: "Anthropic top-tier",       icon: <Cpu  className="h-3 w-3 text-amber-500" /> },
 ];
+const MODEL_LABELS = new Map(MODELS.map((model) => [model.value, model.label]));
 
 function ModelSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
@@ -102,7 +105,7 @@ function CreateSessionDialog({ open, onOpenChange, preselectedProjectId }: Creat
   const { projects, createSession, createProject, loadProjects } = useStore();
 
   const [name, setName] = useState("");
-  const [model, setModel] = useState("gemini-3-flash-preview");
+  const [model, setModel] = useState("gemini-3.1-flash");
   const [projectMode, setProjectMode] = useState<ProjectMode>(preselectedProjectId ? "existing" : "none");
   const [selectedProjectId, setSelectedProjectId] = useState<string>(preselectedProjectId ?? "");
   const [newProjectName, setNewProjectName] = useState("");
@@ -329,7 +332,7 @@ function SessionRow({
 }) {
   const [showMoveMenu, setShowMoveMenu] = useState(false);
 
-  const modelLabel = session.model_name?.split("-").slice(1, 2).join("-") || "flash";
+  const modelLabel = MODEL_LABELS.get(session.model_name ?? "") || session.model_name || "Gemini 3 Flash";
   const isProModel = session.model_name?.includes("pro") || session.model_name?.includes("opus") || session.model_name?.includes("5.4");
 
   return (

@@ -3,21 +3,14 @@ import datetime
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from src.agents.architect import create_architect_agent
+from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name
 
-# Reuse pricing logic logic if possible, or duplicate for independence
-PRICING = {
-    "gemini-3-flash-preview": {"input": 0.30, "output": 2.50},
-    "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00},
-    "gpt-5-mini": {"input": 0.30, "output": 2.50},
-    "gpt-5.3-codex": {"input": 2.00, "output": 12.00},
-    "claude-sonnet-4-6": {"input": 0.30, "output": 2.50},
-    "claude-opus-4-6": {"input": 2.00, "output": 12.00},
-}
 
-def generate_markdown_report(session_id, db_path, model_name="gemini-3-flash-preview"):
+def generate_markdown_report(session_id, db_path, model_name=DEFAULT_MODEL):
     """
     Generates a Markdown report for a given session.
     """
+    model_name = normalize_model_name(model_name)
     
     # 1. Connect to DB to get history
     try:
@@ -103,7 +96,7 @@ def generate_markdown_report(session_id, db_path, model_name="gemini-3-flash-pre
              transcript.append(f"## ⚙️ Tool Output\n\n```\n{content[:500]}...\n```\n")
 
     # 3. Calculate Cost
-    rates = PRICING.get(model_name, PRICING["gemini-3-flash-preview"])
+    rates = PRICING.get(model_name, PRICING[DEFAULT_MODEL])
     cost = (input_tokens / 1_000_000 * rates["input"]) + (output_tokens / 1_000_000 * rates["output"])
     
     # 4. Build Report
