@@ -40,6 +40,7 @@ export function ToolCallCard({ toolCall, result, isRunning }: ToolCallCardProps)
   const [isExpanded, setIsExpanded] = useState(false);
 
   const toolLabel = toolLabelMap[toolCall.name] || toolCall.name;
+  const normalizedStatus = result?.status?.toLowerCase() ?? "";
 
   const getToolSummary = () => {
     const args = toolCall.args as Record<string, unknown>;
@@ -57,8 +58,12 @@ export function ToolCallCard({ toolCall, result, isRunning }: ToolCallCardProps)
   };
 
   const summary = getToolSummary();
-  const isError = result?.status === "error";
-  const isSuccess = result?.status === "success";
+  const isSuccess = ["success", "passed", "test_passed"].includes(normalizedStatus);
+  const isError =
+    normalizedStatus.includes("fail") ||
+    normalizedStatus.includes("error") ||
+    normalizedStatus === "compile_failed" ||
+    normalizedStatus === "sim_failed";
 
   return (
     <div className="text-xs">

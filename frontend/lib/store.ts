@@ -294,13 +294,14 @@ export const useStore = create<AppState>((set, get) => ({
   sendMessage: (content: string) => {
     const { currentSession, ws: existingWs, wsSessionId, messages } = get();
     if (!currentSession || !content.trim()) return;
+    const messageContent = content;
 
     // Add user message
     const userMessage: Message = {
       id: generateId(),
       role: "user",
-      content: content.trim(),
-      blocks: [{ type: "text", content: content.trim() }],
+      content: messageContent,
+      blocks: [{ type: "text", content: messageContent }],
       timestamp: new Date().toISOString(),
     };
 
@@ -322,10 +323,10 @@ export const useStore = create<AppState>((set, get) => ({
       socket.onopen = () => {
         // Ignore stale socket opens after session/socket replacement.
         if (get().ws !== socket) return;
-        socket.send(JSON.stringify({ message: content.trim() }));
+        socket.send(JSON.stringify({ message: messageContent }));
       };
     } else {
-      ws.send(JSON.stringify({ message: content.trim() }));
+      ws.send(JSON.stringify({ message: messageContent }));
     }
 
     // Create streaming message placeholder
