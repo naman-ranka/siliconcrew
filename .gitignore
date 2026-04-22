@@ -179,4 +179,6 @@ codex-automate/
 EEE_598_Team_9_Final_report.pdf
 
 # Local benchmark clone
-cvdp_benchmark/
+cvdp_benchmark/*
+cvdp-automate/*
+.env.docker

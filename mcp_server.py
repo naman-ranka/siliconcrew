@@ -480,7 +480,8 @@ Ready to design! What would you like to create?"""
                     "type": "object",
                     "properties": {
                         "session_name": {"type": "string", "description": "Session name (e.g., 'counter_design')"},
-                        "model_name": {"type": "string", "description": "Model name for tracking", "default": "claude-via-mcp"}
+                        "model_name": {"type": "string", "description": "Model name for tracking", "default": "claude-via-mcp"},
+                        "project_id": {"type": "string", "description": "Optional project ID to group this session under. Project must already exist."}
                     },
                     "required": ["session_name"]
                 }
@@ -582,14 +583,18 @@ Ready to design! What would you like to create?"""
         if name == "create_session_tool":
             session_name = arguments["session_name"]
             model_name = arguments.get("model_name", "claude-via-mcp")
+            project_id = arguments.get("project_id") or None
             try:
-                session_id = self.session_manager.create_session(tag=session_name, model_name=model_name)
+                session_id = self.session_manager.create_session(
+                    tag=session_name, model_name=model_name, project_id=project_id
+                )
                 self.current_session = session_id
                 workspace = self.session_manager.get_workspace_path(session_id)
                 os.environ["RTL_WORKSPACE"] = workspace
+                project_line = f"\nProject: {project_id}" if project_id else ""
                 return [TextContent(
                     type="text",
-                    text=f"✅ Created session '{session_id}'\nWorkspace: {workspace}\nThis session is now active."
+                    text=f"✅ Created session '{session_id}'\nWorkspace: {workspace}{project_line}\nThis session is now active."
                 )]
             except FileExistsError:
                 return [TextContent(type="text", text=f"❌ Session '{session_name}' already exists. Use set_active_session to switch to it.")]
