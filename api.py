@@ -23,6 +23,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, Tool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from src.agents.architect import create_architect_agent, load_system_prompt
+from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name
 from src.utils.session_manager import SessionManager
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.tools.design_report import save_design_report
@@ -40,18 +41,6 @@ WORKSPACE_DIR = os.environ.get("RTL_WORKSPACE") or os.path.join(BASE_DIR, "works
 _DATA_DIR = os.environ.get("RTL_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".siliconcrew")
 os.makedirs(_DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(_DATA_DIR, "state.db")
-
-# Pricing Constants (Per 1M Tokens)
-PRICING = {
-    "gemini-3-flash-preview": {"input": 0.30, "output": 2.50},
-    "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00},
-    "gpt-5-mini": {"input": 0.30, "output": 2.50},
-    "gpt-5.3-codex": {"input": 2.00, "output": 12.00},
-    "gpt-5.4": {"input": 2.00, "output": 12.00},
-    "gpt-5.4-mini": {"input": 0.30, "output": 2.50},
-    "claude-sonnet-4-6": {"input": 0.30, "output": 2.50},
-    "claude-opus-4-6": {"input": 2.00, "output": 12.00},
-}
 
 # Initialize Session Manager
 session_manager = SessionManager(base_dir=WORKSPACE_DIR, db_path=DB_PATH)
@@ -73,7 +62,7 @@ class ProjectResponse(BaseModel):
 
 class SessionCreate(BaseModel):
     name: str
-    model: str = "gemini-3-flash-preview"
+    model: str = DEFAULT_MODEL
     project_id: Optional[str] = None
 
 
@@ -161,7 +150,8 @@ def get_clean_content(msg) -> str:
 
 def calculate_cost(input_tokens: int, output_tokens: int, model_name: str) -> float:
     """Calculate cost based on token usage."""
-    rates = PRICING.get(model_name, PRICING["gemini-3-flash-preview"])
+    canonical_model = normalize_model_name(model_name)
+    rates = PRICING.get(canonical_model, PRICING[DEFAULT_MODEL])
     return (input_tokens / 1_000_000 * rates["input"]) + (output_tokens / 1_000_000 * rates["output"])
 
 
@@ -308,15 +298,16 @@ async def list_sessions():
 async def create_session(data: SessionCreate):
     """Create a new session."""
     try:
+        model_name = normalize_model_name(data.model)
         session_id = session_manager.create_session(
-            tag=data.name, model_name=data.model, project_id=data.project_id
+            tag=data.name, model_name=model_name, project_id=data.project_id
         )
         meta = session_manager.get_session_metadata(session_id)
 
         return SessionResponse(
             id=session_id,
             name=meta.get("session_name") if meta else data.name,
-            model_name=data.model,
+            model_name=model_name,
             project_id=data.project_id,
             created_at=str(meta.get("created_at")) if meta else None,
             updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
@@ -426,7 +417,7 @@ async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
     try:
         async with open_checkpointer(DB_PATH) as memory:
             meta = session_manager.get_session_metadata(session_id)
-            model_name = meta.get("model_name", "gemini-3-flash-preview") if meta else "gemini-3-flash-preview"
+            model_name = normalize_model_name(meta.get("model_name", DEFAULT_MODEL) if meta else DEFAULT_MODEL)
 
             agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
             config = {"configurable": {"thread_id": session_id}}
@@ -507,7 +498,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             # Initialize agent with AsyncSqliteSaver (supports async streaming/state)
             async with open_checkpointer(DB_PATH) as memory:
                 meta = session_manager.get_session_metadata(session_id)
-                model_name = meta.get("model_name", "gemini-3-flash-preview") if meta else "gemini-3-flash-preview"
+                model_name = normalize_model_name(meta.get("model_name", DEFAULT_MODEL) if meta else DEFAULT_MODEL)
 
                 agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
                 config = {"configurable": {"thread_id": session_id}, "recursion_limit": 50}

@@ -2,6 +2,8 @@ import os
 import warnings
 from typing import Literal
 
+from src.model_catalog import normalize_model_name
+
 
 Provider = Literal["gemini", "openai", "anthropic"]
 
@@ -63,6 +65,7 @@ def create_llm(model_name: str, temperature: float = 0.0):
     Create a LangChain chat model for the inferred provider.
     Uses lazy imports so optional provider deps do not affect others.
     """
+    model_name = normalize_model_name(model_name)
     provider = infer_provider_from_model(model_name)
 
     if provider == "gemini":
