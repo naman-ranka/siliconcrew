@@ -14,7 +14,7 @@ def _reset_workspace(workspace: str) -> None:
     synth_runs = os.path.join(workspace, "synth_runs")
     for name in os.listdir(synth_runs):
         path = os.path.join(synth_runs, name)
-        if name == "synth_0001":
+        if name in {"synth_0001", "LATEST"}:
             continue
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
@@ -23,6 +23,8 @@ def _reset_workspace(workspace: str) -> None:
                 os.remove(path)
             except OSError:
                 pass
+    with open(os.path.join(synth_runs, "LATEST"), "w", encoding="utf-8") as f:
+        f.write("synth_0001")
 
 
 def _wait_for_terminal(job_id: str, workspace: str) -> dict:
@@ -54,6 +56,9 @@ def test_retry_pd_job_creates_child_run_and_lineage(monkeypatch):
     def fake_run_targets(**kwargs):
         calls["targets"] = kwargs["targets"]
         calls["orfs_overrides"] = kwargs["orfs_overrides"]
+        calls["utilization"] = kwargs["utilization"]
+        calls["aspect_ratio"] = kwargs["aspect_ratio"]
+        calls["core_margin"] = kwargs["core_margin"]
         run_dir = kwargs["run_dir"]
         reports = os.path.join(run_dir, "orfs_reports", "sky130hd", "demo_top", "base")
         results = os.path.join(run_dir, "orfs_results", "sky130hd", "demo_top", "base")
@@ -81,6 +86,14 @@ def test_retry_pd_job_creates_child_run_and_lineage(monkeypatch):
 
     monkeypatch.setattr(sm, "_run_orfs_targets", fake_run_targets)
 
+    parent_meta_path = os.path.join(workspace, "synth_runs", "synth_0001", "run_meta.json")
+    with open(parent_meta_path, "r", encoding="utf-8") as f:
+        parent_meta = json.load(f)
+    original_parent_meta = dict(parent_meta)
+    parent_meta.update({"utilization": 42, "aspect_ratio": 1.5, "core_margin": 3.0})
+    with open(parent_meta_path, "w", encoding="utf-8") as f:
+        json.dump(parent_meta, f, indent=2)
+
     started = sm.retry_pd_job(
         workspace=workspace,
         source_run_id="synth_0001",
@@ -88,6 +101,9 @@ def test_retry_pd_job_creates_child_run_and_lineage(monkeypatch):
         max_stage="finish",
         orfs_overrides_json='{"CTS_BUF_DISTANCE": 100}',
     )
+    with open(parent_meta_path, "w", encoding="utf-8") as f:
+        json.dump(original_parent_meta, f, indent=2)
+
     assert started["status"] == "queued"
     assert started["mode"] == "pd_retry"
 
@@ -98,6 +114,9 @@ def test_retry_pd_job_creates_child_run_and_lineage(monkeypatch):
     assert final["stages"]["finish"]["status"] == "completed"
     assert calls["targets"] == ["do-cts", "do-grt", "do-route", "do-finish"]
     assert calls["orfs_overrides"]["CTS_BUF_DISTANCE"] == 100
+    assert calls["utilization"] == 42
+    assert calls["aspect_ratio"] == 1.5
+    assert calls["core_margin"] == 3.0
 
     run_meta = os.path.join(workspace, "synth_runs", started["run_id"], "run_meta.json")
     with open(run_meta, "r", encoding="utf-8") as f:
@@ -106,6 +125,34 @@ def test_retry_pd_job_creates_child_run_and_lineage(monkeypatch):
     assert data["parent_run_id"] == "synth_0001"
     assert data["retry_start_stage"] == "cts"
     assert data["retry_max_stage"] == "finish"
+    assert data["pd_parameters"] == {"utilization": 42, "aspect_ratio": 1.5, "core_margin": 3.0}
+
+
+def test_retry_pd_job_rejects_unsafe_orfs_overrides():
+    workspace = _fixture_workspace()
+    _reset_workspace(workspace)
+
+    bad_key = sm.retry_pd_job(
+        workspace=workspace,
+        source_run_id="synth_0001",
+        start_stage="cts",
+        max_stage="finish",
+        orfs_overrides_json='{"BAD\\nKEY": 1}',
+    )
+    bad_value = sm.retry_pd_job(
+        workspace=workspace,
+        source_run_id="synth_0001",
+        start_stage="cts",
+        max_stage="finish",
+        orfs_overrides_json='{"CTS_BUF_DISTANCE": "$(shell echo unsafe)"}',
+    )
+
+    assert bad_key["status"] == "error"
+    assert "Invalid ORFS override key" in bad_key["message"]
+    assert bad_value["status"] == "error"
+    assert "Invalid ORFS override value" in bad_value["message"]
+    synth_dirs = sorted(name for name in os.listdir(os.path.join(workspace, "synth_runs")) if name.startswith("synth_"))
+    assert synth_dirs == ["synth_0001"]
 
 
 def test_retry_pd_job_copies_root_level_spec_when_present(monkeypatch):

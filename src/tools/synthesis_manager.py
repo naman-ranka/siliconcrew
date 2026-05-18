@@ -39,10 +39,12 @@ PD_PREREQ_FILES = {
 }
 
 _JOB_LOCK = threading.Lock()
+_INDEX_LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=2)
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _POLL_CACHE: Dict[str, Dict[str, Any]] = {}
 _POLL_BACKOFF_STATE: Dict[str, Dict[str, Any]] = {}
+_ORFS_OVERRIDE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 # Prevent aggressive status polling loops from burning recursion/context.
 POLL_MIN_INTERVAL_SEC = 1.0
@@ -105,6 +107,18 @@ def _next_run_id(workspace: str) -> str:
         return "synth_0001"
     max_id = max(int(x.split("_")[1]) for x in existing)
     return f"synth_{max_id + 1:04d}"
+
+
+def _allocate_run_dir(workspace: str) -> tuple[str, str]:
+    with _JOB_LOCK:
+        while True:
+            run_id = _next_run_id(workspace)
+            run_dir = os.path.join(_runs_root(workspace), run_id)
+            try:
+                os.makedirs(run_dir, exist_ok=False)
+                return run_id, run_dir
+            except FileExistsError:
+                continue
 
 
 def _write_json(path: str, data: Dict[str, Any]) -> None:
@@ -438,6 +452,14 @@ def _find_stage_artifacts(run_dir: str) -> Dict[str, Dict[str, str]]:
     return found
 
 
+def _stage_artifacts_indicate_completion(stage: str, artifacts: Dict[str, str]) -> bool:
+    if not artifacts:
+        return False
+    if stage == "route":
+        return "odb" in artifacts or "sdc" in artifacts
+    return True
+
+
 def _refresh_stage_metadata(run_dir: str, run_meta: Dict[str, Any], terminal_status: Optional[str] = None) -> Dict[str, Any]:
     stages = run_meta.get("stages")
     if not isinstance(stages, dict):
@@ -456,18 +478,20 @@ def _refresh_stage_metadata(run_dir: str, run_meta: Dict[str, Any], terminal_sta
         else:
             artifacts = discovered.get(stage, {})
             if artifacts:
-                stage_meta["status"] = "completed"
                 stage_meta["artifacts"] = artifacts
+            if _stage_artifacts_indicate_completion(stage, artifacts):
+                stage_meta["status"] = "completed"
             elif terminal_status == "failed" and run_meta.get("current_stage") == stage:
                 stage_meta["status"] = "failed"
         stages[stage] = stage_meta
 
-    # If later physical-design stages completed, synthesis necessarily completed too,
-    # even when explicit 1_synth.* artifacts were not preserved in the mounted run dir.
-    downstream_completed = any(
-        stages.get(stage, {}).get("status") == "completed"
-        for stage in ["floorplan", "place", "cts", "grt", "route", "finish"]
-    )
+    # If a later stage completed, earlier stages necessarily completed too, even
+    # when intermediate artifacts were not preserved in the mounted run dir.
+    for idx, stage in enumerate(PD_RETRYABLE_STAGES):
+        if any(stages.get(later, {}).get("status") == "completed" for later in PD_RETRYABLE_STAGES[idx + 1 :]):
+            stages[stage]["status"] = "completed"
+
+    downstream_completed = any(stages.get(stage, {}).get("status") == "completed" for stage in PD_RETRYABLE_STAGES)
     if downstream_completed and stages["synth"].get("status") != "completed":
         stages["synth"]["status"] = "completed"
 
@@ -481,6 +505,67 @@ def _refresh_stage_metadata(run_dir: str, run_meta: Dict[str, Any], terminal_sta
 
     run_meta["stages"] = stages
     return run_meta
+
+
+def _load_run_meta_with_inferred_stages(run_dir: str) -> Dict[str, Any]:
+    run_meta = _read_run_meta(run_dir)
+    stages = run_meta.get("stages")
+    if isinstance(stages, dict) and stages:
+        return run_meta
+
+    terminal_status = run_meta.get("status")
+    if terminal_status not in {"completed", "failed"}:
+        terminal_status = None
+    return _refresh_stage_metadata(run_dir, run_meta, terminal_status=terminal_status)
+
+
+def _read_config_mk_pd_parameters(run_dir: str) -> Dict[str, Any]:
+    config_path = os.path.join(run_dir, "config.mk")
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception:
+        return {}
+
+    values: Dict[str, Any] = {}
+    for key, out_key, cast in [
+        ("CORE_UTILIZATION", "utilization", int),
+        ("CORE_ASPECT_RATIO", "aspect_ratio", float),
+        ("CORE_MARGIN", "core_margin", float),
+    ]:
+        match = re.search(rf"^\s*export\s+{key}\s*=\s*([^\s#]+)", text, re.MULTILINE)
+        if not match:
+            continue
+        try:
+            values[out_key] = cast(match.group(1))
+        except Exception:
+            pass
+    return values
+
+
+def _pd_parameters_from_run(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, Any]:
+    config_values = _read_config_mk_pd_parameters(run_dir)
+    nested = run_meta.get("pd_parameters") if isinstance(run_meta.get("pd_parameters"), dict) else {}
+
+    def _pick(name: str, default: Any, cast: Any) -> Any:
+        for source in (run_meta, nested, config_values):
+            value = source.get(name)
+            if value is None:
+                continue
+            try:
+                return cast(value)
+            except Exception:
+                continue
+        return default
+
+    utilization = _pick("utilization", 5, int)
+    return {
+        "utilization": max(1, min(100, utilization)),
+        "aspect_ratio": _pick("aspect_ratio", 1.0, float),
+        "core_margin": _pick("core_margin", 2.0, float),
+    }
 
 
 def _find_netlist(run_dir: str, top_module: str) -> Optional[str]:
@@ -669,7 +754,23 @@ def _parse_orfs_overrides(orfs_overrides_json: Optional[str]) -> Dict[str, Any]:
         raise ValueError(f"Invalid orfs_overrides_json: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("orfs_overrides_json must decode to a JSON object.")
-    return {str(k): v for k, v in parsed.items()}
+
+    normalized: Dict[str, Any] = {}
+    for raw_key, value in parsed.items():
+        key = str(raw_key)
+        if not _ORFS_OVERRIDE_KEY_RE.match(key):
+            raise ValueError(
+                f"Invalid ORFS override key '{key}'. Keys must match ^[A-Z][A-Z0-9_]*$."
+            )
+        if value is None or isinstance(value, (dict, list)):
+            raise ValueError(f"Invalid ORFS override value for '{key}'. Use a scalar string/number/bool.")
+        text = str(value)
+        if any(ch in text for ch in ["\n", "\r", "\x00", "$", "`"]):
+            raise ValueError(
+                f"Invalid ORFS override value for '{key}'. Newlines, NUL, '$', and backticks are not allowed."
+            )
+        normalized[key] = value
+    return normalized
 
 
 def _copy_retry_inputs(parent_run_dir: str, child_run_dir: str, parent_meta: Optional[Dict[str, Any]] = None) -> tuple[List[str], Optional[str]]:
@@ -728,10 +829,8 @@ def _copy_retry_constraints(parent_run_dir: str, child_run_dir: str) -> None:
         shutil.copy2(parent_constraints, os.path.join(child_run_dir, "constraints.sdc"))
 
 
-def _copy_retry_prerequisites(parent_run_dir: str, child_run_dir: str, start_stage: str) -> Dict[str, str]:
-    parent_results = os.path.join(parent_run_dir, "orfs_results")
-    child_results = _ensure_dir(os.path.join(child_run_dir, "orfs_results"))
-    copied: Dict[str, str] = {}
+def _validate_retry_prerequisites(parent_run_dir: str, start_stage: str) -> Dict[str, str]:
+    found: Dict[str, str] = {}
     missing: List[str] = []
 
     for filename, artifact_key in PD_PREREQ_FILES[start_stage]:
@@ -739,16 +838,27 @@ def _copy_retry_prerequisites(parent_run_dir: str, child_run_dir: str, start_sta
         if not src:
             missing.append(filename)
             continue
+        found[artifact_key] = src
+
+    if missing:
+        raise FileNotFoundError(
+            f"Missing prerequisite artifacts for retry stage '{start_stage}': {', '.join(missing)}"
+        )
+    return found
+
+
+def _copy_retry_prerequisites(parent_run_dir: str, child_run_dir: str, start_stage: str) -> Dict[str, str]:
+    parent_results = os.path.join(parent_run_dir, "orfs_results")
+    child_results = _ensure_dir(os.path.join(child_run_dir, "orfs_results"))
+    copied: Dict[str, str] = {}
+
+    for artifact_key, src in _validate_retry_prerequisites(parent_run_dir, start_stage).items():
         rel = os.path.relpath(src, parent_results)
         dst = os.path.join(child_results, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(src, dst)
         copied[artifact_key] = dst
 
-    if missing:
-        raise FileNotFoundError(
-            f"Missing prerequisite artifacts for retry stage '{start_stage}': {', '.join(missing)}"
-        )
     return copied
 
 
@@ -803,6 +913,14 @@ def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, 
         "clock_period_ns": parent_meta.get("clock_period_ns"),
         "clock_source": parent_meta.get("clock_source"),
         "constraints_mode": parent_meta.get("constraints_mode", "auto"),
+        "utilization": args["utilization"],
+        "aspect_ratio": args["aspect_ratio"],
+        "core_margin": args["core_margin"],
+        "pd_parameters": {
+            "utilization": args["utilization"],
+            "aspect_ratio": args["aspect_ratio"],
+            "core_margin": args["core_margin"],
+        },
         "auto_checks": asdict(auto_checks),
         "check_notes": f"Retrying from stage '{args['start_stage']}' through '{args['max_stage']}'.",
         "stages": stages,
@@ -875,15 +993,16 @@ def _persist_run_meta(run_dir: str, meta: Dict[str, Any]) -> None:
 
 
 def _append_index(workspace: str, run_id: str, job_id: str, status: str) -> None:
-    index = _load_index(workspace)
-    index["runs"] = [x for x in index["runs"] if x.get("run_id") != run_id]
-    index["jobs"] = [x for x in index["jobs"] if x.get("job_id") != job_id]
-    now = _now_iso()
-    index["runs"].append({"run_id": run_id, "status": status, "updated_at": now})
-    index["jobs"].append({"job_id": job_id, "run_id": run_id, "status": status, "updated_at": now})
-    _save_index(workspace, index)
-    with open(_latest_path(workspace), "w", encoding="utf-8") as f:
-        f.write(run_id)
+    with _INDEX_LOCK:
+        index = _load_index(workspace)
+        index["runs"] = [x for x in index["runs"] if x.get("run_id") != run_id]
+        index["jobs"] = [x for x in index["jobs"] if x.get("job_id") != job_id]
+        now = _now_iso()
+        index["runs"].append({"run_id": run_id, "status": status, "updated_at": now})
+        index["jobs"].append({"job_id": job_id, "run_id": run_id, "status": status, "updated_at": now})
+        _save_index(workspace, index)
+        with open(_latest_path(workspace), "w", encoding="utf-8") as f:
+            f.write(run_id)
 
 
 def _load_stdcell_manifest(workspace: str, platform: str) -> Dict[str, Any]:
@@ -930,6 +1049,14 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "clock_period_ns": constraints.get("clock_period_ns"),
         "clock_source": constraints.get("clock_source"),
         "constraints_mode": args.get("constraints_mode", "auto"),
+        "utilization": args["utilization"],
+        "aspect_ratio": args["aspect_ratio"],
+        "core_margin": args["core_margin"],
+        "pd_parameters": {
+            "utilization": args["utilization"],
+            "aspect_ratio": args["aspect_ratio"],
+            "core_margin": args["core_margin"],
+        },
         "auto_checks": asdict(auto_checks),
         "check_notes": constraints["note"],
         "stages": _init_stage_metadata(),
@@ -1038,8 +1165,7 @@ def start_synthesis_job(
     constraints_mode: str = "auto",
 ) -> Dict[str, Any]:
     _ensure_dir(workspace)
-    run_id = _next_run_id(workspace)
-    run_dir = _ensure_dir(os.path.join(_runs_root(workspace), run_id))
+    run_id, run_dir = _allocate_run_dir(workspace)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
 
     # Enforce global safety cap so synthesis jobs do not run unbounded.
@@ -1126,11 +1252,15 @@ def retry_pd_job(
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
 
-    run_id = _next_run_id(workspace)
-    run_dir = _ensure_dir(os.path.join(_runs_root(workspace), run_id))
+    try:
+        _validate_retry_prerequisites(parent_run_dir, start_stage)
+    except FileNotFoundError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    pd_parameters = _pd_parameters_from_run(parent_run_dir, parent_meta)
+    run_id, run_dir = _allocate_run_dir(workspace)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
     timeout_sec = max(60, min(int(timeout), SYNTH_HARD_TIMEOUT_SEC))
-
     args = {
         "run_id": run_id,
         "source_run_id": source_run_id,
@@ -1138,19 +1268,12 @@ def retry_pd_job(
         "max_stage": max_stage,
         "top_module": top_module,
         "platform": platform,
-        "utilization": int(parent_meta.get("summary_metrics", {}).get("utilization_pct", 5) or 5),
-        "aspect_ratio": float(parent_meta.get("aspect_ratio", 1.0) or 1.0),
-        "core_margin": float(parent_meta.get("core_margin", 2.0) or 2.0),
+        "utilization": pd_parameters["utilization"],
+        "aspect_ratio": pd_parameters["aspect_ratio"],
+        "core_margin": pd_parameters["core_margin"],
         "timeout": timeout_sec,
         "orfs_overrides": orfs_overrides,
     }
-
-    try:
-        _copy_retry_prerequisites(parent_run_dir, run_dir, start_stage)
-    except FileNotFoundError as exc:
-        return {"status": "error", "message": str(exc)}
-    else:
-        shutil.rmtree(os.path.join(run_dir, "orfs_results"), ignore_errors=True)
 
     with _JOB_LOCK:
         future = _EXECUTOR.submit(_retry_pd_worker, job_id, workspace, run_dir, args)
@@ -1457,7 +1580,7 @@ def read_stage_report(workspace: str, stage: str, run_id: Optional[str] = None) 
             selected_name = filename
             break
 
-    run_meta = _read_run_meta(run_dir)
+    run_meta = _load_run_meta_with_inferred_stages(run_dir)
     resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
     if not selected_path:
         return {
@@ -1515,7 +1638,7 @@ def get_route_drc_summary(workspace: str, run_id: Optional[str] = None) -> Dict[
         }
 
     report_path = _find_report_file(run_dir, "5_route_drc.rpt")
-    run_meta = _read_run_meta(run_dir)
+    run_meta = _load_run_meta_with_inferred_stages(run_dir)
     resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
     if not report_path:
         return {
@@ -1549,20 +1672,28 @@ def get_route_drc_summary(workspace: str, run_id: Optional[str] = None) -> Dict[
             unique_entries.append(entry)
             seen.add(entry)
 
-    clean = len(nonempty) == 0
+    route_stage = run_meta.get("stages", {}).get("route", {})
+    route_completed = route_stage.get("status") == "completed"
+    clean = len(nonempty) == 0 and route_completed
+    notes = []
+    if len(nonempty) == 0 and route_completed:
+        notes.append("Empty 5_route_drc.rpt with completed route stage indicates no final route DRC entries.")
+    elif len(nonempty) == 0:
+        notes.append("Empty 5_route_drc.rpt is not treated as clean because route stage is not completed.")
     return {
         "status": "ok",
         "run_id": resolved_run_id,
         "top_module": run_meta.get("top_module"),
         "platform": run_meta.get("platform"),
         "stage": "route",
+        "route_stage_status": route_stage.get("status"),
         "report_path": report_path,
         "line_count": len(lines),
         "violation_count": len(nonempty),
         "unique_violation_count": len(unique_entries),
         "clean": clean,
         "sample_violations": unique_entries[:20],
-        "notes": ["Empty 5_route_drc.rpt indicates no final route DRC entries."] if clean else [],
+        "notes": notes,
     }
 
 
@@ -1577,7 +1708,7 @@ def get_cts_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, A
         }
 
     report_path = _find_report_file(run_dir, "4_cts_final.rpt")
-    run_meta = _read_run_meta(run_dir)
+    run_meta = _load_run_meta_with_inferred_stages(run_dir)
     resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
     if not report_path:
         return {
@@ -1668,7 +1799,7 @@ def get_congestion_summary(workspace: str, run_id: Optional[str] = None) -> Dict
             "stage": "grt",
         }
 
-    run_meta = _read_run_meta(run_dir)
+    run_meta = _load_run_meta_with_inferred_stages(run_dir)
     resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
 
     artifact_path = _find_artifact_file(run_dir, "orfs_reports", "congestion.rpt")
@@ -2000,7 +2131,7 @@ def get_stage_status(workspace: str, run_id: Optional[str] = None) -> Dict[str, 
             "run_id": run_id,
         }
 
-    run_meta = _read_run_meta(run_dir)
+    run_meta = _load_run_meta_with_inferred_stages(run_dir)
     resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
     stages = run_meta.get("stages", {})
     completed = [name for name, item in stages.items() if item.get("status") == "completed"]
