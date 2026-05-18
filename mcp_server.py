@@ -58,10 +58,15 @@ from src.tools.wrappers import (
     cocotb_tool,
     sby_tool,
     start_synthesis,
+    retry_pd,
     get_synthesis_job,
     wait_for_synthesis,
     get_synthesis_metrics,
     read_stage_report,
+    get_route_drc_summary,
+    get_cts_summary,
+    get_congestion_summary,
+    get_stage_status,
     search_logs_tool,
     schematic_tool,
     save_metrics_tool,
@@ -112,7 +117,7 @@ TOOL_CATEGORIES = {
         "waveform_tool", "cocotb_tool", "sby_tool"
     ],
     "synthesis": [
-        "start_synthesis", "get_synthesis_job", "wait_for_synthesis", "get_synthesis_metrics", "read_stage_report", "search_logs_tool", "schematic_tool"
+        "start_synthesis", "retry_pd", "get_synthesis_job", "wait_for_synthesis", "get_synthesis_metrics", "read_stage_report", "get_route_drc_summary", "get_cts_summary", "get_congestion_summary", "get_stage_status", "search_logs_tool", "schematic_tool"
     ],
     "editing": [
         "apply_patch_tool", "edit_file_tool", "load_yaml_spec_file"
@@ -743,10 +748,15 @@ Ready to design! What would you like to create?"""
             "cocotb_tool": cocotb_tool,
             "sby_tool": sby_tool,
             "start_synthesis": start_synthesis,
+            "retry_pd": retry_pd,
             "get_synthesis_job": get_synthesis_job,
             "wait_for_synthesis": wait_for_synthesis,
             "get_synthesis_metrics": get_synthesis_metrics,
             "read_stage_report": read_stage_report,
+            "get_route_drc_summary": get_route_drc_summary,
+            "get_cts_summary": get_cts_summary,
+            "get_congestion_summary": get_congestion_summary,
+            "get_stage_status": get_stage_status,
             "search_logs_tool": search_logs_tool,
             "schematic_tool": schematic_tool,
             "save_metrics_tool": save_metrics_tool,
