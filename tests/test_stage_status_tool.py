@@ -70,6 +70,29 @@ def test_get_stage_status_reads_stage_metadata():
     assert result["running_stages"] == []
 
 
+def test_get_stage_status_infers_missing_stage_metadata(tmp_path):
+    workspace = str(tmp_path)
+    run_dir = os.path.join(workspace, "synth_runs", "synth_0009")
+    reports = os.path.join(run_dir, "orfs_reports", "sky130hd", "legacy_top", "base")
+    results = os.path.join(run_dir, "orfs_results", "sky130hd", "legacy_top", "base")
+    os.makedirs(reports, exist_ok=True)
+    os.makedirs(results, exist_ok=True)
+    _write_file(os.path.join(workspace, "synth_runs", "LATEST"), "synth_0009")
+    _write_file(
+        os.path.join(run_dir, "run_meta.json"),
+        json.dumps({"run_id": "synth_0009", "status": "completed", "top_module": "legacy_top", "platform": "sky130hd"}),
+    )
+    _write_file(os.path.join(reports, "6_finish.rpt"), "wns max 0.01\n")
+    _write_file(os.path.join(results, "6_final.v"), "module legacy_top(input clk, output y); endmodule")
+
+    result = get_stage_status(workspace=workspace, run_id="synth_0009")
+
+    assert result["status"] == "ok"
+    assert result["stage_count"] > 0
+    assert "finish" in result["completed_stages"]
+    assert result["current_stage"] == "finish"
+
+
 def test_get_stage_status_from_runtime_job(monkeypatch):
     workspace = _runtime_workspace()
     _reset_runtime_workspace(workspace)

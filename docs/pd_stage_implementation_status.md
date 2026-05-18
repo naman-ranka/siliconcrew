@@ -413,6 +413,7 @@ tests/test_stage_metadata_runtime.py
 tests/test_stage_status_tool.py
 tests/test_retry_pd_tool.py
 tests/test_compare_pd_runs_tool.py
+tests/test_synthesis_manager_hardening.py
 ```
 
 MCP visibility updated in:
@@ -439,6 +440,7 @@ pytest tests/test_congestion_summary_tool.py -q
 pytest tests/test_stage_metadata_runtime.py -q
 pytest tests/test_stage_status_tool.py -q
 pytest tests/test_retry_pd_tool.py -q
+pytest tests/test_synthesis_manager_hardening.py -q
 pytest tests/test_poll_wait_and_mcp_visibility.py::test_mcp_does_not_expose_sleep_tool -q
 ```
 
@@ -454,6 +456,35 @@ retry_pd error path
 retry_pd success path with stubbed ORFS target runner
 ```
 
+## Hardening Added After Review
+
+The following correctness fixes were added after reviewing the first implementation:
+
+```text
+PD parameter preservation:
+  start_synthesis now persists utilization/aspect_ratio/core_margin into run_meta
+  retry_pd recovers those parent values instead of falling back through summary_metrics
+
+Run allocation safety:
+  run-id allocation and run directory creation are serialized
+  index.json updates are serialized
+
+Route DRC safety:
+  an empty 5_route_drc.rpt is clean only when route stage completion is established
+  empty incomplete reports are not reported as clean
+
+ORFS override safety:
+  override keys must match ^[A-Z][A-Z0-9_]*$
+  values must be scalar and cannot contain newlines, NUL, '$', or backticks
+
+Retry prerequisites:
+  retry_pd validates prerequisite artifacts without copying into the child run
+  worker performs the actual copy once
+
+Legacy metadata:
+  get_stage_status infers stage metadata from existing ORFS artifacts for old runs
+```
+
 ## Current Limitations
 
 ### Parent-child QoR comparison is a read tool, not persisted metadata
@@ -462,7 +493,7 @@ retry_pd success path with stubbed ORFS target runner
 
 It is not yet automatically persisted into child `run_meta.json`.
 
-### ORFS overrides are generic
+### ORFS overrides are generic but validated
 
 `orfs_overrides_json` is flexible, but it relies on the agent or user knowing valid ORFS variable names.
 
