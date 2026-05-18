@@ -166,6 +166,45 @@ stage_count
 elapsed_sec
 ```
 
+### `compare_pd_runs`
+
+Compares a PD retry child run against its parent.
+
+If `parent_run_id` is omitted, the tool infers it from child retry metadata:
+
+```text
+parent_run_id
+source_run_id
+```
+
+Returns:
+
+```text
+parent_run_id
+child_run_id
+lineage
+verdict
+signoff_clean
+timing_closed
+route_clean
+improved_metrics
+regressed_metrics
+comparisons
+route_drc_comparison
+congestion_comparison
+```
+
+Current verdict values:
+
+```text
+closed
+closed_with_tradeoffs
+improved
+mixed
+regressed
+neutral
+```
+
 ### `retry_pd`
 
 Creates a checkpoint-based child retry run.
@@ -373,6 +412,7 @@ tests/test_congestion_summary_tool.py
 tests/test_stage_metadata_runtime.py
 tests/test_stage_status_tool.py
 tests/test_retry_pd_tool.py
+tests/test_compare_pd_runs_tool.py
 ```
 
 MCP visibility updated in:
@@ -416,20 +456,11 @@ retry_pd success path with stubbed ORFS target runner
 
 ## Current Limitations
 
-### No automatic parent-child QoR comparison yet
+### Parent-child QoR comparison is a read tool, not persisted metadata
 
-The agent can inspect parent and child runs manually, but there is not yet a structured comparison object persisted in the child metadata.
+`compare_pd_runs` now provides a structured comparison object on demand.
 
-Needed fields:
-
-```text
-parent_run_id
-child_run_id
-cts_delta
-congestion_delta
-drc_delta
-finish_metric_delta
-```
+It is not yet automatically persisted into child `run_meta.json`.
 
 ### ORFS overrides are generic
 
@@ -467,17 +498,13 @@ Richer reports such as detailed skew histograms or top critical path endpoints m
 
 ## Recommended Future Plan
 
-### 1. Parent-child QoR comparison
+### 1. Persist parent-child QoR comparison in retry metadata
 
-Add a tool:
+`compare_pd_runs(child_run_id, parent_run_id=None)` exists as an on-demand tool.
 
-```text
-compare_pd_runs(parent_run_id, child_run_id)
-```
+Next step is optional persistence into retry child metadata after completion.
 
-or persist comparison automatically in retry child metadata.
-
-Initial comparison fields:
+Useful persisted fields:
 
 ```text
 CTS:

@@ -52,6 +52,7 @@ def test_mcp_does_not_expose_sleep_tool():
         assert "get_route_drc_summary" in names
         assert "get_cts_summary" in names
         assert "get_congestion_summary" in names
+        assert "compare_pd_runs" in names
         assert "get_stage_status" in names
         assert "retry_pd" in names
     finally:
