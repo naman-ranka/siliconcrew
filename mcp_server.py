@@ -66,6 +66,7 @@ from src.tools.wrappers import (
     get_route_drc_summary,
     get_cts_summary,
     get_congestion_summary,
+    compare_pd_runs,
     get_stage_status,
     search_logs_tool,
     schematic_tool,
@@ -117,7 +118,7 @@ TOOL_CATEGORIES = {
         "waveform_tool", "cocotb_tool", "sby_tool"
     ],
     "synthesis": [
-        "start_synthesis", "retry_pd", "get_synthesis_job", "wait_for_synthesis", "get_synthesis_metrics", "read_stage_report", "get_route_drc_summary", "get_cts_summary", "get_congestion_summary", "get_stage_status", "search_logs_tool", "schematic_tool"
+        "start_synthesis", "retry_pd", "get_synthesis_job", "wait_for_synthesis", "get_synthesis_metrics", "read_stage_report", "get_route_drc_summary", "get_cts_summary", "get_congestion_summary", "compare_pd_runs", "get_stage_status", "search_logs_tool", "schematic_tool"
     ],
     "editing": [
         "apply_patch_tool", "edit_file_tool", "load_yaml_spec_file"
@@ -532,7 +533,7 @@ Ready to design! What would you like to create?"""
                         "mode": {
                             "type": "string",
                             "enum": ["all", "essential", "custom"],
-                            "description": "Filter mode: 'all' (23 tools), 'essential' (7 core tools), 'custom' (specify categories/tools)"
+                            "description": "Filter mode: 'all', 'essential' (7 core tools), or 'custom' (specify categories/tools)"
                         },
                         "custom_filter": {
                             "type": "array",
@@ -756,6 +757,7 @@ Ready to design! What would you like to create?"""
             "get_route_drc_summary": get_route_drc_summary,
             "get_cts_summary": get_cts_summary,
             "get_congestion_summary": get_congestion_summary,
+            "compare_pd_runs": compare_pd_runs,
             "get_stage_status": get_stage_status,
             "search_logs_tool": search_logs_tool,
             "schematic_tool": schematic_tool,

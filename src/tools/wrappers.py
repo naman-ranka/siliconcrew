@@ -18,6 +18,7 @@ from src.tools.synthesis_manager import (
     get_route_drc_summary as collect_route_drc_summary,
     get_cts_summary as collect_cts_summary,
     get_congestion_summary as collect_congestion_summary,
+    compare_pd_runs as collect_pd_run_comparison,
     get_stage_status as collect_stage_status,
 )
 from src.tools.file_patch import apply_unified_patch
@@ -449,6 +450,21 @@ def get_congestion_summary(run_id: str = None) -> str:
     """
     workspace = get_workspace_path()
     result = collect_congestion_summary(workspace=workspace, run_id=run_id)
+    return json.dumps(result, indent=2)
+
+
+@tool
+def compare_pd_runs(child_run_id: str, parent_run_id: str = None) -> str:
+    """
+    Compares a PD retry child run against its parent.
+    If parent_run_id is omitted, uses the child run lineage metadata when available.
+    """
+    workspace = get_workspace_path()
+    result = collect_pd_run_comparison(
+        workspace=workspace,
+        child_run_id=child_run_id,
+        parent_run_id=parent_run_id,
+    )
     return json.dumps(result, indent=2)
 
 
@@ -899,6 +915,7 @@ mcp_tools = [
     get_route_drc_summary,
     get_cts_summary,
     get_congestion_summary,
+    compare_pd_runs,
     get_stage_status,
     search_logs_tool,
     schematic_tool,

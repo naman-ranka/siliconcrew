@@ -17,6 +17,7 @@ def _runtime_workspace() -> str:
 
 def _reset_runtime_workspace(workspace: str) -> None:
     synth_runs = os.path.join(workspace, "synth_runs")
+    os.makedirs(synth_runs, exist_ok=True)
     for name in os.listdir(synth_runs):
         path = os.path.join(synth_runs, name)
         if os.path.isdir(path):

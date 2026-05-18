@@ -1777,6 +1777,220 @@ def get_congestion_summary(workspace: str, run_id: Optional[str] = None) -> Dict
     }
 
 
+def _numeric_comparison(parent_value: Any, child_value: Any, better_when: str) -> Dict[str, Any]:
+    out = {
+        "parent": parent_value,
+        "child": child_value,
+        "delta": None,
+        "percent_delta": None,
+        "classification": "missing",
+        "better_when": better_when,
+    }
+    if not isinstance(parent_value, (int, float)) or not isinstance(child_value, (int, float)):
+        return out
+
+    delta = child_value - parent_value
+    out["delta"] = delta
+    if parent_value != 0:
+        out["percent_delta"] = (delta / abs(parent_value)) * 100.0
+
+    if abs(delta) < 1e-12:
+        out["classification"] = "unchanged"
+    elif better_when == "higher":
+        out["classification"] = "improved" if delta > 0 else "regressed"
+    elif better_when == "lower":
+        out["classification"] = "improved" if delta < 0 else "regressed"
+    else:
+        out["classification"] = "unknown"
+    return out
+
+
+def _violation_total(violations: Dict[str, Any]) -> Optional[int]:
+    if not isinstance(violations, dict):
+        return None
+    values = [v for v in violations.values() if isinstance(v, int)]
+    if not values:
+        return None
+    return sum(values)
+
+
+def compare_pd_runs(
+    workspace: str,
+    child_run_id: str,
+    parent_run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    child_dir = get_run_dir(workspace, child_run_id)
+    if child_dir is None:
+        return {
+            "status": "error",
+            "message": f"Child run '{child_run_id}' not found.",
+            "child_run_id": child_run_id,
+            "parent_run_id": parent_run_id,
+        }
+
+    child_meta = _read_run_meta(child_dir)
+    resolved_child_id = child_meta.get("run_id") or os.path.basename(child_dir)
+    resolved_parent_id = parent_run_id or child_meta.get("parent_run_id") or child_meta.get("source_run_id")
+    if not resolved_parent_id:
+        return {
+            "status": "error",
+            "message": "parent_run_id is required when the child run has no parent_run_id/source_run_id metadata.",
+            "child_run_id": resolved_child_id,
+            "parent_run_id": parent_run_id,
+        }
+
+    parent_dir = get_run_dir(workspace, resolved_parent_id)
+    if parent_dir is None:
+        return {
+            "status": "error",
+            "message": f"Parent run '{resolved_parent_id}' not found.",
+            "child_run_id": resolved_child_id,
+            "parent_run_id": resolved_parent_id,
+        }
+
+    parent_meta = _read_run_meta(parent_dir)
+    parent_metrics = get_synthesis_metrics(workspace=workspace, run_id=resolved_parent_id)
+    child_metrics = get_synthesis_metrics(workspace=workspace, run_id=resolved_child_id)
+    if parent_metrics.get("status") != "ok" or child_metrics.get("status") != "ok":
+        return {
+            "status": "error",
+            "message": "Unable to read metrics for one or both runs.",
+            "parent_run_id": resolved_parent_id,
+            "child_run_id": resolved_child_id,
+            "parent_metrics_status": parent_metrics.get("status"),
+            "child_metrics_status": child_metrics.get("status"),
+        }
+
+    parent_values = parent_metrics.get("metrics", {})
+    child_values = child_metrics.get("metrics", {})
+    metric_preferences = {
+        "wns_ns": "higher",
+        "tns_ns": "higher",
+        "area_um2": "lower",
+        "cell_count": "lower",
+        "power_uw": "lower",
+    }
+    comparisons = {
+        name: _numeric_comparison(parent_values.get(name), child_values.get(name), better_when)
+        for name, better_when in metric_preferences.items()
+    }
+
+    parent_violation_total = _violation_total(parent_metrics.get("violations", {}))
+    child_violation_total = _violation_total(child_metrics.get("violations", {}))
+    comparisons["timing_violation_total"] = _numeric_comparison(
+        parent_violation_total,
+        child_violation_total,
+        "lower",
+    )
+
+    parent_drc = get_route_drc_summary(workspace=workspace, run_id=resolved_parent_id)
+    child_drc = get_route_drc_summary(workspace=workspace, run_id=resolved_child_id)
+    route_drc_comparison = None
+    if parent_drc.get("status") == "ok" and child_drc.get("status") == "ok":
+        route_drc_comparison = {
+            "violation_count": _numeric_comparison(
+                parent_drc.get("violation_count"),
+                child_drc.get("violation_count"),
+                "lower",
+            ),
+            "parent_clean": parent_drc.get("clean"),
+            "child_clean": child_drc.get("clean"),
+        }
+
+    parent_congestion = get_congestion_summary(workspace=workspace, run_id=resolved_parent_id)
+    child_congestion = get_congestion_summary(workspace=workspace, run_id=resolved_child_id)
+    congestion_comparison = None
+    if parent_congestion.get("status") == "ok" and child_congestion.get("status") == "ok":
+        parent_total = parent_congestion.get("total") or {}
+        child_total = child_congestion.get("total") or {}
+        congestion_comparison = {
+            "total_overflow": _numeric_comparison(
+                parent_total.get("total_overflow"),
+                child_total.get("total_overflow"),
+                "lower",
+            ),
+            "usage_pct": _numeric_comparison(
+                parent_total.get("usage_pct"),
+                child_total.get("usage_pct"),
+                "lower",
+            ),
+            "wirelength_um": _numeric_comparison(
+                parent_congestion.get("wirelength_um"),
+                child_congestion.get("wirelength_um"),
+                "lower",
+            ),
+            "parent_congested_layers": parent_congestion.get("congested_layers", []),
+            "child_congested_layers": child_congestion.get("congested_layers", []),
+        }
+
+    improved = [name for name, item in comparisons.items() if item.get("classification") == "improved"]
+    regressed = [name for name, item in comparisons.items() if item.get("classification") == "regressed"]
+    if route_drc_comparison:
+        cls = route_drc_comparison["violation_count"].get("classification")
+        if cls == "improved":
+            improved.append("route_drc_violation_count")
+        elif cls == "regressed":
+            regressed.append("route_drc_violation_count")
+    if congestion_comparison:
+        cls = congestion_comparison["total_overflow"].get("classification")
+        if cls == "improved":
+            improved.append("congestion_total_overflow")
+        elif cls == "regressed":
+            regressed.append("congestion_total_overflow")
+
+    child_wns = child_values.get("wns_ns")
+    child_tns = child_values.get("tns_ns")
+    timing_closed = (
+        isinstance(child_wns, (int, float))
+        and child_wns >= 0
+        and (child_tns is None or child_tns >= 0)
+    )
+    route_clean = child_drc.get("clean") if child_drc.get("status") == "ok" else None
+    signoff_clean = bool(timing_closed and route_clean is True)
+
+    if signoff_clean and not regressed:
+        verdict = "closed"
+    elif signoff_clean:
+        verdict = "closed_with_tradeoffs"
+    elif improved and not regressed:
+        verdict = "improved"
+    elif improved and regressed:
+        verdict = "mixed"
+    elif regressed:
+        verdict = "regressed"
+    else:
+        verdict = "neutral"
+
+    return {
+        "status": "ok",
+        "parent_run_id": resolved_parent_id,
+        "child_run_id": resolved_child_id,
+        "top_module": child_meta.get("top_module") or parent_meta.get("top_module"),
+        "platform": child_meta.get("platform") or parent_meta.get("platform"),
+        "lineage": {
+            "child_mode": child_meta.get("mode"),
+            "retry_start_stage": child_meta.get("retry_start_stage"),
+            "retry_max_stage": child_meta.get("retry_max_stage"),
+            "orfs_overrides": child_meta.get("orfs_overrides", {}),
+        },
+        "verdict": verdict,
+        "signoff_clean": signoff_clean,
+        "timing_closed": timing_closed,
+        "route_clean": route_clean,
+        "improved_metrics": improved,
+        "regressed_metrics": regressed,
+        "comparisons": comparisons,
+        "route_drc_comparison": route_drc_comparison,
+        "congestion_comparison": congestion_comparison,
+        "parent_complete": parent_metrics.get("complete"),
+        "child_complete": child_metrics.get("complete"),
+        "notes": [
+            "Positive WNS/TNS deltas are better; negative area/cell/power/DRC/congestion deltas are better.",
+            "Use this as a retry triage summary; detailed diagnosis still comes from stage-specific reports.",
+        ],
+    }
+
+
 def get_stage_status(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
     run_dir = get_run_dir(workspace, run_id)
     if run_dir is None:
