@@ -34,7 +34,8 @@ PD_PREREQ_FILES = {
     "place": [("2_floorplan.odb", "2_floorplan.odb"), ("2_floorplan.sdc", "2_floorplan.sdc")],
     "cts": [("3_place.odb", "3_place.odb"), ("3_place.sdc", "3_place.sdc")],
     "grt": [("4_cts.odb", "4_cts.odb"), ("4_cts.sdc", "4_cts.sdc")],
-    "route": [("5_1_grt.odb", "5_1_grt.odb"), ("5_1_grt.sdc", "5_1_grt.sdc")],
+    # ORFS do-route invokes 5_1_grt first, so it needs the CTS checkpoint.
+    "route": [("4_cts.odb", "4_cts.odb"), ("4_cts.sdc", "4_cts.sdc")],
     "finish": [("5_route.odb", "5_route.odb"), ("5_route.sdc", "5_route.sdc")],
 }
 

@@ -295,8 +295,10 @@ grt:
   4_cts.sdc
 
 route:
-  5_1_grt.odb
-  5_1_grt.sdc
+  4_cts.odb
+  4_cts.sdc
+
+Note: ORFS `do-route` invokes the global-route step first, so it depends on the CTS checkpoint rather than the already-generated `5_1_grt.*` checkpoint.
 
 finish:
   5_route.odb
@@ -398,6 +400,69 @@ run_meta.json:
 
 child spec directory:
   spec/seq_detector_0011_spec.yaml
+```
+
+Stage retry validation after hardening:
+
+```text
+parent: synth_0011
+validation summary:
+  workspace/p1-claude-code/pd_validation/pd_retry_matrix_20260518_103902.json
+
+cts -> finish:
+  child: synth_0015
+  override: CTS_BUF_DISTANCE=100
+  result: completed
+  elapsed: 32.19s
+  QoR verdict: neutral
+  evidence: 4_1_cts.log contains -distance_between_buffers 100
+
+floorplan -> finish:
+  child: synth_0016
+  override: CORE_UTILIZATION=10
+  result: completed
+  elapsed: 40.14s
+  QoR verdict: regressed on this tiny design
+
+place -> finish:
+  child: synth_0017
+  override: PLACE_DENSITY=0.20
+  result: completed
+  elapsed: 37.63s
+  QoR verdict: mixed on this tiny design
+
+grt -> finish:
+  child: synth_0018
+  override: none
+  result: completed
+  elapsed: 21.74s
+  QoR verdict: neutral
+
+finish only:
+  child: synth_0020
+  override: none
+  result: completed
+  elapsed: 8.34s
+  QoR verdict: neutral
+```
+
+Route retry exposed and fixed a prerequisite bug:
+
+```text
+initial route -> finish child: synth_0019
+result: failed
+reason: ORFS do-route invokes 5_1_grt and expects 4_cts.odb
+old copied prereq: 5_1_grt.odb / 5_1_grt.sdc
+
+fix:
+  route retry prerequisites changed to 4_cts.odb / 4_cts.sdc
+
+rerun child: synth_0021
+result: completed
+elapsed: 16.71s
+QoR verdict: neutral
+validation summary:
+  workspace/p1-claude-code/pd_validation/route_retry_after_prereq_fix_synth_0021.json
 ```
 
 ## Tests Added
