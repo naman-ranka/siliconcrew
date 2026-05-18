@@ -19,11 +19,33 @@ INDEX_FILENAME = "index.json"
 LATEST_FILENAME = "LATEST"
 RUN_META_FILENAME = "run_meta.json"
 
+PD_STAGE_SEQUENCE = ["constraints", "synth", "floorplan", "place", "cts", "grt", "route", "finish"]
+PD_RETRYABLE_STAGES = ["floorplan", "place", "cts", "grt", "route", "finish"]
+PD_STAGE_TARGETS = {
+    "floorplan": "do-floorplan",
+    "place": "do-place",
+    "cts": "do-cts",
+    "grt": "do-grt",
+    "route": "do-route",
+    "finish": "do-finish",
+}
+PD_PREREQ_FILES = {
+    "floorplan": [("1_synth.odb", "1_synth.odb"), ("1_synth.sdc", "1_synth.sdc")],
+    "place": [("2_floorplan.odb", "2_floorplan.odb"), ("2_floorplan.sdc", "2_floorplan.sdc")],
+    "cts": [("3_place.odb", "3_place.odb"), ("3_place.sdc", "3_place.sdc")],
+    "grt": [("4_cts.odb", "4_cts.odb"), ("4_cts.sdc", "4_cts.sdc")],
+    # ORFS do-route invokes 5_1_grt first, so it needs the CTS checkpoint.
+    "route": [("4_cts.odb", "4_cts.odb"), ("4_cts.sdc", "4_cts.sdc")],
+    "finish": [("5_route.odb", "5_route.odb"), ("5_route.sdc", "5_route.sdc")],
+}
+
 _JOB_LOCK = threading.Lock()
+_INDEX_LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=2)
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _POLL_CACHE: Dict[str, Dict[str, Any]] = {}
 _POLL_BACKOFF_STATE: Dict[str, Dict[str, Any]] = {}
+_ORFS_OVERRIDE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 # Prevent aggressive status polling loops from burning recursion/context.
 POLL_MIN_INTERVAL_SEC = 1.0
@@ -86,6 +108,18 @@ def _next_run_id(workspace: str) -> str:
         return "synth_0001"
     max_id = max(int(x.split("_")[1]) for x in existing)
     return f"synth_{max_id + 1:04d}"
+
+
+def _allocate_run_dir(workspace: str) -> tuple[str, str]:
+    with _JOB_LOCK:
+        while True:
+            run_id = _next_run_id(workspace)
+            run_dir = os.path.join(_runs_root(workspace), run_id)
+            try:
+                os.makedirs(run_dir, exist_ok=False)
+                return run_id, run_dir
+            except FileExistsError:
+                continue
 
 
 def _write_json(path: str, data: Dict[str, Any]) -> None:
@@ -357,6 +391,184 @@ def _collect_artifacts(run_dir: str) -> Dict[str, int]:
     return counts
 
 
+def _init_stage_metadata() -> Dict[str, Any]:
+    return {
+        stage: {
+            "status": "pending",
+            "artifacts": {},
+        }
+        for stage in PD_STAGE_SEQUENCE
+    }
+
+
+def _find_stage_artifacts(run_dir: str) -> Dict[str, Dict[str, str]]:
+    found: Dict[str, Dict[str, str]] = {stage: {} for stage in PD_STAGE_SEQUENCE}
+
+    checks = {
+        "synth": [
+            ("odb", "orfs_results", "1_synth.odb"),
+            ("sdc", "orfs_results", "1_synth.sdc"),
+            ("stat_report", "orfs_reports", "synth_stat.txt"),
+        ],
+        "floorplan": [
+            ("report", "orfs_reports", "2_floorplan_final.rpt"),
+            ("odb", "orfs_results", "2_floorplan.odb"),
+            ("sdc", "orfs_results", "2_floorplan.sdc"),
+        ],
+        "place": [
+            ("log", "orfs_logs", "3_3_place_gp.json"),
+            ("odb", "orfs_results", "3_place.odb"),
+            ("sdc", "orfs_results", "3_place.sdc"),
+        ],
+        "cts": [
+            ("report", "orfs_reports", "4_cts_final.rpt"),
+            ("odb", "orfs_results", "4_cts.odb"),
+            ("sdc", "orfs_results", "4_cts.sdc"),
+        ],
+        "grt": [
+            ("report", "orfs_reports", "congestion.rpt"),
+            ("log", "orfs_logs", "5_1_grt.log"),
+            ("odb", "orfs_results", "5_1_grt.odb"),
+            ("sdc", "orfs_results", "5_1_grt.sdc"),
+        ],
+        "route": [
+            ("report", "orfs_reports", "5_route_drc.rpt"),
+            ("odb", "orfs_results", "5_route.odb"),
+            ("sdc", "orfs_results", "5_route.sdc"),
+        ],
+        "finish": [
+            ("report", "orfs_reports", "6_finish.rpt"),
+            ("odb", "orfs_results", "6_final.odb"),
+            ("sdc", "orfs_results", "6_final.sdc"),
+            ("netlist", "orfs_results", "6_final.v"),
+            ("gds", "orfs_results", "6_final.gds"),
+        ],
+    }
+
+    for stage, candidates in checks.items():
+        for artifact_key, scope, filename in candidates:
+            path = _find_artifact_file(run_dir, scope, filename)
+            if path:
+                found[stage][artifact_key] = path
+    return found
+
+
+def _stage_artifacts_indicate_completion(stage: str, artifacts: Dict[str, str]) -> bool:
+    if not artifacts:
+        return False
+    if stage == "route":
+        return "odb" in artifacts or "sdc" in artifacts
+    return True
+
+
+def _refresh_stage_metadata(run_dir: str, run_meta: Dict[str, Any], terminal_status: Optional[str] = None) -> Dict[str, Any]:
+    stages = run_meta.get("stages")
+    if not isinstance(stages, dict):
+        stages = _init_stage_metadata()
+
+    discovered = _find_stage_artifacts(run_dir)
+    for stage in PD_STAGE_SEQUENCE:
+        stage_meta = stages.get(stage, {"status": "pending", "artifacts": {}})
+        stage_meta.setdefault("artifacts", {})
+        if stage == "constraints":
+            constraints_ok = run_meta.get("auto_checks", {}).get("constraints")
+            if constraints_ok == "pass":
+                stage_meta["status"] = "completed"
+            elif constraints_ok == "fail":
+                stage_meta["status"] = "failed"
+        else:
+            artifacts = discovered.get(stage, {})
+            if artifacts:
+                stage_meta["artifacts"] = artifacts
+            if _stage_artifacts_indicate_completion(stage, artifacts):
+                stage_meta["status"] = "completed"
+            elif terminal_status == "failed" and run_meta.get("current_stage") == stage:
+                stage_meta["status"] = "failed"
+        stages[stage] = stage_meta
+
+    # If a later stage completed, earlier stages necessarily completed too, even
+    # when intermediate artifacts were not preserved in the mounted run dir.
+    for idx, stage in enumerate(PD_RETRYABLE_STAGES):
+        if any(stages.get(later, {}).get("status") == "completed" for later in PD_RETRYABLE_STAGES[idx + 1 :]):
+            stages[stage]["status"] = "completed"
+
+    downstream_completed = any(stages.get(stage, {}).get("status") == "completed" for stage in PD_RETRYABLE_STAGES)
+    if downstream_completed and stages["synth"].get("status") != "completed":
+        stages["synth"]["status"] = "completed"
+
+    if terminal_status == "completed":
+        run_meta["current_stage"] = "finish"
+    elif terminal_status == "failed":
+        failed_stage = run_meta.get("current_stage") or _infer_stage(_collect_log_tail(run_dir))
+        run_meta["current_stage"] = failed_stage
+        if failed_stage in stages and stages[failed_stage].get("status") != "completed":
+            stages[failed_stage]["status"] = "failed"
+
+    run_meta["stages"] = stages
+    return run_meta
+
+
+def _load_run_meta_with_inferred_stages(run_dir: str) -> Dict[str, Any]:
+    run_meta = _read_run_meta(run_dir)
+    stages = run_meta.get("stages")
+    if isinstance(stages, dict) and stages:
+        return run_meta
+
+    terminal_status = run_meta.get("status")
+    if terminal_status not in {"completed", "failed"}:
+        terminal_status = None
+    return _refresh_stage_metadata(run_dir, run_meta, terminal_status=terminal_status)
+
+
+def _read_config_mk_pd_parameters(run_dir: str) -> Dict[str, Any]:
+    config_path = os.path.join(run_dir, "config.mk")
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception:
+        return {}
+
+    values: Dict[str, Any] = {}
+    for key, out_key, cast in [
+        ("CORE_UTILIZATION", "utilization", int),
+        ("CORE_ASPECT_RATIO", "aspect_ratio", float),
+        ("CORE_MARGIN", "core_margin", float),
+    ]:
+        match = re.search(rf"^\s*export\s+{key}\s*=\s*([^\s#]+)", text, re.MULTILINE)
+        if not match:
+            continue
+        try:
+            values[out_key] = cast(match.group(1))
+        except Exception:
+            pass
+    return values
+
+
+def _pd_parameters_from_run(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, Any]:
+    config_values = _read_config_mk_pd_parameters(run_dir)
+    nested = run_meta.get("pd_parameters") if isinstance(run_meta.get("pd_parameters"), dict) else {}
+
+    def _pick(name: str, default: Any, cast: Any) -> Any:
+        for source in (run_meta, nested, config_values):
+            value = source.get(name)
+            if value is None:
+                continue
+            try:
+                return cast(value)
+            except Exception:
+                continue
+        return default
+
+    utilization = _pick("utilization", 5, int)
+    return {
+        "utilization": max(1, min(100, utilization)),
+        "aspect_ratio": _pick("aspect_ratio", 1.0, float),
+        "core_margin": _pick("core_margin", 2.0, float),
+    }
+
+
 def _find_netlist(run_dir: str, top_module: str) -> Optional[str]:
     roots = [os.path.join(run_dir, "orfs_results"), os.path.join(run_dir, "inputs")]
     ranked = []
@@ -458,6 +670,306 @@ def _run_orfs(
     )
 
 
+def _write_orfs_config(
+    run_dir: str,
+    top_module: str,
+    platform: str,
+    input_files: List[str],
+    utilization: int,
+    aspect_ratio: float,
+    core_margin: float,
+    orfs_overrides: Optional[Dict[str, Any]] = None,
+) -> str:
+    rel_files = [f"/workspace/inputs/{os.path.basename(x)}" for x in input_files]
+    config_mk = os.path.join(run_dir, "config.mk")
+    lines = [
+        f"export DESIGN_NAME = {top_module}",
+        f"export PLATFORM = {platform}",
+        f"export VERILOG_FILES = {' '.join(rel_files)}",
+        "export SDC_FILE = /workspace/constraints.sdc",
+        f"export CORE_UTILIZATION = {utilization}",
+        f"export CORE_ASPECT_RATIO = {aspect_ratio}",
+        f"export CORE_MARGIN = {core_margin}",
+    ]
+    for key, value in (orfs_overrides or {}).items():
+        lines.append(f"export {key} = {value}")
+    with open(config_mk, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return config_mk
+
+
+def _run_orfs_targets(
+    run_dir: str,
+    top_module: str,
+    platform: str,
+    input_files: List[str],
+    utilization: int,
+    aspect_ratio: float,
+    core_margin: float,
+    targets: List[str],
+    timeout: int,
+    orfs_overrides: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    results_dir = _ensure_dir(os.path.join(run_dir, "orfs_results"))
+    logs_dir = _ensure_dir(os.path.join(run_dir, "orfs_logs"))
+    reports_dir = _ensure_dir(os.path.join(run_dir, "orfs_reports"))
+
+    _write_orfs_config(
+        run_dir=run_dir,
+        top_module=top_module,
+        platform=platform,
+        input_files=input_files,
+        utilization=utilization,
+        aspect_ratio=aspect_ratio,
+        core_margin=core_margin,
+        orfs_overrides=orfs_overrides,
+    )
+
+    volumes = [
+        f"{results_dir}:/OpenROAD-flow-scripts/flow/results",
+        f"{logs_dir}:/OpenROAD-flow-scripts/flow/logs",
+        f"{reports_dir}:/OpenROAD-flow-scripts/flow/reports",
+    ]
+    target_cmds = [f"make DESIGN_CONFIG=/workspace/config.mk {target}" for target in targets]
+    return run_docker_command(
+        command="set -e; " + "; ".join(target_cmds),
+        workspace_path=run_dir,
+        volumes=volumes,
+        timeout=timeout,
+    )
+
+
+def _stage_range(start_stage: str, max_stage: str) -> List[str]:
+    start_idx = PD_RETRYABLE_STAGES.index(start_stage)
+    end_idx = PD_RETRYABLE_STAGES.index(max_stage)
+    return PD_RETRYABLE_STAGES[start_idx : end_idx + 1]
+
+
+def _parse_orfs_overrides(orfs_overrides_json: Optional[str]) -> Dict[str, Any]:
+    raw = (orfs_overrides_json or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception as exc:
+        raise ValueError(f"Invalid orfs_overrides_json: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("orfs_overrides_json must decode to a JSON object.")
+
+    normalized: Dict[str, Any] = {}
+    for raw_key, value in parsed.items():
+        key = str(raw_key)
+        if not _ORFS_OVERRIDE_KEY_RE.match(key):
+            raise ValueError(
+                f"Invalid ORFS override key '{key}'. Keys must match ^[A-Z][A-Z0-9_]*$."
+            )
+        if value is None or isinstance(value, (dict, list)):
+            raise ValueError(f"Invalid ORFS override value for '{key}'. Use a scalar string/number/bool.")
+        text = str(value)
+        if any(ch in text for ch in ["\n", "\r", "\x00", "$", "`"]):
+            raise ValueError(
+                f"Invalid ORFS override value for '{key}'. Newlines, NUL, '$', and backticks are not allowed."
+            )
+        normalized[key] = value
+    return normalized
+
+
+def _copy_retry_inputs(parent_run_dir: str, child_run_dir: str, parent_meta: Optional[Dict[str, Any]] = None) -> tuple[List[str], Optional[str]]:
+    parent_inputs = os.path.join(parent_run_dir, "inputs")
+    child_inputs = _ensure_dir(os.path.join(child_run_dir, "inputs"))
+    copied_inputs: List[str] = []
+    if os.path.exists(parent_inputs):
+        for name in os.listdir(parent_inputs):
+            src = os.path.join(parent_inputs, name)
+            if os.path.isfile(src):
+                dst = os.path.join(child_inputs, name)
+                shutil.copy2(src, dst)
+                copied_inputs.append(dst)
+
+    copied_spec = None
+    parent_spec = os.path.join(parent_run_dir, "spec")
+    child_spec = _ensure_dir(os.path.join(child_run_dir, "spec"))
+    if os.path.exists(parent_spec):
+        for name in os.listdir(parent_spec):
+            src = os.path.join(parent_spec, name)
+            if os.path.isfile(src):
+                dst = os.path.join(child_spec, name)
+                shutil.copy2(src, dst)
+                if copied_spec is None:
+                    copied_spec = dst
+
+    # Older/full-flow runs may store the active spec at the run root instead of run_dir/spec/.
+    if copied_spec is None:
+        spec_name = None
+        if parent_meta:
+            spec_name = parent_meta.get("spec_file")
+        candidate_specs = []
+        if spec_name:
+            candidate_specs.append(os.path.join(parent_run_dir, spec_name))
+        candidate_specs.extend(
+            os.path.join(parent_run_dir, name)
+            for name in os.listdir(parent_run_dir)
+            if name.endswith("_spec.yaml")
+        )
+        seen = set()
+        for src in candidate_specs:
+            if src in seen:
+                continue
+            seen.add(src)
+            if os.path.isfile(src):
+                dst = os.path.join(child_spec, os.path.basename(src))
+                shutil.copy2(src, dst)
+                copied_spec = dst
+                break
+    return copied_inputs, copied_spec
+
+
+def _copy_retry_constraints(parent_run_dir: str, child_run_dir: str) -> None:
+    parent_constraints = os.path.join(parent_run_dir, "constraints.sdc")
+    if os.path.exists(parent_constraints):
+        shutil.copy2(parent_constraints, os.path.join(child_run_dir, "constraints.sdc"))
+
+
+def _validate_retry_prerequisites(parent_run_dir: str, start_stage: str) -> Dict[str, str]:
+    found: Dict[str, str] = {}
+    missing: List[str] = []
+
+    for filename, artifact_key in PD_PREREQ_FILES[start_stage]:
+        src = _find_artifact_file(parent_run_dir, "orfs_results", filename)
+        if not src:
+            missing.append(filename)
+            continue
+        found[artifact_key] = src
+
+    if missing:
+        raise FileNotFoundError(
+            f"Missing prerequisite artifacts for retry stage '{start_stage}': {', '.join(missing)}"
+        )
+    return found
+
+
+def _copy_retry_prerequisites(parent_run_dir: str, child_run_dir: str, start_stage: str) -> Dict[str, str]:
+    parent_results = os.path.join(parent_run_dir, "orfs_results")
+    child_results = _ensure_dir(os.path.join(child_run_dir, "orfs_results"))
+    copied: Dict[str, str] = {}
+
+    for artifact_key, src in _validate_retry_prerequisites(parent_run_dir, start_stage).items():
+        rel = os.path.relpath(src, parent_results)
+        dst = os.path.join(child_results, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        copied[artifact_key] = dst
+
+    return copied
+
+
+def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    start = time.time()
+    parent_run_id = args["source_run_id"]
+    parent_run_dir = get_run_dir(workspace, parent_run_id)
+    if not parent_run_dir:
+        return {
+            "run_id": args["run_id"],
+            "job_id": job_id,
+            "status": "failed",
+            "current_stage": args["start_stage"],
+            "check_notes": f"Source run '{parent_run_id}' not found.",
+        }
+
+    parent_meta = _read_run_meta(parent_run_dir)
+    copied_inputs, copied_spec = _copy_retry_inputs(parent_run_dir, run_dir, parent_meta=parent_meta)
+    _copy_retry_constraints(parent_run_dir, run_dir)
+    copied_prereqs = _copy_retry_prerequisites(parent_run_dir, run_dir, args["start_stage"])
+
+    auto_checks = GuardrailSummary(
+        constraints=parent_meta.get("auto_checks", {}).get("constraints", "pass"),
+        signoff="skip",
+        equiv="skip",
+    )
+    stages = _init_stage_metadata()
+    for stage in PD_STAGE_SEQUENCE:
+        if stage == "constraints":
+            stages[stage]["status"] = "completed"
+        elif stage in PD_RETRYABLE_STAGES and PD_RETRYABLE_STAGES.index(stage) < PD_RETRYABLE_STAGES.index(args["start_stage"]):
+            stages[stage]["status"] = "completed"
+
+    run_meta: Dict[str, Any] = {
+        "run_id": args["run_id"],
+        "job_id": job_id,
+        "created_at": _now_iso(),
+        "status": "running",
+        "mode": "pd_retry",
+        "parent_run_id": parent_run_id,
+        "source_run_id": parent_run_id,
+        "retry_start_stage": args["start_stage"],
+        "retry_max_stage": args["max_stage"],
+        "orfs_overrides": args["orfs_overrides"],
+        "current_stage": args["start_stage"],
+        "platform": args["platform"],
+        "top_module": args["top_module"],
+        "input_files": [os.path.basename(x) for x in copied_inputs],
+        "spec_file": os.path.basename(copied_spec) if copied_spec else None,
+        "requested_clock_period_ns": parent_meta.get("requested_clock_period_ns"),
+        "effective_clock_period_ns": parent_meta.get("effective_clock_period_ns"),
+        "clock_period_ns": parent_meta.get("clock_period_ns"),
+        "clock_source": parent_meta.get("clock_source"),
+        "constraints_mode": parent_meta.get("constraints_mode", "auto"),
+        "utilization": args["utilization"],
+        "aspect_ratio": args["aspect_ratio"],
+        "core_margin": args["core_margin"],
+        "pd_parameters": {
+            "utilization": args["utilization"],
+            "aspect_ratio": args["aspect_ratio"],
+            "core_margin": args["core_margin"],
+        },
+        "auto_checks": asdict(auto_checks),
+        "check_notes": f"Retrying from stage '{args['start_stage']}' through '{args['max_stage']}'.",
+        "stages": stages,
+        "retry_prerequisites": copied_prereqs,
+    }
+    run_meta["stages"][args["start_stage"]]["status"] = "running"
+    _persist_run_meta(run_dir, run_meta)
+
+    targets = [PD_STAGE_TARGETS[stage] for stage in _stage_range(args["start_stage"], args["max_stage"])]
+    docker_result = _run_orfs_targets(
+        run_dir=run_dir,
+        top_module=args["top_module"],
+        platform=args["platform"],
+        input_files=copied_inputs,
+        utilization=args["utilization"],
+        aspect_ratio=args["aspect_ratio"],
+        core_margin=args["core_margin"],
+        targets=targets,
+        timeout=args["timeout"],
+        orfs_overrides=args["orfs_overrides"],
+    )
+
+    run_meta["docker_command"] = docker_result.get("command")
+    run_meta["docker_success"] = docker_result.get("success", False)
+    run_meta["docker_stdout_tail"] = (docker_result.get("stdout") or "")[-1200:]
+    run_meta["docker_stderr_tail"] = (docker_result.get("stderr") or "")[-1200:]
+
+    signoff = _signoff_guardrail(run_dir, args["top_module"], docker_result)
+    auto_checks.signoff = signoff["status"]
+    run_meta["auto_checks"] = asdict(auto_checks)
+    run_meta["netlist_path"] = _find_netlist(run_dir, args["top_module"])
+    run_meta["summary_metrics"] = _extract_summary_metrics(run_dir)
+    run_meta["status"] = "completed" if docker_result.get("success", False) and auto_checks.signoff == "pass" else "failed"
+    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else "PD retry completed"
+    run_meta["next_action"] = (
+        "Inspect stage summaries and continue tuning." if run_meta["status"] == "completed"
+        else "Inspect retry stage logs and adjust parameters."
+    )
+    run_meta["finished_at"] = _now_iso()
+    run_meta["elapsed_sec"] = round(time.time() - start, 2)
+    run_meta["current_stage"] = args["max_stage"] if run_meta["status"] == "completed" else args["start_stage"]
+    run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
+
+    _persist_run_meta(run_dir, run_meta)
+    _append_index(workspace, args["run_id"], job_id, run_meta["status"])
+    return run_meta
+
+
 def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, Any]) -> Dict[str, str]:
     if not docker_result.get("success"):
         return {"status": "fail", "note": "ORFS command failed"}
@@ -482,15 +994,16 @@ def _persist_run_meta(run_dir: str, meta: Dict[str, Any]) -> None:
 
 
 def _append_index(workspace: str, run_id: str, job_id: str, status: str) -> None:
-    index = _load_index(workspace)
-    index["runs"] = [x for x in index["runs"] if x.get("run_id") != run_id]
-    index["jobs"] = [x for x in index["jobs"] if x.get("job_id") != job_id]
-    now = _now_iso()
-    index["runs"].append({"run_id": run_id, "status": status, "updated_at": now})
-    index["jobs"].append({"job_id": job_id, "run_id": run_id, "status": status, "updated_at": now})
-    _save_index(workspace, index)
-    with open(_latest_path(workspace), "w", encoding="utf-8") as f:
-        f.write(run_id)
+    with _INDEX_LOCK:
+        index = _load_index(workspace)
+        index["runs"] = [x for x in index["runs"] if x.get("run_id") != run_id]
+        index["jobs"] = [x for x in index["jobs"] if x.get("job_id") != job_id]
+        now = _now_iso()
+        index["runs"].append({"run_id": run_id, "status": status, "updated_at": now})
+        index["jobs"].append({"job_id": job_id, "run_id": run_id, "status": status, "updated_at": now})
+        _save_index(workspace, index)
+        with open(_latest_path(workspace), "w", encoding="utf-8") as f:
+            f.write(run_id)
 
 
 def _load_stdcell_manifest(workspace: str, platform: str) -> Dict[str, Any]:
@@ -527,6 +1040,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "job_id": job_id,
         "created_at": _now_iso(),
         "status": "running",
+        "current_stage": "constraints",
         "platform": platform,
         "top_module": top_module,
         "input_files": [os.path.basename(x) for x in copied_inputs],
@@ -536,19 +1050,36 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "clock_period_ns": constraints.get("clock_period_ns"),
         "clock_source": constraints.get("clock_source"),
         "constraints_mode": args.get("constraints_mode", "auto"),
+        "utilization": args["utilization"],
+        "aspect_ratio": args["aspect_ratio"],
+        "core_margin": args["core_margin"],
+        "pd_parameters": {
+            "utilization": args["utilization"],
+            "aspect_ratio": args["aspect_ratio"],
+            "core_margin": args["core_margin"],
+        },
         "auto_checks": asdict(auto_checks),
         "check_notes": constraints["note"],
+        "stages": _init_stage_metadata(),
     }
+    run_meta["stages"]["constraints"]["status"] = "running"
     _persist_run_meta(run_dir, run_meta)
 
     if constraints["status"] != "pass":
         run_meta["status"] = "failed"
+        run_meta["current_stage"] = "constraints"
         run_meta["finished_at"] = _now_iso()
         run_meta["elapsed_sec"] = round(time.time() - start, 2)
         run_meta["next_action"] = "Fix spec/clock constraints and rerun synthesis."
+        run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status="failed")
         _persist_run_meta(run_dir, run_meta)
         _append_index(workspace, run_id, job_id, "failed")
         return run_meta
+
+    run_meta["stages"]["constraints"]["status"] = "completed"
+    run_meta["current_stage"] = "synth"
+    run_meta["stages"]["synth"]["status"] = "running"
+    _persist_run_meta(run_dir, run_meta)
 
     docker_result = _run_orfs(
         run_dir=run_dir,
@@ -606,6 +1137,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
 
     final_ok = docker_result.get("success", False) and auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
     run_meta["status"] = "completed" if final_ok else "failed"
+    run_meta["current_stage"] = "finish" if final_ok else _infer_stage(_collect_log_tail(run_dir))
     run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else "All guardrails passed"
     run_meta["next_action"] = (
         "Use search_logs_tool for detailed PPA/error verification." if run_meta["status"] == "completed"
@@ -613,6 +1145,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
     )
     run_meta["finished_at"] = _now_iso()
     run_meta["elapsed_sec"] = round(time.time() - start, 2)
+    run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
 
     _persist_run_meta(run_dir, run_meta)
     _append_index(workspace, run_id, job_id, run_meta["status"])
@@ -633,8 +1166,7 @@ def start_synthesis_job(
     constraints_mode: str = "auto",
 ) -> Dict[str, Any]:
     _ensure_dir(workspace)
-    run_id = _next_run_id(workspace)
-    run_dir = _ensure_dir(os.path.join(_runs_root(workspace), run_id))
+    run_id, run_dir = _allocate_run_dir(workspace)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
 
     # Enforce global safety cap so synthesis jobs do not run unbounded.
@@ -671,6 +1203,98 @@ def start_synthesis_job(
         "status": "queued",
         "stage": "unknown",
         "timeout_sec": timeout_sec,
+    }
+
+
+def retry_pd_job(
+    workspace: str,
+    source_run_id: str,
+    start_stage: str,
+    max_stage: str = "finish",
+    orfs_overrides_json: str = "",
+    timeout: int = SYNTH_HARD_TIMEOUT_SEC,
+) -> Dict[str, Any]:
+    start_stage = (start_stage or "").strip().lower()
+    max_stage = (max_stage or "").strip().lower()
+    if start_stage not in PD_RETRYABLE_STAGES:
+        return {
+            "status": "error",
+            "message": f"Unsupported start_stage '{start_stage}'.",
+            "supported_stages": PD_RETRYABLE_STAGES,
+        }
+    if max_stage not in PD_RETRYABLE_STAGES:
+        return {
+            "status": "error",
+            "message": f"Unsupported max_stage '{max_stage}'.",
+            "supported_stages": PD_RETRYABLE_STAGES,
+        }
+    if PD_RETRYABLE_STAGES.index(max_stage) < PD_RETRYABLE_STAGES.index(start_stage):
+        return {
+            "status": "error",
+            "message": "max_stage must be the same as or after start_stage.",
+        }
+
+    parent_run_dir = get_run_dir(workspace, source_run_id)
+    if not parent_run_dir:
+        return {
+            "status": "error",
+            "message": f"Source run '{source_run_id}' not found.",
+        }
+    parent_meta = _read_run_meta(parent_run_dir)
+    top_module = parent_meta.get("top_module")
+    platform = parent_meta.get("platform")
+    if not top_module or not platform:
+        return {
+            "status": "error",
+            "message": f"Source run '{source_run_id}' is missing top_module/platform metadata.",
+        }
+    try:
+        orfs_overrides = _parse_orfs_overrides(orfs_overrides_json)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    try:
+        _validate_retry_prerequisites(parent_run_dir, start_stage)
+    except FileNotFoundError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    pd_parameters = _pd_parameters_from_run(parent_run_dir, parent_meta)
+    run_id, run_dir = _allocate_run_dir(workspace)
+    job_id = f"job_{uuid.uuid4().hex[:10]}"
+    timeout_sec = max(60, min(int(timeout), SYNTH_HARD_TIMEOUT_SEC))
+    args = {
+        "run_id": run_id,
+        "source_run_id": source_run_id,
+        "start_stage": start_stage,
+        "max_stage": max_stage,
+        "top_module": top_module,
+        "platform": platform,
+        "utilization": pd_parameters["utilization"],
+        "aspect_ratio": pd_parameters["aspect_ratio"],
+        "core_margin": pd_parameters["core_margin"],
+        "timeout": timeout_sec,
+        "orfs_overrides": orfs_overrides,
+    }
+
+    with _JOB_LOCK:
+        future = _EXECUTOR.submit(_retry_pd_worker, job_id, workspace, run_dir, args)
+        _JOBS[job_id] = {
+            "future": future,
+            "workspace": workspace,
+            "run_id": run_id,
+            "run_dir": run_dir,
+            "created_at": _now_iso(),
+        }
+
+    _append_index(workspace, run_id, job_id, "running")
+    return {
+        "job_id": job_id,
+        "run_id": run_id,
+        "status": "queued",
+        "stage": start_stage,
+        "timeout_sec": timeout_sec,
+        "source_run_id": source_run_id,
+        "mode": "pd_retry",
     }
 
 
@@ -715,6 +1339,8 @@ def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, 
         "run_id": run_id,
         "status": status,
         "stage": "final" if status in {"completed", "failed"} else stage,
+        "current_stage": meta.get("current_stage", stage),
+        "stages": meta.get("stages"),
         "elapsed_sec": meta.get("elapsed_sec"),
         "last_log_lines": last_log_lines,
         "artifacts_found": _collect_artifacts(run_dir),
@@ -955,7 +1581,7 @@ def read_stage_report(workspace: str, stage: str, run_id: Optional[str] = None) 
             selected_name = filename
             break
 
-    run_meta = _read_run_meta(run_dir)
+    run_meta = _load_run_meta_with_inferred_stages(run_dir)
     resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
     if not selected_path:
         return {
@@ -999,6 +1625,535 @@ def read_stage_report(workspace: str, stage: str, run_id: Optional[str] = None) 
         "content_truncated": len(content) > max_chars,
         "content_length": len(content),
         "checked_candidates": checked,
+    }
+
+
+def get_route_drc_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    run_dir = get_run_dir(workspace, run_id)
+    if run_dir is None:
+        return {
+            "status": "error",
+            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
+            "run_id": run_id,
+            "stage": "route",
+        }
+
+    report_path = _find_report_file(run_dir, "5_route_drc.rpt")
+    run_meta = _load_run_meta_with_inferred_stages(run_dir)
+    resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
+    if not report_path:
+        return {
+            "status": "error",
+            "message": "5_route_drc.rpt not found.",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "route",
+        }
+
+    try:
+        with open(report_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = [line.rstrip("\n") for line in f.readlines()]
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Failed to read route DRC report: {exc}",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "route",
+            "report_path": report_path,
+        }
+
+    nonempty = [line.strip() for line in lines if line.strip()]
+    unique_entries: List[str] = []
+    seen = set()
+    for entry in nonempty:
+        if entry not in seen:
+            unique_entries.append(entry)
+            seen.add(entry)
+
+    route_stage = run_meta.get("stages", {}).get("route", {})
+    route_completed = route_stage.get("status") == "completed"
+    clean = len(nonempty) == 0 and route_completed
+    notes = []
+    if len(nonempty) == 0 and route_completed:
+        notes.append("Empty 5_route_drc.rpt with completed route stage indicates no final route DRC entries.")
+    elif len(nonempty) == 0:
+        notes.append("Empty 5_route_drc.rpt is not treated as clean because route stage is not completed.")
+    return {
+        "status": "ok",
+        "run_id": resolved_run_id,
+        "top_module": run_meta.get("top_module"),
+        "platform": run_meta.get("platform"),
+        "stage": "route",
+        "route_stage_status": route_stage.get("status"),
+        "report_path": report_path,
+        "line_count": len(lines),
+        "violation_count": len(nonempty),
+        "unique_violation_count": len(unique_entries),
+        "clean": clean,
+        "sample_violations": unique_entries[:20],
+        "notes": notes,
+    }
+
+
+def get_cts_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    run_dir = get_run_dir(workspace, run_id)
+    if run_dir is None:
+        return {
+            "status": "error",
+            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
+            "run_id": run_id,
+            "stage": "cts",
+        }
+
+    report_path = _find_report_file(run_dir, "4_cts_final.rpt")
+    run_meta = _load_run_meta_with_inferred_stages(run_dir)
+    resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
+    if not report_path:
+        return {
+            "status": "error",
+            "message": "4_cts_final.rpt not found.",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "cts",
+        }
+
+    try:
+        with open(report_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Failed to read CTS report: {exc}",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "cts",
+            "report_path": report_path,
+        }
+
+    def _mfloat(pattern: str) -> Optional[float]:
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except Exception:
+            return None
+
+    def _mint(pattern: str) -> Optional[int]:
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except Exception:
+            return None
+
+    summary = {
+        "wns_ns": _mfloat(r"^\s*wns\s+max\s+([0-9.eE+-]+)"),
+        "tns_ns": _mfloat(r"^\s*tns\s+max\s+([0-9.eE+-]+)"),
+        "worst_slack_ns": _mfloat(r"^\s*worst\s+slack\s+max\s+([0-9.eE+-]+)"),
+        "clock_period_min_ns": _mfloat(r"period_min\s*=\s*([0-9.eE+-]+)"),
+        "clock_fmax_mhz": _mfloat(r"fmax\s*=\s*([0-9.eE+-]+)"),
+        "setup_skew_ns": _mfloat(r"^\s*([0-9.eE+-]+)\s+setup\s+skew\s*$"),
+        "max_slew_violation_count": _mint(r"max_slew_violation_count\s*-+\s*([0-9]+)"),
+        "max_fanout_violation_count": _mint(r"max_fanout_violation_count\s*-+\s*([0-9]+)"),
+        "max_cap_violation_count": _mint(r"max_cap_violation_count\s*-+\s*([0-9]+)"),
+        "setup_violation_count": _mint(r"setup_violation_count\s*-+\s*([0-9]+)"),
+        "hold_violation_count": _mint(r"hold_violation_count\s*-+\s*([0-9]+)"),
+        "critical_path_delay_ns": _mfloat(r"critical\s+path\s+delay\s*-+\s*([0-9.eE+-]+)"),
+        "critical_path_slack_ns": _mfloat(r"critical\s+path\s+slack\s*-+\s*([0-9.eE+-]+)"),
+        "slack_over_delay_ratio": _mfloat(r"slack\s+div\s+critical\s+path\s+delay\s*-+\s*([0-9.eE+-]+)"),
+    }
+
+    startpoints = re.findall(r"^Startpoint:\s+(.+)$", text, re.MULTILINE)
+    endpoints = re.findall(r"^Endpoint:\s+(.+)$", text, re.MULTILINE)
+    clock_names = re.findall(r"^Clock\s+(\S+)\s*$", text, re.MULTILINE)
+
+    return {
+        "status": "ok",
+        "run_id": resolved_run_id,
+        "top_module": run_meta.get("top_module"),
+        "platform": run_meta.get("platform"),
+        "stage": "cts",
+        "report_path": report_path,
+        "clock_names": clock_names,
+        "startpoint_count": len(startpoints),
+        "endpoint_count": len(endpoints),
+        "sample_startpoints": startpoints[:5],
+        "sample_endpoints": endpoints[:5],
+        "summary": summary,
+    }
+
+
+def get_congestion_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    run_dir = get_run_dir(workspace, run_id)
+    if run_dir is None:
+        return {
+            "status": "error",
+            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
+            "run_id": run_id,
+            "stage": "grt",
+        }
+
+    run_meta = _load_run_meta_with_inferred_stages(run_dir)
+    resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
+
+    artifact_path = _find_artifact_file(run_dir, "orfs_reports", "congestion.rpt")
+    artifact_scope = "orfs_reports"
+    if not artifact_path:
+        artifact_path = _find_artifact_file(run_dir, "orfs_logs", "5_1_grt.log")
+        artifact_scope = "orfs_logs"
+
+    if not artifact_path:
+        return {
+            "status": "error",
+            "message": "Neither congestion.rpt nor 5_1_grt.log was found.",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "grt",
+        }
+
+    try:
+        with open(artifact_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Failed to read congestion artifact: {exc}",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "grt",
+            "artifact_path": artifact_path,
+        }
+
+    layer_rows = []
+    row_re = re.compile(
+        r"^(?P<layer>\S+)\s+"
+        r"(?P<resource>[0-9]+)\s+"
+        r"(?P<demand>[0-9]+)\s+"
+        r"(?P<usage>[0-9.]+)%\s+"
+        r"(?P<max_h>[0-9]+)\s*/\s*(?P<max_v>[0-9]+)\s*/\s*(?P<overflow>[0-9]+)\s*$",
+        re.MULTILINE,
+    )
+    for match in row_re.finditer(text):
+        layer = match.group("layer")
+        if layer.lower() == "total":
+            continue
+        layer_rows.append(
+            {
+                "layer": layer,
+                "resource": int(match.group("resource")),
+                "demand": int(match.group("demand")),
+                "usage_pct": float(match.group("usage")),
+                "max_h_overflow": int(match.group("max_h")),
+                "max_v_overflow": int(match.group("max_v")),
+                "total_overflow": int(match.group("overflow")),
+            }
+        )
+
+    total_match = re.search(
+        r"^Total\s+([0-9]+)\s+([0-9]+)\s+([0-9.]+)%\s+([0-9]+)\s*/\s*([0-9]+)\s*/\s*([0-9]+)\s*$",
+        text,
+        re.MULTILINE,
+    )
+
+    total = None
+    if total_match:
+        total = {
+            "resource": int(total_match.group(1)),
+            "demand": int(total_match.group(2)),
+            "usage_pct": float(total_match.group(3)),
+            "max_h_overflow": int(total_match.group(4)),
+            "max_v_overflow": int(total_match.group(5)),
+            "total_overflow": int(total_match.group(6)),
+        }
+
+    wirelength_um = None
+    routed_nets = None
+    wire_m = re.search(r"Total wirelength:\s*([0-9.eE+-]+)\s*um", text)
+    if wire_m:
+        try:
+            wirelength_um = float(wire_m.group(1))
+        except Exception:
+            pass
+    nets_m = re.search(r"Routed nets:\s*([0-9]+)", text)
+    if nets_m:
+        try:
+            routed_nets = int(nets_m.group(1))
+        except Exception:
+            pass
+
+    congested_layers = [row["layer"] for row in layer_rows if row["total_overflow"] > 0]
+    return {
+        "status": "ok",
+        "run_id": resolved_run_id,
+        "top_module": run_meta.get("top_module"),
+        "platform": run_meta.get("platform"),
+        "stage": "grt",
+        "artifact_scope": artifact_scope,
+        "artifact_path": artifact_path,
+        "layer_count": len(layer_rows),
+        "layers": layer_rows,
+        "total": total,
+        "wirelength_um": wirelength_um,
+        "routed_nets": routed_nets,
+        "has_overflow": bool(total and total["total_overflow"] > 0),
+        "congested_layers": congested_layers,
+    }
+
+
+def _numeric_comparison(parent_value: Any, child_value: Any, better_when: str) -> Dict[str, Any]:
+    out = {
+        "parent": parent_value,
+        "child": child_value,
+        "delta": None,
+        "percent_delta": None,
+        "classification": "missing",
+        "better_when": better_when,
+    }
+    if not isinstance(parent_value, (int, float)) or not isinstance(child_value, (int, float)):
+        return out
+
+    delta = child_value - parent_value
+    out["delta"] = delta
+    if parent_value != 0:
+        out["percent_delta"] = (delta / abs(parent_value)) * 100.0
+
+    if abs(delta) < 1e-12:
+        out["classification"] = "unchanged"
+    elif better_when == "higher":
+        out["classification"] = "improved" if delta > 0 else "regressed"
+    elif better_when == "lower":
+        out["classification"] = "improved" if delta < 0 else "regressed"
+    else:
+        out["classification"] = "unknown"
+    return out
+
+
+def _violation_total(violations: Dict[str, Any]) -> Optional[int]:
+    if not isinstance(violations, dict):
+        return None
+    values = [v for v in violations.values() if isinstance(v, int)]
+    if not values:
+        return None
+    return sum(values)
+
+
+def compare_pd_runs(
+    workspace: str,
+    child_run_id: str,
+    parent_run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    child_dir = get_run_dir(workspace, child_run_id)
+    if child_dir is None:
+        return {
+            "status": "error",
+            "message": f"Child run '{child_run_id}' not found.",
+            "child_run_id": child_run_id,
+            "parent_run_id": parent_run_id,
+        }
+
+    child_meta = _read_run_meta(child_dir)
+    resolved_child_id = child_meta.get("run_id") or os.path.basename(child_dir)
+    resolved_parent_id = parent_run_id or child_meta.get("parent_run_id") or child_meta.get("source_run_id")
+    if not resolved_parent_id:
+        return {
+            "status": "error",
+            "message": "parent_run_id is required when the child run has no parent_run_id/source_run_id metadata.",
+            "child_run_id": resolved_child_id,
+            "parent_run_id": parent_run_id,
+        }
+
+    parent_dir = get_run_dir(workspace, resolved_parent_id)
+    if parent_dir is None:
+        return {
+            "status": "error",
+            "message": f"Parent run '{resolved_parent_id}' not found.",
+            "child_run_id": resolved_child_id,
+            "parent_run_id": resolved_parent_id,
+        }
+
+    parent_meta = _read_run_meta(parent_dir)
+    parent_metrics = get_synthesis_metrics(workspace=workspace, run_id=resolved_parent_id)
+    child_metrics = get_synthesis_metrics(workspace=workspace, run_id=resolved_child_id)
+    if parent_metrics.get("status") != "ok" or child_metrics.get("status") != "ok":
+        return {
+            "status": "error",
+            "message": "Unable to read metrics for one or both runs.",
+            "parent_run_id": resolved_parent_id,
+            "child_run_id": resolved_child_id,
+            "parent_metrics_status": parent_metrics.get("status"),
+            "child_metrics_status": child_metrics.get("status"),
+        }
+
+    parent_values = parent_metrics.get("metrics", {})
+    child_values = child_metrics.get("metrics", {})
+    metric_preferences = {
+        "wns_ns": "higher",
+        "tns_ns": "higher",
+        "area_um2": "lower",
+        "cell_count": "lower",
+        "power_uw": "lower",
+    }
+    comparisons = {
+        name: _numeric_comparison(parent_values.get(name), child_values.get(name), better_when)
+        for name, better_when in metric_preferences.items()
+    }
+
+    parent_violation_total = _violation_total(parent_metrics.get("violations", {}))
+    child_violation_total = _violation_total(child_metrics.get("violations", {}))
+    comparisons["timing_violation_total"] = _numeric_comparison(
+        parent_violation_total,
+        child_violation_total,
+        "lower",
+    )
+
+    parent_drc = get_route_drc_summary(workspace=workspace, run_id=resolved_parent_id)
+    child_drc = get_route_drc_summary(workspace=workspace, run_id=resolved_child_id)
+    route_drc_comparison = None
+    if parent_drc.get("status") == "ok" and child_drc.get("status") == "ok":
+        route_drc_comparison = {
+            "violation_count": _numeric_comparison(
+                parent_drc.get("violation_count"),
+                child_drc.get("violation_count"),
+                "lower",
+            ),
+            "parent_clean": parent_drc.get("clean"),
+            "child_clean": child_drc.get("clean"),
+        }
+
+    parent_congestion = get_congestion_summary(workspace=workspace, run_id=resolved_parent_id)
+    child_congestion = get_congestion_summary(workspace=workspace, run_id=resolved_child_id)
+    congestion_comparison = None
+    if parent_congestion.get("status") == "ok" and child_congestion.get("status") == "ok":
+        parent_total = parent_congestion.get("total") or {}
+        child_total = child_congestion.get("total") or {}
+        congestion_comparison = {
+            "total_overflow": _numeric_comparison(
+                parent_total.get("total_overflow"),
+                child_total.get("total_overflow"),
+                "lower",
+            ),
+            "usage_pct": _numeric_comparison(
+                parent_total.get("usage_pct"),
+                child_total.get("usage_pct"),
+                "lower",
+            ),
+            "wirelength_um": _numeric_comparison(
+                parent_congestion.get("wirelength_um"),
+                child_congestion.get("wirelength_um"),
+                "lower",
+            ),
+            "parent_congested_layers": parent_congestion.get("congested_layers", []),
+            "child_congested_layers": child_congestion.get("congested_layers", []),
+        }
+
+    improved = [name for name, item in comparisons.items() if item.get("classification") == "improved"]
+    regressed = [name for name, item in comparisons.items() if item.get("classification") == "regressed"]
+    if route_drc_comparison:
+        cls = route_drc_comparison["violation_count"].get("classification")
+        if cls == "improved":
+            improved.append("route_drc_violation_count")
+        elif cls == "regressed":
+            regressed.append("route_drc_violation_count")
+    if congestion_comparison:
+        cls = congestion_comparison["total_overflow"].get("classification")
+        if cls == "improved":
+            improved.append("congestion_total_overflow")
+        elif cls == "regressed":
+            regressed.append("congestion_total_overflow")
+
+    child_wns = child_values.get("wns_ns")
+    child_tns = child_values.get("tns_ns")
+    timing_closed = (
+        isinstance(child_wns, (int, float))
+        and child_wns >= 0
+        and (child_tns is None or child_tns >= 0)
+    )
+    route_clean = child_drc.get("clean") if child_drc.get("status") == "ok" else None
+    signoff_clean = bool(timing_closed and route_clean is True)
+
+    if signoff_clean and not regressed:
+        verdict = "closed"
+    elif signoff_clean:
+        verdict = "closed_with_tradeoffs"
+    elif improved and not regressed:
+        verdict = "improved"
+    elif improved and regressed:
+        verdict = "mixed"
+    elif regressed:
+        verdict = "regressed"
+    else:
+        verdict = "neutral"
+
+    return {
+        "status": "ok",
+        "parent_run_id": resolved_parent_id,
+        "child_run_id": resolved_child_id,
+        "top_module": child_meta.get("top_module") or parent_meta.get("top_module"),
+        "platform": child_meta.get("platform") or parent_meta.get("platform"),
+        "lineage": {
+            "child_mode": child_meta.get("mode"),
+            "retry_start_stage": child_meta.get("retry_start_stage"),
+            "retry_max_stage": child_meta.get("retry_max_stage"),
+            "orfs_overrides": child_meta.get("orfs_overrides", {}),
+        },
+        "verdict": verdict,
+        "signoff_clean": signoff_clean,
+        "timing_closed": timing_closed,
+        "route_clean": route_clean,
+        "improved_metrics": improved,
+        "regressed_metrics": regressed,
+        "comparisons": comparisons,
+        "route_drc_comparison": route_drc_comparison,
+        "congestion_comparison": congestion_comparison,
+        "parent_complete": parent_metrics.get("complete"),
+        "child_complete": child_metrics.get("complete"),
+        "notes": [
+            "Positive WNS/TNS deltas are better; negative area/cell/power/DRC/congestion deltas are better.",
+            "Use this as a retry triage summary; detailed diagnosis still comes from stage-specific reports.",
+        ],
+    }
+
+
+def get_stage_status(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    run_dir = get_run_dir(workspace, run_id)
+    if run_dir is None:
+        return {
+            "status": "error",
+            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
+            "run_id": run_id,
+        }
+
+    run_meta = _load_run_meta_with_inferred_stages(run_dir)
+    resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
+    stages = run_meta.get("stages", {})
+    completed = [name for name, item in stages.items() if item.get("status") == "completed"]
+    failed = [name for name, item in stages.items() if item.get("status") == "failed"]
+    running = [name for name, item in stages.items() if item.get("status") == "running"]
+    pending = [name for name, item in stages.items() if item.get("status") == "pending"]
+
+    return {
+        "status": "ok",
+        "run_id": resolved_run_id,
+        "top_module": run_meta.get("top_module"),
+        "platform": run_meta.get("platform"),
+        "run_status": run_meta.get("status"),
+        "current_stage": run_meta.get("current_stage"),
+        "stages": stages,
+        "completed_stages": completed,
+        "failed_stages": failed,
+        "running_stages": running,
+        "pending_stages": pending,
+        "stage_count": len(stages),
+        "elapsed_sec": run_meta.get("elapsed_sec"),
     }
 
 
