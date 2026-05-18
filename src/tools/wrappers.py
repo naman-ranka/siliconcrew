@@ -11,9 +11,15 @@ from src.tools.run_cocotb import run_cocotb
 from src.tools.run_sby import run_sby
 from src.tools.synthesis_manager import (
     start_synthesis_job,
+    retry_pd_job,
     get_synthesis_job_status,
     get_synthesis_metrics as collect_synthesis_metrics,
     read_stage_report as collect_stage_report,
+    get_route_drc_summary as collect_route_drc_summary,
+    get_cts_summary as collect_cts_summary,
+    get_congestion_summary as collect_congestion_summary,
+    compare_pd_runs as collect_pd_run_comparison,
+    get_stage_status as collect_stage_status,
 )
 from src.tools.file_patch import apply_unified_patch
 
@@ -234,6 +240,31 @@ def start_synthesis(
     )
     return json.dumps(result, indent=2)
 
+
+@tool
+def retry_pd(
+    run_id: str,
+    start_stage: str,
+    max_stage: str = "finish",
+    orfs_overrides_json: str = "",
+    timeout_sec: int = 1200,
+) -> str:
+    """
+    Creates a child PD retry run from an existing synthesis run.
+    Validates the required checkpoint for start_stage, copies prerequisites into a new run,
+    and reruns only the requested downstream ORFS do-* stages.
+    """
+    workspace = get_workspace_path()
+    result = retry_pd_job(
+        workspace=workspace,
+        source_run_id=run_id,
+        start_stage=start_stage,
+        max_stage=max_stage,
+        orfs_overrides_json=orfs_overrides_json,
+        timeout=timeout_sec,
+    )
+    return json.dumps(result, indent=2)
+
 @tool
 def get_synthesis_job(job_id: str) -> str:
     """
@@ -386,6 +417,65 @@ def read_stage_report(stage: str, run_id: str = None) -> str:
     """
     workspace = get_workspace_path()
     result = collect_stage_report(workspace=workspace, stage=stage, run_id=run_id)
+    return json.dumps(result, indent=2)
+
+
+@tool
+def get_route_drc_summary(run_id: str = None) -> str:
+    """
+    Summarizes the final route DRC report from ORFS.
+    Treats an empty 5_route_drc.rpt as a clean final route result.
+    """
+    workspace = get_workspace_path()
+    result = collect_route_drc_summary(workspace=workspace, run_id=run_id)
+    return json.dumps(result, indent=2)
+
+
+@tool
+def get_cts_summary(run_id: str = None) -> str:
+    """
+    Summarizes the ORFS CTS final report.
+    Extracts timing, skew, violation counts, and critical-path summary fields.
+    """
+    workspace = get_workspace_path()
+    result = collect_cts_summary(workspace=workspace, run_id=run_id)
+    return json.dumps(result, indent=2)
+
+
+@tool
+def get_congestion_summary(run_id: str = None) -> str:
+    """
+    Summarizes ORFS global-routing congestion from congestion.rpt or 5_1_grt.log.
+    Extracts per-layer resource, demand, usage, and overflow totals.
+    """
+    workspace = get_workspace_path()
+    result = collect_congestion_summary(workspace=workspace, run_id=run_id)
+    return json.dumps(result, indent=2)
+
+
+@tool
+def compare_pd_runs(child_run_id: str, parent_run_id: str = None) -> str:
+    """
+    Compares a PD retry child run against its parent.
+    If parent_run_id is omitted, uses the child run lineage metadata when available.
+    """
+    workspace = get_workspace_path()
+    result = collect_pd_run_comparison(
+        workspace=workspace,
+        child_run_id=child_run_id,
+        parent_run_id=parent_run_id,
+    )
+    return json.dumps(result, indent=2)
+
+
+@tool
+def get_stage_status(run_id: str = None) -> str:
+    """
+    Returns stage-aware run metadata for a synthesis run.
+    Includes current stage, per-stage statuses, and grouped completed/running/pending stages.
+    """
+    workspace = get_workspace_path()
+    result = collect_stage_status(workspace=workspace, run_id=run_id)
     return json.dumps(result, indent=2)
 
 
@@ -817,10 +907,16 @@ mcp_tools = [
     sby_tool,
     # Synthesis & Analysis
     start_synthesis,
+    retry_pd,
     get_synthesis_job,
     wait_for_synthesis,
     get_synthesis_metrics,
     read_stage_report,
+    get_route_drc_summary,
+    get_cts_summary,
+    get_congestion_summary,
+    compare_pd_runs,
+    get_stage_status,
     search_logs_tool,
     schematic_tool,
     # Reporting & Metrics

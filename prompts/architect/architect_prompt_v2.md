@@ -21,14 +21,37 @@ Required full flow:
 7. Reporting: generate_report_tool.
 
 PD Diagnosis (mandatory when WNS < 0):
-Use search_logs_tool to identify the critical path — search "startpoint", "endpoint",
-"data arrival time", "slack (VIOLATED)". Then determine the failure class:
-- Violation present in 2_floorplan_final.rpt → cell propagation alone exceeds the period.
-  This is a process floor. Correct response: reduce RTL logic depth or accept as Fmax limit.
-- Violation only appears after routing → wire parasitics are the cause.
-  Correct response: increase core_margin, adjust aspect_ratio, or reduce utilization.
-- PDN-0185 error → floorplan too small for power grid. Read the reported die width from the
-  error, estimate max safe utilization as cell_area_um2 / required_width_um², retry at that value.
+1. Call get_stage_status to confirm which stages produced artifacts.
+2. Read structured summaries before grepping logs:
+   - get_cts_summary        -> WNS/TNS, setup_skew, clock_fmax, violation counts, sample paths
+   - get_congestion_summary -> per-layer usage_pct, total_overflow, has_overflow, wirelength
+   - get_route_drc_summary  -> clean flag, violation_count, route_stage_status
+   - read_stage_report      -> raw stage artifact when summaries are insufficient
+3. Use search_logs_tool only for evidence the structured summaries do not surface (PDN errors,
+   path-level detail, ORFS-specific warnings).
+4. Diagnose the failure class from this evidence. Do not assume the cause without reading the data.
+
+Existing rules still apply:
+- Violation present in 2_floorplan_final.rpt -> cell propagation alone exceeds the period.
+  Process floor. Reduce RTL logic depth or accept as Fmax limit.
+- Violation only appears after routing -> wire parasitics. Adjust core_margin, aspect_ratio,
+  or utilization (via a PD retry).
+- PDN-0185 -> floorplan too small for power grid. Read reported die width, estimate max safe
+  utilization as cell_area_um2 / required_width_um^2, retry at that value.
+
+PD Retry (controlled physical-design iteration):
+retry_pd creates a child run from an existing parent. It never modifies the parent run.
+
+The retry knob determines the start_stage. Read docs/pd_knob_catalog.md for the validated set
+and the stage each knob applies to. Do not invent ORFS variables.
+
+After every retry:
+1. Wait for terminal status via get_synthesis_job / wait_for_synthesis on the child job_id.
+2. Call compare_pd_runs(child_run_id) for the structured parent-vs-child delta.
+3. Decide whether to accept the child based on the diagnostic data - improvement on the target
+   metric, acceptable tradeoffs elsewhere.
+4. If multiple retries do not improve the target, weigh PD tuning against RTL or constraint
+   changes.
 
 Simulation Failure Diagnosis (mandatory when simulation status = test_failed):
 Use waveform_tool on the .vcd to identify x/z propagation, output cycle misalignment, and
@@ -48,6 +71,8 @@ Iteration policy (mandatory when goals are unmet):
    - Synthesis parameter tuning: start utilization at 40% for standard designs; adjust based on
      PD feedback. Use core_margin >= 4 for very small designs (< 30 cells). Increase aspect_ratio
      if routing congestion is driving timing failures after placement.
+   - PD retry path: use retry_pd to iterate physical knobs without re-running synthesis from
+     scratch. Follow with compare_pd_runs.
 4. After each attempt, rerun the relevant verification chain (lint -> RTL sim -> synthesis/metrics -> post-synth sim as applicable).
 
 Synthesis guardrails (mandatory):

@@ -7,6 +7,10 @@ import tempfile
 from src.tools import wrappers
 
 
+def _repo_root() -> str:
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
+
+
 def test_sleep_tool_clamps_seconds(monkeypatch):
     called = {"seconds": None}
 
@@ -45,6 +49,12 @@ def test_mcp_does_not_expose_sleep_tool():
         assert "sleep_tool" not in names
         assert "wait_for_synthesis" in names
         assert "read_stage_report" in names
+        assert "get_route_drc_summary" in names
+        assert "get_cts_summary" in names
+        assert "get_congestion_summary" in names
+        assert "compare_pd_runs" in names
+        assert "get_stage_status" in names
+        assert "retry_pd" in names
     finally:
         if old_home is None:
             os.environ.pop("HOME", None)
