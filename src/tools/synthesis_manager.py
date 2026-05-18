@@ -19,6 +19,25 @@ INDEX_FILENAME = "index.json"
 LATEST_FILENAME = "LATEST"
 RUN_META_FILENAME = "run_meta.json"
 
+PD_STAGE_SEQUENCE = ["constraints", "synth", "floorplan", "place", "cts", "grt", "route", "finish"]
+PD_RETRYABLE_STAGES = ["floorplan", "place", "cts", "grt", "route", "finish"]
+PD_STAGE_TARGETS = {
+    "floorplan": "do-floorplan",
+    "place": "do-place",
+    "cts": "do-cts",
+    "grt": "do-grt",
+    "route": "do-route",
+    "finish": "do-finish",
+}
+PD_PREREQ_FILES = {
+    "floorplan": [("1_synth.odb", "1_synth.odb"), ("1_synth.sdc", "1_synth.sdc")],
+    "place": [("2_floorplan.odb", "2_floorplan.odb"), ("2_floorplan.sdc", "2_floorplan.sdc")],
+    "cts": [("3_place.odb", "3_place.odb"), ("3_place.sdc", "3_place.sdc")],
+    "grt": [("4_cts.odb", "4_cts.odb"), ("4_cts.sdc", "4_cts.sdc")],
+    "route": [("5_1_grt.odb", "5_1_grt.odb"), ("5_1_grt.sdc", "5_1_grt.sdc")],
+    "finish": [("5_route.odb", "5_route.odb"), ("5_route.sdc", "5_route.sdc")],
+}
+
 _JOB_LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=2)
 _JOBS: Dict[str, Dict[str, Any]] = {}
@@ -357,6 +376,113 @@ def _collect_artifacts(run_dir: str) -> Dict[str, int]:
     return counts
 
 
+def _init_stage_metadata() -> Dict[str, Any]:
+    return {
+        stage: {
+            "status": "pending",
+            "artifacts": {},
+        }
+        for stage in PD_STAGE_SEQUENCE
+    }
+
+
+def _find_stage_artifacts(run_dir: str) -> Dict[str, Dict[str, str]]:
+    found: Dict[str, Dict[str, str]] = {stage: {} for stage in PD_STAGE_SEQUENCE}
+
+    checks = {
+        "synth": [
+            ("odb", "orfs_results", "1_synth.odb"),
+            ("sdc", "orfs_results", "1_synth.sdc"),
+            ("stat_report", "orfs_reports", "synth_stat.txt"),
+        ],
+        "floorplan": [
+            ("report", "orfs_reports", "2_floorplan_final.rpt"),
+            ("odb", "orfs_results", "2_floorplan.odb"),
+            ("sdc", "orfs_results", "2_floorplan.sdc"),
+        ],
+        "place": [
+            ("log", "orfs_logs", "3_3_place_gp.json"),
+            ("odb", "orfs_results", "3_place.odb"),
+            ("sdc", "orfs_results", "3_place.sdc"),
+        ],
+        "cts": [
+            ("report", "orfs_reports", "4_cts_final.rpt"),
+            ("odb", "orfs_results", "4_cts.odb"),
+            ("sdc", "orfs_results", "4_cts.sdc"),
+        ],
+        "grt": [
+            ("report", "orfs_reports", "congestion.rpt"),
+            ("log", "orfs_logs", "5_1_grt.log"),
+            ("odb", "orfs_results", "5_1_grt.odb"),
+            ("sdc", "orfs_results", "5_1_grt.sdc"),
+        ],
+        "route": [
+            ("report", "orfs_reports", "5_route_drc.rpt"),
+            ("odb", "orfs_results", "5_route.odb"),
+            ("sdc", "orfs_results", "5_route.sdc"),
+        ],
+        "finish": [
+            ("report", "orfs_reports", "6_finish.rpt"),
+            ("odb", "orfs_results", "6_final.odb"),
+            ("sdc", "orfs_results", "6_final.sdc"),
+            ("netlist", "orfs_results", "6_final.v"),
+            ("gds", "orfs_results", "6_final.gds"),
+        ],
+    }
+
+    for stage, candidates in checks.items():
+        for artifact_key, scope, filename in candidates:
+            path = _find_artifact_file(run_dir, scope, filename)
+            if path:
+                found[stage][artifact_key] = path
+    return found
+
+
+def _refresh_stage_metadata(run_dir: str, run_meta: Dict[str, Any], terminal_status: Optional[str] = None) -> Dict[str, Any]:
+    stages = run_meta.get("stages")
+    if not isinstance(stages, dict):
+        stages = _init_stage_metadata()
+
+    discovered = _find_stage_artifacts(run_dir)
+    for stage in PD_STAGE_SEQUENCE:
+        stage_meta = stages.get(stage, {"status": "pending", "artifacts": {}})
+        stage_meta.setdefault("artifacts", {})
+        if stage == "constraints":
+            constraints_ok = run_meta.get("auto_checks", {}).get("constraints")
+            if constraints_ok == "pass":
+                stage_meta["status"] = "completed"
+            elif constraints_ok == "fail":
+                stage_meta["status"] = "failed"
+        else:
+            artifacts = discovered.get(stage, {})
+            if artifacts:
+                stage_meta["status"] = "completed"
+                stage_meta["artifacts"] = artifacts
+            elif terminal_status == "failed" and run_meta.get("current_stage") == stage:
+                stage_meta["status"] = "failed"
+        stages[stage] = stage_meta
+
+    # If later physical-design stages completed, synthesis necessarily completed too,
+    # even when explicit 1_synth.* artifacts were not preserved in the mounted run dir.
+    downstream_completed = any(
+        stages.get(stage, {}).get("status") == "completed"
+        for stage in ["floorplan", "place", "cts", "grt", "route", "finish"]
+    )
+    if downstream_completed and stages["synth"].get("status") != "completed":
+        stages["synth"]["status"] = "completed"
+
+    if terminal_status == "completed":
+        run_meta["current_stage"] = "finish"
+    elif terminal_status == "failed":
+        failed_stage = run_meta.get("current_stage") or _infer_stage(_collect_log_tail(run_dir))
+        run_meta["current_stage"] = failed_stage
+        if failed_stage in stages and stages[failed_stage].get("status") != "completed":
+            stages[failed_stage]["status"] = "failed"
+
+    run_meta["stages"] = stages
+    return run_meta
+
+
 def _find_netlist(run_dir: str, top_module: str) -> Optional[str]:
     roots = [os.path.join(run_dir, "orfs_results"), os.path.join(run_dir, "inputs")]
     ranked = []
@@ -458,6 +584,273 @@ def _run_orfs(
     )
 
 
+def _write_orfs_config(
+    run_dir: str,
+    top_module: str,
+    platform: str,
+    input_files: List[str],
+    utilization: int,
+    aspect_ratio: float,
+    core_margin: float,
+    orfs_overrides: Optional[Dict[str, Any]] = None,
+) -> str:
+    rel_files = [f"/workspace/inputs/{os.path.basename(x)}" for x in input_files]
+    config_mk = os.path.join(run_dir, "config.mk")
+    lines = [
+        f"export DESIGN_NAME = {top_module}",
+        f"export PLATFORM = {platform}",
+        f"export VERILOG_FILES = {' '.join(rel_files)}",
+        "export SDC_FILE = /workspace/constraints.sdc",
+        f"export CORE_UTILIZATION = {utilization}",
+        f"export CORE_ASPECT_RATIO = {aspect_ratio}",
+        f"export CORE_MARGIN = {core_margin}",
+    ]
+    for key, value in (orfs_overrides or {}).items():
+        lines.append(f"export {key} = {value}")
+    with open(config_mk, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return config_mk
+
+
+def _run_orfs_targets(
+    run_dir: str,
+    top_module: str,
+    platform: str,
+    input_files: List[str],
+    utilization: int,
+    aspect_ratio: float,
+    core_margin: float,
+    targets: List[str],
+    timeout: int,
+    orfs_overrides: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    results_dir = _ensure_dir(os.path.join(run_dir, "orfs_results"))
+    logs_dir = _ensure_dir(os.path.join(run_dir, "orfs_logs"))
+    reports_dir = _ensure_dir(os.path.join(run_dir, "orfs_reports"))
+
+    _write_orfs_config(
+        run_dir=run_dir,
+        top_module=top_module,
+        platform=platform,
+        input_files=input_files,
+        utilization=utilization,
+        aspect_ratio=aspect_ratio,
+        core_margin=core_margin,
+        orfs_overrides=orfs_overrides,
+    )
+
+    volumes = [
+        f"{results_dir}:/OpenROAD-flow-scripts/flow/results",
+        f"{logs_dir}:/OpenROAD-flow-scripts/flow/logs",
+        f"{reports_dir}:/OpenROAD-flow-scripts/flow/reports",
+    ]
+    target_cmds = [f"make DESIGN_CONFIG=/workspace/config.mk {target}" for target in targets]
+    return run_docker_command(
+        command="set -e; " + "; ".join(target_cmds),
+        workspace_path=run_dir,
+        volumes=volumes,
+        timeout=timeout,
+    )
+
+
+def _stage_range(start_stage: str, max_stage: str) -> List[str]:
+    start_idx = PD_RETRYABLE_STAGES.index(start_stage)
+    end_idx = PD_RETRYABLE_STAGES.index(max_stage)
+    return PD_RETRYABLE_STAGES[start_idx : end_idx + 1]
+
+
+def _parse_orfs_overrides(orfs_overrides_json: Optional[str]) -> Dict[str, Any]:
+    raw = (orfs_overrides_json or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception as exc:
+        raise ValueError(f"Invalid orfs_overrides_json: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("orfs_overrides_json must decode to a JSON object.")
+    return {str(k): v for k, v in parsed.items()}
+
+
+def _copy_retry_inputs(parent_run_dir: str, child_run_dir: str, parent_meta: Optional[Dict[str, Any]] = None) -> tuple[List[str], Optional[str]]:
+    parent_inputs = os.path.join(parent_run_dir, "inputs")
+    child_inputs = _ensure_dir(os.path.join(child_run_dir, "inputs"))
+    copied_inputs: List[str] = []
+    if os.path.exists(parent_inputs):
+        for name in os.listdir(parent_inputs):
+            src = os.path.join(parent_inputs, name)
+            if os.path.isfile(src):
+                dst = os.path.join(child_inputs, name)
+                shutil.copy2(src, dst)
+                copied_inputs.append(dst)
+
+    copied_spec = None
+    parent_spec = os.path.join(parent_run_dir, "spec")
+    child_spec = _ensure_dir(os.path.join(child_run_dir, "spec"))
+    if os.path.exists(parent_spec):
+        for name in os.listdir(parent_spec):
+            src = os.path.join(parent_spec, name)
+            if os.path.isfile(src):
+                dst = os.path.join(child_spec, name)
+                shutil.copy2(src, dst)
+                if copied_spec is None:
+                    copied_spec = dst
+
+    # Older/full-flow runs may store the active spec at the run root instead of run_dir/spec/.
+    if copied_spec is None:
+        spec_name = None
+        if parent_meta:
+            spec_name = parent_meta.get("spec_file")
+        candidate_specs = []
+        if spec_name:
+            candidate_specs.append(os.path.join(parent_run_dir, spec_name))
+        candidate_specs.extend(
+            os.path.join(parent_run_dir, name)
+            for name in os.listdir(parent_run_dir)
+            if name.endswith("_spec.yaml")
+        )
+        seen = set()
+        for src in candidate_specs:
+            if src in seen:
+                continue
+            seen.add(src)
+            if os.path.isfile(src):
+                dst = os.path.join(child_spec, os.path.basename(src))
+                shutil.copy2(src, dst)
+                copied_spec = dst
+                break
+    return copied_inputs, copied_spec
+
+
+def _copy_retry_constraints(parent_run_dir: str, child_run_dir: str) -> None:
+    parent_constraints = os.path.join(parent_run_dir, "constraints.sdc")
+    if os.path.exists(parent_constraints):
+        shutil.copy2(parent_constraints, os.path.join(child_run_dir, "constraints.sdc"))
+
+
+def _copy_retry_prerequisites(parent_run_dir: str, child_run_dir: str, start_stage: str) -> Dict[str, str]:
+    parent_results = os.path.join(parent_run_dir, "orfs_results")
+    child_results = _ensure_dir(os.path.join(child_run_dir, "orfs_results"))
+    copied: Dict[str, str] = {}
+    missing: List[str] = []
+
+    for filename, artifact_key in PD_PREREQ_FILES[start_stage]:
+        src = _find_artifact_file(parent_run_dir, "orfs_results", filename)
+        if not src:
+            missing.append(filename)
+            continue
+        rel = os.path.relpath(src, parent_results)
+        dst = os.path.join(child_results, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        copied[artifact_key] = dst
+
+    if missing:
+        raise FileNotFoundError(
+            f"Missing prerequisite artifacts for retry stage '{start_stage}': {', '.join(missing)}"
+        )
+    return copied
+
+
+def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    start = time.time()
+    parent_run_id = args["source_run_id"]
+    parent_run_dir = get_run_dir(workspace, parent_run_id)
+    if not parent_run_dir:
+        return {
+            "run_id": args["run_id"],
+            "job_id": job_id,
+            "status": "failed",
+            "current_stage": args["start_stage"],
+            "check_notes": f"Source run '{parent_run_id}' not found.",
+        }
+
+    parent_meta = _read_run_meta(parent_run_dir)
+    copied_inputs, copied_spec = _copy_retry_inputs(parent_run_dir, run_dir, parent_meta=parent_meta)
+    _copy_retry_constraints(parent_run_dir, run_dir)
+    copied_prereqs = _copy_retry_prerequisites(parent_run_dir, run_dir, args["start_stage"])
+
+    auto_checks = GuardrailSummary(
+        constraints=parent_meta.get("auto_checks", {}).get("constraints", "pass"),
+        signoff="skip",
+        equiv="skip",
+    )
+    stages = _init_stage_metadata()
+    for stage in PD_STAGE_SEQUENCE:
+        if stage == "constraints":
+            stages[stage]["status"] = "completed"
+        elif stage in PD_RETRYABLE_STAGES and PD_RETRYABLE_STAGES.index(stage) < PD_RETRYABLE_STAGES.index(args["start_stage"]):
+            stages[stage]["status"] = "completed"
+
+    run_meta: Dict[str, Any] = {
+        "run_id": args["run_id"],
+        "job_id": job_id,
+        "created_at": _now_iso(),
+        "status": "running",
+        "mode": "pd_retry",
+        "parent_run_id": parent_run_id,
+        "source_run_id": parent_run_id,
+        "retry_start_stage": args["start_stage"],
+        "retry_max_stage": args["max_stage"],
+        "orfs_overrides": args["orfs_overrides"],
+        "current_stage": args["start_stage"],
+        "platform": args["platform"],
+        "top_module": args["top_module"],
+        "input_files": [os.path.basename(x) for x in copied_inputs],
+        "spec_file": os.path.basename(copied_spec) if copied_spec else None,
+        "requested_clock_period_ns": parent_meta.get("requested_clock_period_ns"),
+        "effective_clock_period_ns": parent_meta.get("effective_clock_period_ns"),
+        "clock_period_ns": parent_meta.get("clock_period_ns"),
+        "clock_source": parent_meta.get("clock_source"),
+        "constraints_mode": parent_meta.get("constraints_mode", "auto"),
+        "auto_checks": asdict(auto_checks),
+        "check_notes": f"Retrying from stage '{args['start_stage']}' through '{args['max_stage']}'.",
+        "stages": stages,
+        "retry_prerequisites": copied_prereqs,
+    }
+    run_meta["stages"][args["start_stage"]]["status"] = "running"
+    _persist_run_meta(run_dir, run_meta)
+
+    targets = [PD_STAGE_TARGETS[stage] for stage in _stage_range(args["start_stage"], args["max_stage"])]
+    docker_result = _run_orfs_targets(
+        run_dir=run_dir,
+        top_module=args["top_module"],
+        platform=args["platform"],
+        input_files=copied_inputs,
+        utilization=args["utilization"],
+        aspect_ratio=args["aspect_ratio"],
+        core_margin=args["core_margin"],
+        targets=targets,
+        timeout=args["timeout"],
+        orfs_overrides=args["orfs_overrides"],
+    )
+
+    run_meta["docker_command"] = docker_result.get("command")
+    run_meta["docker_success"] = docker_result.get("success", False)
+    run_meta["docker_stdout_tail"] = (docker_result.get("stdout") or "")[-1200:]
+    run_meta["docker_stderr_tail"] = (docker_result.get("stderr") or "")[-1200:]
+
+    signoff = _signoff_guardrail(run_dir, args["top_module"], docker_result)
+    auto_checks.signoff = signoff["status"]
+    run_meta["auto_checks"] = asdict(auto_checks)
+    run_meta["netlist_path"] = _find_netlist(run_dir, args["top_module"])
+    run_meta["summary_metrics"] = _extract_summary_metrics(run_dir)
+    run_meta["status"] = "completed" if docker_result.get("success", False) and auto_checks.signoff == "pass" else "failed"
+    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else "PD retry completed"
+    run_meta["next_action"] = (
+        "Inspect stage summaries and continue tuning." if run_meta["status"] == "completed"
+        else "Inspect retry stage logs and adjust parameters."
+    )
+    run_meta["finished_at"] = _now_iso()
+    run_meta["elapsed_sec"] = round(time.time() - start, 2)
+    run_meta["current_stage"] = args["max_stage"] if run_meta["status"] == "completed" else args["start_stage"]
+    run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
+
+    _persist_run_meta(run_dir, run_meta)
+    _append_index(workspace, args["run_id"], job_id, run_meta["status"])
+    return run_meta
+
+
 def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, Any]) -> Dict[str, str]:
     if not docker_result.get("success"):
         return {"status": "fail", "note": "ORFS command failed"}
@@ -527,6 +920,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "job_id": job_id,
         "created_at": _now_iso(),
         "status": "running",
+        "current_stage": "constraints",
         "platform": platform,
         "top_module": top_module,
         "input_files": [os.path.basename(x) for x in copied_inputs],
@@ -538,17 +932,26 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "constraints_mode": args.get("constraints_mode", "auto"),
         "auto_checks": asdict(auto_checks),
         "check_notes": constraints["note"],
+        "stages": _init_stage_metadata(),
     }
+    run_meta["stages"]["constraints"]["status"] = "running"
     _persist_run_meta(run_dir, run_meta)
 
     if constraints["status"] != "pass":
         run_meta["status"] = "failed"
+        run_meta["current_stage"] = "constraints"
         run_meta["finished_at"] = _now_iso()
         run_meta["elapsed_sec"] = round(time.time() - start, 2)
         run_meta["next_action"] = "Fix spec/clock constraints and rerun synthesis."
+        run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status="failed")
         _persist_run_meta(run_dir, run_meta)
         _append_index(workspace, run_id, job_id, "failed")
         return run_meta
+
+    run_meta["stages"]["constraints"]["status"] = "completed"
+    run_meta["current_stage"] = "synth"
+    run_meta["stages"]["synth"]["status"] = "running"
+    _persist_run_meta(run_dir, run_meta)
 
     docker_result = _run_orfs(
         run_dir=run_dir,
@@ -606,6 +1009,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
 
     final_ok = docker_result.get("success", False) and auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
     run_meta["status"] = "completed" if final_ok else "failed"
+    run_meta["current_stage"] = "finish" if final_ok else _infer_stage(_collect_log_tail(run_dir))
     run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else "All guardrails passed"
     run_meta["next_action"] = (
         "Use search_logs_tool for detailed PPA/error verification." if run_meta["status"] == "completed"
@@ -613,6 +1017,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
     )
     run_meta["finished_at"] = _now_iso()
     run_meta["elapsed_sec"] = round(time.time() - start, 2)
+    run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
 
     _persist_run_meta(run_dir, run_meta)
     _append_index(workspace, run_id, job_id, run_meta["status"])
@@ -674,6 +1079,101 @@ def start_synthesis_job(
     }
 
 
+def retry_pd_job(
+    workspace: str,
+    source_run_id: str,
+    start_stage: str,
+    max_stage: str = "finish",
+    orfs_overrides_json: str = "",
+    timeout: int = SYNTH_HARD_TIMEOUT_SEC,
+) -> Dict[str, Any]:
+    start_stage = (start_stage or "").strip().lower()
+    max_stage = (max_stage or "").strip().lower()
+    if start_stage not in PD_RETRYABLE_STAGES:
+        return {
+            "status": "error",
+            "message": f"Unsupported start_stage '{start_stage}'.",
+            "supported_stages": PD_RETRYABLE_STAGES,
+        }
+    if max_stage not in PD_RETRYABLE_STAGES:
+        return {
+            "status": "error",
+            "message": f"Unsupported max_stage '{max_stage}'.",
+            "supported_stages": PD_RETRYABLE_STAGES,
+        }
+    if PD_RETRYABLE_STAGES.index(max_stage) < PD_RETRYABLE_STAGES.index(start_stage):
+        return {
+            "status": "error",
+            "message": "max_stage must be the same as or after start_stage.",
+        }
+
+    parent_run_dir = get_run_dir(workspace, source_run_id)
+    if not parent_run_dir:
+        return {
+            "status": "error",
+            "message": f"Source run '{source_run_id}' not found.",
+        }
+    parent_meta = _read_run_meta(parent_run_dir)
+    top_module = parent_meta.get("top_module")
+    platform = parent_meta.get("platform")
+    if not top_module or not platform:
+        return {
+            "status": "error",
+            "message": f"Source run '{source_run_id}' is missing top_module/platform metadata.",
+        }
+    try:
+        orfs_overrides = _parse_orfs_overrides(orfs_overrides_json)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+
+    run_id = _next_run_id(workspace)
+    run_dir = _ensure_dir(os.path.join(_runs_root(workspace), run_id))
+    job_id = f"job_{uuid.uuid4().hex[:10]}"
+    timeout_sec = max(60, min(int(timeout), SYNTH_HARD_TIMEOUT_SEC))
+
+    args = {
+        "run_id": run_id,
+        "source_run_id": source_run_id,
+        "start_stage": start_stage,
+        "max_stage": max_stage,
+        "top_module": top_module,
+        "platform": platform,
+        "utilization": int(parent_meta.get("summary_metrics", {}).get("utilization_pct", 5) or 5),
+        "aspect_ratio": float(parent_meta.get("aspect_ratio", 1.0) or 1.0),
+        "core_margin": float(parent_meta.get("core_margin", 2.0) or 2.0),
+        "timeout": timeout_sec,
+        "orfs_overrides": orfs_overrides,
+    }
+
+    try:
+        _copy_retry_prerequisites(parent_run_dir, run_dir, start_stage)
+    except FileNotFoundError as exc:
+        return {"status": "error", "message": str(exc)}
+    else:
+        shutil.rmtree(os.path.join(run_dir, "orfs_results"), ignore_errors=True)
+
+    with _JOB_LOCK:
+        future = _EXECUTOR.submit(_retry_pd_worker, job_id, workspace, run_dir, args)
+        _JOBS[job_id] = {
+            "future": future,
+            "workspace": workspace,
+            "run_id": run_id,
+            "run_dir": run_dir,
+            "created_at": _now_iso(),
+        }
+
+    _append_index(workspace, run_id, job_id, "running")
+    return {
+        "job_id": job_id,
+        "run_id": run_id,
+        "status": "queued",
+        "stage": start_stage,
+        "timeout_sec": timeout_sec,
+        "source_run_id": source_run_id,
+        "mode": "pd_retry",
+    }
+
+
 def _read_run_meta(run_dir: str) -> Dict[str, Any]:
     path = os.path.join(run_dir, RUN_META_FILENAME)
     if not os.path.exists(path):
@@ -715,6 +1215,8 @@ def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, 
         "run_id": run_id,
         "status": status,
         "stage": "final" if status in {"completed", "failed"} else stage,
+        "current_stage": meta.get("current_stage", stage),
+        "stages": meta.get("stages"),
         "elapsed_sec": meta.get("elapsed_sec"),
         "last_log_lines": last_log_lines,
         "artifacts_found": _collect_artifacts(run_dir),
@@ -999,6 +1501,313 @@ def read_stage_report(workspace: str, stage: str, run_id: Optional[str] = None) 
         "content_truncated": len(content) > max_chars,
         "content_length": len(content),
         "checked_candidates": checked,
+    }
+
+
+def get_route_drc_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    run_dir = get_run_dir(workspace, run_id)
+    if run_dir is None:
+        return {
+            "status": "error",
+            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
+            "run_id": run_id,
+            "stage": "route",
+        }
+
+    report_path = _find_report_file(run_dir, "5_route_drc.rpt")
+    run_meta = _read_run_meta(run_dir)
+    resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
+    if not report_path:
+        return {
+            "status": "error",
+            "message": "5_route_drc.rpt not found.",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "route",
+        }
+
+    try:
+        with open(report_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = [line.rstrip("\n") for line in f.readlines()]
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Failed to read route DRC report: {exc}",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "route",
+            "report_path": report_path,
+        }
+
+    nonempty = [line.strip() for line in lines if line.strip()]
+    unique_entries: List[str] = []
+    seen = set()
+    for entry in nonempty:
+        if entry not in seen:
+            unique_entries.append(entry)
+            seen.add(entry)
+
+    clean = len(nonempty) == 0
+    return {
+        "status": "ok",
+        "run_id": resolved_run_id,
+        "top_module": run_meta.get("top_module"),
+        "platform": run_meta.get("platform"),
+        "stage": "route",
+        "report_path": report_path,
+        "line_count": len(lines),
+        "violation_count": len(nonempty),
+        "unique_violation_count": len(unique_entries),
+        "clean": clean,
+        "sample_violations": unique_entries[:20],
+        "notes": ["Empty 5_route_drc.rpt indicates no final route DRC entries."] if clean else [],
+    }
+
+
+def get_cts_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    run_dir = get_run_dir(workspace, run_id)
+    if run_dir is None:
+        return {
+            "status": "error",
+            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
+            "run_id": run_id,
+            "stage": "cts",
+        }
+
+    report_path = _find_report_file(run_dir, "4_cts_final.rpt")
+    run_meta = _read_run_meta(run_dir)
+    resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
+    if not report_path:
+        return {
+            "status": "error",
+            "message": "4_cts_final.rpt not found.",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "cts",
+        }
+
+    try:
+        with open(report_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Failed to read CTS report: {exc}",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "cts",
+            "report_path": report_path,
+        }
+
+    def _mfloat(pattern: str) -> Optional[float]:
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except Exception:
+            return None
+
+    def _mint(pattern: str) -> Optional[int]:
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except Exception:
+            return None
+
+    summary = {
+        "wns_ns": _mfloat(r"^\s*wns\s+max\s+([0-9.eE+-]+)"),
+        "tns_ns": _mfloat(r"^\s*tns\s+max\s+([0-9.eE+-]+)"),
+        "worst_slack_ns": _mfloat(r"^\s*worst\s+slack\s+max\s+([0-9.eE+-]+)"),
+        "clock_period_min_ns": _mfloat(r"period_min\s*=\s*([0-9.eE+-]+)"),
+        "clock_fmax_mhz": _mfloat(r"fmax\s*=\s*([0-9.eE+-]+)"),
+        "setup_skew_ns": _mfloat(r"^\s*([0-9.eE+-]+)\s+setup\s+skew\s*$"),
+        "max_slew_violation_count": _mint(r"max_slew_violation_count\s*-+\s*([0-9]+)"),
+        "max_fanout_violation_count": _mint(r"max_fanout_violation_count\s*-+\s*([0-9]+)"),
+        "max_cap_violation_count": _mint(r"max_cap_violation_count\s*-+\s*([0-9]+)"),
+        "setup_violation_count": _mint(r"setup_violation_count\s*-+\s*([0-9]+)"),
+        "hold_violation_count": _mint(r"hold_violation_count\s*-+\s*([0-9]+)"),
+        "critical_path_delay_ns": _mfloat(r"critical\s+path\s+delay\s*-+\s*([0-9.eE+-]+)"),
+        "critical_path_slack_ns": _mfloat(r"critical\s+path\s+slack\s*-+\s*([0-9.eE+-]+)"),
+        "slack_over_delay_ratio": _mfloat(r"slack\s+div\s+critical\s+path\s+delay\s*-+\s*([0-9.eE+-]+)"),
+    }
+
+    startpoints = re.findall(r"^Startpoint:\s+(.+)$", text, re.MULTILINE)
+    endpoints = re.findall(r"^Endpoint:\s+(.+)$", text, re.MULTILINE)
+    clock_names = re.findall(r"^Clock\s+(\S+)\s*$", text, re.MULTILINE)
+
+    return {
+        "status": "ok",
+        "run_id": resolved_run_id,
+        "top_module": run_meta.get("top_module"),
+        "platform": run_meta.get("platform"),
+        "stage": "cts",
+        "report_path": report_path,
+        "clock_names": clock_names,
+        "startpoint_count": len(startpoints),
+        "endpoint_count": len(endpoints),
+        "sample_startpoints": startpoints[:5],
+        "sample_endpoints": endpoints[:5],
+        "summary": summary,
+    }
+
+
+def get_congestion_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    run_dir = get_run_dir(workspace, run_id)
+    if run_dir is None:
+        return {
+            "status": "error",
+            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
+            "run_id": run_id,
+            "stage": "grt",
+        }
+
+    run_meta = _read_run_meta(run_dir)
+    resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
+
+    artifact_path = _find_artifact_file(run_dir, "orfs_reports", "congestion.rpt")
+    artifact_scope = "orfs_reports"
+    if not artifact_path:
+        artifact_path = _find_artifact_file(run_dir, "orfs_logs", "5_1_grt.log")
+        artifact_scope = "orfs_logs"
+
+    if not artifact_path:
+        return {
+            "status": "error",
+            "message": "Neither congestion.rpt nor 5_1_grt.log was found.",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "grt",
+        }
+
+    try:
+        with open(artifact_path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Failed to read congestion artifact: {exc}",
+            "run_id": resolved_run_id,
+            "top_module": run_meta.get("top_module"),
+            "platform": run_meta.get("platform"),
+            "stage": "grt",
+            "artifact_path": artifact_path,
+        }
+
+    layer_rows = []
+    row_re = re.compile(
+        r"^(?P<layer>\S+)\s+"
+        r"(?P<resource>[0-9]+)\s+"
+        r"(?P<demand>[0-9]+)\s+"
+        r"(?P<usage>[0-9.]+)%\s+"
+        r"(?P<max_h>[0-9]+)\s*/\s*(?P<max_v>[0-9]+)\s*/\s*(?P<overflow>[0-9]+)\s*$",
+        re.MULTILINE,
+    )
+    for match in row_re.finditer(text):
+        layer = match.group("layer")
+        if layer.lower() == "total":
+            continue
+        layer_rows.append(
+            {
+                "layer": layer,
+                "resource": int(match.group("resource")),
+                "demand": int(match.group("demand")),
+                "usage_pct": float(match.group("usage")),
+                "max_h_overflow": int(match.group("max_h")),
+                "max_v_overflow": int(match.group("max_v")),
+                "total_overflow": int(match.group("overflow")),
+            }
+        )
+
+    total_match = re.search(
+        r"^Total\s+([0-9]+)\s+([0-9]+)\s+([0-9.]+)%\s+([0-9]+)\s*/\s*([0-9]+)\s*/\s*([0-9]+)\s*$",
+        text,
+        re.MULTILINE,
+    )
+
+    total = None
+    if total_match:
+        total = {
+            "resource": int(total_match.group(1)),
+            "demand": int(total_match.group(2)),
+            "usage_pct": float(total_match.group(3)),
+            "max_h_overflow": int(total_match.group(4)),
+            "max_v_overflow": int(total_match.group(5)),
+            "total_overflow": int(total_match.group(6)),
+        }
+
+    wirelength_um = None
+    routed_nets = None
+    wire_m = re.search(r"Total wirelength:\s*([0-9.eE+-]+)\s*um", text)
+    if wire_m:
+        try:
+            wirelength_um = float(wire_m.group(1))
+        except Exception:
+            pass
+    nets_m = re.search(r"Routed nets:\s*([0-9]+)", text)
+    if nets_m:
+        try:
+            routed_nets = int(nets_m.group(1))
+        except Exception:
+            pass
+
+    congested_layers = [row["layer"] for row in layer_rows if row["total_overflow"] > 0]
+    return {
+        "status": "ok",
+        "run_id": resolved_run_id,
+        "top_module": run_meta.get("top_module"),
+        "platform": run_meta.get("platform"),
+        "stage": "grt",
+        "artifact_scope": artifact_scope,
+        "artifact_path": artifact_path,
+        "layer_count": len(layer_rows),
+        "layers": layer_rows,
+        "total": total,
+        "wirelength_um": wirelength_um,
+        "routed_nets": routed_nets,
+        "has_overflow": bool(total and total["total_overflow"] > 0),
+        "congested_layers": congested_layers,
+    }
+
+
+def get_stage_status(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    run_dir = get_run_dir(workspace, run_id)
+    if run_dir is None:
+        return {
+            "status": "error",
+            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
+            "run_id": run_id,
+        }
+
+    run_meta = _read_run_meta(run_dir)
+    resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
+    stages = run_meta.get("stages", {})
+    completed = [name for name, item in stages.items() if item.get("status") == "completed"]
+    failed = [name for name, item in stages.items() if item.get("status") == "failed"]
+    running = [name for name, item in stages.items() if item.get("status") == "running"]
+    pending = [name for name, item in stages.items() if item.get("status") == "pending"]
+
+    return {
+        "status": "ok",
+        "run_id": resolved_run_id,
+        "top_module": run_meta.get("top_module"),
+        "platform": run_meta.get("platform"),
+        "run_status": run_meta.get("status"),
+        "current_stage": run_meta.get("current_stage"),
+        "stages": stages,
+        "completed_stages": completed,
+        "failed_stages": failed,
+        "running_stages": running,
+        "pending_stages": pending,
+        "stage_count": len(stages),
+        "elapsed_sec": run_meta.get("elapsed_sec"),
     }
 
 

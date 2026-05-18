@@ -1,0 +1,18 @@
+{
+  "run_id": "synth_0001",
+  "status": "completed",
+  "platform": "sky130hd",
+  "top_module": "demo_top",
+  "requested_clock_period_ns": 10.0,
+  "effective_clock_period_ns": 10.0,
+  "clock_period_ns": 10.0,
+  "clock_source": "requested",
+  "constraints_mode": "auto",
+  "auto_checks": {
+    "constraints": "pass",
+    "signoff": "pass",
+    "equiv": "skip"
+  },
+  "summary_metrics": {},
+  "spec_file": "demo_top_spec.yaml"
+}

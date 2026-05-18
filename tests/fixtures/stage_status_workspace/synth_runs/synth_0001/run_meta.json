@@ -1,0 +1,55 @@
+{
+  "run_id": "synth_0001",
+  "status": "completed",
+  "current_stage": "finish",
+  "platform": "sky130hd",
+  "top_module": "demo_top",
+  "elapsed_sec": 1.23,
+  "stages": {
+    "constraints": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "synth": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "floorplan": {
+      "status": "completed",
+      "artifacts": {
+        "report": "fixture/2_floorplan_final.rpt"
+      }
+    },
+    "place": {
+      "status": "completed",
+      "artifacts": {
+        "log": "fixture/3_3_place_gp.json"
+      }
+    },
+    "cts": {
+      "status": "completed",
+      "artifacts": {
+        "report": "fixture/4_cts_final.rpt"
+      }
+    },
+    "grt": {
+      "status": "completed",
+      "artifacts": {
+        "log": "fixture/5_1_grt.log"
+      }
+    },
+    "route": {
+      "status": "completed",
+      "artifacts": {
+        "report": "fixture/5_route_drc.rpt"
+      }
+    },
+    "finish": {
+      "status": "completed",
+      "artifacts": {
+        "report": "fixture/6_finish.rpt",
+        "netlist": "fixture/6_final.v"
+      }
+    }
+  }
+}
