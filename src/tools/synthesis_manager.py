@@ -453,6 +453,55 @@ def _find_stage_artifacts(run_dir: str) -> Dict[str, Dict[str, str]]:
     return found
 
 
+def _orfs_final_artifacts_are_clean(run_dir: str, top_module: str) -> Dict[str, str]:
+    finish_report = _find_report_file(run_dir, "6_finish.rpt")
+    if not finish_report:
+        return {"status": "fail", "note": "6_finish.rpt not found"}
+
+    netlist = _find_netlist(run_dir, top_module)
+    if not netlist:
+        return {"status": "fail", "note": "6_final.v netlist not found"}
+
+    gds = _find_artifact_file(run_dir, "orfs_results", "6_final.gds")
+    if not gds:
+        return {"status": "fail", "note": "6_final.gds not found"}
+
+    finish_data = _parse_finish_report(finish_report)
+    wns = finish_data.get("wns_ns")
+    tns = finish_data.get("tns_ns")
+    if wns is None or tns is None:
+        return {"status": "fail", "note": "final timing metrics could not be parsed"}
+    if wns < 0 or tns != 0:
+        return {"status": "fail", "note": f"final timing is not clean: WNS={wns}, TNS={tns}"}
+
+    violations = finish_data.get("violations", {})
+    for key in ("setup", "hold", "max_slew", "max_cap", "max_fanout"):
+        value = violations.get(key)
+        if value not in (None, 0):
+            return {"status": "fail", "note": f"final {key} violation count is {value}"}
+
+    route_drc = _find_artifact_file(run_dir, "orfs_reports", "5_route_drc.rpt")
+    if route_drc:
+        try:
+            with open(route_drc, "r", encoding="utf-8", errors="ignore") as f:
+                if f.read().strip():
+                    return {"status": "fail", "note": "final route DRC report is not empty"}
+        except Exception:
+            return {"status": "fail", "note": "final route DRC report could not be read"}
+
+    report_json = _find_artifact_file(run_dir, "orfs_logs", "6_report.json")
+    if report_json:
+        try:
+            data = _read_json(report_json)
+            errors = data.get("finish__flow__errors__count")
+            if errors not in (None, 0):
+                return {"status": "fail", "note": f"finish flow errors count is {errors}"}
+        except Exception:
+            return {"status": "fail", "note": "6_report.json could not be parsed"}
+
+    return {"status": "pass", "note": "final artifacts, timing, and route DRC are clean"}
+
+
 def _stage_artifacts_indicate_completion(stage: str, artifacts: Dict[str, str]) -> bool:
     if not artifacts:
         return False
@@ -954,8 +1003,13 @@ def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, 
     run_meta["auto_checks"] = asdict(auto_checks)
     run_meta["netlist_path"] = _find_netlist(run_dir, args["top_module"])
     run_meta["summary_metrics"] = _extract_summary_metrics(run_dir)
-    run_meta["status"] = "completed" if docker_result.get("success", False) and auto_checks.signoff == "pass" else "failed"
-    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else "PD retry completed"
+    run_meta["status"] = "completed" if auto_checks.signoff == "pass" else "failed"
+    retry_completed_note = (
+        signoff["note"]
+        if signoff["note"].startswith("ORFS command returned nonzero")
+        else "PD retry completed"
+    )
+    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else retry_completed_note
     run_meta["next_action"] = (
         "Inspect stage summaries and continue tuning." if run_meta["status"] == "completed"
         else "Inspect retry stage logs and adjust parameters."
@@ -971,12 +1025,16 @@ def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, 
 
 
 def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, Any]) -> Dict[str, str]:
-    if not docker_result.get("success"):
-        return {"status": "fail", "note": "ORFS command failed"}
-
     artifacts = _collect_artifacts(run_dir)
     if artifacts["reports"] == 0:
         return {"status": "fail", "note": "No ORFS reports found"}
+
+    recovered = False
+    if not docker_result.get("success"):
+        recovery = _orfs_final_artifacts_are_clean(run_dir, top_module)
+        if recovery["status"] != "pass":
+            return {"status": "fail", "note": f"ORFS command failed; {recovery['note']}"}
+        recovered = True
 
     log_tail = "\n".join(_collect_log_tail(run_dir, max_lines=120)).lower()
     fatal_patterns = ["error:", "fatal", "failed"]
@@ -985,6 +1043,9 @@ def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, A
 
     if artifacts["netlists"] == 0:
         return {"status": "fail", "note": "No netlist artifact found"}
+
+    if recovered:
+        return {"status": "pass", "note": "ORFS command returned nonzero, but final artifacts and reports are clean"}
 
     return {"status": "pass", "note": "Signoff artifact/log checks passed"}
 
@@ -1135,10 +1196,15 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
     }
     run_meta["summary_metrics"] = summary_metrics
 
-    final_ok = docker_result.get("success", False) and auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
+    final_ok = auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
     run_meta["status"] = "completed" if final_ok else "failed"
     run_meta["current_stage"] = "finish" if final_ok else _infer_stage(_collect_log_tail(run_dir))
-    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else "All guardrails passed"
+    completed_note = (
+        signoff["note"]
+        if signoff["note"].startswith("ORFS command returned nonzero")
+        else "All guardrails passed"
+    )
+    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else completed_note
     run_meta["next_action"] = (
         "Use search_logs_tool for detailed PPA/error verification." if run_meta["status"] == "completed"
         else "Use search_logs_tool with error/timing queries and fix RTL/constraints."
