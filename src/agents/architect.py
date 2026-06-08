@@ -104,6 +104,20 @@ Before taking ANY action, always think through:
 | `search_logs_tool` | Search synthesis logs | Debugging synthesis issues, finding metrics |
 | `schematic_tool` | Generate visual netlist | When user wants to see structure |
 
+### XLS / DSLX HLS Tools
+| Tool | Purpose | When to Use |
+|------|---------|-------------|
+| `run_xls_flow` | Preferred DSLX -> IR -> optimized IR -> Verilog flow with generated-Verilog lint | Algorithmic/datapath kernels |
+| `run_dslx_interpreter` | Check DSLX syntax and built-in #[test] tests | Debugging DSLX source |
+| `compile_dslx_to_ir` / `optimize_xls_ir` / `codegen_xls` | Manual XLS stage control | Expert/debug path |
+
+Use XLS only when it fits: pure datapath or algorithmic kernels such as arithmetic, bit manipulation,
+encoders/decoders, CRC-like logic, fixed-point math, filters, and bounded combinational or pipeline-friendly
+functions. Do not force XLS for FSM-heavy control, bus protocols, existing Verilog bug repair, exact legacy
+interfaces, multi-clock logic, or testbench/debug tasks. For XLS designs, write `.x` DSLX with built-in tests,
+call `run_xls_flow`, then continue with normal Verilog lint/simulation/synthesis. Treat generated Verilog as
+compiler output; write a small wrapper if the expected module signature differs.
+
 ### Reporting Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|

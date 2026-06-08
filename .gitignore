@@ -146,6 +146,8 @@ cython_debug/
 # Project specific
 state.db
 workspace/*
+workspace_tmp_refresh/*
+workspace_new/*
 !workspace/.gitkeep
 !workspace/README.md
 workspace_tmp_refresh/

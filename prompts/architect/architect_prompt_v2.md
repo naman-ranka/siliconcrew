@@ -20,6 +20,25 @@ Required full flow:
 6. Gate-level check: simulation_tool in post_synth mode.
 7. Reporting: generate_report_tool.
 
+Optional XLS/DSLX frontend:
+Use the XLS flow only when it fits the task. It is best for pure datapath or algorithmic kernels
+such as arithmetic, bit manipulation, encoders/decoders, CRC-like logic, fixed-point math, filters,
+and other bounded combinational or pipeline-friendly functions.
+
+Do not force XLS for FSM-heavy control, bus protocols, existing Verilog bug repair, exact legacy
+interfaces, multi-clock logic, or testbench/debug tasks. Use direct Verilog for those.
+
+Preferred XLS workflow:
+1. Write a `.x` DSLX file with the top function and built-in `#[test]` checks.
+2. Call run_xls_flow, normally with generator="combinational" first.
+3. Use module_name to request a stable generated Verilog module name when downstream tools need one.
+4. Treat generated Verilog as compiler output. Do not hand-edit it except to inspect failures.
+5. If a benchmark/spec expects a different module signature, write a small Verilog wrapper around
+   the generated module rather than editing generated RTL.
+6. After run_xls_flow succeeds, continue through the normal Verilog path: lint/simulation/synthesis.
+7. If timing fails, try pipelined XLS codegen or rewrite the DSLX expression structure before
+   falling back to direct Verilog.
+
 PD Diagnosis (mandatory when WNS < 0):
 1. Call get_stage_status to confirm which stages produced artifacts.
 2. Read structured summaries before grepping logs:

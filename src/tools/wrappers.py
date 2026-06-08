@@ -887,6 +887,147 @@ def sleep_tool(seconds: int) -> str:
     time.sleep(wait_s)
     return f"Slept for {wait_s} second(s)."
 
+# New Google XLS / DSLX HLS tools
+@tool
+def run_dslx_interpreter(filename: str) -> str:
+    """
+    Runs the DSLX interpreter on a .x file in the active workspace to check syntax
+    and execute built-in unit tests (#[test] blocks).
+    Args:
+        filename: Name of the DSLX file (e.g. 'saturating_add.x').
+    """
+    from src.tools.run_xls import run_dslx_interpreter as run_interpreter
+    workspace = get_workspace_path()
+    result = run_interpreter(filename, cwd=workspace)
+    return json.dumps(result, indent=2)
+
+@tool
+def compile_dslx_to_ir(filename: str, top_module: str) -> str:
+    """
+    Translates a DSLX (.x) design into XLS Intermediate Representation (IR).
+    Args:
+        filename: Name of the DSLX file.
+        top_module: Name of the top-level function or proc to compile.
+    """
+    from src.tools.run_xls import compile_dslx_to_ir as compile_to_ir
+    workspace = get_workspace_path()
+    result = compile_to_ir(filename, top_module, cwd=workspace)
+    return json.dumps(result, indent=2)
+
+@tool
+def experimental_compile_cpp_to_ir(filename: str, top_name: str, block_from_class: bool = False) -> str:
+    """
+    Translates C++ hardware description code into XLS IR via xlscc (experimental).
+    Args:
+        filename: Name of the C++ file (e.g., 'design.cc').
+        top_name: Name of the top-level function or class.
+        block_from_class: True if compiling a class-based block/stateful system.
+    """
+    from src.tools.run_xls import experimental_compile_cpp_to_ir as compile_cpp
+    workspace = get_workspace_path()
+    result = compile_cpp(filename, top_name, block_from_class, cwd=workspace)
+    return json.dumps(result, indent=2)
+
+@tool
+def optimize_xls_ir(ir_filename: str) -> str:
+    """
+    Optimizes XLS IR using logic and dataflow optimizations.
+    Args:
+        ir_filename: Name of the XLS IR file (e.g. 'saturating_add.ir').
+    """
+    from src.tools.run_xls import optimize_xls_ir as optimize_ir
+    workspace = get_workspace_path()
+    result = optimize_ir(ir_filename, cwd=workspace)
+    return json.dumps(result, indent=2)
+
+@tool
+def codegen_xls(
+    opt_ir_filename: str,
+    generator: str = "combinational",
+    pipeline_stages: int = 0,
+    clock_period_ps: int = 0,
+    delay_model: str = "sky130",
+    module_name: str = None
+) -> str:
+    """
+    Schedules optimized XLS IR and generates synthesizable Verilog.
+    Args:
+        opt_ir_filename: Name of the optimized IR file.
+        generator: 'combinational' or 'pipeline'.
+        pipeline_stages: Number of pipeline stages for pipelined designs.
+        clock_period_ps: Target clock period in picoseconds.
+        delay_model: Delay model (e.g., 'sky130', 'asap7').
+        module_name: Optional custom name for the generated Verilog module.
+    """
+    from src.tools.run_xls import codegen_xls as run_codegen
+    workspace = get_workspace_path()
+    result = run_codegen(
+        opt_ir_filename=opt_ir_filename,
+        generator=generator,
+        pipeline_stages=pipeline_stages,
+        clock_period_ps=clock_period_ps,
+        delay_model=delay_model,
+        module_name=module_name,
+        cwd=workspace
+    )
+    return json.dumps(result, indent=2)
+
+@tool
+def benchmark_xls(opt_ir_filename: str, delay_model: str = "sky130") -> str:
+    """
+    Evaluates XLS IR for performance, area complexity, and estimated critical path delay.
+    Args:
+        opt_ir_filename: Name of the optimized IR file.
+        delay_model: Delay model (e.g., 'sky130', 'asap7').
+    """
+    from src.tools.run_xls import benchmark_xls as run_benchmark
+    workspace = get_workspace_path()
+    result = run_benchmark(opt_ir_filename, delay_model=delay_model, cwd=workspace)
+    return json.dumps(result, indent=2)
+
+@tool
+def run_xls_flow(
+    dslx_file: str,
+    top_module: str,
+    generator: str = "combinational",
+    pipeline_stages: int = 0,
+    clock_period_ps: int = 0,
+    delay_model: str = "sky130",
+    module_name: str = None,
+    keep_intermediates: bool = True,
+    run_lint: bool = True,
+) -> str:
+    """
+    Executes the entire high-level XLS synthesis flow:
+    DSLX Interpreter -> IR Conversion -> Optimization -> Codegen.
+    This is the preferred agent path for compiling DSLX code to Verilog.
+    Args:
+        dslx_file: Name of the DSLX file (e.g. 'saturating_add.x').
+        top_module: Name of the top-level function or proc.
+        generator: 'combinational' or 'pipeline'.
+        pipeline_stages: Number of pipeline stages for pipelined designs.
+        clock_period_ps: Target clock period in picoseconds.
+        delay_model: Delay model (e.g., 'sky130', 'asap7').
+        module_name: Optional custom name for the generated Verilog module.
+        keep_intermediates: Preserve .ir and .opt.ir artifacts for debugging/provenance.
+        run_lint: Run Icarus Verilog syntax lint on generated Verilog before returning success.
+    """
+    from src.tools.run_xls import run_xls_flow as run_flow
+    workspace = get_workspace_path()
+    result = run_flow(
+        dslx_file=dslx_file,
+        top_module=top_module,
+        generator=generator,
+        pipeline_stages=pipeline_stages,
+        clock_period_ps=clock_period_ps,
+        delay_model=delay_model,
+        module_name=module_name,
+        keep_intermediates=keep_intermediates,
+        run_lint=run_lint,
+        cwd=workspace
+    )
+    return json.dumps(result, indent=2)
+
 # Tools exposed over MCP (no blocking wait tool).
 mcp_tools = [
     # Specification tools (use FIRST)
@@ -922,6 +1063,14 @@ mcp_tools = [
     # Reporting & Metrics
     save_metrics_tool,
     generate_report_tool,
+    # Google XLS HLS tools
+    run_dslx_interpreter,
+    compile_dslx_to_ir,
+    experimental_compile_cpp_to_ir,
+    optimize_xls_ir,
+    codegen_xls,
+    benchmark_xls,
+    run_xls_flow,
 ]
 
 # Tools bound to the in-process architect agent.
