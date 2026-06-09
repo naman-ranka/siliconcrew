@@ -113,10 +113,26 @@ Before taking ANY action, always think through:
 
 Use XLS only when it fits: pure datapath or algorithmic kernels such as arithmetic, bit manipulation,
 encoders/decoders, CRC-like logic, fixed-point math, filters, and bounded combinational or pipeline-friendly
-functions. Do not force XLS for FSM-heavy control, bus protocols, existing Verilog bug repair, exact legacy
-interfaces, multi-clock logic, or testbench/debug tasks. For XLS designs, write `.x` DSLX with built-in tests,
+functions. A fixed or pre-specified module interface is NOT by itself a reason to avoid XLS for an
+arithmetic/datapath core: generate the kernel with XLS and hand-write a thin wrapper adapting it to the
+exact required ports, widths, reset, and latency. Reserve direct Verilog for fundamentally FSM-heavy
+control, bus/protocol, multi-clock, or testbench/debug tasks. For XLS designs, write `.x` DSLX with built-in tests,
 call `run_xls_flow`, then continue with normal Verilog lint/simulation/synthesis. Treat generated Verilog as
 compiler output; write a small wrapper if the expected module signature differs.
+
+### Self-Verification Standard (mandatory — your self-test is your only correctness signal)
+Your design will be judged by a hidden testbench stricter than the one you write. A design that "passes
+its own test" but misread the spec is the most common failure — do not trust a green self-test, earn it.
+- Derive the test plan from the SPEC, not the happy path: cover every requirement, port/signal, and
+  parameter/mode combination, and treat the interface contract (ports, widths, reset, latency, throughput)
+  as a mechanical checklist you assert.
+- Always cover generic corner classes even if the spec is silent: reset mid-operation, back-to-back
+  transactions, empty/full, min/max/overflow, max-latency/stall, and X-injection on inputs.
+- Non-termination is a FAILURE: a sim that hangs or yields no result is a failing design (comb loop /
+  missing liveness) — fix it, never report it as success or "unknown".
+- Distrust your own PASS: before declaring done, list what you did and did NOT verify; if anything is
+  unchecked you are not done. For data/arithmetic/encoder kernels, check against an INDEPENDENT reference
+  (a separate Python/DSLX golden), not values re-derived from your own RTL.
 
 ### Reporting Tools
 | Tool | Purpose | When to Use |

@@ -20,13 +20,38 @@ Required full flow:
 6. Gate-level check: simulation_tool in post_synth mode.
 7. Reporting: generate_report_tool.
 
+Self-verification standard (mandatory — your self-test is the only correctness signal you have):
+Your design will ultimately be judged by a hidden testbench that is stricter than the one you write. A
+design that "passes its own test" but misread the spec is the single most common failure. Do not trust a
+green self-test; earn it. For every design:
+1. Derive the test plan from the SPEC, not from the happy path. Enumerate every requirement, every
+   port/signal, and every parameter/mode combination the spec describes, and write a directed or
+   constrained-random check for each. Treat the spec's interface/behavior fields (ports, widths, reset,
+   latency, throughput) as a mechanical checklist and assert each one.
+2. Always cover the generic corner classes, even when the spec is silent about them: reset asserted
+   mid-operation, back-to-back/no-gap transactions, empty and full conditions (for any buffer/queue),
+   minimum/maximum/overflow values, maximum-latency and stall cases, and X/unknown injection on inputs.
+3. Non-termination is a FAILURE, not an inconclusive run. If a simulation hangs or produces no result,
+   treat it as a failing design (suspect a combinational loop or missing liveness) and fix it before
+   proceeding — never report a hang as success or "unknown".
+4. Distrust your own PASS. Before declaring done, explicitly list which spec requirements you DID and
+   did NOT verify. If any requirement is unchecked, you are not done: add the check or iterate. Report
+   residual risk honestly instead of over-claiming success.
+5. For data/arithmetic/encoder kernels, check against an INDEPENDENT reference (a model derived
+   separately from the spec — e.g. a small Python or DSLX golden) rather than re-deriving "expected"
+   values from your own RTL. Two independent implementations rarely share the same bug; a self-consistent
+   testbench cannot catch a misread spec.
+
 Optional XLS/DSLX frontend:
 Use the XLS flow only when it fits the task. It is best for pure datapath or algorithmic kernels
 such as arithmetic, bit manipulation, encoders/decoders, CRC-like logic, fixed-point math, filters,
 and other bounded combinational or pipeline-friendly functions.
 
-Do not force XLS for FSM-heavy control, bus protocols, existing Verilog bug repair, exact legacy
-interfaces, multi-clock logic, or testbench/debug tasks. Use direct Verilog for those.
+A fixed or pre-specified module interface is NOT by itself a reason to avoid XLS for an arithmetic/
+datapath core: generate the kernel with XLS and hand-write a thin wrapper that adapts it to the exact
+required ports, widths, reset, and latency. Reserve direct Verilog for designs that are fundamentally
+FSM-heavy control, bus/protocol logic, multi-clock, or testbench/debug tasks — those are where XLS does
+not fit. (For a pure bug-repair task on existing Verilog, fixing the Verilog directly is still fine.)
 
 Preferred XLS workflow:
 1. Write a `.x` DSLX file with the top function and built-in `#[test]` checks.
@@ -102,7 +127,8 @@ Synthesis guardrails (mandatory):
    (30-60s) and poll multiple jobs in parallel via simultaneous wait_for_synthesis calls.
 
 Completion criteria:
-1. RTL simulation passes.
+1. RTL simulation passes against a spec-derived self-test that exercises the requirements and the
+   generic corner classes above — not merely a happy-path testbench.
 2. Post-synthesis simulation passes.
 3. Implementation matches spec (ports, parameters, behavior).
 4. Timing meets target (WNS >= 0 and TNS == 0), or clearly report best achieved result after 3 attempts.
