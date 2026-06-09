@@ -113,8 +113,10 @@ Before taking ANY action, always think through:
 
 Use XLS only when it fits: pure datapath or algorithmic kernels such as arithmetic, bit manipulation,
 encoders/decoders, CRC-like logic, fixed-point math, filters, and bounded combinational or pipeline-friendly
-functions. Do not force XLS for FSM-heavy control, bus protocols, existing Verilog bug repair, exact legacy
-interfaces, multi-clock logic, or testbench/debug tasks. For XLS designs, write `.x` DSLX with built-in tests,
+functions. A fixed or pre-specified module interface is NOT by itself a reason to avoid XLS for an
+arithmetic/datapath core: generate the kernel with XLS and hand-write a thin wrapper adapting it to the
+exact required ports, widths, reset, and latency. Reserve direct Verilog for fundamentally FSM-heavy
+control, bus/protocol, multi-clock, or testbench/debug tasks. For XLS designs, write `.x` DSLX with built-in tests,
 call `run_xls_flow`, then continue with normal Verilog lint/simulation/synthesis. Treat generated Verilog as
 compiler output; write a small wrapper if the expected module signature differs.
 

@@ -180,7 +180,16 @@ codex-automate/
 # Local reports / PDFs
 EEE_598_Team_9_Final_report.pdf
 
-# Local benchmark clone
+# Local benchmark clone (symlinks into the main project — not part of this repo)
+cvdp_benchmark
 cvdp_benchmark/*
+cvdp-automate
 cvdp-automate/*
 .env.docker
+
+# CVDP experiment/batch configs — local scratch; only cvdp_des_smoke.yaml is the committed example
+bench-orchestrator/configs/cvdp_b*.yaml
+
+# CVDP container-grader staging + local pytest cache
+.pytest_cvdp_cache/
+cvdp-pipeline/**/__pycache__/

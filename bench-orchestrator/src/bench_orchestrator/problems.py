@@ -37,18 +37,53 @@ def build_agent_prompt(problem: ProblemConfig, prepared: dict[str, Any], session
     elif problem.kind == "prompt":
         body = "Problem kind: prompt.\n" + prepared["prompt"] + "\n"
     else:
+        context_dir = str(Path(prepared["problem_json"]).parent / "context")
+        patch_targets = prepared.get("patch_targets") or []
+        targets_line = ", ".join(patch_targets) if patch_targets else "(see problem.json patch keys)"
         body = (
-            "Problem kind: CVDP agentic JSONL.\n"
+            "Problem kind: CVDP agentic JSONL (RTL-simulation-only).\n"
             f"Read the extracted problem JSON at: {prepared['problem_json']}\n"
-            "Use its prompt and context files as the design task. Materialize context files in the SC workspace "
-            "using their relative paths, modify only required solution files, and stop after RTL-level checks. "
-            "Do not run synthesis for CVDP unless the problem explicitly asks for it.\n"
+            "Use its `prompt` as the design task and `prompt_contract`/`context` as requirements.\n"
+            f"Context files are already materialized at: {context_dir}\n"
+            "Copy each context file into your active SC session workspace at the SAME relative path "
+            "(write_file with the relative path) before coding. Do not modify provided context testbenches.\n"
+            f"Write only the solution files (patch targets): {targets_line}\n"
+            "Tool argument contract: pass verilog_files to linter_tool/simulation_tool as a JSON-array "
+            "string (e.g. \"[\\\"rtl/dut.sv\\\",\\\"verif/tb.sv\\\"]\"), including DUT, TB, and dependencies; "
+            "do not pass space-separated filenames.\n"
+            "Verify with RTL simulation against the provided/context testbench and iterate until it passes.\n"
+            "DO NOT run synthesis, post-synthesis simulation, retry_pd, or report generation for CVDP. "
+            "Stop after RTL simulation is correct.\n"
         )
     return common + flow_rules + "\n" + body
 
 
 def _flow_rules(flow: str) -> str:
     f = flow.lower()
+    if f == "auto":
+        return (
+            "Flow: agent's choice (XLS/DSLX frontend is AVAILABLE but OPTIONAL).\n"
+            "- You decide the implementation path. You MAY use the XLS/DSLX HLS frontend "
+            "(run_xls_flow, run_dslx_interpreter, codegen_xls, ...) if you judge it beneficial for "
+            "arithmetic/datapath cores, OR write Verilog/SystemVerilog directly. Your call.\n"
+            "- If you use XLS, wrap the generated Verilog so the public module matches the EXACT "
+            "required interface (port names, widths, reset style) and latency/handshake contract.\n"
+            "- Pick whichever path most reliably satisfies the provided testbench and contract.\n"
+        )
+    if f == "xls_force":
+        return (
+            "Flow: XLS/DSLX MANDATORY (overrides any 'optional XLS' guidance).\n"
+            "- IMPORTANT: ignore any instruction — INCLUDING the injected architect prompt — that says "
+            "to avoid XLS for existing-Verilog/legacy/exact-interface/bug-repair tasks. For THIS run, XLS "
+            "is REQUIRED regardless of the interface being fixed.\n"
+            "- You MUST implement the core combinational/datapath logic in DSLX and generate Verilog via "
+            "run_xls_flow (DSLX -> IR -> codegen_xls). Writing the core logic directly in Verilog/"
+            "SystemVerilog is NOT allowed for this run.\n"
+            "- You MAY hand-write ONLY a thin SystemVerilog WRAPPER that instantiates the XLS-generated "
+            "module and adapts it to the exact required interface (port names, widths, reset, latency).\n"
+            "- If a specific part genuinely cannot be expressed in DSLX, state which part and why, then "
+            "implement only that minimal glue in the wrapper.\n"
+        )
     if f == "xls":
         return (
             "Flow: XLS/DSLX frontend.\n"
