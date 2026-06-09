@@ -146,13 +146,32 @@ class CodexRunner(BaseRunner):
 class ClaudeRunner(BaseRunner):
     def run(self, prompt: str, run_dir: Path, model: str, timeout_sec: int) -> RunnerResult:
         claude = _require_cli("claude")
-        cmd = [claude, "-p", "--model", model, "--dangerously-skip-permissions", "--add-dir", str(Path.cwd())]
-        return _run_text_agent(cmd, prompt, run_dir, "claude", timeout_sec)
+        cmd = [
+            claude,
+            "-p",
+            "--output-format", "stream-json",
+            "--include-partial-messages",
+            "--verbose",
+            "--model", model,
+            "--dangerously-skip-permissions",
+            "--add-dir", str(Path.cwd()),
+        ]
+        return _run_text_agent(cmd, prompt, run_dir, "claude", timeout_sec, stdout_is_events=True)
 
     def resume(self, prompt: str, run_dir: Path, continuation_dir: Path, model: str, timeout_sec: int) -> RunnerResult:
         claude = _require_cli("claude")
-        cmd = [claude, "-p", "--continue", "--model", model, "--dangerously-skip-permissions", "--add-dir", str(Path.cwd())]
-        return _run_text_agent(cmd, prompt, continuation_dir, "claude_resume", timeout_sec)
+        cmd = [
+            claude,
+            "-p",
+            "--continue",
+            "--output-format", "stream-json",
+            "--include-partial-messages",
+            "--verbose",
+            "--model", model,
+            "--dangerously-skip-permissions",
+            "--add-dir", str(Path.cwd()),
+        ]
+        return _run_text_agent(cmd, prompt, continuation_dir, "claude_resume", timeout_sec, stdout_is_events=True)
 
 
 class AntigravityRunner(BaseRunner):
@@ -272,7 +291,14 @@ def _run_and_stream(
     return exit_code
 
 
-def _run_text_agent(cmd: list[str], prompt_stdin: str | None, out_dir: Path, event_name: str, timeout_sec: int) -> RunnerResult:
+def _run_text_agent(
+    cmd: list[str],
+    prompt_stdin: str | None,
+    out_dir: Path,
+    event_name: str,
+    timeout_sec: int,
+    stdout_is_events: bool = False,
+) -> RunnerResult:
     out_dir.mkdir(parents=True, exist_ok=True)
     raw = out_dir / "raw"
     raw.mkdir(parents=True, exist_ok=True)
@@ -286,7 +312,7 @@ def _run_text_agent(cmd: list[str], prompt_stdin: str | None, out_dir: Path, eve
         prompt_stdin=prompt_stdin,
         stdout_path=stdout,
         stderr_path=stderr,
-        extra_stdout_path=None,
+        extra_stdout_path=events if stdout_is_events else None,
         timeout_sec=timeout_sec,
     )
     if stdout.exists():
@@ -295,10 +321,11 @@ def _run_text_agent(cmd: list[str], prompt_stdin: str | None, out_dir: Path, eve
             last.write_text(content[-20000:], encoding="utf-8", newline="\n")
         except Exception:
             pass
-    _write_jsonl(events, [
-        {"type": "thread.started", "thread_id": f"{event_name}-{int(started)}"},
-        {"type": "agent.completed" if exit_code == 0 else "agent.failed", "agent": event_name, "exit_code": exit_code},
-    ])
+    if not stdout_is_events:
+        _write_jsonl(events, [
+            {"type": "thread.started", "thread_id": f"{event_name}-{int(started)}"},
+            {"type": "agent.completed" if exit_code == 0 else "agent.failed", "agent": event_name, "exit_code": exit_code},
+        ])
     return RunnerResult(
         status="completed" if exit_code == 0 else "failed",
         exit_code=exit_code,
