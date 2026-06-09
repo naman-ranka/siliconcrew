@@ -10,6 +10,25 @@ details leaking into the orchestrator itself.
 > [`research/CVDP_RESULTS.md`](research/CVDP_RESULTS.md) for results and
 > [`research/EVAL_BROKEN_HANDOFF.md`](research/EVAL_BROKEN_HANDOFF.md) for why.
 
+## Prerequisites
+
+| For | Need |
+| --- | --- |
+| Generating configs (`generate_cvdp_config.py`) | Python 3.10+, `pyyaml`, and a raw CVDP dataset JSONL (e.g. `cvdp_benchmark/data/cvdp_v1.0.2_agentic_code_generation_no_commercial.jsonl`). |
+| Running the agentic phase | The `bench-orchestrator` + the `rtl-codex` MCP server; `RTL_WORKSPACE` exported to match the MCP server's session root (see *Environment gotchas*). |
+| **Grading (`regrade_docker.py`) — REQUIRED for any trustworthy verdict** | **Docker running**, plus a one-time pull of the official reference image. Without it, grading is not trustworthy — the Windows-native shim is deprecated for exactly this reason. |
+
+```bash
+docker pull ghcr.io/hdl/sim/osvb   # one-time; the official CVDP test environment (cocotb 2.0-dev, iverilog 13)
+```
+
+> The CVDP **harness comes from the dataset itself** (materialized verbatim by the orchestrator's
+> `_cvdp()` and graded as-is in the container) — this pipeline never invents a harness, and does **not**
+> use CVDP's own runner scripts (`docker-compose`/`run.py`), only its dataset JSONL + the OSVB image it pins.
+> The image is **digest-pinned** in `regrade_docker.py` (`DEFAULT_IMAGE`) so results stay reproducible if
+> the `:latest` tag moves; override with `--image`. Staging dir is a temp dir by default (`--stage-root`
+> or `CVDP_STAGE_ROOT` to override) — no hardcoded paths.
+
 Stages:
 
 | Stage | Script | Role |
@@ -17,7 +36,9 @@ Stages:
 | **Before** | `generate_cvdp_config.py` | Select problems from a raw CVDP JSONL → emit a bench-orchestrator YAML config |
 | *(run)* | `bench-orchestrator/run_benchmark.py` | Materializes the problem, drives the agent (the orchestrator already supports `kind: cvdp_agentic_jsonl`) |
 | **Grade** ✅ | **`regrade_docker.py`** | Grade a finished run in the **official reference container** (osvb image, correct context staging). **The trustworthy validator.** |
-| ~~After~~ ⛔ | ~~`replay_cvdp_harness.py`~~ | **DEPRECATED** Windows-native shim — untrustworthy, kept only for the historical overnight runs |
+
+(`_cocotb_compat.py` is a small helper used by the grader to load cocotb-1.x harnesses under cocotb-2.x;
+it is not run directly.)
 
 The orchestrator's `_cvdp()` does the heavy lifting (reads the raw row by `datapoint_id`,
 materializes `context/`, `harness/`, `problem.json` under `<run>/raw/cvdp_problem/`), so these
@@ -48,12 +69,15 @@ python cvdp-pipeline/regrade_docker.py --ids <datapoint_short_id>   # or --run-d
 
 ## How validation hooks into the dashboard
 
-`replay_cvdp_harness.py`:
-1. reads `<run>/run_config.json` for `dataset` / `datapoint_id` / session info,
+`regrade_docker.py --run-dir <run> --write`:
+1. reads `<run>/run_config.json` for `datapoint_id`, and the materialized `raw/cvdp_problem/`
+   (`harness/src` + `problem.json` with the dataset's `context`/`patch` fields),
 2. locates the agent's SiliconCrew session workspace via `bench_orchestrator.summary.find_workspace`,
-3. copies the harness into a **fresh, isolated** `<run>/raw/cvdp_harness_run/` (the pristine
-   `raw/cvdp_problem/harness/` is never mutated), applies cocotb-2.x compat rewrites, runs pytest,
-4. writes `<run>/raw/cvdp_replay_result.json` **and** folds the verdict back into
+3. stages `/code` like the official runner into a temp tree (provided **context** files, then the
+   agent's **patch-target** files overlaid) and mounts `harness/src` at `/src` (the pristine
+   `raw/cvdp_problem/harness/` is never mutated); runs `pytest /src/test_runner.py` in the osvb
+   container (unpatched first; `_cocotb_compat` rewrites applied only if the harness fails to load),
+4. with `--write`, writes `<run>/raw/cvdp_docker_result.json` **and** folds the verdict into
    `run_summary.json` (`cvdp_replay` + `status`), so `summarize_runs.py` shows the `cvdp` pass/fail
    column with no agent re-run.
 
@@ -71,8 +95,9 @@ The fake agent needs none of this; real agents (codex/claude) do:
   DBs, so a `project_id` makes the agent's `create_session_tool` fail "Project not found". The
   generated config sets `project.enabled: false`; sessions are created by bare `session_name`. Pass
   `--enable-project` only when both sides share one DB.
-- **Simulator deps** — `iverilog`, `cocotb` (2.x), `pytest`, `cocotb_tools` must be importable in the
-  environment that runs the replay.
+- **No local simulator needed for grading** — `iverilog`/`cocotb`/`pytest` all live inside the osvb
+  container; the host only needs Docker. (The deprecated Windows-native replay shim that *did* need a
+  local simulator has been removed; grade only in the container.)
 
 ## Relation to the legacy `cvdp-automate/`
 

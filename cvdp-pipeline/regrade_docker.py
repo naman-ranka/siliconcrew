@@ -23,6 +23,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -31,10 +32,14 @@ if str(_BENCH_SRC) not in sys.path:
     sys.path.insert(0, str(_BENCH_SRC))
 from bench_orchestrator.summary import find_workspace, read_json  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from replay_cvdp_harness import apply_cocotb_compat_patches  # noqa: E402
+from _cocotb_compat import apply_cocotb_compat_patches  # noqa: E402
 
-STAGE_ROOT = Path("C:/Users/naman/cvdp_dock")
-DEFAULT_IMAGE = "ghcr.io/hdl/sim/osvb"
+# Where /code and /src are staged before mounting into the container. Override with --stage-root
+# (or the CVDP_STAGE_ROOT env); defaults to a temp dir so this is portable across machines.
+DEFAULT_STAGE_ROOT = Path(os.environ.get("CVDP_STAGE_ROOT") or (Path(tempfile.gettempdir()) / "cvdp_dock"))
+# Pin the official reference image to a digest so results stay reproducible even if the tag moves.
+# (Repin via: docker inspect ghcr.io/hdl/sim/osvb --format '{{join .RepoDigests "\n"}}')
+DEFAULT_IMAGE = "ghcr.io/hdl/sim/osvb@sha256:6fc999d943f1b8f8c49e7221459ae01e57afd33f7e73c3734b9a65be25e7f434"
 
 
 def parse_env(env_text: str) -> dict[str, str]:
@@ -57,7 +62,7 @@ def newest_run(pid: str) -> Path | None:
     return None
 
 
-def regrade(run_dir: Path, image: str, write: bool = False) -> dict:
+def regrade(run_dir: Path, image: str, write: bool = False, stage_root: Path = DEFAULT_STAGE_ROOT) -> dict:
     pid = read_json(run_dir / "run_config.json").get("problem", {}).get("datapoint_id", "")
     short = re.sub(r"^cvdp_(agentic|nonagentic)_", "", pid)
     harness_src = run_dir / "raw" / "cvdp_problem" / "harness" / "src"
@@ -77,7 +82,7 @@ def regrade(run_dir: Path, image: str, write: bool = False) -> dict:
         return {"problem": short, "verdict": "NO_WORKSPACE"}
     ws = Path(ws)
 
-    dest = STAGE_ROOT / short
+    dest = stage_root / short
     if dest.exists():
         shutil.rmtree(dest, ignore_errors=True)
     (dest / "code" / "rundir").mkdir(parents=True, exist_ok=True)
@@ -162,11 +167,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ids", default="")
     ap.add_argument("--run-dir", default="")
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+    ap.add_argument("--image", default=DEFAULT_IMAGE,
+                    help="Reference container (digest-pinned by default for reproducibility).")
+    ap.add_argument("--stage-root", default=str(DEFAULT_STAGE_ROOT),
+                    help="Dir to stage /code and /src before mounting (default: a temp dir; "
+                         "or set CVDP_STAGE_ROOT).")
     ap.add_argument("--write", action="store_true",
                     help="Write the trustworthy container verdict back into the run "
                          "(raw/cvdp_docker_result.json + run_summary.json) so the dashboard is authoritative.")
     args = ap.parse_args()
+    stage_root = Path(args.stage_root)
     runs = []
     if args.run_dir:
         runs = [Path(args.run_dir)]
@@ -182,7 +192,7 @@ def main() -> int:
     results = []
     for r in runs:
         try:
-            res = regrade(r, args.image, write=args.write)
+            res = regrade(r, args.image, write=args.write, stage_root=stage_root)
         except subprocess.TimeoutExpired:
             res = {"problem": r.name, "verdict": "TIMEOUT", "passed": 0, "failed": 0}
         except Exception as e:
