@@ -119,15 +119,20 @@ def _cvdp(problem: ProblemConfig, run_dir: Path) -> dict[str, Any]:
     row = find_cvdp_datapoint(problem.dataset, str(problem.datapoint_id))
     out = run_dir / "raw" / "cvdp_problem"
     out.mkdir(parents=True, exist_ok=True)
-    write_json(out / "problem.json", row)
+    # SECURITY (no harness leak): the agent must never see the hidden grading harness or the golden
+    # patch. Write an agent-facing problem.json with `harness` removed and `patch` values blanked
+    # (target names kept so the prompt can list them). The grader re-reads the FULL datapoint from
+    # the dataset at grade time (cvdp-pipeline/regrade_docker.py), so nothing is lost.
+    agent_row = {k: v for k, v in row.items() if k != "harness"}
+    if isinstance(agent_row.get("patch"), dict):
+        agent_row["patch"] = {k: "" for k in agent_row["patch"]}
+    write_json(out / "problem.json", agent_row)
     for rel, content in (row.get("context") or {}).items():
         p = out / "context" / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(str(content), encoding="utf-8", newline="\n")
-    for rel, content in (row.get("harness") or {}).items():
-        p = out / "harness" / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(str(content), encoding="utf-8", newline="\n")
+    # NOTE: harness/ is intentionally NOT materialized — it was a leak surface (sibling of context/,
+    # and the prompt hands the agent this directory). Grading stages it from the dataset instead.
     return {
         "problem_json": str((out / "problem.json").resolve()),
         "dataset": str(problem.dataset),

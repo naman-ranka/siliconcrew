@@ -31,6 +31,7 @@ _BENCH_SRC = REPO_ROOT / "bench-orchestrator" / "src"
 if str(_BENCH_SRC) not in sys.path:
     sys.path.insert(0, str(_BENCH_SRC))
 from bench_orchestrator.summary import find_workspace, read_json  # noqa: E402
+from bench_orchestrator.problems import find_cvdp_datapoint  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _cocotb_compat import apply_cocotb_compat_patches  # noqa: E402
 
@@ -63,19 +64,25 @@ def newest_run(pid: str) -> Path | None:
 
 
 def regrade(run_dir: Path, image: str, write: bool = False, stage_root: Path = DEFAULT_STAGE_ROOT) -> dict:
-    pid = read_json(run_dir / "run_config.json").get("problem", {}).get("datapoint_id", "")
+    rc = read_json(run_dir / "run_config.json") or {}
+    prob = rc.get("problem", {}) if isinstance(rc, dict) else {}
+    pid = prob.get("datapoint_id", "")
     short = re.sub(r"^cvdp_(agentic|nonagentic)_", "", pid)
-    harness_src = run_dir / "raw" / "cvdp_problem" / "harness" / "src"
-    if not harness_src.exists():
-        return {"problem": short, "verdict": "NO_HARNESS"}
-    # The runner + .env may be nested (src/<test>/test_runner.py). Find them.
-    runners = sorted(harness_src.rglob("test_runner*.py"))
-    runner = runners[0] if runners else (harness_src / "test_runner.py")
-    runner_dir = runner.parent
-    env_file = (runner_dir / ".env") if (runner_dir / ".env").exists() else (harness_src / ".env")
-    env = parse_env(env_file.read_text(encoding="utf-8") if env_file.exists() else "")
-    runner_rel = runner.relative_to(harness_src).as_posix()           # e.g. test_poly_decimator/test_runner.py
-    runner_cdir = "/src/" + runner_dir.relative_to(harness_src).as_posix() if runner_dir != harness_src else "/src"
+
+    # Re-read the FULL datapoint (harness/context/patch) from the DATASET — the source of truth.
+    # The agent-visible problem.json has `harness` stripped + `patch` blanked (leak fix), so grading
+    # must never read the harness from the run dir. Legacy runs (pre-fix) still have a materialized
+    # harness/src as a fallback.
+    dataset = prob.get("dataset")
+    row = None
+    if dataset and Path(dataset).exists():
+        try:
+            row = find_cvdp_datapoint(Path(dataset), pid)
+        except Exception:
+            row = None
+    harness = (row or {}).get("harness") or {}
+    context = (row or {}).get("context") or {}
+    patch_targets = list(((row or {}).get("patch") or {}).keys())
 
     ws = find_workspace(run_dir)
     if not ws:
@@ -86,14 +93,32 @@ def regrade(run_dir: Path, image: str, write: bool = False, stage_root: Path = D
     if dest.exists():
         shutil.rmtree(dest, ignore_errors=True)
     (dest / "code" / "rundir").mkdir(parents=True, exist_ok=True)
-    shutil.copytree(harness_src, dest / "src")
-    # Stage /code exactly like the official runner: original CONTEXT files first (provided RTL/TB the
-    # agent must NOT break and the harness may compile), THEN overlay ONLY the agent's PATCH-TARGET
-    # files. This avoids spurious fails from a context file the agent forgot to materialize, and avoids
-    # using the agent's possibly-broken copy of a context file it shouldn't have touched.
-    row = read_json(run_dir / "raw" / "cvdp_problem" / "problem.json") or {}
-    context = row.get("context") or {}
-    patch_targets = list((row.get("patch") or {}).keys())
+
+    # Stage /src: harness from the dataset row (keys like "src/test_runner.py" -> dest/src/...);
+    # fall back to a legacy materialized harness/src for runs created before the leak fix.
+    src_root = dest / "src"
+    legacy_src = run_dir / "raw" / "cvdp_problem" / "harness" / "src"
+    if harness:
+        for rel, content in harness.items():
+            p = dest / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(str(content), encoding="utf-8", newline="\n")
+    elif legacy_src.exists():
+        shutil.copytree(legacy_src, src_root)
+    if not src_root.exists():
+        return {"problem": short, "verdict": "NO_HARNESS"}
+
+    # The runner + .env may be nested (src/<test>/test_runner.py). Find them within the staged /src.
+    runners = sorted(src_root.rglob("test_runner*.py"))
+    runner = runners[0] if runners else (src_root / "test_runner.py")
+    runner_dir = runner.parent
+    env_file = (runner_dir / ".env") if (runner_dir / ".env").exists() else (src_root / ".env")
+    env = parse_env(env_file.read_text(encoding="utf-8") if env_file.exists() else "")
+    runner_rel = runner.relative_to(src_root).as_posix()              # e.g. test_poly_decimator/test_runner.py
+    runner_cdir = "/src/" + runner_dir.relative_to(src_root).as_posix() if runner_dir != src_root else "/src"
+
+    # Stage /code like the official runner: provided CONTEXT files first (verbatim from the dataset),
+    # THEN overlay ONLY the agent's PATCH-TARGET files (its solution).
     for rel, content in context.items():                    # 1) provided context (verbatim from dataset)
         p = dest / "code" / rel
         p.parent.mkdir(parents=True, exist_ok=True)
