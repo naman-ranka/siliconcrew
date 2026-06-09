@@ -29,10 +29,29 @@ docker pull ghcr.io/hdl/sim/osvb   # one-time; the official CVDP test environmen
 > the `:latest` tag moves; override with `--image`. Staging dir is a temp dir by default (`--stage-root`
 > or `CVDP_STAGE_ROOT` to override) — no hardcoded paths.
 
+## Dataset & attribution
+
+The CVDP benchmark (datasets, problem definitions, and the cocotb harnesses graded here) is **NVIDIA's
+Comprehensive Verilog Design Problems (CVDP)** benchmark. This pipeline contains **no CVDP data** — it
+reads a dataset JSONL you supply and runs the dataset's own harnesses unchanged in the reference image.
+
+Obtain the dataset from NVIDIA's CVDP benchmark distribution (the `cvdp_benchmark` repository and its
+linked dataset release) and place/symlink it where the configs expect it, e.g.:
+
+```
+cvdp_benchmark/data/cvdp_v1.0.2_agentic_code_generation_no_commercial.jsonl
+```
+
+Use of the dataset and the `ghcr.io/hdl/sim/osvb` reference image is governed by **their respective
+licenses** — review and comply with NVIDIA's CVDP benchmark license and the OSVB image license before
+publishing results. The `no_commercial` dataset is used because the commercial split requires
+proprietary (Cadence `xrun`) infrastructure the reference container does not provide.
+
 Stages:
 
 | Stage | Script | Role |
 | --- | --- | --- |
+| **All-in-one** ⭐ | **`run_all.py`** | generate → run → grade → emit a provenance-stamped `results.json`. The one-command showcase/replication entrypoint. |
 | **Before** | `generate_cvdp_config.py` | Select problems from a raw CVDP JSONL → emit a bench-orchestrator YAML config |
 | *(run)* | `bench-orchestrator/run_benchmark.py` | Materializes the problem, drives the agent (the orchestrator already supports `kind: cvdp_agentic_jsonl`) |
 | **Grade** ✅ | **`regrade_docker.py`** | Grade a finished run in the **official reference container** (osvb image, correct context staging). **The trustworthy validator.** |
@@ -44,7 +63,42 @@ The orchestrator's `_cvdp()` does the heavy lifting (reads the raw row by `datap
 materializes `context/`, `harness/`, `problem.json` under `<run>/raw/cvdp_problem/`), so these
 scripts only *select* and *validate*.
 
-## Workflow
+## Reproduce a result (one command)
+
+`run_all.py` ties the stages together and writes a single `results.json` whose every verdict is
+stamped with **the repo commit, the digest-pinned image, and the agent/model/flow** — so a third
+party can see exactly what produced the number and re-grade it.
+
+```bash
+export RTL_WORKSPACE=C:/Users/naman/Desktop/Projects/RTL_AGENT/workspace_new   # for the agent run
+docker pull ghcr.io/hdl/sim/osvb                                               # one-time
+
+# full run: generate a 92-problem config, drive the agent, grade in the container, emit results.json
+python cvdp-pipeline/run_all.py \
+    --dataset cvdp_benchmark/data/cvdp_v1.0.2_agentic_code_generation_no_commercial.jsonl \
+    --max-problems 92 --agent codex --model gpt-5.5 --flow auto --name cvdp_full92
+
+# grade-only: re-grade existing runs into a fresh, provenance-stamped results.json (no agent needed)
+python cvdp-pipeline/run_all.py --config bench-orchestrator/configs/cvdp_des_smoke.yaml --skip-run
+```
+
+`results.json` shape:
+```jsonc
+{
+  "benchmark": "cvdp_full92", "dataset": "...jsonl", "generated_at": "2026-...",
+  "provenance": { "repo_commit": "<sha>", "image": "ghcr.io/hdl/sim/osvb@sha256:...",
+                  "grader": "cvdp-pipeline/regrade_docker.py", "agent": "codex",
+                  "model": "gpt-5.5", "flow": "auto" },
+  "summary": { "passed": 64, "total": 92, "pass_rate": 0.6957 },
+  "results": [ { "problem": "DES_0001", "verdict": "PASS", "passed": 1, "failed": 0,
+                 "run_dir": "...", "datapoint_id": "cvdp_agentic_DES_0001" } ]
+}
+```
+A third party with the same dataset + Docker can re-run `--skip-run` against your published run dirs (or
+a fresh full run) and confirm the number; the pinned image digest makes the simulator environment
+bit-identical to what produced it.
+
+## Workflow (manual, stage by stage)
 
 ```bash
 # 1. Generate a config (RTL-simulation-only; verilog flow => agent skips synthesis/PD)
