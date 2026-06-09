@@ -191,7 +191,7 @@ def preflight(agent: str, mcp_server: str) -> int:
     if not codex:
         print("codex CLI not found in PATH", file=sys.stderr)
         return 1
-    proc = subprocess.run([codex, "mcp", "get", mcp_server], text=True, capture_output=True)
+    proc = subprocess.run([codex, "mcp", "get", mcp_server], encoding="utf-8", capture_output=True)
     if proc.returncode != 0:
         print(proc.stdout)
         print(proc.stderr, file=sys.stderr)
@@ -229,7 +229,7 @@ def _run_and_stream(
         stdin=subprocess.PIPE if prompt_stdin is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        encoding="utf-8",
         bufsize=1,
         cwd=Path.cwd(),
     )
@@ -337,12 +337,12 @@ def _preflight_claude(mcp_server: str) -> int:
     if not claude:
         print("claude CLI not found in PATH", file=sys.stderr)
         return 1
-    get_proc = subprocess.run([claude, "mcp", "get", mcp_server], text=True, capture_output=True)
+    get_proc = subprocess.run([claude, "mcp", "get", mcp_server], encoding="utf-8", capture_output=True)
     if get_proc.returncode != 0:
         command, args = _mcp_command()
         add_proc = subprocess.run(
             [claude, "mcp", "add", "-s", "user", mcp_server, "--", command, *args],
-            text=True,
+            encoding="utf-8",
             capture_output=True,
         )
         if add_proc.returncode != 0:
