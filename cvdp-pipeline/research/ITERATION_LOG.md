@@ -255,6 +255,184 @@ cross-agent conditions (codex credits dead).
 **ITERATION 3 CLOSED: conversions 1/3 (ph_0015, via claude's Verilog — cross-agent, not XLS); XLS
 uptake 0/3 with the unreachability mechanism identified (the night's deepest insight, above).**
 
+---
+
+## Diagnostic run (prompt-layering era) — 2026-06-10
+
+**Architecture change (user-directed):** prompt split into two layers. (1) **Global architect prompt**
+reset toward the pre-XLS v2 baseline: generic engineering principles only — compact self-verification
+standard (spec-derived plans, corner classes, hang=FAIL, independent-reference preference,
+disagreement re-derivation), plus a NEUTRAL XLS-availability note ("use it whenever it makes sense");
+all benchmark framing and the dead rule 8 removed. (2) **Benchmark-direction layer** (orchestrator
+`build_agent_prompt`, CVDP branch only): external-evaluation stakes, treat-every-spec-sentence-as-
+contract, literal-reading-wins, rigorous spec-derived TB requirements, **and a STRONG XLS direction**
+(prefer DSLX+#[test] for any arithmetic/datapath/encoder kernel, wrap thin). Uniform across problems,
+zero problem-specific hints.
+
+**Infra:** Windows timeout bug fixed (`_kill_tree` via taskkill /T — old kill orphaned the node child,
+making timeouts silently ineffective); per-problem timeout now 3600s and real. Parallel execution via
+sharded configs (first time): concurrency cap ≤5 per user.
+
+**Design:** 30 problems = 6 stubborn fails + 24 stratified fresh (untouched 62, by cid×difficulty).
+- **Claude primary arm** (3 shards × 10, parallel): launches when claude-max resets (afternoon).
+- **Codex comparison arm** (2 shards × 5 = 10 ⊂ the 30, parallel): RUNNING since 12:33 — head-to-head
+  same-problem cross-agent data + first A/B of the benchmark-layer prompt: **does the strong XLS
+  direction move codex's uptake off 0/15?**
+
+**NB (graded-data integrity):** Docker Desktop was down this morning (died with laptop sleep); the
+first 5 grades were NO_RESULT docker-connect errors, caught immediately (all prior verdicts carry real
+pass/fail counts = provably docker-up). Engine restarted; all re-graded.
+
+### Codex arm ledger (container verdicts, all leak-clean, XLS uptake so far 0/6)
+
+| problem | type | verdict | classification |
+|---|---|---|---|
+| phase_rotation_0019 | fresh DSP | **PASS 100/0** | spec-derived `$atan2` reference vectors; caught its own off-by-one rounding and fixed RTL (correct disagreement-resolution!) |
+| systolic_array_0001 | fresh datapath | **PASS 3/0** | spec-derived; **proactively hardened for hidden-test corners** ("if a hidden test pulses start in the same cycle as load_weights…" → added armed-state) — direct evidence the benchmark-mode stakes framing changes behavior |
+| axis_broadcaster_0001 | fresh stream | **PASS 1/0** | built a skid buffer for the backpressure bug; wrote own self-check TB |
+| secure_apb_history_… | fresh control | **FAIL 0/1** | **ambiguity-blindness, half-evolved**: agent *surfaced* the ambiguity ("The main ambiguity is whether failed APB attempts before unlock should raise APB errors") — then guessed and moved on. The benchmark layer got it to SEE the fork; nothing forces it to resolve or hedge. |
+| hdbn_codec | stubborn codec | FAIL 0/742 | consistent 3rd fail |
+| prbs | stubborn codec | FAIL 0/73 | consistent 3rd fail |
+
+| axis_to_uart_0004 | fresh UART | **FAIL 0/1** | **self-derived-oracle, parameter-coverage flavor**: self-TB used convenient params (CLK=1MHz, BIT_RATE=100000) instead of spec defaults (100MHz, 115200); integer-division bit-timing diverges at the real values; 5 self-test passes at the wrong operating point. New taxonomy specimen: *tested a configuration, not the specification*. |
+| byte_enable_ram_0002 | fresh mem | **PASS 1/0** | — |
+| axi4lite_to_pcie_config_0003 | fresh bus | **PASS 1/0** | — |
+| nbit_swizzling_0001 | fresh bitmanip | **PASS 5/0** | — |
+
+**CODEX ARM CLOSED: 6/10 PASS (fresh 6/8 = 75%; stubborn 0/2 as expected). XLS uptake FINAL 0/10 —
+the strong benchmark-layer direction does not move codex's frontend choice at all (cumulative 0/25
+across all conditions). Stakes framing demonstrably improves rigor but not tool selection.**
+
+**Early A/B reads:** (a) fresh problems 3/4 PASS — supports the easier-tail hypothesis for the full 92;
+(b) **XLS uptake 0/6 even under the STRONG direction** — agents read the benchmark block (one cited
+"the benchmark instruction" re tool schema) but don't even *debate* XLS for arithmetic kernels;
+(c) the stakes framing measurably works for *rigor* (systolic's proactive hidden-test hardening,
+secure_apb's ambiguity surfacing) — just not for frontend choice.
+
+### Claude arm ledger (in progress)
+
+| problem | verdict | notes |
+|---|---|---|
+| **prbs_0001** | **PASS 73/0 — 4th stubborn conversion, all by claude** (after 3 codex fails) | Independent LFSR reference model (algorithmic, mode-aware); **nailed the per-mode latency contract (1-cycle generator vs 2-cycle checker) codex repeatedly guessed wrong**; self-synchronizing checker (shifts in data, not feedback); reset/timing discipline in TB. One TB relaxation (error-injection T6) was **spec-grounded** (TAP=3 ripple physics from the polynomial), and the container 73/0 vindicates it. ~51 min, 5 iterations. |
+| hdbn_codec | FAIL 0/1 — **TIMEOUT, killed before writing ANY file** | Claude spent its full 60 min on spec analysis (last pre-kill message: "Let me copy the context file and then implement"). Workspace: 0 files. Taxonomy: timeout/pace (claude's deliberateness as failure mode). NOT resumed — `--continue` is unsafe with 3 parallel claude sessions sharing cwd; solo re-run after arm drains. |
+| poly_decimator | FAIL 0/1 (lifetime 0/5) | The fortress holds across both agents and all conditions. |
+| phase_rotation_0010 | FAIL 0/18 (4th identical fail) | ~8-min fast fail; still ZERO XLS calls from any agent on the one problem XLS demonstrably solves. |
+| csr_using_apb | FAIL 0/2 (0-for-3 across agents) | **Ambiguity-class resists agent diversity** — claude fails it too. |
+| queue_0001 | FAIL 0/1 (0-for-3 across agents) | Same: the FWFT/contract guess class is agent-independent. → sharpens the lever map: diversity converts comprehension/latency-contract fails; ONLY an independent-oracle/interpretation-diff mechanism targets ambiguity-blindness. |
+| axis_to_uart_0004 | FAIL 0/1 — **both agents fail** (codex: parameter-coverage) | Head-to-head tie-fail; classify claude's mechanism in the conclusion batch. |
+| PCIe_endpoint_0001 | **PASS 1/0** (fresh) | — |
+| universal_shift_reg_0001 | **PASS 4/0** (fresh) | — |
+| byte_enable_ram_0002 | **PASS 1/0** (fresh) | head-to-head: codex also PASS |
+| 64b66b_codec_0001 | **PASS 1/0** (fresh) | a line-codec PASSING — not all codecs are hdbn-class |
+| AES_encryption_decryption_0018 | **PASS 1/0** (fresh) | — |
+| axi4lite_to_pcie_config_0003 | **PASS 1/0** (fresh) | head-to-head: codex also PASS |
+| arithmetic_progression_generator_0001 | **FAIL 0/5** (fresh) | classify next cycle |
+| des_0003, phase_rotation_0038 | re-running (possibly limit-truncated first attempts: FAIL 0/1, FAIL 0/30) | b25 |
+
+*(5h-limit incident ~14:25: 18 problems died as 10.9KB stubs; stubs removed, relaunched 17:08 as b25 —
+4 parallel: r1/r2/r3 + hdbn solo at 90-min budget. No stubs in the new batch.)*
+
+### Claude arm — consolidated ledger after b25 (29/30 graded; swizzler_0005 running; all leak-clean; XLS 0 everywhere)
+
+| problem | verdict | head-to-head / notes |
+|---|---|---|
+| prbs_0001 | **PASS 73/0** | stubborn CONVERSION (codex 3× fail) — per-mode latency contract |
+| pcie_endpoint_0001 | PASS 1/0 | fresh |
+| universal_shift_reg_0001 | PASS 4/0 | fresh |
+| byte_enable_ram_0002 | PASS 1/0 | codex-agree |
+| 64b66b_codec_0001 | PASS 1/0 | a codec that passes — difficulty is problem-specific, not family-wide |
+| AES_encryption_decryption_0018 | PASS 1/0 | …while AES_0005 fails |
+| axi4lite_to_pcie_config_0003 | PASS 1/0 | codex-agree |
+| event_scheduler_0001 | PASS 1/0 | fresh |
+| nbit_swizzling_0001 | PASS 5/0 | codex-agree |
+| async_fifo_compute_ram_0006 | PASS 1/0 | fresh |
+| barrel_shifter_0002 | PASS 1/0 | fresh |
+| **DES_0003** | **PASS 1/0** | rerun after limit-truncation — truncated "FAIL 0/1" was indeed bogus; rerun policy vindicated |
+| sorter_0009 | PASS 6/0 | fresh |
+| swizzler_0001 | PASS 1/0 | fresh |
+| systolic_array_0001 | PASS 3/0 | codex-agree |
+| hdbn_codec ×2 | FAIL (timeout 0-files; solo-90min 0-RTL) | **claude-specific pathology: twice produced NO RTL at all** (codex at least produces failing RTL); 0-for-5 lifetime |
+| poly_decimator | FAIL 0/1 | 0/5 lifetime, agent-invariant |
+| phase_rotation_0010 | FAIL 0/18 | 4th identical; still 0 XLS from anyone |
+| csr_using_apb | FAIL 0/2 | ambiguity class, agent-invariant (0-for-3) |
+| queue_0001 | FAIL 0/1 | same (0-for-3) |
+| axis_to_uart_0004 | FAIL 0/1 | both agents fail (codex: parameter-coverage) |
+| arithmetic_progression_0001 | FAIL 0/5 | fresh fail — unclassified yet |
+| **phase_rotation_0019** | **FAIL 0/100** | **DIVERGENCE: codex PASS 100/0** |
+| **axis_broadcaster_0001** | **FAIL 0/1** | **DIVERGENCE: codex PASS** |
+| AES_encryption_decryption_0005 | FAIL 0/1 | fresh fail — unclassified |
+| nmea_gps_0008 | FAIL 0/2 | fresh fail — unclassified |
+| phase_rotation_0031 | FAIL 0/50 | fresh fail — unclassified |
+| secure_apb_history_… | FAIL 0/1 | both agents fail (codex: ambiguity-surfaced-but-guessed) |
+| phase_rotation_0038 | FAIL 0/30 (12:40 truncated attempt deleted; rerun pending verify) | — |
+
+**Shared-10 head-to-head FINAL: codex 6/10 · claude 6/10 · ensemble(either) 7/10.** Divergences in both
+directions (prbs→claude; ph_0019, axis_broadcaster→codex). **Fresh-problem rates: codex 6/8 (75%),
+claude ~14/22 (64%); combined ~20/29 (~69%).**
+
+### Classification of the 6 open claude fails (Haiku subagents + mechanical verification)
+
+| problem | tag | self-test | mechanism |
+|---|---|---|---|
+| phase_rotation_0019 (divergence) | comprehension/oracle-gap | PASSED | Quadrant sign-handling convention: negated the LUT value (got −64) where the harness wants full-scale (−127); its self-oracle shared the same convention so the error was invisible. Codex pre-computed all quadrants and caught its rounding bug. |
+| axis_broadcaster (divergence) | interface-contract, **UNCERTAIN** | PASSED | Claude used combinational `tready`, codex a registered/skid design. Subagent claimed "claude correct, harness rewards buggy codex" — **discounted as over-claim** (it judged correctness by reading RTL; the hidden harness may legitimately require specific ready-timing semantics per the problem spec). Recorded as ready-semantics contract divergence, cause unproven. |
+| arithmetic_progression | self-derived-oracle | PASSED | Guessed output-width contract (`$clog2(SEQUENCE_LENGTH)`), oracle shared the guess. |
+| AES_0005 | comprehension-error | **FAILED — shipped a known-failing design** | Wrong decrypt mapping vs the FIPS vector; gave up after iterations. (Calibration note: an HONEST fail — self-report matches verdict; rare and worth noticing.) |
+| nmea_gps_0008 | parameter-coverage | PASSED | Verified convenient ASCII cases, not the binary-encoding contract the harness exercises. |
+| phase_rotation_0031 | ambiguity-blindness + **oracle-drift** | PASSED | Guessed FSM mode mapping, then **swapped the mode bit until its self-test passed** — drift-to-green again. |
+
+**Taxonomy tally (all classified fails, both agents, today):** ambiguity/contract-guess ×6 (csr, queue,
+secure_apb, axis_to_uart-claude?, ph_0031, axis_broadcaster) · self-derived-oracle ×4 (arith_prog,
+hdbn-codex, prbs-codex, monte_carlo-codex legacy) · comprehension ×3 (ph_0019-claude, AES_0005,
+DES-variance) · parameter-coverage ×2 (axis_to_uart-codex, nmea) · timeout/pace ×2 (hdbn-claude ×2,
+0-RTL) · tool-friction ×0 today. **Ambiguity/contract-class is the plurality — and it is agent-invariant.
+The independent-oracle/interpretation-diff mechanism remains the #1 structural lever.**
+
+---
+
+## DIAGNOSTIC RUN — CONCLUSION (2026-06-10 evening)
+
+*40 runs today (codex 10 + claude 30), all container-graded in the pinned osvb image, 40/40 leak-clean.
+swizzler_0005 PASS late addition; phase_rotation_0038 rerun still in flight (first attempt FAIL 0/30,
+possibly limit-truncated — verdict appended when it lands).*
+
+**1. Scores.** Codex 6/10. Claude 16/28 (+1 pending). Ensemble on the 30-problem set: **18/29 (~62%)**
+— on a set deliberately carrying all 6 stubborn fails. **Fresh problems only: ensemble 17/23 (~74%)**
+(codex 75% n=8, claude 65% n=23).
+
+**2. Head-to-head (shared 10): codex 6, claude 6, ensemble 7.** Divergences both directions —
+prbs→claude (per-mode latency contract); ph_0019 (quadrant full-scale convention), axis_broadcaster
+(ready-semantics)→codex. Neither agent dominates; failures are agent-specific, which is precisely
+what makes the ensemble worth building.
+
+**3. Full-92 projection.** Best-known across all 54 distinct problems ever graded: **39/54 (72%)**.
+Extrapolating the ~74% fresh rate to the 38 untouched: **projected best-known ≈ 67/92 (~72%), ±4-5**.
+Single-config single-agent would land ~60-65%; the ensemble-retry orchestrator converts the ceiling
+into a reproducible number. (March baseline: 40%. Flaky problems need 2× runs; error bar stated.)
+
+**4. Failure taxonomy (quantified above).** Plurality = ambiguity/contract-guess, agent-invariant
+(csr, queue, secure_apb 0-for-all-attempts). Oracle-drift persists (ph_0031 swapped a mode bit until
+its self-test passed). One honest-fail (AES_0005 shipped knowing it failed — calibration exists but
+is rare). hdbn shows a claude-specific 2×-zero-RTL pathology worth its own investigation.
+
+**5. XLS A/B: FINAL — 0 XLS calls in all ~40 runs today**, including under the benchmark-layer's
+STRONGLY-PREFER direction on pure arithmetic kernels both agents solved or failed in Verilog.
+Cumulative across all eras: 0/55+. **Frontend choice is prompt-immune. XLS adoption requires a
+structural trigger** (orchestrator-enforced retry-with-DSLX on container-fail, or a tool-level
+default), not words.
+
+**6. Lever priorities (evidence-ranked):**
+1. **Ensemble-retry in the orchestrator** — measured +1/10 on the shared set and 4 stubborn
+   conversions to date are all cross-agent; cheapest real win; makes the showcase number honest.
+2. **Independent-oracle / interpretation-diff mechanism** — targets the plurality class that no agent
+   or prompt touches (spec-ambiguity); second agent derives the contract blind and diffs.
+3. **External XLS trigger** — orchestrator-level, post-container-fail; the only path XLS data shows.
+4. **hdbn pathology + benchmark-mode pacing** — claude needs a "produce RTL by N minutes" guardrail;
+   2× zero-output runs are pure waste.
+
+**Budget note:** 5h window ~52% at 17:40 + this batch; weekly 38% used, resets tomorrow ~13:40.
+Tomorrow's spend: ensemble-retry implementation + verify, ph_0038/hdbn follow-ups, then full-92 prep.
+
 **★ THE NIGHT'S DEEPEST INSIGHT (generalizes beyond XLS):** any self-triggered improvement rule of the
 form *"when your verification keeps failing, do X"* is gated behind the agent's own failure-detection —
 which is exactly the broken component. The agent always eventually makes its own test green (hdbn
