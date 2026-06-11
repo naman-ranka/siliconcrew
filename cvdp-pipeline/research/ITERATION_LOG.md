@@ -433,6 +433,56 @@ default), not words.
 **Budget note:** 5h window ~52% at 17:40 + this batch; weekly 38% used, resets tomorrow ~13:40.
 Tomorrow's spend: ensemble-retry implementation + verify, ph_0038/hdbn follow-ups, then full-92 prep.
 
+---
+
+## NIGHT RUN (b26/b27): full-92 coverage — IN PROGRESS
+
+Launched 22:18 (2 parallel shards over the 36 untouched + hdbn probe + ph_0038 re-verify).
+**Paused 00:50 per user (window budget); resume 03:12 on the 5h reset (b27 configs: 25 remaining).**
+
+### Night ledger (13 graded; all leak-clean; XLS 0/13)
+
+| problem | verdict | classification |
+|---|---|---|
+| AES_0009, async_fifo_0001, bcd_adder_0004 (16/0), cellular_automata_0002, DES_0005, cipher_0001, direct_map_cache_0003 (16/0) | **PASS ×7** | fresh wins |
+| hdbn (3rd attempt) | FAIL 0/599 | **WROTE RTL this time** (pathology non-deterministic) — but used LOOPBACK oracle again and **shipped with its own self-test failing** (127 loopback errors). Lifetime 0-for-6. |
+| ph_0038 (3rd) | FAIL 0/30 | identical ×3 → **stable genuine fail, not flaky** (good for error-bar calibration) |
+| binary_search_tree_0014 | FAIL 2/3 partial | TB scope mismatch — self-TB validated search/delete, harness also checks final BST structure |
+| aes_0003 | FAIL 0/1 | variant-specific comprehension (key-schedule); self-test also failing (shipped anyway). AES family: 0009 ✓ 0018 ✓ / 0003 ✗ 0005 ✗ |
+| digital_stopwatch_0001 | FAIL 0/4 | **parameter-coverage #3**: self-tested at CLK_FREQ=10, spec wants 50 MHz — timing off 5000× (same flavor as axis_to_uart, nmea — a RISING class) |
+| dual_port_memory_0001 | FAIL 0/1 | interface-contract (read-latency semantics) |
+
+**Night fresh rate so far: 7/11 (64%).**
+### b27 resume ledger (03:14 launch)
+| problem | verdict | note |
+|---|---|---|
+| AES_0012 | FAIL 0/1 | AES family now 2✓/3✗ — variant-specific comprehension |
+| DES_0007 | FAIL 0/1 | DES family: 0001 flaky, 0003 ✓, 0005 ✓, 0007 ✗ |
+| caesar_cipher_0001, cic_decimator_0001 (March-fail RECOVERED), cont_adder_0001 | PASS ×3 | cic_decimator was a March-2026 baseline failure — fresh recovery |
+| axis_to_uart_0001 | FAIL 0/1 | axis_to_uart family 0-for-3 across agents/variants |
+| binary_search_tree_0001 | FAIL 0/9 | bst family: 0014 partial 2/3, 0001 0/9 |
+| door_lock_0001 | FAIL 0/10 | fresh fail (March also failed door_lock) |
+| dual_port_memory_0004, event_scheduler_0004, lfsr_0001 (March-fail RECOVERED), multiplexer_0001, signed_comparator_0001, sorter_0026 (March-fail RECOVERED) | PASS ×6 | family texture: dual_port 0001✗/0004✓; direct_map_cache 0003✓(16/0)/0001✗(0/16) |
+| direct_map_cache_0001 | FAIL 0/16 | mirror of 0003's 16/0 pass — variant-specific |
+| ethernet_mii_0004, thermostat_secure_0001 | FAIL ×2 | fresh fails, to classify |
+
+### b27 fail classifications (Haiku batch, mechanically sanity-checked)
+- **aes_0012 + bst_0001: INCOMPLETE-RUNS (token-limit deaths mid-conversation — never reached design). Verdicts are not design signal; tail re-run if budget allows.**
+- des_0007: interface-contract (self-test passed, 11 RTL files) · axis_to_uart_0001: ambiguity/param (family 0-for-3 now) · door_lock: comprehension (5 iterations to self-green, 0/10 anyway) · direct_map_cache_0001: parameter-coverage suspected (sibling 0003 passed 16/0 same night) · ethernet_mii_0004: interface-contract (CDC/MII handshake) · thermostat_secure: comprehension (first-try self-green, 0/1).
+- (Subagent's "patched=true suggests spec flag" discounted — that field is our grader's cocotb-compat marker.)
+| fixed_arbiter_0010, programmable_fsm_dse_0001 (March-fail RECOVERED), sync_serial_0001 (20/0, March-fail RECOVERED) | PASS ×3 | — |
+| dynamic_equalizer_0008, ethernet_mii_0006 (0/1793!) | FAIL ×2 | mii family 0-for-2; dyn_eq family 0004✓(once)/0001✓/0008✗ |
+| low_power_channel_0001 | PASS 1/0 | — |
+| sorter_0016 | FAIL 0/5 | sorter family 0009✓ 0026✓ 0016✗ |
+
+
+
+
+
+ Parameter-coverage is emerging as the #3 taxonomy class —
+cheap structural fix candidate: benchmark-layer rule "self-test at the spec's DEFAULT parameters,
+never simplified ones" + orchestrator lint that greps TB params vs spec defaults.
+
 **★ THE NIGHT'S DEEPEST INSIGHT (generalizes beyond XLS):** any self-triggered improvement rule of the
 form *"when your verification keeps failing, do X"* is gated behind the agent's own failure-detection —
 which is exactly the broken component. The agent always eventually makes its own test green (hdbn
