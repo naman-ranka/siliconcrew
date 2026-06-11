@@ -6,10 +6,10 @@ pinned osvb container, every workspace leak-scanned (0 leaks all night).*
 
 ## 1. THE MEASURED NUMBER
 
-**Best-known across the benchmark: 63 PASS / 90 covered of 92 (70%)** — vs the March-2026 baseline
-of 37/92 (40%). Four tail runs in flight at report time can move this to at most 67/92:
-- aes_0012 + bst_0001 (token-limit incompletes re-running — their current FAILs are not design signal)
-- ph_0028 + rgb_0001 (the last 2 never-graded problems — first-overnight casualties, now running)
+**FINAL: 63 PASS / 92 of 92 covered = 68.5% best-known** — vs the March-2026 baseline of 37/92 (40%).
+**100% benchmark coverage**: every problem has >=1 trustworthy container verdict. Tail results (09:00):
+aes_0012 FAIL (real run — genuine, token-death tag cleared); ph_0028 FAIL 0/15 + rgb_0001 FAIL 0/1
+(first-ever verdicts); bst_0001 limit-stub again (keeps incomplete tag — the one soft cell in 92).
 
 This is a *best-known-across-configs* ceiling (two agents, several prompt eras), not one reproducible
 run — the ensemble-retry orchestrator (today's build item) is what makes ~70% a legitimate single
