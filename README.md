@@ -7,6 +7,7 @@
 [![LangGraph](https://img.shields.io/badge/Framework-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
 [![Next.js](https://img.shields.io/badge/Frontend-Next.js%2014-black.svg)](https://nextjs.org/)
 [![MCP](https://img.shields.io/badge/Protocol-MCP-blue.svg)](https://modelcontextprotocol.io/)
+[![CVDP](https://img.shields.io/badge/CVDP-68.5%25%20(63%2F92)-success.svg)](cvdp-pipeline/research/CVDP_RESULTS.md)
 [![Status: Research](https://img.shields.io/badge/Status-Research%20Prototype-yellow.svg)]()
 
 ---
@@ -27,6 +28,23 @@ This project investigates the following research questions:
 
 ---
 
+## Preliminary Results
+
+On **CVDP** (NVIDIA's 92 agentic `no_commercial` problems), every verdict graded in the **official
+reference container** (`ghcr.io/hdl/sim/osvb`, digest-pinned) — not a self-report:
+
+| | Pass rate |
+|---|---|
+| March-2026 baseline | 46.7% (43/92) |
+| **Current best-known** | **68.5% (63/92)** |
+
+> ⚠️ **Preliminary** — best-known across configs, not yet a single reproducible run (±1–2 problems).
+> A multi-run, single-config showcase with one-command reproduction is in progress
+> ([`run_all.py`](cvdp-pipeline/run_all.py) already emits provenance-stamped results). Detail:
+> [`CVDP_RESULTS.md`](cvdp-pipeline/research/CVDP_RESULTS.md).
+
+---
+
 ## Capabilities
 
 - **Specification-First Workflow**: Generates structured YAML specifications before RTL, including port definitions, timing constraints, and SDC files
@@ -37,12 +55,32 @@ This project investigates the following research questions:
 - **Synthesis to GDSII**: Runs the OpenROAD flow via Docker targeting SkyWater 130nm to produce layout outputs
 - **PPA Extraction**: Parses area, timing (WNS/TNS), and power from synthesis logs and reports
 - **Formal Verification**: SymbiYosys integration for property checking and bounded model checking
+- **High-Level Synthesis (XLS)**: Optional Google XLS / DSLX frontend — compiles algorithmic/datapath kernels (`.x`) through IR → optimized IR → Verilog for arithmetic, encoders, and fixed-point math
 - **Schematic Generation**: SVG netlist visualization from Verilog sources
 - **Design Reports**: Markdown reports comparing specification requirements against achieved metrics
 - **Real-Time Streaming UI**: Next.js frontend with WebSocket chat, inline tool call cards, and six artifact viewers (spec, code, waveforms, schematics, layouts, reports)
 - **MCP Protocol Support**: Full toolchain exposed via Model Context Protocol (stdio, SSE, and Streamable HTTP transports) for Claude Desktop, VS Code, and other MCP clients
 - **Multi-Session Management**: Isolated workspaces with per-session chat history, token tracking, and cost accounting — shared across all interfaces
 - **Tool Auto-Discovery**: LangChain tool schemas are automatically converted to MCP format; adding a tool to the backend exposes it to all clients
+
+---
+
+## Benchmarks
+
+The headline numbers are in [Preliminary Results](#preliminary-results) above. All verdicts are graded
+in the pinned `ghcr.io/hdl/sim/osvb` container running the dataset's own cocotb harness. A single fixed
+agent+prompt configuration reproduces ~60–65%; a cross-agent retry ensemble reaches ~70%. The
+reference-container subset check is ~67% (20/30). Agents used: `codex/gpt-5.5` and `claude-sonnet-4-6`
+driving the SiliconCrew MCP toolchain.
+
+The full pipeline — problem selection, agent run, container grading, and a provenance-stamped
+`results.json` (repo commit + pinned image digest + agent/model) — lives in
+[`cvdp-pipeline/`](cvdp-pipeline/). Results detail:
+[`cvdp-pipeline/research/CVDP_RESULTS.md`](cvdp-pipeline/research/CVDP_RESULTS.md).
+
+> CVDP is NVIDIA's benchmark; this repository ships no CVDP data. Provide the dataset yourself and
+> comply with NVIDIA's license. The `no_commercial` split is used because the commercial split
+> requires proprietary (Cadence) simulators the reference container does not include.
 
 ---
 
@@ -70,9 +108,9 @@ This project investigates the following research questions:
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                      Architect Agent (LangGraph ReAct)                      │
 │                                                                            │
-│   System prompt (500+ lines of RTL design methodology)                     │
+│   System prompt (~130-line methodology, versioned in prompts/architect/)   │
 │   + Provider-selected LLM (Gemini / OpenAI / Anthropic)                                 │
-│   + 18 LangChain tools                                                     │
+│   + 35 LangChain tools                                                     │
 │                                                                            │
 │   Workflow: Spec → RTL → Testbench → Lint → Simulate → Debug → Synthesize │
 └──────────────────────────────────┬─────────────────────────────────────────┘
@@ -232,7 +270,7 @@ cd frontend && npm run dev         # Runs on http://localhost:3000
 
 ### MCP Interface (Claude Desktop, VS Code, etc.)
 
-The MCP server exposes all 18 tools plus session management to any MCP-compatible client.
+The MCP server exposes all 35 tools plus session management to any MCP-compatible client.
 
 ```bash
 # Local (stdio) — for Claude Desktop
@@ -245,9 +283,9 @@ python mcp_server.py --transport sse --host 0.0.0.0 --port 8080
 python mcp_server.py --transport http --host 0.0.0.0 --port 8080
 ```
 
-**Claude Desktop**: Configure the MCP server in `claude_desktop_config.json`, then load the "RTL Design Workflow" prompt. See [docs/MCP_SETUP.md](docs/MCP_SETUP.md).
+**Claude Desktop**: Configure the MCP server in `claude_desktop_config.json` (see the example below), then load the "RTL Design Workflow" prompt.
 
-**VS Code**: Configure via settings and use Copilot Chat with full tool access. See [docs/MCP_VSCODE_SETUP.md](docs/MCP_VSCODE_SETUP.md).
+**VS Code**: Configure via settings and use Copilot Chat with full tool access (same command/args as the example below).
 
 **Quick setup (all OS)**
 
@@ -285,7 +323,7 @@ codex mcp add rtl-codex -- <REPO_ROOT>\.venv\Scripts\python.exe <REPO_ROOT>\mcp_
 }
 ```
 
-Detailed guides: [docs/MCP_SETUP.md](docs/MCP_SETUP.md), [docs/MCP_VSCODE_SETUP.md](docs/MCP_VSCODE_SETUP.md).
+Run `python mcp_server.py --help` for all transport, tool-filter, and host/port options.
 
 Sessions are shared across all interfaces — a design started in Claude Desktop can be resumed in the web UI and vice versa.
 
@@ -327,33 +365,31 @@ counter_4bit:
 ```
 ├── api.py                          # FastAPI backend (REST + WebSocket)
 ├── mcp_server.py                   # MCP server (stdio / SSE / HTTP)
-├── app.py                          # Legacy Streamlit interface
 ├── docker-compose.yml              # Container orchestration
-├── Dockerfile.backend              # Backend Docker image
+├── Dockerfile                      # Backend Docker image
+├── Dockerfile.xls                  # Google XLS HLS toolchain image
 ├── requirements.txt
 │
 ├── src/
 │   ├── config.py                   # Model and environment configuration
+│   ├── model_catalog.py            # Provider/model registry
+│   ├── llm/                        # Provider-selected LLM factory (Gemini/OpenAI/Anthropic)
 │   ├── agents/
-│   │   ├── architect.py            # Primary ReAct agent + system prompt
-│   │   ├── rtl_coder.py            # RTL generation node (legacy graph)
-│   │   ├── verifier.py             # Verification node (legacy graph)
-│   │   ├── synthesis_agent.py      # Synthesis node (legacy graph)
-│   │   └── ppa_analyst.py          # PPA analysis node (legacy graph)
-│   ├── graph/
-│   │   └── graph.py                # Multi-agent state graph (legacy)
+│   │   └── architect.py            # Primary ReAct agent + system prompt
 │   ├── state/
 │   │   └── state.py                # DesignState TypedDict
 │   ├── tools/
-│   │   ├── wrappers.py             # 18 LangChain @tool definitions
+│   │   ├── wrappers.py             # 35 LangChain @tool definitions
 │   │   ├── spec_manager.py         # YAML spec handling + validation
 │   │   ├── run_linter.py           # Icarus Verilog linting
 │   │   ├── run_simulation.py       # Simulation orchestration
 │   │   ├── run_iverilog.py         # iverilog compile + vvp execute
 │   │   ├── run_synthesis.py        # OpenROAD via Docker
+│   │   ├── synthesis_manager.py    # ORFS run lifecycle + staged PD tooling
 │   │   ├── run_docker.py           # Docker command runner
-│   │   ├── run_cocotb.py           # Cocotb test runner
-│   │   ├── run_sby.py              # SymbiYosys formal verification
+│   │   ├── run_cocotb.py           # Cocotb runner (osvb reference container)
+│   │   ├── run_sby.py              # SymbiYosys formal verification (containerized)
+│   │   ├── run_xls.py              # Google XLS / DSLX HLS flow
 │   │   ├── get_ppa.py              # PPA metric extraction from logs
 │   │   ├── read_waveform.py        # VCD parsing
 │   │   ├── search_logs.py          # Log/report grep
@@ -363,6 +399,10 @@ counter_4bit:
 │   └── utils/
 │       ├── session_manager.py      # Session CRUD + SQLite metadata
 │       └── visualizers.py          # Waveform/layout rendering helpers
+│
+├── legacy/                         # Earlier multi-agent graph (coder→verifier→synth), kept for reference
+├── bench-orchestrator/             # Generic benchmark runner (agents, runs, dashboards)
+├── cvdp-pipeline/                  # CVDP glue: select → run → grade-in-container → results.json
 │
 ├── frontend/                       # Next.js 14 application
 │   ├── app/                        # App Router (layout, page)
@@ -382,16 +422,15 @@ counter_4bit:
 ├── workspace/                      # Session workspaces (shared across interfaces)
 ├── state.db                        # SQLite database (shared across interfaces)
 │
-├── MCP_SETUP.md                    # MCP configuration (Claude Desktop)
-├── MCP_VSCODE_SETUP.md             # MCP configuration (VS Code)
-└── MCP_SESSION_GUIDE.md            # Session management documentation
+├── prompts/architect/              # Versioned architect system prompts (v0–v2)
+└── docs/                           # Physical-design + hosted-workbench design notes
 ```
 
 ---
 
 ## Design Decisions
 
-**Single agent with many tools vs. multi-agent pipeline.** An earlier version used a fixed multi-agent graph (coder → verifier → synthesizer). The current design uses a single ReAct agent with all 18 tools, allowing it to choose its own execution order and recover from failures more flexibly. The legacy graph remains in `src/graph/` for reference.
+**Single agent with many tools vs. multi-agent pipeline.** An earlier version used a fixed multi-agent graph (coder → verifier → synthesizer). The current design uses a single ReAct agent with all 35 tools, allowing it to choose its own execution order and recover from failures more flexibly. The legacy graph remains in `legacy/graph/` for reference.
 
 **Waveform-based debugging over guessing.** The system prompt explicitly instructs the agent to never guess at simulation failures. It must call `waveform_tool` to inspect signal values at the point of failure. This improves fix accuracy over blind re-prompting.
 
@@ -425,6 +464,8 @@ counter_4bit:
 - [x] Next.js frontend with real-time streaming
 - [x] MCP server with remote transport (SSE, HTTP)
 - [x] Tool auto-discovery and configurable filtering
+- [x] CVDP benchmark harness with reproducible, container-graded results
+- [x] Google XLS / DSLX high-level-synthesis frontend
 
 ### In Progress
 - [ ] Improved handling of parameterized modules
@@ -434,7 +475,7 @@ counter_4bit:
 ### Planned
 - [ ] Additional provider/runtime integrations (local/self-hosted models)
 - [ ] Design space exploration
-- [ ] Benchmark suite for evaluation
+- [ ] Independent-oracle / interpretation-diff verification to close the self-verification gap
 
 ---
 
