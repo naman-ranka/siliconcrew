@@ -144,46 +144,59 @@ class CodexRunner(BaseRunner):
 
 
 class ClaudeRunner(BaseRunner):
+    # Stream JSON events (like codex's --json). WITHOUT --output-format stream-json, `claude -p` buffers
+    # all output to the very end and can appear to hang on long agentic runs (the overnight failure mode);
+    # streaming makes it complete reliably AND traceable. --verbose is required for stream-json.
+    _BASE = ["-p", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"]
+
     def run(self, prompt: str, run_dir: Path, model: str, timeout_sec: int) -> RunnerResult:
         claude = _require_cli("claude")
         cmd = [
             claude,
             "-p",
-            "--output-format", "stream-json",
-            "--include-partial-messages",
-            "--verbose",
-            "--model", model,
             "--dangerously-skip-permissions",
+            "--output-format", "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            "--model", model,
             "--add-dir", str(Path.cwd()),
         ]
-        return _run_text_agent(cmd, prompt, run_dir, "claude", timeout_sec, stdout_is_events=True)
+        return _run_json_stream_agent(cmd, prompt, run_dir, "claude", timeout_sec)
 
     def resume(self, prompt: str, run_dir: Path, continuation_dir: Path, model: str, timeout_sec: int) -> RunnerResult:
         claude = _require_cli("claude")
         cmd = [
             claude,
             "-p",
-            "--continue",
-            "--output-format", "stream-json",
-            "--include-partial-messages",
-            "--verbose",
-            "--model", model,
             "--dangerously-skip-permissions",
+            "--output-format", "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            "--continue",
+            "--model", model,
             "--add-dir", str(Path.cwd()),
         ]
-        return _run_text_agent(cmd, prompt, continuation_dir, "claude_resume", timeout_sec, stdout_is_events=True)
+        return _run_json_stream_agent(cmd, prompt, continuation_dir, "claude_resume", timeout_sec)
 
 
 class AntigravityRunner(BaseRunner):
+    # agy needs: --model (added v1.0.5; e.g. gemini-3.5-flash) and --print-timeout (default is only 5m,
+    # too short for a design run). KNOWN AGY LIMITATIONS (upstream, not fixable here):
+    #   * `--print`/-p drops stdout in non-TTY (issue #76) -> the response isn't captured on stdout;
+    #     the agent's WORKSPACE (RTL written via rtl-codex) is the gradeable artifact, not stdout.
+    #   * headless runs can stall waiting on the antigravity backend (esp. consumer accounts).
+    # Preflight wires MCP into ~/.gemini/config/mcp_config.json + allow-lists mcp(rtl-codex/*).
     def run(self, prompt: str, run_dir: Path, model: str, timeout_sec: int) -> RunnerResult:
         agy = _require_cli("agy")
-        cmd = [agy, "--print", "--dangerously-skip-permissions", "--add-dir", str(Path.cwd()), prompt]
-        return _run_text_agent(cmd, None, run_dir, "antigravity", timeout_sec)
+        cmd = [agy, "--print", "--dangerously-skip-permissions", "--model", model,
+               "--print-timeout", f"{timeout_sec}s", "--add-dir", str(Path.cwd()), prompt]
+        return _run_agy_transcript(cmd, run_dir, "antigravity", timeout_sec)
 
     def resume(self, prompt: str, run_dir: Path, continuation_dir: Path, model: str, timeout_sec: int) -> RunnerResult:
         agy = _require_cli("agy")
-        cmd = [agy, "--print", "--continue", "--dangerously-skip-permissions", "--add-dir", str(Path.cwd()), prompt]
-        return _run_text_agent(cmd, None, continuation_dir, "antigravity_resume", timeout_sec)
+        cmd = [agy, "--print", "--continue", "--dangerously-skip-permissions", "--model", model,
+               "--print-timeout", f"{timeout_sec}s", "--add-dir", str(Path.cwd()), prompt]
+        return _run_agy_transcript(cmd, continuation_dir, "antigravity_resume", timeout_sec)
 
 
 def get_runner(name: str) -> BaseRunner:
@@ -228,6 +241,17 @@ def _stream_reader(pipe, *out_files):
                 f.flush()
     except Exception:
         pass
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the agent process AND its descendants. On Windows the agent CLIs are .cmd wrappers:
+    proc.kill() terminates only the cmd.exe shell, orphaning the node/python child, which keeps the
+    stdout pipe open — so the reader threads block and the timeout is silently ineffective (observed:
+    a 40-min timeout run streaming for 67+ min). taskkill /T takes out the whole tree."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    else:
+        proc.kill()
 
 
 def _run_and_stream(
@@ -279,7 +303,7 @@ def _run_and_stream(
             try:
                 exit_code = proc.wait(timeout=timeout_sec)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _kill_tree(proc)
                 exit_code = proc.wait()
             
             t_out.join()
@@ -289,6 +313,105 @@ def _run_and_stream(
                 f_extra.close()
 
     return exit_code
+
+
+def _run_json_stream_agent(cmd: list[str], prompt_stdin: str | None, out_dir: Path, event_name: str, timeout_sec: int) -> RunnerResult:
+    """Run a CLI that emits stream-json on stdout (claude). The JSON stream IS the event log, so it goes
+    straight to agent_events.jsonl (traceable like codex). The final `result` event becomes agent_last.txt."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    raw = out_dir / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    events = out_dir / "agent_events.jsonl"
+    last = out_dir / "agent_last.txt"
+    stdout = raw / "agent_stdout.log"
+    stderr = raw / "agent_stderr.log"
+    started = time.time()
+    exit_code = _run_and_stream(
+        cmd=cmd,
+        prompt_stdin=prompt_stdin,
+        stdout_path=stdout,
+        stderr_path=stderr,
+        extra_stdout_path=events,   # the stream-json lines ARE the events
+        timeout_sec=timeout_sec,
+    )
+    # Pull the final assistant result text out of the stream for a clean last-message file.
+    final_text = ""
+    try:
+        for line in events.read_text(encoding="utf-8").splitlines():
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if obj.get("type") == "result" and obj.get("result"):
+                final_text = str(obj["result"])
+    except Exception:
+        pass
+    if not final_text and stdout.exists():
+        final_text = stdout.read_text(encoding="utf-8")[-20000:]
+    last.write_text(final_text, encoding="utf-8", newline="\n")
+    return RunnerResult(
+        status="completed" if exit_code == 0 else "failed",
+        exit_code=exit_code,
+        events_path=events,
+        last_message_path=last,
+        stdout_path=stdout,
+        stderr_path=stderr,
+        note=f"elapsed_sec={time.time() - started:.1f}",
+    )
+
+
+def _run_agy_transcript(cmd: list[str], out_dir: Path, event_name: str, timeout_sec: int) -> RunnerResult:
+    """Run agy --print, then recover the result from agy's transcript JSONL — a workaround for agy's
+    known bug (#76) of dropping stdout in non-TTY. Transcript lives at
+    ~/.gemini/antigravity-cli/brain/<conv>/.system_generated/logs/transcript.jsonl ; the final answer is
+    the last {source:MODEL, type:PLANNER_RESPONSE, status:DONE} entry. We copy it to agent_events.jsonl
+    (traceable) and extract the final text to agent_last.txt."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    raw = out_dir / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    events = out_dir / "agent_events.jsonl"
+    last = out_dir / "agent_last.txt"
+    stdout = raw / "agent_stdout.log"
+    stderr = raw / "agent_stderr.log"
+    started = time.time()
+    exit_code = _run_and_stream(cmd, None, stdout, stderr, None, timeout_sec)
+
+    brain = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+    transcripts = [p for p in brain.glob("*/.system_generated/logs/transcript.jsonl")
+                   if p.exists() and p.stat().st_mtime >= started - 2]
+    final_text = ""
+    if transcripts:
+        tr = max(transcripts, key=lambda p: p.stat().st_mtime)
+        try:
+            shutil.copyfile(tr, events)  # the JSONL transcript IS the event log
+        except Exception:
+            pass
+        try:
+            for line in tr.read_text(encoding="utf-8", errors="ignore").splitlines():
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if (obj.get("source") == "MODEL" and obj.get("type") == "PLANNER_RESPONSE"
+                        and obj.get("status") == "DONE" and obj.get("content")):
+                    final_text = obj["content"]   # keep the LAST one = the answer
+        except Exception:
+            pass
+    if not events.exists():
+        _write_jsonl(events, [
+            {"type": "thread.started", "thread_id": f"{event_name}-{int(started)}"},
+            {"type": "agent.completed" if exit_code == 0 else "agent.failed", "agent": event_name, "exit_code": exit_code},
+        ])
+    last.write_text(final_text, encoding="utf-8", newline="\n")
+    return RunnerResult(
+        status="completed" if exit_code == 0 else "failed",
+        exit_code=exit_code,
+        events_path=events,
+        last_message_path=last,
+        stdout_path=stdout,
+        stderr_path=stderr,
+        note=f"elapsed_sec={time.time() - started:.1f}; transcript={'recovered' if transcripts else 'none'}",
+    )
 
 
 def _run_text_agent(
@@ -386,12 +509,34 @@ def _preflight_antigravity(mcp_server: str) -> int:
     if not agy:
         print("agy CLI not found in PATH", file=sys.stderr)
         return 1
-    config = Path.home() / ".gemini" / "antigravity-cli" / "mcp_config.json"
     command, args = _mcp_command()
-    ensure_antigravity_mcp_config(config, mcp_server, command, args)
+    # agy loads MCP servers from ~/.gemini/config/mcp_config.json (per the antigravity docs) — NOT the
+    # antigravity-cli/ folder. Writing to the wrong place is why agy never saw rtl-codex.
+    ensure_antigravity_mcp_config(Path.home() / ".gemini" / "config" / "mcp_config.json", mcp_server, command, args)
+    # agy only exposes MCP tools that are permission-allow-listed; --dangerously-skip-permissions alone
+    # does not expose a non-allow-listed server's tools to the model.
+    ensure_antigravity_permission(Path.home() / ".gemini" / "antigravity-cli" / "settings.json", mcp_server)
     print(f"agy CLI OK: {agy}")
     print(f"MCP server OK: {mcp_server}")
+    print("NOTE: agy --print has a known stdout bug (#76) and headless runs can stall on the backend; "
+          "grade agy via the SC workspace artifacts, not stdout.")
     return 0
+
+
+def ensure_antigravity_permission(settings_path: Path, name: str) -> None:
+    """Add mcp(<name>/*) to agy's permission allow-list so the model can actually call the server's tools."""
+    data = {}
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    allow = data.setdefault("permissions", {}).setdefault("allow", [])
+    rule = f"mcp({name}/*)"
+    if rule not in allow:
+        allow.append(rule)
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8", newline="\n")
 
 
 def ensure_antigravity_mcp_config(config_path: Path, name: str, command: str, args: list[str]) -> dict:

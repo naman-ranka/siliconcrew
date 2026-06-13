@@ -26,16 +26,23 @@ def build_dashboard(runs_root: Path, output: Path) -> Path:
         sc = data.get("siliconcrew", {})
         metrics = sc.get("summary_metrics") or {}
         auto = sc.get("auto_checks") or {}
+        cvdp = (data.get("cvdp_replay") or {}).get("passed")
+        # A CVDP harness verdict is authoritative (mirrors summary._overall_status): trust it over
+        # transient failed agent events. Otherwise fall back to the agent-event check.
+        if cvdp is not None:
+            status = "passed" if cvdp else "failed"
+        else:
+            status = "failed" if has_failed_agent_event(p.parent / "agent_events.jsonl") else data.get("status")
         rows.append({
             "run": p.parent.name,
             "problem": problem.get("id"),
             "flow": data.get("flow"),
             "agent": data.get("agent"),
             "model": data.get("model"),
-            "status": "failed" if has_failed_agent_event(p.parent / "agent_events.jsonl") else data.get("status"),
+            "status": status,
             "synth": sc.get("run_status"),
             "post": auto.get("equiv"),
-            "cvdp": (data.get("cvdp_replay") or {}).get("passed"),
+            "cvdp": cvdp,
             "area": metrics.get("area_um2"),
             "power": metrics.get("power_uw"),
             "wns": metrics.get("wns_ns"),

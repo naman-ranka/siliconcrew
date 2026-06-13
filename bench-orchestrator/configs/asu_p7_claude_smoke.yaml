@@ -1,0 +1,19 @@
+name: asu_p7_claude_smoke
+
+project:
+  enabled: false
+  name: bench_asu_p7_claude_smoke
+
+defaults:
+  agent: claude
+  model: sonnet
+  flow: verilog
+  mcp_server: rtl-codex
+  timeout_sec: 3600
+  evaluation: siliconcrew_pnr
+
+problems:
+  - id: asu_p7
+    suite: asu
+    kind: yaml_spec
+    path: ASU-Spec2Tapeout-ICLAD25-Hackathon/problems/visible/p7.yaml

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import json
+import os
 import shutil
 
 SOURCE_SUFFIXES = {".x", ".v", ".sv", ".svh", ".yaml", ".yml", ".md"}
@@ -34,6 +35,19 @@ def find_workspace(run_dir: Path, explicit: str | None = None) -> Path | None:
         session = config.get("session") if isinstance(config.get("session"), dict) else {}
         session_name = session.get("name")
         project_id = session.get("project_id")
+        # Honor RTL_WORKSPACE directly: when the MCP server's workspace root is pinned
+        # (e.g. via .env) to a path outside this repo/worktree, the session lands at
+        # <RTL_WORKSPACE>/<project_id?>/<session_name>. Check that first.
+        ws_env = os.environ.get("RTL_WORKSPACE")
+        if ws_env and session_name:
+            ws_root = Path(ws_env)
+            env_candidates = []
+            if project_id:
+                env_candidates.append(ws_root / str(project_id) / str(session_name))
+            env_candidates.append(ws_root / str(session_name))
+            for candidate in env_candidates:
+                if candidate.exists():
+                    return candidate.resolve()
         for root in _repo_roots_from_run_dir(run_dir):
             candidates = []
             if project_id and session_name:
