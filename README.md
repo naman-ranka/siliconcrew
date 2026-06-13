@@ -28,6 +28,23 @@ This project investigates the following research questions:
 
 ---
 
+## Preliminary Results
+
+On **CVDP** (NVIDIA's 92 agentic `no_commercial` problems), every verdict graded in the **official
+reference container** (`ghcr.io/hdl/sim/osvb`, digest-pinned) — not a self-report:
+
+| | Pass rate |
+|---|---|
+| March-2026 baseline | 46.7% (43/92) |
+| **Current best-known** | **68.5% (63/92)** |
+
+> ⚠️ **Preliminary** — best-known across configs, not yet a single reproducible run (±1–2 problems).
+> A multi-run, single-config showcase with one-command reproduction is in progress
+> ([`run_all.py`](cvdp-pipeline/run_all.py) already emits provenance-stamped results). Detail:
+> [`CVDP_RESULTS.md`](cvdp-pipeline/research/CVDP_RESULTS.md).
+
+---
+
 ## Capabilities
 
 - **Specification-First Workflow**: Generates structured YAML specifications before RTL, including port definitions, timing constraints, and SDC files
@@ -50,20 +67,11 @@ This project investigates the following research questions:
 
 ## Benchmarks
 
-SiliconCrew is evaluated on **CVDP** (NVIDIA's Comprehensive Verilog Design Problems), the agentic
-`no_commercial` code-generation split (92 problems). Every verdict is graded in CVDP's **official
-reference container** (`ghcr.io/hdl/sim/osvb`, digest-pinned) running the dataset's own cocotb
-harness — not an agent self-report.
-
-| Configuration | Pass rate | Notes |
-|---|---|---|
-| March-2026 baseline | 46.7% (43/92) | prior SiliconCrew, re-graded in the reference container |
-| **Best-known (current)** | **68.5% (63/92)** | 100% coverage; best across agents / prompt eras |
-| Reference-container subset | ~67% (20/30) | controlled 30-problem check |
-
-A single fixed agent+prompt configuration reproduces ~60–65%; a cross-agent retry ensemble reaches
-~70%. Single-run verdicts on transcription/ambiguity-heavy problems carry a ±1–2 problem error bar.
-Agents used: `codex/gpt-5.5` and `claude-sonnet-4-6` driving the SiliconCrew MCP toolchain.
+The headline numbers are in [Preliminary Results](#preliminary-results) above. All verdicts are graded
+in the pinned `ghcr.io/hdl/sim/osvb` container running the dataset's own cocotb harness. A single fixed
+agent+prompt configuration reproduces ~60–65%; a cross-agent retry ensemble reaches ~70%. The
+reference-container subset check is ~67% (20/30). Agents used: `codex/gpt-5.5` and `claude-sonnet-4-6`
+driving the SiliconCrew MCP toolchain.
 
 The full pipeline — problem selection, agent run, container grading, and a provenance-stamped
 `results.json` (repo commit + pinned image digest + agent/model) — lives in
