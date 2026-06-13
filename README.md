@@ -100,7 +100,7 @@ The full pipeline — problem selection, agent run, container grading, and a pro
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                      Architect Agent (LangGraph ReAct)                      │
 │                                                                            │
-│   System prompt (500+ lines of RTL design methodology)                     │
+│   System prompt (~130-line methodology, versioned in prompts/architect/)   │
 │   + Provider-selected LLM (Gemini / OpenAI / Anthropic)                                 │
 │   + 35 LangChain tools                                                     │
 │                                                                            │
