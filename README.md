@@ -57,7 +57,7 @@ harness — not an agent self-report.
 
 | Configuration | Pass rate | Notes |
 |---|---|---|
-| March-2026 baseline | 40% (37/92) | prior SiliconCrew |
+| March-2026 baseline | 46.7% (43/92) | prior SiliconCrew, re-graded in the reference container |
 | **Best-known (current)** | **68.5% (63/92)** | 100% coverage; best across agents / prompt eras |
 | Reference-container subset | ~67% (20/30) | controlled 30-problem check |
 
