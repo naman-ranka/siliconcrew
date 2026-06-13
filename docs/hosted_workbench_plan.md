@@ -564,7 +564,26 @@ post-hype scrutiny. "AI agent *replaces* the EDA flow" does not.
   the PD diagnosis + retry guidance
 
 
+## Appendix: Concurrency, Editor & Git Implementation Notes (Gemini Discussion)
+
+### 1. Simple Concurrency Resolution (The Editor Lock + Diff)
+To resolve conflicts between user edits (Mode B) and agent edits (Mode A) without the initial overhead of CRDTs:
+* **UI State Lock**: When the agent begins editing, set the Monaco Editor to `readOnly: true` and display a loading overlay (e.g., *"Silicon Codex is analyzing and refactoring..."*).
+* **Monaco Diff Viewer**: Instead of overwriting the user's workspace silently, render a side-by-side proposed diff using `<MonacoDiffEditor />`. Provide clear **[Keep Mine]** and **[Use AI Proposed Fix]** CTAs.
+
+### 2. Lightweight Starter Stack
+* **Frontend**: React + `@monaco-editor/react` (incredibly simple wrapper, zero webpack configuration needed).
+* **Backend**: FastAPI WebSockets for streaming simulator outputs (Cocotb/Verilator) to the frontend.
+* **State**: Keep standard React state arrays for active files.
+
+### 3. Scalable Base for Future Upgrades
+This architecture is modular and allows drop-in upgrades as the product matures:
+* **Collaborative AI Typing**: Swap standard Monaco state for **Yjs** (`y-monaco`) to support Google-Docs style live cursor tracking and multi-cursor typing.
+* **Git Safety Net**: Initialize a hidden `.git` repository inside each session's workspace folder. The agent commits its changes to separate branches, letting the user inspect proposed changes via standard Git diffs.
+* **Wasm Simulators**: Compile Icarus Verilog or Verilator to WebAssembly and run them directly in the user's browser, bypassing Cloud Run Job compute costs for simple lints/simulations.
+
+
 ## Document status
 
-Plan, not commitment. Revise as the work proceeds. Update phasing
-estimates with actual numbers once Phase 1 ships.
+Plan, not commitment. Revise as the work proceeds. Update phasing estimates with actual numbers once Phase 1 ships.
+
