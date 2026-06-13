@@ -512,3 +512,17 @@ standard needs an explicit, still-general anti-loopback clause: *"for encoder/de
 encoder OUTPUT VECTORS against spec-derived expected sequences (worked examples from the spec doc or a
 separately-derived Python/DSLX golden)."* gcd shows the agent CAN do independence; hdbn shows it takes
 the loopback shortcut for codecs unless told that shortcut is invalid.
+
+
+## Claude-92 completion (b29) — uniform single-config benchmark closeout
+
+User direction: single-agent benchmarks only (claude-92 now, codex-92 later); ensemble = research
+footnote, not showcase. b29 = the 24 problems never claude-run under the current layered prompt +
+bst_0001 soft-cell. 2 parallel, launched 09:07.
+
+| problem | claude verdict | note |
+|---|---|---|
+| barrel_shifter_0001, Min_Hamming (8/0), dma_xfer_engine | PASS ×3 | dma was a codex-era pass — claude holds it |
+| cache_controller_0001 | FAIL 0/1 | DIVERGENCE: codex-era PASS, claude fails — head-to-head data |
+| async_filo_0001 (5/0), binary_to_gray_0003 (3/0) | PASS ×2 | codex-era passes HELD |
+| DES_0001 | FAIL 0/1 | consistent with transcription-hazard variance (now 1-pass/3-fail lifetime across agents) |

@@ -54,8 +54,44 @@ def build_agent_prompt(problem: ProblemConfig, prepared: dict[str, Any], session
             "Verify with RTL simulation against the provided/context testbench and iterate until it passes.\n"
             "DO NOT run synthesis, post-synthesis simulation, retry_pd, or report generation for CVDP. "
             "Stop after RTL simulation is correct.\n"
+            "\n"
+            "BENCHMARK MODE — external evaluation (applies uniformly to every problem; contains no "
+            "problem-specific information):\n"
+            "Your solution will be graded by an external, hidden testbench you cannot see, which is "
+            "stricter than anything you write. Your own simulation passing is necessary but NOT "
+            "sufficient. Direction:\n"
+            "- Treat EVERY sentence of the problem spec as a testable contract: exact bit orders and "
+            "field positions, reset values, latencies, status-flag semantics, interface timing. Where "
+            "the spec permits two readings, implement the most LITERAL one and note the ambiguity in "
+            "your final report.\n"
+            "- Write the most rigorous self-checking testbench you can: expected output values "
+            "hand-derived from the spec's rules (worked examples computed step by step), full "
+            "corner-class coverage, and a watchdog timeout. Loopback or re-implementing your own "
+            "design's algorithm as the checker proves only self-consistency and is NOT sufficient "
+            "evidence of correctness.\n"
+            "- A simulation that hangs or produces no result is a FAILING design.\n"
+            "- XLS/DSLX: USE IT WHEREVER IT FITS. For any arithmetic, datapath, encoder/decoder, "
+            "bit-manipulation, fixed-point, or filter kernel, STRONGLY PREFER implementing the kernel "
+            "in DSLX with built-in #[test] value checks (run_xls_flow), then wrap the generated module "
+            "to the exact required interface with a thin hand-written Verilog wrapper. The #[test] "
+            "blocks force value-level verification of the kernel in isolation and eliminate "
+            "hand-translation slips. Reserve direct Verilog for FSM/control/protocol/multi-clock logic "
+            "and the wrapper itself.\n"
         )
-    return common + flow_rules + "\n" + body
+    prompt = common + flow_rules + "\n" + body
+    if problem.flow.lower() == "xls_force":
+        docs_dir = Path("C:/Users/naman/.gemini/antigravity-cli/brain/b2ffa41e-9c19-4480-b005-97d2e424b868/scratch/xls_docs")
+        docs_content = []
+        for doc_name in ["dslx_reference.md", "what_is_a_proc.md", "how_to_use_procs.md", "dslx_ffi.md"]:
+            doc_path = docs_dir / doc_name
+            if doc_path.exists():
+                docs_content.append(f"### FILE: {doc_name}\n\n" + doc_path.read_text(encoding="utf-8"))
+        if docs_content:
+            prompt += "\n\n=== GOOGLE XLS/DSLX REFERENCE MANUAL ===\n"
+            prompt += "Use the following documentation to write correct DSLX code, procs, and Verilog FFI instantiations.\n\n"
+            prompt += "\n\n".join(docs_content)
+    return prompt
+
 
 
 def _flow_rules(flow: str) -> str:

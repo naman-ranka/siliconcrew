@@ -224,6 +224,17 @@ def _stream_reader(pipe, *out_files):
         pass
 
 
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the agent process AND its descendants. On Windows the agent CLIs are .cmd wrappers:
+    proc.kill() terminates only the cmd.exe shell, orphaning the node/python child, which keeps the
+    stdout pipe open — so the reader threads block and the timeout is silently ineffective (observed:
+    a 40-min timeout run streaming for 67+ min). taskkill /T takes out the whole tree."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    else:
+        proc.kill()
+
+
 def _run_and_stream(
     cmd: list[str],
     prompt_stdin: str | None,
@@ -273,7 +284,7 @@ def _run_and_stream(
             try:
                 exit_code = proc.wait(timeout=timeout_sec)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _kill_tree(proc)
                 exit_code = proc.wait()
             
             t_out.join()

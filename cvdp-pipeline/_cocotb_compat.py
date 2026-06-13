@@ -30,7 +30,7 @@ _CLOCK_NS_PAT = re.compile(
 def _clock_ns_to_ps(m: "re.Match[str]") -> str:
     sig, n, q = m.group(1), int(m.group(2)), m.group(3)
     if n % 2 == 1:
-        return f"Clock({sig}, {n}, units={q}ns{q}, period_high={n // 2})"
+        return f"Clock({sig}, {n + 1}, units={q}ns{q})"
     return m.group(0)
 
 
