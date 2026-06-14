@@ -22,6 +22,11 @@ import shutil
 import subprocess
 import uuid
 
+try:
+    from src.tools.run_docker import _translate_dood_path
+except Exception:
+    from tools.run_docker import _translate_dood_path
+
 # Derived from openroad/orfs + z3 (the base image has sby/yosys but NO solver). Build with:
 #   docker build -t siliconcrew-sby:latest - < Dockerfile.sby
 # Falls back behavior: if this image is absent, pass image="openroad/orfs:latest" (proofs will ERROR).
@@ -62,7 +67,7 @@ def run_sby(sby_file, cwd=None, timeout=DEFAULT_TIMEOUT, image=DEFAULT_SBY_IMAGE
     sby_name = os.path.basename(rel)
     mount = workspace_root
     if _HOST_WORKSPACE:  # DooD: translate to a host path for the sibling daemon
-        mount = mount.replace("/workspace", _HOST_WORKSPACE, 1)
+        mount = _translate_dood_path(mount)
 
     cd = f"/workspace/{sby_dir}" if sby_dir else "/workspace"
     inner = f"cd {cd} && sby -f {sby_name}"

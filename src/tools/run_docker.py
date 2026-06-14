@@ -6,6 +6,37 @@ import sys
 # host-side path to the workspace bind mount so sibling ORFS containers
 # can mount the same directory via the host Docker daemon.
 _HOST_WORKSPACE = os.environ.get("HOST_WORKSPACE")
+_CONTAINER_WORKSPACE_ALIASES = ("/workspace", "/app/workspace")
+
+
+def _translate_dood_path(path):
+    """Map /workspace paths from this container to the host bind mount path."""
+    if not (_HOST_WORKSPACE and path):
+        return path
+
+    normalized = path.replace("\\", "/")
+    for alias in _CONTAINER_WORKSPACE_ALIASES:
+        if normalized == alias:
+            return _HOST_WORKSPACE
+        prefix = alias + "/"
+        if normalized.startswith(prefix):
+            suffix = normalized[len(prefix):]
+            if ":" in _HOST_WORKSPACE or "\\" in _HOST_WORKSPACE:
+                return _HOST_WORKSPACE.rstrip("\\/") + "\\" + suffix.replace("/", "\\")
+            return os.path.join(_HOST_WORKSPACE, *suffix.split("/"))
+    return path
+
+
+def _translate_dood_volume(volume):
+    if not (_HOST_WORKSPACE and volume):
+        return volume
+
+    parts = volume.split(":")
+    if len(parts) < 2:
+        return volume
+
+    host_path = _translate_dood_path(parts[0])
+    return ":".join([host_path] + parts[1:])
 
 
 def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flow-scripts/flow", workspace_path=None, volumes=None, timeout=3600):
@@ -47,9 +78,9 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
     # In DooD mode, translate container paths (/workspace/...) to host paths
     # so the sibling ORFS container mounts the correct host directory.
     if _HOST_WORKSPACE:
-        workspace_path = workspace_path.replace("/workspace", _HOST_WORKSPACE, 1)
+        workspace_path = _translate_dood_path(workspace_path)
         if volumes:
-            volumes = [v.replace("/workspace", _HOST_WORKSPACE, 1) for v in volumes]
+            volumes = [_translate_dood_volume(v) for v in volumes]
 
     # Construct Docker command
     # We use --rm to clean up the container after exit
