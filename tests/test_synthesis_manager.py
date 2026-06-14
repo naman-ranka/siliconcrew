@@ -265,6 +265,133 @@ def test_constraints_guardrail_strict_can_fail_on_missing_clock(monkeypatch):
         assert "constraints_mode='auto'" in final["check_notes"] or "constraints_mode='bypass'" in final["check_notes"]
 
 
+def _write_clean_final_orfs_outputs(run_dir: str, top_module: str, dirty_route_drc: bool = False) -> None:
+    report_dir = os.path.join(run_dir, "orfs_reports", "sky130hd", top_module, "base")
+    result_dir = os.path.join(run_dir, "orfs_results", "sky130hd", top_module, "base")
+    log_dir = os.path.join(run_dir, "orfs_logs", "sky130hd", top_module, "base")
+    os.makedirs(report_dir, exist_ok=True)
+    os.makedirs(result_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+
+    _write_file(
+        os.path.join(report_dir, "6_finish.rpt"),
+        "wns max 0.3391\n"
+        "tns max 0.0000\n"
+        "setup violation count 0\n"
+        "hold violation count 0\n"
+        "max slew violation count 0\n"
+        "max cap violation count 0\n"
+        "max fanout violation count 0\n"
+        "Total  1.23e-04  2.34e-05  1.11e-06  4.27e-02  100.0%\n",
+    )
+    _write_file(
+        os.path.join(report_dir, "synth_stat.txt"),
+        f"Chip area for module '\\{top_module}': 123.45\n814 7.33E+03 cells\n",
+    )
+    _write_file(
+        os.path.join(report_dir, "5_route_drc.rpt"),
+        "short violation\n" if dirty_route_drc else "",
+    )
+    _write_file(
+        os.path.join(result_dir, "6_final.v"),
+        f"module {top_module}(input clk, input rst, output [3:0] q); endmodule\n",
+    )
+    _write_file(os.path.join(result_dir, "6_final.gds"), "fake-gds\n")
+    _write_file(os.path.join(log_dir, "6_report.json"), json.dumps({"finish__flow__errors__count": 0}))
+
+
+def test_nonzero_orfs_exit_with_clean_final_artifacts_completes(monkeypatch):
+    with tempfile.TemporaryDirectory() as workspace:
+        design = os.path.join(workspace, "counter.v")
+        _write_file(
+            design,
+            "module counter(input clk, input rst, output reg [3:0] q); always @(posedge clk) if(rst) q<=0; else q<=q+1; endmodule",
+        )
+
+        spec = DesignSpec(
+            module_name="counter",
+            description="counter",
+            clock_period_ns=10.0,
+            ports=[PortSpec(name="clk", direction="input"), PortSpec(name="rst", direction="input")],
+        )
+        save_yaml_file(spec, os.path.join(workspace, "counter_spec.yaml"))
+
+        def fake_orfs(**kwargs):
+            _write_clean_final_orfs_outputs(kwargs["run_dir"], "counter")
+            return {"success": False, "stdout": "nonzero docker exit", "stderr": "", "command": "fake"}
+
+        monkeypatch.setattr(sm, "_run_orfs", fake_orfs)
+
+        started = sm.start_synthesis_job(
+            workspace=workspace,
+            verilog_files=[design],
+            top_module="counter",
+            platform="sky130hd",
+        )
+
+        final = None
+        for _ in range(40):
+            status = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
+            if status["status"] in {"completed", "failed"}:
+                final = status
+                break
+            time.sleep(0.05)
+
+        assert final is not None
+        assert final["status"] == "completed"
+        assert final["auto_checks"]["signoff"] == "pass"
+        assert final["summary_metrics"]["wns_ns"] == 0.3391
+        assert "ORFS command returned nonzero" in final["check_notes"]
+
+        run_meta = os.path.join(workspace, "synth_runs", "synth_0001", "run_meta.json")
+        data = json.loads(open(run_meta, "r", encoding="utf-8").read())
+        assert data["docker_success"] is False
+        assert data["status"] == "completed"
+
+
+def test_nonzero_orfs_exit_with_dirty_final_artifacts_fails(monkeypatch):
+    with tempfile.TemporaryDirectory() as workspace:
+        design = os.path.join(workspace, "counter.v")
+        _write_file(
+            design,
+            "module counter(input clk, input rst, output reg [3:0] q); always @(posedge clk) if(rst) q<=0; else q<=q+1; endmodule",
+        )
+
+        spec = DesignSpec(
+            module_name="counter",
+            description="counter",
+            clock_period_ns=10.0,
+            ports=[PortSpec(name="clk", direction="input"), PortSpec(name="rst", direction="input")],
+        )
+        save_yaml_file(spec, os.path.join(workspace, "counter_spec.yaml"))
+
+        def fake_orfs(**kwargs):
+            _write_clean_final_orfs_outputs(kwargs["run_dir"], "counter", dirty_route_drc=True)
+            return {"success": False, "stdout": "nonzero docker exit", "stderr": "", "command": "fake"}
+
+        monkeypatch.setattr(sm, "_run_orfs", fake_orfs)
+
+        started = sm.start_synthesis_job(
+            workspace=workspace,
+            verilog_files=[design],
+            top_module="counter",
+            platform="sky130hd",
+        )
+
+        final = None
+        for _ in range(40):
+            status = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
+            if status["status"] in {"completed", "failed"}:
+                final = status
+                break
+            time.sleep(0.05)
+
+        assert final is not None
+        assert final["status"] == "failed"
+        assert final["auto_checks"]["signoff"] == "fail"
+        assert "final route DRC report is not empty" in final["check_notes"]
+
+
 def test_disk_recovery_and_poll_guidance():
     with tempfile.TemporaryDirectory() as workspace:
         run_dir = os.path.join(workspace, "synth_runs", "synth_0001")

@@ -104,6 +104,36 @@ Before taking ANY action, always think through:
 | `search_logs_tool` | Search synthesis logs | Debugging synthesis issues, finding metrics |
 | `schematic_tool` | Generate visual netlist | When user wants to see structure |
 
+### XLS / DSLX HLS Tools
+| Tool | Purpose | When to Use |
+|------|---------|-------------|
+| `run_xls_flow` | Preferred DSLX -> IR -> optimized IR -> Verilog flow with generated-Verilog lint | Algorithmic/datapath kernels |
+| `run_dslx_interpreter` | Check DSLX syntax and built-in #[test] tests | Debugging DSLX source |
+| `compile_dslx_to_ir` / `optimize_xls_ir` / `codegen_xls` | Manual XLS stage control | Expert/debug path |
+
+An XLS/DSLX high-level synthesis frontend is available. It suits algorithmic/datapath kernels —
+arithmetic, bit manipulation, encoders/decoders, fixed-point math, filters. Use it whenever it makes
+sense for the task: write `.x` DSLX with built-in #[test] checks, call `run_xls_flow`, then continue
+with normal Verilog lint/simulation/synthesis. Treat generated Verilog as compiler output; write a
+small wrapper if the expected module signature differs.
+
+### Self-Verification Standard (mandatory)
+A design that "passes its own test" but misreads the spec is the most common failure mode — do not
+trust a green self-test, earn it.
+- Derive the test plan from the SPEC, not the happy path: cover every requirement, port/signal, and
+  parameter/mode combination; treat the interface contract (ports, widths, reset, latency, throughput)
+  as a mechanical checklist you assert.
+- Cover generic corner classes even if the spec is silent: reset mid-operation, back-to-back
+  transactions, empty/full, min/max/overflow, max-latency/stall, and X-injection on inputs.
+- Non-termination is a FAILURE: a sim that hangs or yields no result is a failing design (comb loop /
+  missing liveness) — fix it, never report it as success or "unknown".
+- Distrust your own PASS: before declaring done, list what you did and did NOT verify. For
+  data/arithmetic/encoder kernels, prefer an INDEPENDENT reference (a separate Python/DSLX golden)
+  over values re-derived from your own RTL; for encoder/decoder pairs, loopback alone proves only
+  self-consistency.
+- When your testbench and RTL disagree, re-derive the expected value from the spec before changing
+  either side, and only change the side that contradicts the spec.
+
 ### Reporting Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|

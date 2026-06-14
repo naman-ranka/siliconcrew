@@ -1,0 +1,26 @@
+name: asu_p7_xls_verilog
+
+project:
+  enabled: true
+  name: bench_asu_p7_xls_verilog
+
+defaults:
+  agent: fake
+  model: gpt-5.5
+  mcp_server: rtl-codex
+  timeout_sec: 2400
+  evaluation: siliconcrew_pnr
+
+problems:
+  - id: asu_p7
+    suite: asu
+    kind: yaml_spec
+    flow: xls
+    path: ASU-Spec2Tapeout-ICLAD25-Hackathon/problems/visible/p7.yaml
+
+  - id: asu_p7
+    suite: asu
+    kind: yaml_spec
+    flow: verilog
+    path: ASU-Spec2Tapeout-ICLAD25-Hackathon/problems/visible/p7.yaml
+

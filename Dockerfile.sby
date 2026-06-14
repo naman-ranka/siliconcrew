@@ -1,0 +1,19 @@
+# SiliconCrew formal-verification image.
+#
+# The base openroad/orfs image ships sby + yosys + yosys-smtbmc but NO SMT solver, so SymbiYosys
+# returns `DONE (ERROR, rc=16)` on every real proof. This layer adds solvers so sby can actually prove:
+#   - z3      : reliable, used as `smtbmc z3`
+#   - yices2  : best-effort; provides the default solver so a bare `smtbmc` engine works too
+#
+# Build (no build context needed):
+#   docker build -t siliconcrew-sby:latest - < Dockerfile.sby
+FROM openroad/orfs:latest
+
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends z3 \
+ && (apt-get install -y --no-install-recommends yices2 || echo "yices2 unavailable; z3 only") \
+ && rm -rf /var/lib/apt/lists/*
+
+# Fail the build if z3 didn't land (sby would be useless without a solver).
+RUN z3 --version

@@ -72,6 +72,13 @@ from src.tools.wrappers import (
     schematic_tool,
     save_metrics_tool,
     generate_report_tool,
+    run_dslx_interpreter,
+    compile_dslx_to_ir,
+    experimental_compile_cpp_to_ir,
+    optimize_xls_ir,
+    codegen_xls,
+    benchmark_xls,
+    run_xls_flow,
     get_workspace_path,
     mcp_tools,
 )
@@ -125,6 +132,11 @@ TOOL_CATEGORIES = {
     ],
     "reporting": [
         "save_metrics_tool", "generate_report_tool"
+    ],
+    "hls": [
+        "run_xls_flow", "run_dslx_interpreter", "compile_dslx_to_ir",
+        "optimize_xls_ir", "codegen_xls", "benchmark_xls",
+        "experimental_compile_cpp_to_ir"
     ]
 }
 
@@ -538,7 +550,7 @@ Ready to design! What would you like to create?"""
                         "custom_filter": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "List of tool names or categories (essential, verification, synthesis, editing, reporting)"
+                            "description": "List of tool names or categories (essential, verification, synthesis, editing, reporting, hls)"
                         }
                     },
                     "required": ["mode"]
@@ -763,6 +775,13 @@ Ready to design! What would you like to create?"""
             "schematic_tool": schematic_tool,
             "save_metrics_tool": save_metrics_tool,
             "generate_report_tool": generate_report_tool,
+            "run_dslx_interpreter": run_dslx_interpreter,
+            "compile_dslx_to_ir": compile_dslx_to_ir,
+            "experimental_compile_cpp_to_ir": experimental_compile_cpp_to_ir,
+            "optimize_xls_ir": optimize_xls_ir,
+            "codegen_xls": codegen_xls,
+            "benchmark_xls": benchmark_xls,
+            "run_xls_flow": run_xls_flow,
         }
         
         if name not in tool_map:

@@ -1,0 +1,21 @@
+name: cvdp_smoke
+
+project:
+  enabled: true
+  name: bench_cvdp_smoke
+
+defaults:
+  agent: fake
+  model: gpt-5.5
+  flow: verilog
+  mcp_server: rtl-codex
+  timeout_sec: 2400
+
+problems:
+  - id: cvdp_aes_0003
+    suite: cvdp
+    kind: cvdp_agentic_jsonl
+    dataset: cvdp_benchmark/data/cvdp_v1.0.2_agentic_code_generation_no_commercial.jsonl
+    datapoint_id: cvdp_agentic_AES_encryption_decryption_0003
+    evaluation: cvdp_replay_harness
+
