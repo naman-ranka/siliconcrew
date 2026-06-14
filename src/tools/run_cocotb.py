@@ -26,6 +26,11 @@ import re
 import subprocess
 import uuid
 
+try:
+    from src.tools.run_docker import _translate_dood_path
+except Exception:
+    from tools.run_docker import _translate_dood_path
+
 # Pinned to the SAME digest the grader uses (cvdp-pipeline/regrade_docker.py) so self-check == grade env.
 DEFAULT_OSVB_IMAGE = (
     "ghcr.io/hdl/sim/osvb@sha256:"
@@ -133,7 +138,7 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
     sources = [_to_rel(f, cwd) for f in verilog_files]
     mount_src = cwd
     if _HOST_WORKSPACE:  # DooD: translate container path -> host path for the sibling daemon
-        mount_src = cwd.replace("/workspace", _HOST_WORKSPACE, 1)
+        mount_src = _translate_dood_path(cwd)
 
     name = f"sc_cocotb_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     b64 = base64.b64encode(_IN_CONTAINER_RUNNER.encode()).decode()
