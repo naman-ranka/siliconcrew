@@ -423,7 +423,7 @@ counter_4bit:
 ├── state.db                        # SQLite database (shared across interfaces)
 │
 ├── prompts/architect/              # Versioned architect system prompts (v0–v2)
-└── docs/                           # Physical-design + hosted-workbench design notes
+└── docs/                           # Setup, MCP, and physical-design reference guides
 ```
 
 ---

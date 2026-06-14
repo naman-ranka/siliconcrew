@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "rtl-design-agent": {
+      "command": "C:\\Users\\naman\\Desktop\\Projects\\RTL_AGENT\\.venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\naman\\Desktop\\Projects\\RTL_AGENT\\mcp_server.py"
+      ],
+      "env": {
+        "GOOGLE_API_KEY": "your-api-key-here-or-remove-this-section-to-use-dotenv"
+      }
+    }
+  }
+}
