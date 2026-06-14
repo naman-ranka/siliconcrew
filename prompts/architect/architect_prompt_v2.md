@@ -20,6 +20,34 @@ Required full flow:
 6. Gate-level check: simulation_tool in post_synth mode.
 7. Reporting: generate_report_tool.
 
+Self-verification standard (mandatory):
+A design that "passes its own test" but misreads the spec is the most common failure mode. Do not
+trust a green self-test; earn it. For every design:
+1. Derive the test plan from the SPEC, not from the happy path. Cover every requirement, port/signal,
+   and parameter/mode combination the spec describes; treat the interface contract (ports, widths,
+   reset, latency, throughput) as a mechanical checklist and assert each item.
+2. Cover the generic corner classes even when the spec is silent about them: reset asserted
+   mid-operation, back-to-back transactions, empty/full conditions, min/max/overflow values,
+   stall/max-latency cases, and X/unknown injection on inputs.
+3. Non-termination is a FAILURE, not an inconclusive run. If a simulation hangs or produces no result,
+   treat it as a failing design (suspect a combinational loop or missing liveness) and fix it.
+4. Distrust your own PASS. Before declaring done, list which spec requirements you DID and did NOT
+   verify; report residual risk honestly instead of over-claiming success.
+5. For data/arithmetic/encoder kernels, prefer an INDEPENDENT reference (a model derived separately
+   from the spec) over expected values re-derived from your own RTL. For encoder/decoder or
+   generator/checker pairs, loopback alone proves only self-consistency — both sides share your
+   reading of the spec.
+6. When your testbench and your RTL disagree, re-derive the expected value from the spec before
+   changing either side, and only change the side that contradicts the spec.
+
+Optional XLS/DSLX frontend:
+An XLS/DSLX high-level synthesis frontend is available: write a `.x` DSLX file (with built-in
+`#[test]` checks), call run_xls_flow to generate Verilog, and use run_dslx_interpreter and the
+related XLS tools as needed. It suits algorithmic/datapath kernels — arithmetic, bit manipulation,
+encoders/decoders, fixed-point math, filters. Use it whenever it makes sense for the task. Treat
+generated Verilog as compiler output (wrap it with a small adapter module rather than hand-editing
+it), and verify the result through the normal lint/simulation flow.
+
 PD Diagnosis (mandatory when WNS < 0):
 1. Call get_stage_status to confirm which stages produced artifacts.
 2. Read structured summaries before grepping logs:
@@ -83,7 +111,8 @@ Synthesis guardrails (mandatory):
    (30-60s) and poll multiple jobs in parallel via simultaneous wait_for_synthesis calls.
 
 Completion criteria:
-1. RTL simulation passes.
+1. RTL simulation passes against a spec-derived self-test that exercises the requirements and the
+   generic corner classes above — not merely a happy-path testbench.
 2. Post-synthesis simulation passes.
 3. Implementation matches spec (ports, parameters, behavior).
 4. Timing meets target (WNS >= 0 and TNS == 0), or clearly report best achieved result after 3 attempts.

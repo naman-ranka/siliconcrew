@@ -1,0 +1,20 @@
+name: asu_xls_smoke
+
+project:
+  enabled: true
+  name: bench_asu_xls_smoke
+
+defaults:
+  agent: fake
+  model: gpt-5.5
+  flow: xls
+  mcp_server: rtl-codex
+  timeout_sec: 2400
+
+problems:
+  - id: asu_p7
+    suite: asu
+    kind: yaml_spec
+    path: ASU-Spec2Tapeout-ICLAD25-Hackathon/problems/visible/p7.yaml
+    evaluation: siliconcrew_pnr
+

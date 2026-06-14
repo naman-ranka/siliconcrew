@@ -1,0 +1,32 @@
+FROM ubuntu:22.04
+
+# Avoid prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Install necessary dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    tar \
+    coreutils \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Latest verified release version as build argument
+ARG XLS_VERSION=v0.0.0-10092-g25df2916b
+ARG XLS_SHA256=
+
+WORKDIR /xls
+
+# Download and extract the official precompiled Linux x64 binaries
+RUN curl -fL "https://github.com/google/xls/releases/download/${XLS_VERSION}/xls-${XLS_VERSION}-linux-x64.tar.gz" -o xls.tar.gz \
+    && if [[ -n "${XLS_SHA256}" ]]; then echo "${XLS_SHA256}  xls.tar.gz" | sha256sum -c -; fi \
+    && tar -xzf xls.tar.gz --strip-components=1 \
+    && rm xls.tar.gz
+
+# Expose binaries on system path
+ENV PATH="/xls:/xls/xls/tools:/xls/xls/dslx:/xls/xls/dslx/ir_convert:${PATH}"
+
+WORKDIR /workspace
