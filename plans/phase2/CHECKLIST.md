@@ -30,6 +30,22 @@ behavior, now behind interfaces.
   heavy/nightly CI inside the EDA image), GCS workspace round-trip, Cloud SQL,
   Cloud KMS. Code + IaC + runbook are provided; no autonomous provisioning/spend.
 
+## Verification status (this branch)
+
+All Phase-2 slices land green locally with stdlib + fakes (no Docker, no GCP):
+
+```
+100 passed, 3 skipped
+  (skips: langchain-dep workspace test, RUN_REAL_ORFS smoke, one optional-dep path)
+```
+
+Pre-existing, unrelated to this work (verified identical on the pre-Phase-2 base
+commit `fe6c693`): `test_llm_factory` (missing optional langchain provider
+deps), `test_design_report` / `test_congestion_summary_tool` (test-level
+issues), `test_run_cocotb` / `test_run_sby` (need Docker), and the 9 modules
+that import `src.tools.wrappers` (need `langchain_core` installed). None are
+regressions from Phase 2.
+
 ## Heavy verification (owner / nightly)
 
 - A real sky130 synth through `LocalDockerOrfsRunner` (needs Docker + the ORFS
