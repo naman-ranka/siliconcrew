@@ -91,17 +91,43 @@
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
   /* ---------- runs ---------- */
-  .runs{padding:4px 8px 10px}
-  .runrow{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:pointer;font-size:11.5px}
+  .runtools{display:flex;align-items:center;gap:6px;padding:4px 10px 2px}
+  .filt{display:flex;gap:3px;background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:2px}
+  .filt span{font-size:10.5px;color:var(--txt3);padding:2px 8px;border-radius:4px;cursor:pointer}
+  .filt span.on{background:#2a2a40;color:var(--txt)}
+  .cmpbtn{margin-left:auto;font-size:10.5px;color:var(--txt3);background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:3px 8px;cursor:pointer}
+  .cmpbtn.on{border-color:var(--run);color:var(--run)}
+  .runs{padding:4px 8px 6px}
+  .runrow{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:11.5px;position:relative}
   .runrow:hover{background:var(--bg3)}
-  .runrow.active{background:#2a2a40}
-  .runrow .rid{font-family:var(--mono);color:var(--txt2);min-width:74px}
-  .runrow .rmeta{color:var(--txt3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .runrow .rs{font-weight:700}
+  .runrow.active{background:#2a2a40;box-shadow:inset 2px 0 0 var(--accent)}
+  .runrow.child{margin-left:16px}
+  .runrow.child::before{content:"↳";position:absolute;left:-11px;color:var(--txt3);font-family:var(--mono)}
+  .runrow .cur{position:absolute;right:6px;top:-6px;font-size:8px;background:var(--accent);color:#11111b;border-radius:3px;padding:0 4px;font-weight:700;letter-spacing:.3px}
+  .runrow .cmpck{width:12px;height:12px;border:1px solid var(--line2);border-radius:3px;flex:none;display:none}
+  .runs.compare .runrow.synth .cmpck{display:inline-block}
+  .runs.compare .runrow.synth .cmpck.ck{background:var(--run);border-color:var(--run)}
+  .runrow .rid{font-family:var(--mono);color:var(--txt2);min-width:70px}
+  .runrow .rmeta{color:var(--txt3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+  .runrow .pin{color:var(--txt3);font-size:11px;opacity:0;cursor:pointer}
+  .runrow:hover .pin{opacity:.6}
+  .runrow .pin.on{opacity:1;color:var(--warn)}
+  .runrow .rs{font-weight:700;font-size:11px}
   .rs.ok{color:var(--ok)} .rs.fail{color:var(--fail)}
-  .kind{font-size:9px;font-weight:700;border-radius:3px;padding:1px 4px}
+  .kind{font-size:8.5px;font-weight:700;border-radius:3px;padding:1px 4px;flex:none}
   .k-sim{background:rgba(116,199,236,.16);color:var(--accent2)}
   .k-synth{background:rgba(203,166,247,.16);color:var(--run)}
+  .runfoot{padding:6px 12px 12px;font-size:10px;color:var(--txt3);line-height:1.5}
+  .cmpbar{margin:0 8px 8px;background:var(--bg3);border:1px solid var(--run);border-radius:7px;padding:8px 10px;font-size:11px;display:none}
+  .runs-wrap.compare .cmpbar{display:block}
+  .cmpbar .row{display:flex;justify-content:space-between;padding:3px 0;font-family:var(--mono);font-size:11px}
+  .cmpbar .hd{color:var(--run);font-weight:700;text-transform:uppercase;letter-spacing:.4px;font-family:var(--sans);font-size:10px;margin-bottom:4px}
+
+  /* viewing-run banner on viewer panes */
+  .vbanner{display:flex;align-items:center;gap:9px;padding:6px 14px;background:rgba(137,180,250,.08);border-bottom:1px solid var(--line);font-size:11px;color:var(--txt2)}
+  .vbanner .tagr{font-family:var(--mono);font-weight:700;color:var(--accent)}
+  .vbanner.stale{background:rgba(249,226,175,.10)}
+  .vbanner .latestbtn{margin-left:auto;font-size:10.5px;color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 
   /* ---------- center tabs ---------- */
   .tabs{display:flex;align-items:stretch;background:var(--bg2);border-bottom:1px solid var(--line);height:38px;overflow:auto}
@@ -274,14 +300,48 @@
         </div>
       </div>
 
-      <!-- RUNS (sim + synth history, each isolated) -->
+      <!-- RUNS — unified timeline (sim + synth), lineage, pin, compare, auto-prune -->
       <div class="sect">
-        <div class="sect-h">Runs <span class="pill">isolated · comparable</span></div>
-        <div class="runs">
-          <div class="runrow active"><span class="kind k-sim">SIM</span><span class="rid">sim_0004</span><span class="rmeta">cpu_tb</span><span class="rs fail">✗ 240ns</span></div>
-          <div class="runrow"><span class="kind k-sim">SIM</span><span class="rid">sim_0003</span><span class="rmeta">alu_tb</span><span class="rs ok">✓</span></div>
-          <div class="runrow"><span class="kind k-synth">SYN</span><span class="rid">synth_0002</span><span class="rmeta">cpu_top · 1842µm² · 108MHz</span><span class="rs ok">✓</span></div>
-          <div class="runrow"><span class="kind k-synth">SYN</span><span class="rid">synth_0001</span><span class="rmeta">cpu_top · route DRC</span><span class="rs fail">✗</span></div>
+        <div class="sect-h">Runs <span class="pill">latest = status</span></div>
+        <div class="runtools">
+          <div class="filt">
+            <span class="on" onclick="filterRuns(this,'all')">All</span>
+            <span onclick="filterRuns(this,'sim')">Sim</span>
+            <span onclick="filterRuns(this,'synth')">Synth</span>
+          </div>
+          <div class="cmpbtn" id="cmpbtn" onclick="toggleCompare()">⌗ compare</div>
+        </div>
+
+        <div class="runs-wrap" id="runsWrap">
+          <!-- compare result bar (visible only in compare mode) -->
+          <div class="cmpbar">
+            <div class="hd">synth_0001 → synth_0002</div>
+            <div class="row"><span>Area</span><span>2104 → 1842 <span class="delta good">−12%</span></span></div>
+            <div class="row"><span>WNS</span><span>−0.40 → +0.18 <span class="delta good">closed</span></span></div>
+            <div class="row"><span>Power</span><span>1.61 → 1.42 <span class="delta good">−12%</span></span></div>
+          </div>
+
+          <div class="runs" id="runsList">
+            <div class="runrow sim active" data-kind="sim" onclick="selectRun(this,'sim','sim_0004')">
+              <span class="cmpck"></span><span class="kind k-sim">SIM</span><span class="rid">sim_0004</span>
+              <span class="rmeta">cpu_tb</span><span class="pin" title="pin to keep">📌</span><span class="rs fail">✗ 240ns</span>
+              <span class="cur">current</span>
+            </div>
+            <div class="runrow sim" data-kind="sim" onclick="selectRun(this,'sim','sim_0003')">
+              <span class="cmpck"></span><span class="kind k-sim">SIM</span><span class="rid">sim_0003</span>
+              <span class="rmeta">alu_tb · unit</span><span class="pin" title="pin to keep">📌</span><span class="rs ok">✓</span>
+            </div>
+            <div class="runrow synth" data-kind="synth" onclick="selectRun(this,'synth','synth_0002')">
+              <span class="cmpck ck"></span><span class="kind k-synth">SYN</span><span class="rid">synth_0002</span>
+              <span class="rmeta">cpu_top · 1842µm² · 108MHz</span><span class="pin on" title="pinned baseline">📌</span><span class="rs ok">✓</span>
+            </div>
+            <div class="runrow synth child" data-kind="synth" onclick="selectRun(this,'synth','synth_0001')">
+              <span class="cmpck ck"></span><span class="kind k-synth">SYN</span><span class="rid">synth_0001</span>
+              <span class="rmeta">retry→0002 from route</span><span class="pin" title="pin to keep">📌</span><span class="rs fail">✗</span>
+            </div>
+          </div>
+
+          <div class="runfoot">Keeping last 10 + pinned · older runs auto-pruned. Click a run → its artifacts load in the viewer.</div>
         </div>
       </div>
 
@@ -298,6 +358,13 @@
       <div class="tab" data-tab="schem" onclick="showTab('schem')">Schematic</div>
       <div class="tab" data-tab="layout" onclick="showTab('layout')">Layout</div>
       <div class="tab" data-tab="report" onclick="showTab('report')">Report</div>
+    </div>
+
+    <!-- which run the viewers are showing (the run↔tab coupling) -->
+    <div class="vbanner" id="vbanner">
+      <span>Viewing</span><span class="tagr" id="vbanner-id">sim_0004</span>
+      <span class="dim" id="vbanner-meta">· latest sim · cpu_tb</span>
+      <span class="latestbtn" id="vbanner-latest" style="display:none" onclick="selectRun(document.querySelector('.runrow.sim'),'sim','sim_0004')">jump to latest →</span>
     </div>
 
     <div class="panes">
@@ -500,7 +567,7 @@
 
 </div>
 
-<div class="note">Static mockup · non-functional · clicks switch tabs only · simple_cpu = multi-module scenario</div>
+<div class="note">Static mockup · try: click a <b>Run</b> in the sidebar, the <b>⌗ compare</b> toggle, the <b>All/Sim/Synth</b> filter, tabs, and the failure deep-link in the console</div>
 
 <script>
   function showTab(t){
@@ -540,6 +607,41 @@
     if(shell.classList.toggle('chat-collapsed')){full.style.display='none';col.style.display='flex';}
     else{full.style.display='flex';col.style.display='none';}
   }
+
+  // ----- run metadata: which tab each run drives + banner text -----
+  var RUNS={
+    sim_0004:{kind:'sim', tab:'wave', latest:true,  meta:'· latest sim · cpu_tb', con:'sim'},
+    sim_0003:{kind:'sim', tab:'wave', latest:false, meta:'· cpu unit test · alu_tb', con:'sim'},
+    synth_0002:{kind:'synth', tab:'report', latest:true,  meta:'· latest synth · cpu_top · 108MHz', con:'synth'},
+    synth_0001:{kind:'synth', tab:'report', latest:false, meta:'· failed · route DRC · cpu_top', con:'synth'}
+  };
+  function selectRun(row,kind,id){
+    document.querySelectorAll('.runrow').forEach(r=>r.classList.remove('active'));
+    if(row) row.classList.add('active');
+    var r=RUNS[id]||{};
+    // run drives the viewer: open its natural tab + matching console
+    showTab(r.tab||'code');
+    if(r.con) showConsole(r.con);
+    // update the "viewing X" banner, flag if it's not the latest of its kind
+    document.getElementById('vbanner-id').textContent=id;
+    document.getElementById('vbanner-meta').textContent=r.meta||'';
+    var b=document.getElementById('vbanner'), jl=document.getElementById('vbanner-latest');
+    if(r.latest===false){b.classList.add('stale'); jl.style.display='inline';}
+    else{b.classList.remove('stale'); jl.style.display='none';}
+  }
+  function filterRuns(el,kind){
+    el.parentElement.querySelectorAll('span').forEach(s=>s.classList.remove('on'));
+    el.classList.add('on');
+    document.querySelectorAll('#runsList .runrow').forEach(r=>{
+      r.style.display=(kind==='all'||r.dataset.kind===kind)?'flex':'none';
+    });
+  }
+  function toggleCompare(){
+    var on=document.getElementById('runsWrap').classList.toggle('compare');
+    document.getElementById('runsList').classList.toggle('compare',on);
+    document.getElementById('cmpbtn').classList.toggle('on',on);
+  }
+
   showConsole('sim');
 </script>
 </body>
