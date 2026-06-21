@@ -66,7 +66,24 @@ PD_PREREQ_FILES = {
 
 _JOB_LOCK = threading.Lock()
 _INDEX_LOCK = threading.Lock()
+# Default single-tenant executor (local / self-host). In hosted mode this is
+# replaced via set_job_executor() with a per-user queue so one tenant's backlog
+# cannot starve others and per-user synth concurrency is enforced. Any object
+# with a ``.submit(fn, *args)`` returning a concurrent.futures.Future works.
 _EXECUTOR = ThreadPoolExecutor(max_workers=2)
+_ACTIVE_EXECUTOR: Any = None
+
+
+def set_job_executor(executor: Any) -> None:
+    """Override the synth job executor (hosted per-user queue). None resets to default."""
+    global _ACTIVE_EXECUTOR
+    _ACTIVE_EXECUTOR = executor
+
+
+def _job_executor() -> Any:
+    return _ACTIVE_EXECUTOR if _ACTIVE_EXECUTOR is not None else _EXECUTOR
+
+
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _POLL_CACHE: Dict[str, Dict[str, Any]] = {}
 _POLL_BACKOFF_STATE: Dict[str, Dict[str, Any]] = {}
@@ -1278,7 +1295,7 @@ def start_synthesis_job(
     }
 
     with _JOB_LOCK:
-        future = _EXECUTOR.submit(_job_worker, job_id, workspace, run_dir, args)
+        future = _job_executor().submit(_job_worker, job_id, workspace, run_dir, args)
         _JOBS[job_id] = {
             "future": future,
             "workspace": workspace,
@@ -1368,7 +1385,7 @@ def retry_pd_job(
     }
 
     with _JOB_LOCK:
-        future = _EXECUTOR.submit(_retry_pd_worker, job_id, workspace, run_dir, args)
+        future = _job_executor().submit(_retry_pd_worker, job_id, workspace, run_dir, args)
         _JOBS[job_id] = {
             "future": future,
             "workspace": workspace,

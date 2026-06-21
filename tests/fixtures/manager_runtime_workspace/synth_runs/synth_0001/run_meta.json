@@ -1,0 +1,102 @@
+{
+  "run_id": "synth_0001",
+  "job_id": "job_760d4b4013",
+  "created_at": "2026-06-21T23:39:00.918772+00:00",
+  "status": "completed",
+  "current_stage": "finish",
+  "platform": "sky130hd",
+  "top_module": "counter",
+  "input_files": [
+    "counter.v"
+  ],
+  "spec_file": "counter_spec.yaml",
+  "requested_clock_period_ns": 10.0,
+  "effective_clock_period_ns": 10.0,
+  "clock_period_ns": 10.0,
+  "clock_source": "requested",
+  "constraints_mode": "auto",
+  "utilization": 5,
+  "aspect_ratio": 1.0,
+  "core_margin": 2.0,
+  "pd_parameters": {
+    "utilization": 5,
+    "aspect_ratio": 1.0,
+    "core_margin": 2.0
+  },
+  "auto_checks": {
+    "constraints": "pass",
+    "signoff": "pass",
+    "equiv": "skip"
+  },
+  "check_notes": "All guardrails passed",
+  "stages": {
+    "constraints": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "synth": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "floorplan": {
+      "status": "completed",
+      "artifacts": {
+        "report": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_reports/sky130hd/counter/base/2_floorplan_final.rpt",
+        "odb": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/2_floorplan.odb"
+      }
+    },
+    "place": {
+      "status": "completed",
+      "artifacts": {
+        "log": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_logs/sky130hd/counter/base/3_3_place_gp.json",
+        "odb": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/3_place.odb"
+      }
+    },
+    "cts": {
+      "status": "completed",
+      "artifacts": {
+        "report": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_reports/sky130hd/counter/base/4_cts_final.rpt",
+        "odb": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/4_cts.odb"
+      }
+    },
+    "grt": {
+      "status": "completed",
+      "artifacts": {
+        "log": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_logs/sky130hd/counter/base/5_1_grt.log",
+        "odb": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/5_1_grt.odb"
+      }
+    },
+    "route": {
+      "status": "completed",
+      "artifacts": {
+        "report": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_reports/sky130hd/counter/base/5_route_drc.rpt",
+        "odb": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/5_route.odb"
+      }
+    },
+    "finish": {
+      "status": "completed",
+      "artifacts": {
+        "report": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_reports/sky130hd/counter/base/6_finish.rpt",
+        "sdc": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/6_final.sdc",
+        "netlist": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/6_final.v"
+      }
+    }
+  },
+  "docker_command": "fake",
+  "docker_success": true,
+  "docker_stdout_tail": "ok",
+  "docker_stderr_tail": "",
+  "netlist_path": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/6_final.v",
+  "stdcell_manifest_version": null,
+  "stdcell_files_used": [],
+  "summary_metrics": {
+    "area_um2": null,
+    "cell_count": null,
+    "wns_ns": 0.12,
+    "tns_ns": null,
+    "power_uw": null
+  },
+  "next_action": "Use search_logs_tool for detailed PPA/error verification.",
+  "finished_at": "2026-06-21T23:39:00.920625+00:00",
+  "elapsed_sec": 0.0
+}

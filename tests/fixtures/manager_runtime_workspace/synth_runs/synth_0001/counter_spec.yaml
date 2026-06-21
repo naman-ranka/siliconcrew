@@ -1,0 +1,12 @@
+counter:
+  description: counter
+  tech_node: SkyWater 130HD
+  clock_period: 10.0ns
+  ports:
+  - name: clk
+    direction: input
+    type: logic
+  - name: rst
+    direction: input
+    type: logic
+  created_at: '2026-06-21T23:39:00.916087'
