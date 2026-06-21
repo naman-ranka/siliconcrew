@@ -5,9 +5,11 @@ understands the digital hardware design domain (RTL → lint → sim → synth �
 GDSII, timing closure, waveforms, PPA). Your job is to build the SiliconCrew
 **workbench UI** and the **thin API layer** over the existing tools.
 
-Read first: `plans/phase0/README.md`, `api-contract.md`, `data-model.md`, and
-open `mockups/workbench.html` (the target UX). Honor every principle in the
-README.
+Read first: `plans/phase0/README.md`, `api-contract.md`, `data-model.md`,
+`ui-design-language.md` (colors/typography/agentic-UI inspiration — Claude warm
+grey+orange with a blue accent; study Codex/Antigravity patterns), and open
+`mockups/workbench.html` (target UX; its colors are superseded by the design
+doc). Honor every principle in the README.
 
 ## Mission
 
@@ -57,10 +59,18 @@ the run called → what does the user do next.* Then build, then test.
 
 ## Verification (mandatory feedback loop)
 
-- Component/store unit tests per slice.
+Scaffolds already exist — use and extend them, do not skip:
+- **Tier 1 (no browser):** Vitest + Testing Library (jsdom). Config at
+  `frontend/vitest.config.ts`, example at `frontend/test/example.test.tsx`.
+  Run `npm run test`. Write a component/store test per slice.
+- **Tier 2 (browser):** Playwright at `frontend/playwright.config.ts`, smoke at
+  `frontend/e2e/workbench.smoke.spec.ts`. First run `npx playwright install
+  chrome` (apt Chrome — the bundled-chromium CDN is egress-blocked). Run
+  `npm run e2e`. The Playwright MCP server (`.mcp.json`) is also available for
+  ad-hoc navigate/screenshot. `file:` is blocked — always test over HTTP.
+  Flesh out the skipped flow: upload → lint → sim (fail) → open waveform → fix
+  → re-run → synth → report, screenshotting each stage.
 - API smoke tests hitting each endpoint against a local workspace.
-- Prefer Playwright (or equivalent) for the key flow: upload → lint → sim
-  (fail) → open waveform → fix → re-run → synth → report.
 - Keep a checklist artifact of slices done / in progress.
 
 ## Non-goals (Phase 1)
