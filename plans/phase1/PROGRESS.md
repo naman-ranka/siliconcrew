@@ -54,6 +54,20 @@ Status: ✅ done · 🟡 in progress · ⬜ not started.
   bare app + temp workspace; the EDA-dependent path is exercised when `iverilog`
   is present.
 
+## Screenshots (committed, from the Playwright E2E)
+Captured by `frontend/e2e/workbench.smoke.spec.ts`; copies live in
+`plans/phase1/screenshots/` for review (the live `frontend/e2e-artifacts/` is
+gitignored and regenerated on each `npm run e2e`).
+
+| Stage | File |
+|---|---|
+| Shell — pipeline spine + file tree (roles) + runs timeline + agent rail | `screenshots/workbench-shell.png` |
+| Upload — manifest auto-tags roles | `screenshots/wb-1-upload.png` |
+| Lint — console shows the exact iverilog command + result | `screenshots/wb-2-lint.png` |
+| Sim (fail) — drives the waveform + "viewing X" banner + deeplink | `screenshots/wb-3-sim-fail.png` |
+| Sim (pass) — re-run after fix, new `sim_0002` in the timeline | `screenshots/wb-4-sim-pass.png` |
+| Report — pipeline all green, unified timeline, timing-first PPA | `screenshots/wb-5-report.png` |
+
 ## Architecture notes / Phase-2 seams
 - The action layer is a standalone `APIRouter` (`src/api/actions.py`) built from
   a `resolve_workspace(session_id)` callable — **no dependency on the agent
