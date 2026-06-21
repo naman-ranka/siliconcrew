@@ -213,6 +213,78 @@ def simulation_tool(
     return json.dumps(result, indent=2)
 
 from src.tools.search_logs import search_logs
+from src.tools import manifest as manifest_mod
+from src.tools.sim_manager import run_sim_isolated
+
+
+@tool
+def get_manifest() -> str:
+    """
+    Returns the design manifest (files + roles + synthTop/simTop + clock + platform).
+    The manifest is the single source of truth shared with the UI; auto-derived if absent.
+    """
+    workspace = get_workspace_path()
+    m = manifest_mod.read_manifest(workspace)
+    return json.dumps(m.model_dump(), indent=2)
+
+
+@tool
+def update_manifest(updates_json: str) -> str:
+    """
+    Upserts manifest fields. Pass a JSON object with any of:
+    synthTop, simTop, clockPeriodNs, platform, or files: [{name, role}] to override roles.
+    Roles: rtl | tb | sdc | include | other.
+    """
+    workspace = get_workspace_path()
+    try:
+        updates = json.loads(updates_json) if updates_json else {}
+        if not isinstance(updates, dict):
+            return "Error: updates_json must be a JSON object."
+    except Exception as exc:
+        return f"Error: invalid updates_json ({exc})."
+    m = manifest_mod.write_manifest(workspace, updates)
+    return json.dumps(m.model_dump(), indent=2)
+
+
+@tool
+def run_isolated_simulation(
+    sim_top: str = "",
+    mode: str = "rtl",
+    run_id: str = None,
+    sim_profile: str = "auto",
+    pass_marker: str = "TEST PASSED",
+) -> str:
+    """
+    Runs a manifest-driven simulation in an isolated sim_runs/sim_NNNN/ directory
+    (its own VCD, persisted run record + provenance). Prefer this over simulation_tool
+    so runs stay comparable and waveforms never collide.
+    Args:
+        sim_top: testbench top module; defaults to the manifest's simTop.
+        mode: 'rtl' or 'post_synth'.
+        run_id: optional synthesis run id for post_synth mode (resolves the netlist).
+        sim_profile: 'auto' (default), 'pinned', or 'compat'.
+        pass_marker: explicit pass marker required for a passing status.
+    """
+    workspace = get_workspace_path()
+    m = manifest_mod.read_manifest(workspace)
+    top = sim_top or m.simTop
+    if not top:
+        return "Error: no simTop in manifest and none provided. Set it with update_manifest."
+    files = manifest_mod.files_for_stage(m, "simulate")
+    if not files:
+        return "Error: manifest has no rtl/tb files to simulate."
+    result = run_sim_isolated(
+        workspace=workspace,
+        verilog_files=files,
+        top_module=top,
+        mode=mode,
+        run_id=run_id,
+        platform=m.platform,
+        sim_profile=sim_profile,
+        pass_marker=pass_marker,
+    )
+    return json.dumps(result, indent=2)
+
 
 @tool
 def start_synthesis(
@@ -1070,9 +1142,13 @@ mcp_tools = [
     apply_patch_tool,
     edit_file_tool,
     list_files_tool,
+    # Design manifest (shared source of truth with the UI)
+    get_manifest,
+    update_manifest,
     # Verification tools
     linter_tool,
     simulation_tool,
+    run_isolated_simulation,
     waveform_tool,
     cocotb_tool,
     sby_tool,

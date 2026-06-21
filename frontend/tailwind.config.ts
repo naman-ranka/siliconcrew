@@ -52,6 +52,18 @@ const config: Config = {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
         },
+        // Secondary brand accent (Claude blue) — links, info, "viewing X" banner.
+        info: {
+          DEFAULT: "hsl(var(--info))",
+          foreground: "hsl(var(--info-foreground))",
+        },
+        // Run/status semantics — meaning, never decoration.
+        status: {
+          pass: "hsl(var(--status-pass))",
+          fail: "hsl(var(--status-fail))",
+          warn: "hsl(var(--status-warn))",
+          running: "hsl(var(--status-running))",
+        },
         // Surface hierarchy
         surface: {
           0: "hsl(var(--surface-0))",
