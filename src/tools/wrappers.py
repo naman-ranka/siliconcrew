@@ -23,31 +23,11 @@ from src.tools.synthesis_manager import (
 )
 from src.tools.file_patch import apply_unified_patch
 
-# Helper to get workspace path
-def get_workspace_path():
-    """
-    Returns the active workspace directory.
-
-    Resolution order (Phase 0 tenancy seam):
-      1. task-local SessionContext  (multi-tenant safe; set per request)
-      2. RTL_WORKSPACE env var      (legacy / single-tenant override)
-      3. 'workspace/' relative to project root (default)
-    """
-    # 1. Prefer the task-local session context when one is active. This is what
-    #    makes concurrent multi-user requests safe; see utils.session_context.
-    try:
-        from src.utils.session_context import current_workspace
-        ctx_ws = current_workspace()
-        if ctx_ws:
-            return os.path.abspath(ctx_ws)
-    except Exception:
-        pass
-
-    env_path = os.environ.get("RTL_WORKSPACE")
-    if env_path:
-        return os.path.abspath(env_path)
-
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
+# Workspace resolution lives in a dependency-light module (src.utils.workspace)
+# so the tenancy seam and its concurrency gate test do not require this heavy
+# tool/agent module. Re-exported here for backward compatibility — ~30 call
+# sites in this file resolve the workspace via get_workspace_path().
+from src.utils.workspace import get_workspace_path
 
 
 def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
