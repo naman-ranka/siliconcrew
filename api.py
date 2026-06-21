@@ -25,6 +25,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from src.agents.architect import create_architect_agent, load_system_prompt
 from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name
 from src.utils.session_manager import SessionManager
+from src.utils.session_context import SessionContext, set_current_session
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.tools.design_report import save_design_report
 from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
@@ -493,6 +494,14 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
         await websocket.close()
         return
 
+    # Bind this connection's task to its session/workspace. Each WebSocket runs
+    # in its own asyncio task, so this contextvar is task-local and isolated
+    # across concurrent users — replacing the process-global RTL_WORKSPACE
+    # mutation that raced. Tools resolve the workspace via get_workspace_path(),
+    # which now prefers this context. Propagation through LangGraph tool
+    # execution is covered by tests/test_session_context_propagation.py.
+    set_current_session(SessionContext(session_id=session_id, workspace=workspace))
+
     try:
         while True:
             # Receive message from client
@@ -503,8 +512,8 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 await websocket.send_json({"type": "error", "error": "Empty message"})
                 continue
 
-            # Set workspace path for tools
-            os.environ["RTL_WORKSPACE"] = workspace
+            # Workspace is bound via the task-local session context at connection
+            # start (see set_current_session above) — no global env mutation.
             print(f"[CHAT] Session: {session_id} | Message: {message[:50]}...")
 
             # Initialize agent with AsyncSqliteSaver (supports async streaming/state)

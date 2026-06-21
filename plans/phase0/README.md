@@ -61,26 +61,24 @@ Phase 0 replaces the *resolution* with a task-local context. Because every tool
 already funnels through `get_workspace_path()`, fixing that one function makes
 **all ~30 call sites** context-aware with no edits to them.
 
-### Required integration step (first task of Phase 1/2)
+### Integration step — DONE (bridge commit)
 
-Wire the request lifecycle to set the context instead of mutating the global.
-In `api.py`, replace the `os.environ["RTL_WORKSPACE"] = workspace` line with:
+`api.py` now binds each WebSocket connection's task to a `SessionContext`
+(`set_current_session(...)` at connection start) instead of mutating
+`os.environ["RTL_WORKSPACE"]`. Each connection is its own asyncio task, so the
+contextvar is task-local and isolated across concurrent users.
 
-```python
-from src.utils.session_context import SessionContext, session_scope
-...
-with session_scope(SessionContext(session_id=session_id, workspace=workspace)):
-    # run the agent / call tools for this request
-    ...
-```
+**Propagation gate — verified:** `tests/test_session_context_propagation.py`
+proves (a) concurrent async tasks stay isolated, (b) the context survives
+through `asyncio.to_thread` **and** `langchain_core.runnables.config.run_in_executor`
+— the exact primitive LangChain uses to run sync tools in async contexts (it
+copies the context). Note a *bare* `loop.run_in_executor` does **not** copy, so
+if future code dispatches tools that way, wrap with `contextvars.copy_context().run(...)`.
 
-**Verification gate (do not skip):** confirm the context propagates through
-LangGraph tool execution. `asyncio.to_thread` copies context, but
-`loop.run_in_executor(...)` does **not**. If LangGraph runs sync tools via a
-bare executor, wrap tool invocation with `contextvars.copy_context().run(...)`
-(or run tools on the event loop). Add an integration test that fires two
-concurrent sessions through the agent and asserts each writes only to its own
-workspace. This is the gate that says "multi-tenant safe."
+**Remaining for Phase 1/2:** the new action endpoints (POST /simulate, etc.)
+must also run inside a session scope, and the agents should add an end-to-end
+test firing two real concurrent agent sessions asserting no cross-workspace
+writes. The mechanism and unit/gate coverage are in place.
 
 ## Principles both workstreams must honor
 

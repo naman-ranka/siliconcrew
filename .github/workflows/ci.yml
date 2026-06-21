@@ -26,11 +26,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Unit tests for stdcells + simulation contract
+    - name: Unit tests for stdcells + simulation contract + session context
       env:
         PYTHONPATH: .
       run: |
-        pytest -q tests/test_guardrails_and_stdcells.py tests/test_simulation_contract.py
+        pytest -q tests/test_guardrails_and_stdcells.py tests/test_simulation_contract.py tests/test_session_context.py tests/test_session_context_propagation.py
 
     - name: First-run stdcell bootstrap
       env:
