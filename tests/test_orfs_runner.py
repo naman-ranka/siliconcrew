@@ -116,6 +116,11 @@ def test_cloud_runner_stages_in_executes_and_stages_out_on_success():
     assert env["ORFS_COMMAND"] == req.command
     assert env["ORFS_IMAGE"].startswith("us-docker.pkg.dev")
     assert set(env["ORFS_RESULT_SUBDIRS"].split(",")) == {"orfs_results", "orfs_logs"}
+    # The Job entrypoint needs the full rundir-rel::container mapping to copy
+    # ORFS outputs back to the right run-dir-relative subdirs.
+    vmap = dict(p.split("::") for p in env["ORFS_VOLUME_MAP"].split(";"))
+    assert vmap["orfs_results"] == "/OpenROAD-flow-scripts/flow/results"
+    assert vmap["orfs_logs"] == "/OpenROAD-flow-scripts/flow/logs"
 
 
 def test_cloud_runner_skips_stage_out_on_failure():
