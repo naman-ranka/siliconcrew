@@ -98,6 +98,26 @@ workspace. This is the gate that says "multi-tenant safe."
 - **Slice and verify.** Each unit of work ends in something runnable and tested.
   No long open-ended runs without a feedback loop.
 
+## Verification environment (proven working)
+
+Visual / E2E verification is available in cloud sessions and was confirmed by
+opening `mockups/workbench.html` and screenshotting it. Recipe for the agents:
+
+- **Browser tools:** the committed `.mcp.json` provides the **Playwright MCP
+  server**. First use in a session may need an explicit "use playwright mcp".
+- **Install path:** use `npx playwright install chrome` (apt-based real Chrome).
+  The bundled-Chromium CDN build (`cdn.playwright.dev`) may be blocked by egress;
+  `install chrome` is the reliable path here.
+- **Serving files:** the `file:` protocol is blocked. Serve over local HTTP
+  (`python3 -m http.server 8765`) and load `http://localhost:8765/...`. The
+  Next.js dev server is already HTTP, so the app under test is fine; this only
+  matters for static files.
+- **Loop:** navigate → screenshot → DOM snapshot for assertions. Use this for
+  the Tier-2 (visual/E2E) checks each brief requires; Tier-1 (Vitest/jsdom)
+  needs no browser.
+- A bare HTML page served over HTTP typically logs one benign `favicon.ico 404`
+  console error — harmless; don't chase it unless other errors appear.
+
 ## Reference material (already in the repo)
 
 - `mockups/workbench.html` — the target UX (pipeline-first, artifact-first).
