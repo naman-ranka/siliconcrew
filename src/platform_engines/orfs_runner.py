@@ -172,6 +172,9 @@ class CloudJobOrfsRunner:
             # The Job entrypoint replays the same volume subpaths (results/logs/
             # reports) into the staged tree so stage_out restores them locally.
             "ORFS_RESULT_SUBDIRS": ",".join(self._result_subdirs(request)),
+            # Full mapping the Job needs to copy ORFS container outputs back to
+            # the run-dir-relative subdirs: "<rel>::<container_path>" per entry.
+            "ORFS_VOLUME_MAP": ";".join(self._volume_map(request)),
         }
         try:
             execution = self._client.execute(
@@ -204,16 +207,28 @@ class CloudJobOrfsRunner:
     @staticmethod
     def _result_subdirs(request: OrfsRequest) -> List[str]:
         """Derive the run-dir-relative output subdirs from the volume specs."""
-        subdirs = []
+        return [rel for rel, _container in CloudJobOrfsRunner._volume_pairs(request)]
+
+    @staticmethod
+    def _volume_map(request: OrfsRequest) -> List[str]:
+        """Encode each volume as '<rundir-rel>::<container-path>' for the Job."""
+        return [f"{rel}::{container}" for rel, container in CloudJobOrfsRunner._volume_pairs(request)]
+
+    @staticmethod
+    def _volume_pairs(request: OrfsRequest):
+        """Yield (rundir-relative dest, ORFS container source) for each volume."""
+        pairs = []
         for vol in request.volumes:
-            host = vol.split(":", 1)[0]
+            parts = vol.split(":")
+            host = parts[0]
+            container = parts[1] if len(parts) > 1 else ""
             try:
                 rel = os.path.relpath(host, request.run_dir)
             except ValueError:
                 rel = os.path.basename(host)
             if not rel.startswith(".."):
-                subdirs.append(rel)
-        return subdirs
+                pairs.append((rel, container))
+        return pairs
 
 
 # ---------------------------------------------------------------------------
