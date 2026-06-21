@@ -6,9 +6,22 @@ is minutes and memory-hungry, the flow expects a POSIX filesystem). Your job is
 to make the SiliconCrew backend a **safe, multi-tenant, deployable** service
 without touching the EDA tool logic (it is correct — leave it alone).
 
-Read first: `plans/phase0/README.md`, `api-contract.md`, `data-model.md`, and
-`docs/hosted_workbench_plan.md` (the deployment vision). Honor the README
-principles.
+Read first: `plans/phase0/README.md`, `api-contract.md`, `data-model.md`,
+**`plans/phase0/phase2-reference.md`** (locked decisions, the swappable-engine
+pattern, seams, curated references), and `docs/hosted_workbench_plan.md` (the
+deployment north star). Honor the README principles.
+
+**Locked decisions (do not re-litigate):** GCP (Cloud Run + Cloud Run Jobs +
+Cloud Storage + Cloud SQL/Postgres); LLM keys = BYOK for all three providers
+plus a capped hosted **Gemini 3.5 Flash** tier; **Google OAuth** (anonymous
+trial for lint/sim, sign-in for synth/save); **deploy-ready posture** (produce
+code + IaC + runbook; the owner runs the live deploy — no autonomous cloud
+provisioning or spend).
+
+**Build it as swappable engines, not a hosted fork.** Define small interfaces
+(`OrfsRunner`, `WorkspaceProvider`, persistence, `LlmKeyProvider`), each with a
+local impl (= today's behavior, refactored) and a cloud impl, chosen by config.
+See phase2-reference.md for the pattern and the seam-first build order.
 
 ## Mission
 
