@@ -99,6 +99,103 @@ export interface ReportData {
   run_id: string | null;
 }
 
+// --- Design manifest (mirrors plans/phase0/data-model.md) -------------------
+export type FileRole = "rtl" | "tb" | "sdc" | "include" | "other";
+
+export interface DesignFile {
+  name: string;
+  role: FileRole;
+  path: string;
+}
+
+export interface DesignManifest {
+  sessionId: string;
+  files: DesignFile[];
+  synthTop: string;
+  simTop: string;
+  clockPeriodNs: number;
+  platform: string;
+}
+
+// --- Unified run model ------------------------------------------------------
+export type RunKind = "sim" | "synth";
+export type RunStatus = "running" | "passed" | "failed";
+
+export interface RunProvenance {
+  repoCommit?: string | null;
+  iverilogVersion?: string | null;
+  orfsImageDigest?: string | null;
+  pdk?: string | null;
+  numCores?: number | null;
+}
+
+export interface RunSummary {
+  id: string;
+  kind: RunKind;
+  status: RunStatus;
+  createdAt: string | null;
+  top: string | null;
+  pinned: boolean;
+  parentRunId?: string | null;
+  provenance?: RunProvenance;
+  // sim
+  mode?: "rtl" | "post_synth";
+  vcdPath?: string;
+  passMarkerFound?: boolean;
+  failure?: { type?: string; firstFailureLine?: string | null; timeNs?: number | null } | null;
+  compileCommand?: string;
+  simCommand?: string;
+  stdoutTail?: string;
+  stderrTail?: string;
+  // synth
+  platform?: string | null;
+  ppa?: PpaMetrics | null;
+  reportAvailable?: boolean;
+}
+
+export interface PpaMetrics {
+  areaUm2?: number | null;
+  cells?: number | null;
+  wnsNs?: number | null;
+  tnsNs?: number | null;
+  fmaxMhz?: number | null;
+  powerMw?: number | null;
+}
+
+export interface LintDiag {
+  file?: string;
+  line: number | null;
+  severity: "error" | "warning";
+  message: string;
+}
+
+export interface LintResult {
+  status: "passed" | "failed";
+  warnings: LintDiag[];
+  errors: LintDiag[];
+  byFile: Record<string, LintDiag[]>;
+  command: string;
+  files: string[];
+}
+
+export interface PpaDiff {
+  a: string;
+  b: string;
+  rows: { metric: string; a: number | null; b: number | null; deltaPct?: number | null }[];
+}
+
+// Console entries surfaced under the artifact viewers (lint/sim/synth).
+export type ConsoleChannel = "lint" | "sim" | "synth";
+export interface ConsoleEntry {
+  channel: ConsoleChannel;
+  status: "running" | "passed" | "failed" | "info";
+  command?: string;
+  summary: string;
+  detail?: string;
+  runId?: string;
+  ts: string;
+}
+
 // WebSocket message types
 export type WSMessageType =
   | { type: "start" }

@@ -13,8 +13,14 @@ import type {
   FileInfo,
   ReportData,
   SynthesisRun,
+  DesignManifest,
+  RunSummary,
+  LintResult,
+  FileRole,
+  ConsoleChannel,
+  ConsoleEntry,
 } from "@/types";
-import { projectsApi, sessionsApi, chatApi, workspaceApi } from "./api";
+import { projectsApi, sessionsApi, chatApi, workspaceApi, workbenchApi } from "./api";
 import { generateId } from "./utils";
 
 interface AppState {
@@ -60,6 +66,7 @@ interface AppState {
   selectedSynthesisRunId: string | null;
   report: ReportData | null;
   layoutFiles: string[];
+  selectedLayout: string | null;
   schematicFiles: string[];
 
   // Actions
@@ -86,6 +93,30 @@ interface AppState {
   selectSynthesisRun: (runId: string | null) => Promise<void>;
   loadReport: (runId?: string | null) => Promise<void>;
   generateReport: (runId?: string | null) => Promise<void>;
+  selectLayout: (filename: string) => void;
+
+  // --- Workbench (Phase 1) ---
+  manifest: DesignManifest | null;
+  runs: RunSummary[];
+  selectedRunId: string | null;
+  runKindFilter: "all" | "sim" | "synth";
+  lintResult: LintResult | null;
+  consoleEntries: ConsoleEntry[];
+  activeConsole: ConsoleChannel;
+  actionPending: { lint: boolean; sim: boolean; synth: boolean };
+
+  loadWorkbench: () => Promise<void>;
+  loadManifest: () => Promise<void>;
+  setFileRole: (name: string, role: FileRole) => Promise<void>;
+  uploadFiles: (files: File[]) => Promise<void>;
+  loadRuns: () => Promise<void>;
+  selectRun: (runId: string | null) => Promise<void>;
+  pinRun: (runId: string, pinned: boolean) => Promise<void>;
+  setRunKindFilter: (kind: "all" | "sim" | "synth") => void;
+  setActiveConsole: (channel: ConsoleChannel) => void;
+  runLint: () => Promise<void>;
+  runSim: (opts?: { mode?: string; runId?: string }) => Promise<void>;
+  runSynth: () => Promise<void>;
 }
 
 function buildBlocks(
@@ -137,7 +168,18 @@ export const useStore = create<AppState>((set, get) => ({
   selectedSynthesisRunId: null,
   report: null,
   layoutFiles: [],
+  selectedLayout: null,
   schematicFiles: [],
+
+  // Workbench state
+  manifest: null,
+  runs: [],
+  selectedRunId: null,
+  runKindFilter: "all",
+  lintResult: null,
+  consoleEntries: [],
+  activeConsole: "sim",
+  actionPending: { lint: false, sim: false, synth: false },
 
   // Project actions
   loadProjects: async () => {
@@ -709,4 +751,223 @@ export const useStore = create<AppState>((set, get) => ({
       throw error;
     }
   },
+
+  selectLayout: (filename: string) => {
+    set({ selectedLayout: filename });
+  },
+
+  // ====================== Workbench actions ======================
+
+  loadWorkbench: async () => {
+    await Promise.all([get().loadManifest(), get().loadRuns(), get().refreshWorkspace()]);
+  },
+
+  loadManifest: async () => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    try {
+      const manifest = await workbenchApi.getManifest(currentSession.id);
+      set({ manifest });
+    } catch {
+      set({ manifest: null });
+    }
+  },
+
+  setFileRole: async (name: string, role: FileRole) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const manifest = await workbenchApi.updateManifest(currentSession.id, { files: [{ name, role }] });
+    set({ manifest });
+  },
+
+  uploadFiles: async (files: File[]) => {
+    const { currentSession } = get();
+    if (!currentSession || files.length === 0) return;
+    const res = await workbenchApi.uploadFiles(currentSession.id, files);
+    set({ manifest: res.manifest });
+    pushConsole(set, get, {
+      channel: get().activeConsole,
+      status: "info",
+      summary: `Uploaded ${res.uploaded.length} file(s): ${res.uploaded.join(", ")}`,
+    });
+    await get().refreshWorkspace();
+  },
+
+  loadRuns: async () => {
+    const { currentSession, runKindFilter } = get();
+    if (!currentSession) return;
+    try {
+      const runs = await workbenchApi.listRuns(currentSession.id, runKindFilter);
+      set((state) => ({
+        runs,
+        selectedRunId:
+          runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
+      }));
+    } catch {
+      set({ runs: [] });
+    }
+  },
+
+  setRunKindFilter: (kind) => {
+    set({ runKindFilter: kind });
+    void get().loadRuns();
+  },
+
+  setActiveConsole: (channel) => set({ activeConsole: channel }),
+
+  selectRun: async (runId: string | null) => {
+    set({ selectedRunId: runId });
+    if (!runId) return;
+    const run = get().runs.find((r) => r.id === runId);
+    if (!run) return;
+
+    if (run.kind === "sim") {
+      set({ activeConsole: "sim" });
+      if (run.vcdPath) {
+        await get().selectWaveform(run.vcdPath);
+        set({ artifactsVisible: true, activeArtifactTab: "waveform" });
+      }
+    } else {
+      set({ activeConsole: "synth", selectedSynthesisRunId: runId });
+      await get().loadReport(runId);
+      set({ artifactsVisible: true, activeArtifactTab: "report" });
+    }
+  },
+
+  pinRun: async (runId: string, pinned: boolean) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    await workbenchApi.pinRun(currentSession.id, runId, pinned);
+    set((state) => ({ runs: state.runs.map((r) => (r.id === runId ? { ...r, pinned } : r)) }));
+  },
+
+  runLint: async () => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set((s) => ({ activeConsole: "lint", actionPending: { ...s.actionPending, lint: true } }));
+    pushConsole(set, get, { channel: "lint", status: "running", summary: "Linting…" });
+    try {
+      const result = await workbenchApi.lint(currentSession.id);
+      set({ lintResult: result });
+      const n = result.errors.length;
+      pushConsole(set, get, {
+        channel: "lint",
+        status: result.status,
+        command: result.command,
+        summary:
+          result.status === "passed"
+            ? `Lint passed (${result.warnings.length} warning(s))`
+            : `Lint failed — ${n} error(s), ${result.warnings.length} warning(s)`,
+        detail: [...result.errors, ...result.warnings]
+          .map((d) => `${d.file ?? ""}:${d.line ?? "?"} ${d.severity}: ${d.message}`)
+          .join("\n"),
+      });
+    } catch (e) {
+      pushConsole(set, get, { channel: "lint", status: "failed", summary: errMsg(e) });
+    } finally {
+      set((s) => ({ actionPending: { ...s.actionPending, lint: false } }));
+    }
+  },
+
+  runSim: async (opts) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set((s) => ({ activeConsole: "sim", actionPending: { ...s.actionPending, sim: true } }));
+    pushConsole(set, get, { channel: "sim", status: "running", summary: "Simulating…" });
+    try {
+      const run = await workbenchApi.simulate(currentSession.id, opts ?? {});
+      await get().loadRuns();
+      pushConsole(set, get, {
+        channel: "sim",
+        status: run.status,
+        command: [run.compileCommand, run.simCommand].filter(Boolean).join("\n"),
+        runId: run.id,
+        summary:
+          run.status === "passed"
+            ? `${run.id} passed (${run.top})`
+            : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`,
+        detail: [run.failure?.firstFailureLine, run.stdoutTail, run.stderrTail].filter(Boolean).join("\n"),
+      });
+      await get().selectRun(run.id);
+    } catch (e) {
+      pushConsole(set, get, { channel: "sim", status: "failed", summary: errMsg(e) });
+    } finally {
+      set((s) => ({ actionPending: { ...s.actionPending, sim: false } }));
+    }
+  },
+
+  runSynth: async () => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set((s) => ({ activeConsole: "synth", actionPending: { ...s.actionPending, synth: true } }));
+    pushConsole(set, get, { channel: "synth", status: "running", summary: "Starting synthesis…" });
+    try {
+      const { jobId, runId } = await workbenchApi.synthesize(currentSession.id);
+      pushConsole(set, get, { channel: "synth", status: "running", runId, summary: `${runId} queued (job ${jobId})` });
+      await get().loadRuns();
+
+      // Poll the job until terminal (bounded), surfacing stage progress.
+      const sid = currentSession.id;
+      const deadline = Date.now() + 20 * 60 * 1000;
+      let interval = 3000;
+      // eslint-disable-next-line no-constant-condition
+      while (Date.now() < deadline) {
+        await sleep(interval);
+        if (get().currentSession?.id !== sid) return; // session switched away
+        let job: Record<string, unknown>;
+        try {
+          job = await workbenchApi.getJob(sid, jobId);
+        } catch {
+          continue;
+        }
+        const state = String(job.status ?? "");
+        const stage = String(job.current_stage ?? job.stage ?? "");
+        pushConsole(set, get, { channel: "synth", status: "running", runId, summary: `${runId} ${state}${stage ? ` · ${stage}` : ""}` });
+        if (state === "completed" || state === "failed") {
+          await get().loadRuns();
+          pushConsole(set, get, {
+            channel: "synth",
+            status: state === "completed" ? "passed" : "failed",
+            runId,
+            summary: `${runId} ${state}`,
+          });
+          if (state === "completed") await get().selectRun(runId);
+          break;
+        }
+        interval = Math.min(interval * 1.5, 30000);
+      }
+    } catch (e) {
+      pushConsole(set, get, { channel: "synth", status: "failed", summary: errMsg(e) });
+    } finally {
+      set((s) => ({ actionPending: { ...s.actionPending, synth: false } }));
+    }
+  },
 }));
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Append a console entry, collapsing the most recent "running" entry on the
+// same channel so a finished action replaces its own spinner line.
+function pushConsole(
+  set: (fn: (s: AppState) => Partial<AppState>) => void,
+  get: () => AppState,
+  entry: Omit<ConsoleEntry, "ts">
+) {
+  const full: ConsoleEntry = { ...entry, ts: new Date().toISOString() };
+  set((s) => {
+    const entries = [...s.consoleEntries];
+    const lastIdx = entries.length - 1;
+    if (lastIdx >= 0 && entries[lastIdx].channel === entry.channel && entries[lastIdx].status === "running") {
+      entries[lastIdx] = full;
+    } else {
+      entries.push(full);
+    }
+    return { consoleEntries: entries.slice(-100) };
+  });
+}

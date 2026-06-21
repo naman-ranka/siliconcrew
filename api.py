@@ -25,10 +25,12 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from src.agents.architect import create_architect_agent, load_system_prompt
 from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name
 from src.utils.session_manager import SessionManager
-from src.utils.session_context import SessionContext, set_current_session
+from src.utils.session_context import SessionContext, set_current_session, session_scope
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.tools.design_report import save_design_report
 from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
+from src.tools import manifest as manifest_mod
+from src.api.actions import build_actions_router
 
 # Load environment
 load_dotenv()
@@ -95,6 +97,7 @@ class FileInfo(BaseModel):
     type: str
     size: int
     modified: str
+    role: Optional[str] = None  # manifest role: rtl|tb|sdc|include|other
 
 
 class SpecResponse(BaseModel):
@@ -668,6 +671,14 @@ async def list_workspace_files(session_id: str) -> List[FileInfo]:
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # Manifest roles annotate the design files (rtl/tb/sdc/include).
+    try:
+        with session_scope(SessionContext(session_id=session_id, workspace=workspace)):
+            manifest = manifest_mod.read_manifest(workspace, session_id)
+        roles = {f.name: f.role for f in manifest.files}
+    except Exception:
+        roles = {}
+
     files = []
     for item in os.listdir(workspace):
         item_path = os.path.join(workspace, item)
@@ -695,7 +706,8 @@ async def list_workspace_files(session_id: str) -> List[FileInfo]:
                 path=item_path,
                 type=file_type,
                 size=stat.st_size,
-                modified=datetime.fromtimestamp(stat.st_mtime).isoformat()
+                modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                role=roles.get(item),
             ))
 
     return sorted(files, key=lambda f: f.modified, reverse=True)
@@ -918,6 +930,52 @@ async def list_layout_files(session_id: str) -> List[str]:
     return gds_files
 
 
+@app.get("/api/workspace/{session_id:path}/layout/{filename:path}")
+async def get_layout_svg(session_id: str, filename: str):
+    """Best-effort GDS→SVG for the layout viewer.
+
+    Prefers a pre-rendered ``<file>.svg`` next to the GDS; otherwise renders the
+    top cell with gdstk (bounded by a polygon cap). Full layout rendering of
+    large designs is a Phase-2 concern, so this degrades to a structured error
+    the viewer shows gracefully rather than failing the request.
+    """
+    workspace = session_manager.get_workspace_path(session_id)
+    gds_path = os.path.join(workspace, filename)
+    real_ws = os.path.realpath(workspace)
+    if not os.path.realpath(gds_path).startswith(real_ws):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not os.path.exists(gds_path):
+        raise HTTPException(status_code=404, detail="Layout not found")
+
+    # 1) pre-rendered SVG sidecar
+    sidecar = gds_path + ".svg"
+    if os.path.exists(sidecar):
+        with open(sidecar, "r", encoding="utf-8", errors="ignore") as f:
+            return {"svg": f.read(), "cell_name": os.path.basename(filename), "cached": True}
+
+    # 2) render with gdstk if available
+    try:
+        import gdstk  # type: ignore
+    except Exception:
+        return {"error": "unsupported", "message": "Layout rendering needs gdstk (Phase 2). No pre-rendered SVG found.", "cell_name": ""}
+
+    try:
+        lib = gdstk.read_gds(gds_path)
+        top = lib.top_level()
+        if not top:
+            return {"error": "render_failed", "message": "No top cell in GDS.", "cell_name": ""}
+        cell = top[0]
+        polygon_count = sum(len(p.points) for p in cell.get_polygons()[:20000])
+        if polygon_count > 2_000_000:
+            return {"error": "too_large", "message": "Layout too large to render inline.", "cell_name": cell.name}
+        svg = cell.svg(scaling=1.0)
+        if isinstance(svg, bytes):
+            svg = svg.decode("utf-8", "ignore")
+        return {"svg": svg, "cell_name": cell.name}
+    except Exception as e:
+        return {"error": "render_failed", "message": str(e), "cell_name": ""}
+
+
 @app.get("/api/workspace/{session_id:path}/schematics")
 async def list_schematic_files(session_id: str) -> List[str]:
     """List SVG schematic files in the workspace."""
@@ -947,6 +1005,16 @@ async def get_file_content(session_id: str, filename: str):
         content = f.read()
 
     return {"filename": filename, "content": content}
+
+
+# =============================================================================
+# ACTION LAYER  (manifest + IDE-first buttons + unified runs)
+#   Implemented as a standalone router so it has no dependency on the agent
+#   stack — see src/api/actions.py. Both the human (these endpoints) and the
+#   agent (the @tool wrappers) drive the identical tool functions underneath.
+# =============================================================================
+
+app.include_router(build_actions_router(session_manager.get_workspace_path))
 
 
 # =============================================================================

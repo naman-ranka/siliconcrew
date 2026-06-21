@@ -31,7 +31,14 @@ export function WaveformViewer() {
     }
   }, [currentSession, loadWaveforms]);
 
-  if (waveformFiles.length === 0) {
+  // Per-run waveforms are selected by their isolated VCD path (sim_runs/.../x.vcd)
+  // which is not in the flat top-level listing — so honor a selected waveform /
+  // loaded data even when the legacy listing is empty.
+  const options = Array.from(
+    new Set([...(selectedWaveform ? [selectedWaveform] : []), ...waveformFiles])
+  );
+
+  if (options.length === 0 && !waveformData) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
         <Activity className="h-12 w-12 mb-4" />
@@ -120,9 +127,9 @@ export function WaveformViewer() {
               <SelectValue placeholder="Select VCD file" />
             </SelectTrigger>
             <SelectContent>
-              {waveformFiles.map((file) => (
+              {options.map((file) => (
                 <SelectItem key={file} value={file}>
-                  {file}
+                  {file.includes("/") ? file.split("/").slice(-2).join("/") : file}
                 </SelectItem>
               ))}
             </SelectContent>

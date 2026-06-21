@@ -8,6 +8,10 @@ import type {
   WaveformData,
   ReportData,
   SynthesisRun,
+  DesignManifest,
+  RunSummary,
+  LintResult,
+  PpaDiff,
 } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
@@ -125,6 +129,11 @@ export const workspaceApi = {
   listLayouts: (sessionId: string) =>
     apiFetch<string[]>(`/api/workspace/${encodeSessionId(sessionId)}/layouts`),
 
+  getLayout: (sessionId: string, filename: string) =>
+    apiFetch<{ svg: string; cell_name: string; cached?: boolean; error?: string; message?: string }>(
+      `/api/workspace/${encodeSessionId(sessionId)}/layout/${encodeFilePath(filename)}`
+    ),
+
   listSchematics: (sessionId: string) =>
     apiFetch<string[]>(`/api/workspace/${encodeSessionId(sessionId)}/schematics`),
 
@@ -132,6 +141,80 @@ export const workspaceApi = {
     apiFetch<{ filename: string; content: string }>(
       `/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(filename)}`
     ),
+};
+
+// Workbench action layer — manifest, IDE-first buttons, unified runs.
+// Every endpoint returns the uniform { ok, ... } envelope (api-contract.md).
+async function actionFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...options?.headers },
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok || (body && body.ok === false)) {
+    const err = body?.detail?.error || body?.error || { message: response.statusText };
+    throw new Error(err.message || "Action failed");
+  }
+  return body as T;
+}
+
+const ws = (sessionId: string) => `/api/workspace/${encodeSessionId(sessionId)}`;
+
+export const workbenchApi = {
+  getManifest: (sessionId: string) =>
+    actionFetch<{ ok: true; manifest: DesignManifest }>(`${ws(sessionId)}/manifest`).then((r) => r.manifest),
+
+  updateManifest: (sessionId: string, updates: Partial<DesignManifest> | { files: { name: string; role: string }[] }) =>
+    actionFetch<{ ok: true; manifest: DesignManifest }>(`${ws(sessionId)}/manifest`, {
+      method: "PUT",
+      body: JSON.stringify(updates),
+    }).then((r) => r.manifest),
+
+  uploadFiles: async (sessionId: string, files: File[]) => {
+    const form = new FormData();
+    for (const f of files) form.append("files", f, f.name);
+    const response = await fetch(`${API_BASE}${ws(sessionId)}/files`, { method: "POST", body: form });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || (body && body.ok === false)) {
+      throw new Error(body?.detail?.error?.message || "Upload failed");
+    }
+    return body as { ok: true; uploaded: string[]; manifest: DesignManifest };
+  },
+
+  lint: (sessionId: string) =>
+    actionFetch<LintResult & { ok: true }>(`${ws(sessionId)}/lint`, { method: "POST" }),
+
+  simulate: (sessionId: string, body: { simTop?: string; mode?: string; runId?: string } = {}) =>
+    actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/simulate`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }).then((r) => r.run),
+
+  synthesize: (sessionId: string, body: Record<string, unknown> = {}) =>
+    actionFetch<{ ok: true; jobId: string; runId: string }>(`${ws(sessionId)}/synthesize`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  listRuns: (sessionId: string, kind: "all" | "sim" | "synth" = "all") =>
+    actionFetch<{ ok: true; runs: RunSummary[] }>(`${ws(sessionId)}/runs?kind=${kind}`).then((r) => r.runs),
+
+  getRun: (sessionId: string, runId: string) =>
+    actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/runs/${encodeURIComponent(runId)}`).then((r) => r.run),
+
+  getJob: (sessionId: string, jobId: string) =>
+    actionFetch<{ ok: true; job: Record<string, unknown> }>(`${ws(sessionId)}/jobs/${encodeURIComponent(jobId)}`).then((r) => r.job),
+
+  pinRun: (sessionId: string, runId: string, pinned: boolean) =>
+    actionFetch<{ ok: true; runId: string; pinned: boolean }>(`${ws(sessionId)}/runs/${encodeURIComponent(runId)}/pin`, {
+      method: "POST",
+      body: JSON.stringify({ pinned }),
+    }),
+
+  compareRuns: (sessionId: string, a: string, b: string) =>
+    actionFetch<{ ok: true; diff: PpaDiff }>(
+      `${ws(sessionId)}/runs/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`
+    ).then((r) => r.diff),
 };
 
 // Health check

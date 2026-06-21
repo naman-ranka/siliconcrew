@@ -8,53 +8,65 @@
 
 @layer base {
   :root {
-    /* Claude-inspired dark theme with better contrast */
-    --background: 220 16% 8%;           /* Deep charcoal - main bg */
-    --foreground: 220 13% 91%;          /* Off-white text */
+    /* Warm Claude-inspired dark theme: warm grey + Claude orange, blue accent.
+       Brand/primary = orange (#d97757). Status colors are SEPARATE from brand
+       so warnings never collide with the orange (see ui-design-language.md). */
+    --background: 40 8% 7%;             /* Warm near-black (#141312) */
+    --foreground: 40 18% 90%;           /* Warm off-white text */
 
-    --card: 220 16% 11%;                /* Slightly elevated surface */
-    --card-foreground: 220 13% 91%;
+    --card: 36 9% 11%;                  /* Warm elevated surface (#1e1c19) */
+    --card-foreground: 40 18% 90%;
 
-    --popover: 220 16% 13%;             /* Popover/dropdown bg */
-    --popover-foreground: 220 13% 91%;
+    --popover: 33 10% 13%;              /* Warm popover/dropdown bg */
+    --popover-foreground: 40 18% 90%;
 
-    --primary: 217 92% 60%;             /* Vibrant blue accent */
+    --primary: 14 63% 60%;             /* Claude orange (#d97757) — brand/action */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 220 14% 15%;           /* Subtle secondary surface */
-    --secondary-foreground: 220 13% 91%;
+    --secondary: 33 9% 15%;            /* Subtle warm secondary surface */
+    --secondary-foreground: 40 18% 90%;
 
-    --muted: 220 14% 18%;               /* Muted elements */
-    --muted-foreground: 220 9% 55%;     /* Dimmed text */
+    --muted: 33 8% 17%;                /* Muted warm elements */
+    --muted-foreground: 38 8% 58%;     /* Dimmed warm text */
 
-    --accent: 220 14% 20%;              /* Hover/active states */
-    --accent-foreground: 220 13% 91%;
+    --accent: 33 9% 19%;               /* Hover/active states (warm) */
+    --accent-foreground: 40 18% 90%;
 
-    --destructive: 0 72% 51%;           /* Red for errors */
+    /* Secondary brand accent — Claude blue (#6a9bcc): links, info, banners. */
+    --info: 210 47% 61%;
+    --info-foreground: 0 0% 100%;
+
+    --destructive: 8 56% 54%;          /* Warm red — fail/violated (#cc5b49) */
     --destructive-foreground: 0 0% 100%;
 
-    --success: 142 76% 36%;             /* Green for success */
+    --success: 136 49% 49%;            /* Green — pass / timing met (#3fb950) */
     --success-foreground: 0 0% 100%;
 
-    --warning: 38 92% 50%;              /* Amber for warnings */
+    --warning: 43 73% 49%;             /* Distinct yellow amber (#d6a221) */
     --warning-foreground: 0 0% 0%;
 
-    --border: 220 13% 20%;              /* Subtle borders */
-    --input: 220 14% 18%;               /* Input backgrounds */
-    --ring: 217 92% 60%;                /* Focus rings */
+    /* Run/status semantics (meaning, never decoration). */
+    --status-pass: 136 49% 49%;
+    --status-fail: 8 56% 54%;
+    --status-warn: 43 73% 49%;
+    --status-running: 210 47% 61%;     /* blue for "running" — never orange */
+
+    --border: 33 9% 18%;               /* Warm subtle borders */
+    --input: 33 8% 17%;                /* Warm input backgrounds */
+    --ring: 14 63% 60%;                /* Orange focus rings */
 
     --radius: 0.5rem;
 
-    /* Surface hierarchy - Claude-style layering */
-    --surface-0: 220 16% 8%;            /* Base layer */
-    --surface-1: 220 16% 11%;           /* First elevation */
-    --surface-2: 220 14% 14%;           /* Second elevation */
-    --surface-3: 220 14% 17%;           /* Third elevation */
+    /* Warm surface hierarchy */
+    --surface-0: 40 8% 7%;
+    --surface-1: 36 9% 11%;
+    --surface-2: 33 9% 14%;
+    --surface-3: 30 9% 17%;
 
-    /* Semantic text colors */
-    --text-primary: 220 13% 91%;        /* Primary text */
-    --text-secondary: 220 9% 65%;       /* Secondary text */
-    --text-muted: 220 9% 45%;           /* Muted/disabled text */
+    /* Semantic text colors (warm) */
+    --text-primary: 40 18% 90%;
+    --text-secondary: 38 10% 66%;
+    --text-muted: 36 8% 48%;
   }
 
   .light {
