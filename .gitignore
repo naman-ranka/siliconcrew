@@ -193,3 +193,7 @@ bench-orchestrator/configs/cvdp_b*.yaml
 # CVDP container-grader staging + local pytest cache
 .pytest_cvdp_cache/
 cvdp-pipeline/**/__pycache__/
+
+# Playwright MCP screenshots / scratch artifacts
+.playwright-mcp/
+workbench.png
