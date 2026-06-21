@@ -27,13 +27,26 @@ from src.tools.file_patch import apply_unified_patch
 def get_workspace_path():
     """
     Returns the active workspace directory.
-    Defaults to 'workspace/' relative to project root, 
-    but can be overridden by RTL_WORKSPACE env var for isolated runs.
+
+    Resolution order (Phase 0 tenancy seam):
+      1. task-local SessionContext  (multi-tenant safe; set per request)
+      2. RTL_WORKSPACE env var      (legacy / single-tenant override)
+      3. 'workspace/' relative to project root (default)
     """
+    # 1. Prefer the task-local session context when one is active. This is what
+    #    makes concurrent multi-user requests safe; see utils.session_context.
+    try:
+        from src.utils.session_context import current_workspace
+        ctx_ws = current_workspace()
+        if ctx_ws:
+            return os.path.abspath(ctx_ws)
+    except Exception:
+        pass
+
     env_path = os.environ.get("RTL_WORKSPACE")
     if env_path:
         return os.path.abspath(env_path)
-        
+
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
 
 
