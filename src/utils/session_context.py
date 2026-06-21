@@ -3,15 +3,22 @@
 Why this exists
 ---------------
 Tools must resolve *which workspace they act on* from an explicit, task-local
-context — never from process-global state. Today ``api.py`` does::
+context — never from process-global state. The original backend did::
 
     os.environ["RTL_WORKSPACE"] = workspace   # per incoming request
 
-and every tool reads that global via ``get_workspace_path()``. In a single
-local user that is fine. Under the deployed UI a single process serves many
-users concurrently, so two requests race on the global: user A's tools can end
-up writing into user B's workspace. That is cross-tenant corruption, and it is
-the prerequisite blocker for multi-tenant deployment.
+and every tool read that global via ``get_workspace_path()``. In a single local
+user that is fine. Under the deployed UI a single process serves many users
+concurrently, so two requests race on the global: user A's tools can end up
+writing into user B's workspace. That is cross-tenant corruption, and it is the
+prerequisite blocker for multi-tenant deployment.
+
+The served request lifecycle no longer mutates that env var: ``api.py`` binds
+each connection's task to a ``SessionContext`` (``set_current_session`` /
+``session_scope``) and ``get_workspace_path()`` resolves it task-locally. The
+``RTL_WORKSPACE`` env var remains only as a read-only single-tenant override.
+Isolation under concurrency is the release gate
+(``tests/test_concurrency_isolation.py``).
 
 Design
 ------
