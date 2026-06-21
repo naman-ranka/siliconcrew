@@ -26,6 +26,7 @@ from src.agents.architect import create_architect_agent, load_system_prompt
 from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name
 from src.utils.session_manager import SessionManager
 from src.utils.session_context import SessionContext, set_current_session
+from src.platform_engines.workspace_provider import get_workspace_provider
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.tools.design_report import save_design_report
 from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
@@ -488,11 +489,18 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for streaming chat."""
     await websocket.accept()
 
-    workspace = session_manager.get_workspace_path(session_id)
-    if not os.path.exists(workspace):
+    # Session existence is checked against the session manager's metadata/dir.
+    if not os.path.exists(session_manager.get_workspace_path(session_id)):
         await websocket.send_json({"type": "error", "error": "Session not found"})
         await websocket.close()
         return
+
+    # Materialize the workspace via the active WorkspaceProvider. Locally this is
+    # the same workspace/<session_id> directory the session manager uses; in
+    # hosted mode it stages the session's object-storage tarball into local
+    # scratch and returns that POSIX path. The tools never know the difference.
+    _ws_provider = get_workspace_provider()
+    workspace = _ws_provider.workspace_for(session_id)
 
     # Bind this connection's task to its session/workspace. Each WebSocket runs
     # in its own asyncio task, so this contextvar is task-local and isolated
@@ -500,7 +508,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
     # mutation that raced. Tools resolve the workspace via get_workspace_path(),
     # which now prefers this context. Propagation through LangGraph tool
     # execution is covered by tests/test_session_context_propagation.py.
-    set_current_session(SessionContext(session_id=session_id, workspace=workspace))
+    set_current_session(SessionContext(session_id=session_id, workspace=workspace, user_id=None))
 
     try:
         while True:
@@ -631,6 +639,12 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             cached = current_meta.get("cached_tokens", 0)
                             new_cost = calculate_cost(new_input, new_output, model_name)
                             session_manager.update_session_stats(session_id, new_input, new_output, cached, new_cost)
+
+                    # Persist any workspace changes back to durable storage in
+                    # hosted mode (cloud provider). No-op for the local provider.
+                    _sync = getattr(_ws_provider, "sync", None)
+                    if callable(_sync):
+                        _sync(session_id)
 
                     await websocket.send_json({
                         "type": "done",
