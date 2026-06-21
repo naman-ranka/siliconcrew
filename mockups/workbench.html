@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SiliconCrew — Workbench (static mockup)</title>
+<style>
+  :root{
+    --bg:#1e1e2e; --bg2:#181825; --bg3:#11111b; --panel:#232334;
+    --line:#313244; --line2:#45475a;
+    --txt:#cdd6f4; --txt2:#a6adc8; --txt3:#6c7086;
+    --accent:#89b4fa; --accent2:#74c7ec;
+    --ok:#a6e3a1; --warn:#f9e2af; --fail:#f38ba8; --run:#cba6f7;
+    --rtl:#89b4fa; --tb:#f9e2af; --sdc:#fab387; --inc:#94e2d5;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--txt);font-family:var(--sans);font-size:13px;overflow:hidden}
+  .muted{color:var(--txt2)} .dim{color:var(--txt3)}
+  .mono{font-family:var(--mono)}
+  kbd{font-family:var(--mono);background:var(--bg3);border:1px solid var(--line2);border-radius:4px;padding:1px 5px;font-size:11px}
+
+  /* ---------- top bar ---------- */
+  .topbar{height:42px;display:flex;align-items:center;gap:14px;padding:0 14px;background:var(--bg2);border-bottom:1px solid var(--line)}
+  .logo{font-weight:700;letter-spacing:.3px}
+  .logo .si{color:var(--accent)}
+  .crumb{color:var(--txt2)}
+  .crumb b{color:var(--txt)}
+  .spacer{flex:1}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--line);border-radius:20px;padding:3px 10px;font-size:11px;color:var(--txt2)}
+  .chip .dot{width:7px;height:7px;border-radius:50%}
+  .chip.prov{font-family:var(--mono)}
+  .gbtn{background:var(--bg3);border:1px solid var(--line2);color:var(--txt);border-radius:6px;padding:5px 11px;font-size:12px;cursor:pointer}
+  .gbtn:hover{border-color:var(--accent)}
+
+  /* ---------- layout ---------- */
+  .shell{display:grid;grid-template-columns:268px 1fr 330px;height:calc(100% - 42px)}
+  .shell.chat-collapsed{grid-template-columns:268px 1fr 46px}
+  .col{min-width:0;display:flex;flex-direction:column;overflow:hidden}
+  .left{background:var(--bg2);border-right:1px solid var(--line)}
+  .center{background:var(--bg)}
+  .right{background:var(--bg2);border-left:1px solid var(--line)}
+
+  .sect{border-bottom:1px solid var(--line)}
+  .sect-h{display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--txt3);font-weight:600}
+  .sect-h .pill{margin-left:auto;font-size:10px;color:var(--txt3);text-transform:none;letter-spacing:0}
+  .scroll{overflow:auto}
+  .left .scroll{flex:0 0 auto}
+
+  /* ---------- file tree ---------- */
+  .tree{padding:2px 6px 8px}
+  .grp{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--txt3);padding:7px 8px 3px}
+  .frow{display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:5px;cursor:pointer;font-family:var(--mono);font-size:12px}
+  .frow:hover{background:var(--bg3)}
+  .frow.active{background:#2a2a40}
+  .frow .ic{width:13px;text-align:center;color:var(--txt3)}
+  .frow .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .badge{font-size:9px;font-weight:700;letter-spacing:.4px;border-radius:4px;padding:1px 5px;font-family:var(--sans)}
+  .b-rtl{background:rgba(137,180,250,.16);color:var(--rtl)}
+  .b-tb{background:rgba(249,226,175,.16);color:var(--tb)}
+  .b-sdc{background:rgba(250,179,135,.16);color:var(--sdc)}
+  .b-inc{background:rgba(148,226,213,.16);color:var(--inc)}
+  .treebtns{display:flex;gap:6px;padding:6px 10px 2px}
+  .tbtn{flex:1;text-align:center;background:var(--bg3);border:1px dashed var(--line2);color:var(--txt2);border-radius:6px;padding:5px;font-size:11px;cursor:pointer}
+  .tbtn:hover{border-color:var(--accent);color:var(--txt)}
+
+  /* ---------- design config (manifest) ---------- */
+  .cfg{padding:6px 12px 12px}
+  .cfg .row{display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px dashed var(--line)}
+  .cfg .row:last-child{border-bottom:0}
+  .cfg .k{color:var(--txt3);font-size:11.5px}
+  .sel{background:var(--bg3);border:1px solid var(--line2);color:var(--txt);border-radius:5px;padding:3px 7px;font-size:11.5px;font-family:var(--mono);cursor:pointer}
+  .manifest-note{margin:0 12px 12px;font-size:10.5px;color:var(--txt3);line-height:1.5;background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:7px 9px}
+
+  /* ---------- actions ---------- */
+  .acts{padding:8px 12px 12px;display:flex;flex-direction:column;gap:7px}
+  .act{display:flex;align-items:center;gap:9px;background:var(--bg3);border:1px solid var(--line2);border-radius:7px;padding:8px 10px;cursor:pointer}
+  .act:hover{border-color:var(--accent)}
+  .act.disabled{opacity:.45;cursor:not-allowed}
+  .act .play{color:var(--txt2)}
+  .act .lbl{font-weight:600}
+  .act .sub{font-size:10.5px;color:var(--txt3);font-family:var(--mono)}
+  .act .st{margin-left:auto;font-size:11px;font-weight:700;display:flex;align-items:center;gap:5px}
+  .st .dot{width:8px;height:8px;border-radius:50%}
+  .st.ok{color:var(--ok)} .st.ok .dot{background:var(--ok)}
+  .st.fail{color:var(--fail)} .st.fail .dot{background:var(--fail)}
+  .st.idle{color:var(--txt3)} .st.idle .dot{background:var(--txt3)}
+  .st.run{color:var(--run)} .st.run .dot{background:var(--run);animation:pulse 1s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+  /* ---------- runs ---------- */
+  .runs{padding:4px 8px 10px}
+  .runrow{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;cursor:pointer;font-size:11.5px}
+  .runrow:hover{background:var(--bg3)}
+  .runrow.active{background:#2a2a40}
+  .runrow .rid{font-family:var(--mono);color:var(--txt2);min-width:74px}
+  .runrow .rmeta{color:var(--txt3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .runrow .rs{font-weight:700}
+  .rs.ok{color:var(--ok)} .rs.fail{color:var(--fail)}
+  .kind{font-size:9px;font-weight:700;border-radius:3px;padding:1px 4px}
+  .k-sim{background:rgba(116,199,236,.16);color:var(--accent2)}
+  .k-synth{background:rgba(203,166,247,.16);color:var(--run)}
+
+  /* ---------- center tabs ---------- */
+  .tabs{display:flex;align-items:stretch;background:var(--bg2);border-bottom:1px solid var(--line);height:38px;overflow:auto}
+  .tab{display:flex;align-items:center;gap:7px;padding:0 15px;font-size:12.5px;color:var(--txt2);cursor:pointer;border-right:1px solid var(--line);white-space:nowrap}
+  .tab:hover{color:var(--txt)}
+  .tab.active{color:var(--txt);background:var(--bg);box-shadow:inset 0 -2px 0 var(--accent)}
+  .tab .fn{font-family:var(--mono);font-size:11.5px}
+  .panes{flex:1;overflow:hidden;display:flex;flex-direction:column}
+  .pane{flex:1;overflow:auto;display:none}
+  .pane.active{display:block}
+
+  /* code */
+  .code{font-family:var(--mono);font-size:12.5px;line-height:1.65;padding:10px 0}
+  .ln{display:flex}
+  .ln .num{width:46px;text-align:right;padding-right:14px;color:var(--txt3);user-select:none;flex:none}
+  .ln .src{white-space:pre}
+  .kw{color:#cba6f7} .ty{color:#89b4fa} .st2{color:#a6e3a1} .nu{color:#fab387} .cm{color:#6c7086} .pp{color:#f5c2e7}
+
+  /* hierarchy */
+  .hier{padding:16px 20px;font-family:var(--mono);font-size:12.5px;line-height:1.9}
+  .hier .node{color:var(--txt)}
+  .hier .inst{color:var(--txt3)}
+  .hier .mod{color:var(--accent)}
+  .hier .tag{font-family:var(--sans);font-size:9px;font-weight:700;border-radius:4px;padding:1px 5px;margin-left:6px}
+
+  /* waveform */
+  .wave{display:grid;grid-template-columns:200px 1fr;height:100%}
+  .scope{border-right:1px solid var(--line);overflow:auto;background:var(--bg2)}
+  .scope .sh{padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--txt3);border-bottom:1px solid var(--line)}
+  .sig{display:flex;align-items:center;gap:7px;padding:4px 10px;font-family:var(--mono);font-size:11.5px;cursor:pointer}
+  .sig:hover{background:var(--bg3)}
+  .sig .ind{color:var(--txt3)}
+  .sig.sel{background:#2a2a40;color:var(--accent2)}
+  .wavearea{overflow:auto;position:relative}
+  .wavebar{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--txt2)}
+  .marker{color:var(--fail);font-family:var(--mono);font-weight:700}
+  .wgrid{padding:14px}
+  .wrow{display:flex;align-items:center;height:34px;font-family:var(--mono);font-size:11px}
+  .wrow .wn{width:150px;color:var(--txt2);flex:none}
+  .wrow svg{flex:1}
+  .tline{position:absolute;top:42px;bottom:0;width:2px;background:var(--fail);opacity:.6}
+
+  /* report */
+  .rep{padding:18px 22px;max-width:760px}
+  .rep h2{font-size:15px;margin:0 0 4px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:14px}
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:14px}
+  .card h3{margin:0 0 10px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--txt3)}
+  .metric{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--line);font-family:var(--mono);font-size:12.5px}
+  .metric:last-child{border-bottom:0}
+  .delta.good{color:var(--ok)} .delta.bad{color:var(--fail)}
+  .stagebar{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+  .stage{font-size:10px;font-family:var(--mono);background:rgba(166,227,161,.13);color:var(--ok);border-radius:4px;padding:3px 7px}
+  .dlrow{display:flex;gap:9px;margin-top:16px}
+
+  /* console */
+  .console{height:172px;border-top:1px solid var(--line);background:var(--bg3);display:flex;flex-direction:column}
+  .console .ch{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid var(--line);font-size:11px;color:var(--txt3)}
+  .console .ch .tab2{cursor:pointer;padding:2px 6px;border-radius:4px}
+  .console .ch .tab2.active{color:var(--txt);background:var(--bg)}
+  .console .body{flex:1;overflow:auto;padding:8px 12px;font-family:var(--mono);font-size:11.5px;line-height:1.7}
+  .cl-file{color:var(--accent2);margin-top:6px}
+  .cl-warn{color:var(--warn)} .cl-err{color:var(--fail)} .cl-ok{color:var(--ok)} .cl-dim{color:var(--txt3)}
+  .deeplink{color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+
+  /* ---------- right / agent ---------- */
+  .chat-h{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--txt3);font-weight:600}
+  .collapse{margin-left:auto;cursor:pointer;color:var(--txt3);background:none;border:0;font-size:14px}
+  .chat-body{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+  .msg{font-size:12.5px;line-height:1.55}
+  .msg .who{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--txt3);margin-bottom:4px}
+  .msg.user .bub{background:#2a2a40;border-radius:9px;padding:8px 11px}
+  .msg.agent .bub{background:var(--bg3);border:1px solid var(--line);border-radius:9px;padding:8px 11px}
+  .toolcall{font-family:var(--mono);font-size:11px;color:var(--accent2);background:var(--bg3);border:1px solid var(--line);border-radius:6px;padding:4px 8px;margin:4px 0;display:flex;align-items:center;gap:6px}
+  .fixbtns{display:flex;gap:7px;margin-top:8px}
+  .fixb{font-size:11px;border-radius:6px;padding:5px 9px;cursor:pointer;border:1px solid var(--line2);background:var(--bg3);color:var(--txt)}
+  .fixb.primary{background:var(--accent);color:#11111b;border-color:var(--accent);font-weight:600}
+  .chat-in{border-top:1px solid var(--line);padding:10px}
+  .chat-in input{width:100%;background:var(--bg3);border:1px solid var(--line2);border-radius:8px;padding:9px 11px;color:var(--txt);font-size:12.5px}
+  .chat-in input::placeholder{color:var(--txt3)}
+  .rail-collapsed{writing-mode:vertical-rl;transform:rotate(180deg);margin:14px auto;color:var(--txt3);font-size:11px;letter-spacing:1px;text-transform:uppercase;cursor:pointer}
+
+  .note{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--line2);border-radius:8px;padding:6px 14px;font-size:11px;color:var(--txt3);box-shadow:0 6px 20px rgba(0,0,0,.4)}
+</style>
+</head>
+<body>
+
+<!-- ============ TOP BAR ============ -->
+<div class="topbar">
+  <div class="logo"><span class="si">Silicon</span>Crew</div>
+  <div class="crumb">Session: <b>simple_cpu</b></div>
+  <span class="chip"><span class="dot" style="background:var(--sdc)"></span>sky130hd</span>
+  <span class="chip">5 modules · 2 testbenches</span>
+  <div class="spacer"></div>
+  <span class="chip prov" title="Pinned toolchain — stamped on every run for reproducibility">
+    <span class="dot" style="background:var(--ok)"></span>
+    iverilog 12.0 · orfs@sha256:9f3c… · sky130_fd_sc_hd
+  </span>
+  <button class="gbtn" onclick="toggleChat()">⌗ Toggle agent</button>
+</div>
+
+<!-- ============ SHELL ============ -->
+<div class="shell" id="shell">
+
+  <!-- ---------- LEFT RAIL ---------- -->
+  <div class="col left">
+    <div class="scroll">
+
+      <!-- FILES -->
+      <div class="sect">
+        <div class="sect-h">Files <span class="pill">role-tagged</span></div>
+        <div class="tree">
+          <div class="grp">▾ rtl &nbsp;<span class="dim">(synthesizable)</span></div>
+          <div class="frow active" onclick="showTab('code')"><span class="ic">▤</span><span class="nm">cpu_top.v</span><span class="badge b-rtl">RTL</span></div>
+          <div class="frow"><span class="ic">▤</span><span class="nm">alu.v</span><span class="badge b-rtl">RTL</span></div>
+          <div class="frow"><span class="ic">▤</span><span class="nm">regfile.v</span><span class="badge b-rtl">RTL</span></div>
+          <div class="frow"><span class="ic">▤</span><span class="nm">decoder.v</span><span class="badge b-rtl">RTL</span></div>
+          <div class="frow"><span class="ic">▤</span><span class="nm">pc.v</span><span class="badge b-rtl">RTL</span></div>
+
+          <div class="grp">▾ tb &nbsp;<span class="dim">(excluded from synth)</span></div>
+          <div class="frow"><span class="ic">▤</span><span class="nm">cpu_tb.v</span><span class="badge b-tb">TB</span></div>
+          <div class="frow"><span class="ic">▤</span><span class="nm">alu_tb.v</span><span class="badge b-tb">TB</span></div>
+
+          <div class="grp">▾ constraints &nbsp;/ &nbsp;include</div>
+          <div class="frow"><span class="ic">▤</span><span class="nm">cpu.sdc</span><span class="badge b-sdc">SDC</span></div>
+          <div class="frow"><span class="ic">▤</span><span class="nm">defs.vh</span><span class="badge b-inc">INC</span></div>
+
+          <div class="treebtns">
+            <div class="tbtn">+ Upload</div>
+            <div class="tbtn">+ New file</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DESIGN CONFIG (manifest = source of truth) -->
+      <div class="sect">
+        <div class="sect-h">Design config <span class="pill">manifest</span></div>
+        <div class="cfg">
+          <div class="row"><span class="k">Synth top (DUT)</span><span class="sel">cpu_top ▾</span></div>
+          <div class="row"><span class="k">Sim top (TB)</span><span class="sel">cpu_tb ▾</span></div>
+          <div class="row"><span class="k">Clock</span><span class="sel">10 ns · 100 MHz ▾</span></div>
+          <div class="row"><span class="k">Platform</span><span class="sel">sky130hd ▾</span></div>
+        </div>
+        <div class="manifest-note">
+          One source of truth. Roles &amp; tops here decide which files reach lint / sim / synth.
+          The agent edits this same manifest — clicking a button and asking the agent run the
+          <i>identical</i> flow.
+        </div>
+      </div>
+
+      <!-- ACTIONS -->
+      <div class="sect">
+        <div class="sect-h">Actions</div>
+        <div class="acts">
+          <div class="act" onclick="showConsole('lint')">
+            <span class="play">▶</span>
+            <div><div class="lbl">Run Lint</div><div class="sub">all rtl + include · elaborate cpu_top</div></div>
+            <span class="st ok"><span class="dot"></span>OK · 2 warn</span>
+          </div>
+          <div class="act" onclick="showConsole('sim')">
+            <span class="play">▶</span>
+            <div><div class="lbl">Run Sim</div><div class="sub">cpu_tb · isolated → sim_0004/</div></div>
+            <span class="st fail"><span class="dot"></span>FAIL @240ns</span>
+          </div>
+          <div class="act disabled">
+            <span class="play">▶</span>
+            <div><div class="lbl">Run Synth</div><div class="sub">cpu_top · rtl-only + cpu.sdc</div></div>
+            <span class="st idle"><span class="dot"></span>locked · sim must pass</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- RUNS (sim + synth history, each isolated) -->
+      <div class="sect">
+        <div class="sect-h">Runs <span class="pill">isolated · comparable</span></div>
+        <div class="runs">
+          <div class="runrow active"><span class="kind k-sim">SIM</span><span class="rid">sim_0004</span><span class="rmeta">cpu_tb</span><span class="rs fail">✗ 240ns</span></div>
+          <div class="runrow"><span class="kind k-sim">SIM</span><span class="rid">sim_0003</span><span class="rmeta">alu_tb</span><span class="rs ok">✓</span></div>
+          <div class="runrow"><span class="kind k-synth">SYN</span><span class="rid">synth_0002</span><span class="rmeta">cpu_top · 1842µm² · 108MHz</span><span class="rs ok">✓</span></div>
+          <div class="runrow"><span class="kind k-synth">SYN</span><span class="rid">synth_0001</span><span class="rmeta">cpu_top · route DRC</span><span class="rs fail">✗</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ---------- CENTER ---------- -->
+  <div class="col center">
+    <div class="tabs">
+      <div class="tab active" data-tab="code" onclick="showTab('code')">▤ <span class="fn">cpu_top.v</span></div>
+      <div class="tab" data-tab="spec" onclick="showTab('spec')">Spec</div>
+      <div class="tab" data-tab="hier" onclick="showTab('hier')">Hierarchy</div>
+      <div class="tab" data-tab="wave" onclick="showTab('wave')">Waveform</div>
+      <div class="tab" data-tab="schem" onclick="showTab('schem')">Schematic</div>
+      <div class="tab" data-tab="layout" onclick="showTab('layout')">Layout</div>
+      <div class="tab" data-tab="report" onclick="showTab('report')">Report</div>
+    </div>
+
+    <div class="panes">
+
+      <!-- CODE -->
+      <div class="pane active" id="pane-code">
+        <div class="code">
+          <div class="ln"><span class="num">1</span><span class="src"><span class="cm">// cpu_top.v — top-level DUT (instantiates alu, regfile, decoder, pc)</span></span></div>
+          <div class="ln"><span class="num">2</span><span class="src"><span class="pp">`include "defs.vh"</span></span></div>
+          <div class="ln"><span class="num">3</span><span class="src"></span></div>
+          <div class="ln"><span class="num">4</span><span class="src"><span class="kw">module</span> <span class="ty">cpu_top</span> (</span></div>
+          <div class="ln"><span class="num">5</span><span class="src">    <span class="kw">input</span>  clk, rst,</span></div>
+          <div class="ln"><span class="num">6</span><span class="src">    <span class="kw">output</span> [<span class="nu">7</span>:<span class="nu">0</span>] result</span></div>
+          <div class="ln"><span class="num">7</span><span class="src">);</span></div>
+          <div class="ln"><span class="num">8</span><span class="src">    <span class="kw">wire</span> [<span class="nu">7</span>:<span class="nu">0</span>] op_a, op_b, alu_y;</span></div>
+          <div class="ln"><span class="num">9</span><span class="src">    <span class="kw">wire</span> [<span class="nu">3</span>:<span class="nu">0</span>] opcode;</span></div>
+          <div class="ln"><span class="num">10</span><span class="src"></span></div>
+          <div class="ln"><span class="num">11</span><span class="src">    <span class="ty">pc</span>      u_pc      (.clk(clk), .rst(rst), .pc_out(pc_addr));</span></div>
+          <div class="ln"><span class="num">12</span><span class="src">    <span class="ty">decoder</span> u_decoder (.instr(instr), .opcode(opcode));</span></div>
+          <div class="ln"><span class="num">13</span><span class="src">    <span class="ty">regfile</span> u_regfile (.clk(clk), .ra(op_a), .rb(op_b));</span></div>
+          <div class="ln"><span class="num">14</span><span class="src">    <span class="ty">alu</span>     u_alu     (.a(op_a), .b(op_b), .op(opcode), .y(alu_y));</span></div>
+          <div class="ln"><span class="num">15</span><span class="src"></span></div>
+          <div class="ln"><span class="num">16</span><span class="src">    <span class="kw">assign</span> result = alu_y;</span></div>
+          <div class="ln"><span class="num">17</span><span class="src"><span class="kw">endmodule</span></span></div>
+        </div>
+      </div>
+
+      <!-- SPEC -->
+      <div class="pane" id="pane-spec">
+        <div class="code">
+          <div class="ln"><span class="num">1</span><span class="src"><span class="ty">simple_cpu</span>:</span></div>
+          <div class="ln"><span class="num">2</span><span class="src">  description: <span class="st2">8-bit single-cycle CPU (alu + regfile + decoder + pc)</span></span></div>
+          <div class="ln"><span class="num">3</span><span class="src">  top: <span class="st2">cpu_top</span></span></div>
+          <div class="ln"><span class="num">4</span><span class="src">  tech_node: <span class="st2">sky130hd</span></span></div>
+          <div class="ln"><span class="num">5</span><span class="src">  clock_period: <span class="nu">10ns</span></span></div>
+          <div class="ln"><span class="num">6</span><span class="src">  submodules: [alu, regfile, decoder, pc]   <span class="cm"># hierarchy is explicit</span></span></div>
+          <div class="ln"><span class="num">7</span><span class="src">  ports:</span></div>
+          <div class="ln"><span class="num">8</span><span class="src">    - {name: clk, dir: input}</span></div>
+          <div class="ln"><span class="num">9</span><span class="src">    - {name: rst, dir: input}</span></div>
+          <div class="ln"><span class="num">10</span><span class="src">    - {name: result, dir: output, width: <span class="nu">8</span>}</span></div>
+        </div>
+      </div>
+
+      <!-- HIERARCHY -->
+      <div class="pane" id="pane-hier">
+        <div class="hier">
+          <div class="dim" style="margin-bottom:10px">Elaborated from <span class="mono">cpu_top</span> — this is the file set lint &amp; synth operate on (TBs excluded).</div>
+          <div class="node">▾ <span class="mod">cpu_top</span><span class="tag b-rtl">RTL</span> &nbsp;<span class="dim">cpu_top.v</span></div>
+          <div class="node">&nbsp;&nbsp;├─ <span class="inst">u_pc</span> : <span class="mod">pc</span><span class="tag b-rtl">RTL</span> &nbsp;<span class="dim">pc.v</span></div>
+          <div class="node">&nbsp;&nbsp;├─ <span class="inst">u_decoder</span> : <span class="mod">decoder</span><span class="tag b-rtl">RTL</span> &nbsp;<span class="dim">decoder.v</span></div>
+          <div class="node">&nbsp;&nbsp;├─ <span class="inst">u_regfile</span> : <span class="mod">regfile</span><span class="tag b-rtl">RTL</span> &nbsp;<span class="dim">regfile.v</span></div>
+          <div class="node">&nbsp;&nbsp;└─ <span class="inst">u_alu</span> : <span class="mod">alu</span><span class="tag b-rtl">RTL</span> &nbsp;<span class="dim">alu.v</span></div>
+          <div style="margin-top:18px" class="dim">Sim view — elaborated from <span class="mono">cpu_tb</span>:</div>
+          <div class="node">▾ <span class="mod">cpu_tb</span><span class="tag b-tb">TB</span></div>
+          <div class="node">&nbsp;&nbsp;└─ <span class="inst">dut</span> : <span class="mod">cpu_top</span> &nbsp;<span class="dim">(+ full subtree above)</span></div>
+        </div>
+      </div>
+
+      <!-- WAVEFORM -->
+      <div class="pane" id="pane-wave">
+        <div class="wave">
+          <div class="scope">
+            <div class="sh">Scope · sim_0004.vcd</div>
+            <div class="sig"><span class="ind">▾</span>cpu_tb</div>
+            <div class="sig"><span class="ind">&nbsp;▾</span>dut</div>
+            <div class="sig sel"><span class="ind">&nbsp;&nbsp;</span>clk</div>
+            <div class="sig"><span class="ind">&nbsp;&nbsp;</span>rst</div>
+            <div class="sig"><span class="ind">&nbsp;&nbsp;</span>result[7:0]</div>
+            <div class="sig"><span class="ind">&nbsp;&nbsp;▾</span>u_alu</div>
+            <div class="sig sel"><span class="ind">&nbsp;&nbsp;&nbsp;</span>a[7:0]</div>
+            <div class="sig sel"><span class="ind">&nbsp;&nbsp;&nbsp;</span>b[7:0]</div>
+            <div class="sig sel"><span class="ind">&nbsp;&nbsp;&nbsp;</span>y[7:0]</div>
+            <div class="sig"><span class="ind">&nbsp;&nbsp;▸</span>u_regfile</div>
+          </div>
+          <div class="wavearea">
+            <div class="wavebar">
+              <span>Viewing <b class="mono">sim_0004</b></span>
+              <span class="marker">▎cursor @ 240 ns</span>
+              <span class="dim">deep-linked from console failure</span>
+            </div>
+            <div class="wgrid">
+              <div class="wrow"><span class="wn">clk</span>
+                <svg height="22" viewBox="0 0 600 22" preserveAspectRatio="none"><polyline fill="none" stroke="#a6e3a1" stroke-width="1.5" points="0,18 0,4 40,4 40,18 80,18 80,4 120,4 120,18 160,18 160,4 200,4 200,18 240,18 240,4 280,4 280,18 320,18 320,4 360,4 360,18 400,18 400,4 440,4 440,18 480,18 480,4 520,4 520,18 560,18 560,4 600,4"/></svg></div>
+              <div class="wrow"><span class="wn">a[7:0]</span>
+                <svg height="22" viewBox="0 0 600 22"><line x1="0" y1="11" x2="600" y2="11" stroke="#89b4fa" stroke-width="1.4"/><text x="60" y="8" fill="#89b4fa" font-size="9">2A</text><text x="300" y="8" fill="#89b4fa" font-size="9">AA</text></svg></div>
+              <div class="wrow"><span class="wn">b[7:0]</span>
+                <svg height="22" viewBox="0 0 600 22"><line x1="0" y1="11" x2="600" y2="11" stroke="#89b4fa" stroke-width="1.4"/><text x="60" y="8" fill="#89b4fa" font-size="9">11</text><text x="300" y="8" fill="#89b4fa" font-size="9">11</text></svg></div>
+              <div class="wrow"><span class="wn">y[7:0] (alu)</span>
+                <svg height="22" viewBox="0 0 600 22"><line x1="0" y1="11" x2="600" y2="11" stroke="#fab387" stroke-width="1.4"/><text x="60" y="8" fill="#fab387" font-size="9">3B</text><text x="300" y="8" fill="#f38ba8" font-size="9">BB ← wrong</text></svg></div>
+              <div class="wrow"><span class="wn">result[7:0]</span>
+                <svg height="22" viewBox="0 0 600 22"><line x1="0" y1="11" x2="600" y2="11" stroke="#fab387" stroke-width="1.4"/><text x="300" y="8" fill="#f38ba8" font-size="9">BB (exp AA)</text></svg></div>
+            </div>
+            <div class="tline" style="left:330px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SCHEMATIC -->
+      <div class="pane" id="pane-schem">
+        <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--txt3);flex-direction:column;gap:8px">
+          <div style="font-size:40px">⛓</div>
+          <div>Schematic viewer — SVG netlist for <b class="mono">cpu_top</b></div>
+          <div class="dim">(existing SchematicViewer component)</div>
+        </div>
+      </div>
+
+      <!-- LAYOUT -->
+      <div class="pane" id="pane-layout">
+        <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--txt3);flex-direction:column;gap:8px">
+          <div style="font-size:40px">▦</div>
+          <div>Layout viewer — GDSII from <b class="mono">synth_0002</b> (sky130hd)</div>
+          <div class="dim">(existing LayoutViewer component)</div>
+        </div>
+      </div>
+
+      <!-- REPORT -->
+      <div class="pane" id="pane-report">
+        <div class="rep">
+          <h2>PPA Report — synth_0002</h2>
+          <div class="dim mono">cpu_top · sky130hd · orfs@sha256:9f3c… · 10ns target</div>
+          <div class="grid2">
+            <div class="card">
+              <h3>Metrics</h3>
+              <div class="metric"><span>Area</span><span>1842 µm² <span class="delta good">−12%</span></span></div>
+              <div class="metric"><span>Cells</span><span>312</span></div>
+              <div class="metric"><span>WNS</span><span>+0.18 ns <span class="delta good">met</span></span></div>
+              <div class="metric"><span>TNS</span><span>0 ns</span></div>
+              <div class="metric"><span>Fmax</span><span>108 MHz</span></div>
+              <div class="metric"><span>Power</span><span>1.42 mW <span class="delta good">−12%</span></span></div>
+            </div>
+            <div class="card">
+              <h3>vs synth_0001 (prior)</h3>
+              <div class="metric"><span>Area</span><span class="delta good">2104 → 1842</span></div>
+              <div class="metric"><span>WNS</span><span class="delta good">−0.40 → +0.18</span></div>
+              <div class="metric"><span>Power</span><span class="delta good">1.61 → 1.42</span></div>
+              <div style="margin-top:12px;font-size:11px;color:var(--txt3)">compare_pd_runs — runs are isolated snapshots, so diffs are exact.</div>
+            </div>
+          </div>
+          <div class="card" style="margin-top:18px">
+            <h3>Flow stages</h3>
+            <div class="stagebar">
+              <span class="stage">synth ✓</span><span class="stage">floorplan ✓</span><span class="stage">place ✓</span>
+              <span class="stage">cts ✓</span><span class="stage">route ✓</span><span class="stage">finish ✓</span>
+            </div>
+          </div>
+          <div class="dlrow">
+            <button class="gbtn">⬇ GDSII</button>
+            <button class="gbtn">⬇ Netlist</button>
+            <button class="gbtn">⬇ Reports</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- CONSOLE -->
+    <div class="console">
+      <div class="ch">
+        <span class="tab2" id="con-lint" onclick="showConsole('lint')">Lint</span>
+        <span class="tab2 active" id="con-sim" onclick="showConsole('sim')">Sim · sim_0004</span>
+        <span class="tab2" id="con-synth" onclick="showConsole('synth')">Synth</span>
+        <span style="margin-left:auto" class="dim">isolated run dir · provenance-stamped</span>
+      </div>
+      <div class="body" id="console-body">
+        <!-- filled by JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- RIGHT / AGENT ---------- -->
+  <div class="col right" id="rightcol">
+    <div class="chat-h">AI Assistant <button class="collapse" onclick="toggleChat()">⟩</button></div>
+    <div class="chat-body">
+      <div class="msg user"><div class="who">You</div><div class="bub">why is the sim failing?</div></div>
+      <div class="msg agent">
+        <div class="who">Agent</div>
+        <div class="bub">
+          Investigating sim_0004 — inspecting the waveform at the failure point, not guessing.
+          <div class="toolcall">▸ read_file(cpu_tb.v)</div>
+          <div class="toolcall">▸ waveform_tool(run=sim_0004, t=240ns, signals=[u_alu.a, u_alu.b, u_alu.y])</div>
+          Found it. At t=240 the ALU inputs are <span class="mono">a=AA, b=11</span> but <span class="mono">y=BB</span>.
+          The opcode from <span class="mono">decoder</span> selects XOR instead of ADD — a one-bit
+          mismatch in <span class="mono">decoder.v</span>'s opcode map. The bug is cross-module
+          (decoder → alu), which is why the unit test <span class="mono">alu_tb</span> passed but the
+          integration test <span class="mono">cpu_tb</span> fails.
+          <div class="fixbtns">
+            <button class="fixb primary">Apply fix to decoder.v</button>
+            <button class="fixb">Show me first</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chat-in"><input placeholder='Ask, or try: "re-run sim after the fix"' /></div>
+  </div>
+
+  <!-- collapsed rail (hidden unless collapsed) -->
+  <div class="col right" id="rightcol-collapsed" style="display:none">
+    <div class="rail-collapsed" onclick="toggleChat()">⟨ AI Assistant</div>
+  </div>
+
+</div>
+
+<div class="note">Static mockup · non-functional · clicks switch tabs only · simple_cpu = multi-module scenario</div>
+
+<script>
+  function showTab(t){
+    document.querySelectorAll('.pane').forEach(p=>p.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(p=>p.classList.remove('active'));
+    var pane=document.getElementById('pane-'+t); if(pane)pane.classList.add('active');
+    var tab=document.querySelector('.tab[data-tab="'+t+'"]'); if(tab)tab.classList.add('active');
+  }
+  var consoles={
+    lint:`<span class="cl-ok">› iverilog -tnull *.v  (all rtl + include, elaborate cpu_top)</span>
+<span class="cl-file">decoder.v</span>
+  <span class="cl-warn">line 22: warning — opcode case not fully specified (latch risk)</span>
+<span class="cl-file">regfile.v</span>
+  <span class="cl-warn">line 8:  warning — port 'we' unused</span>
+<span class="cl-ok">✓ lint passed · 0 errors · 2 warnings · elaboration of cpu_top OK</span>`,
+    sim:`<span class="cl-dim">› run dir: sim_runs/sim_0004/   (isolated — own VCD, no collision)</span>
+<span class="cl-ok">› iverilog cpu_tb.v + rtl/*.v  →  vvp  →  $dumpfile auto-routed to sim_0004/cpu_tb.vcd</span>
+  t=230ns  ok
+  <span class="cl-err">t=240ns  ERROR: result = 0xBB, expected 0xAA</span>
+  <span class="cl-err">TEST FAILED: 1 mismatch</span>
+  <span class="deeplink" onclick="showTab('wave')">↪ open waveform sim_0004 @ t=240ns →</span>`,
+    synth:`<span class="cl-dim">› synth_0002 — inputs snapshotted to synth_runs/synth_0002/ (rtl-only + cpu.sdc)</span>
+<span class="cl-dim">› SDC auto-generated from clock_period (10ns) in manifest</span>
+<span class="cl-ok">› ORFS orfs@sha256:9f3c…  NUM_CORES=1 (pinned for determinism)</span>
+  synth ✓  floorplan ✓  place ✓  cts ✓  route ✓  finish ✓
+<span class="cl-ok">✓ GDSII produced · WNS +0.18ns · 1842µm² · see Report tab</span>`
+  };
+  function showConsole(k){
+    document.getElementById('console-body').innerHTML=consoles[k];
+    ['lint','sim','synth'].forEach(x=>document.getElementById('con-'+x).classList.remove('active'));
+    document.getElementById('con-'+k).classList.add('active');
+  }
+  function toggleChat(){
+    var shell=document.getElementById('shell');
+    var full=document.getElementById('rightcol');
+    var col=document.getElementById('rightcol-collapsed');
+    if(shell.classList.toggle('chat-collapsed')){full.style.display='none';col.style.display='flex';}
+    else{full.style.display='flex';col.style.display='none';}
+  }
+  showConsole('sim');
+</script>
+</body>
+</html>
