@@ -13,6 +13,31 @@ from typing import Any, Dict, List, Optional
 
 from src.tools.run_docker import run_docker_command
 from src.tools.spec_manager import load_yaml_file
+from src.platform_engines.orfs_runner import OrfsRequest, get_orfs_runner
+
+
+def _run_orfs_via_runner(
+    run_dir: str,
+    command: str,
+    volumes: List[str],
+    timeout: int,
+) -> Dict[str, Any]:
+    """Execute one ORFS invocation through the swappable OrfsRunner seam.
+
+    Returns the same dict shape the synthesis manager has always consumed
+    (``success``/``stdout``/``stderr``/``command``) so run management is
+    unchanged regardless of whether the local Docker or cloud Job backend runs.
+    """
+    result = get_orfs_runner().run(
+        OrfsRequest(run_dir=run_dir, command=command, volumes=list(volumes), timeout=timeout)
+    )
+    return {
+        "success": result.success,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "command": result.command,
+        "backend": result.backend,
+    }
 
 RUNS_DIRNAME = "synth_runs"
 INDEX_FILENAME = "index.json"
@@ -711,9 +736,9 @@ def _run_orfs(
         f"{reports_dir}:/OpenROAD-flow-scripts/flow/reports",
     ]
 
-    return run_docker_command(
+    return _run_orfs_via_runner(
+        run_dir=run_dir,
         command="make -B DESIGN_CONFIG=/workspace/config.mk",
-        workspace_path=run_dir,
         volumes=volumes,
         timeout=timeout,
     )
@@ -780,9 +805,9 @@ def _run_orfs_targets(
         f"{reports_dir}:/OpenROAD-flow-scripts/flow/reports",
     ]
     target_cmds = [f"make DESIGN_CONFIG=/workspace/config.mk {target}" for target in targets]
-    return run_docker_command(
+    return _run_orfs_via_runner(
+        run_dir=run_dir,
         command="set -e; " + "; ".join(target_cmds),
-        workspace_path=run_dir,
         volumes=volumes,
         timeout=timeout,
     )
