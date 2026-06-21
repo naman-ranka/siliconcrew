@@ -1,7 +1,7 @@
 {
   "run_id": "synth_0001",
-  "job_id": "job_760d4b4013",
-  "created_at": "2026-06-21T23:39:00.918772+00:00",
+  "job_id": "job_8251eebdcc",
+  "created_at": "2026-06-21T23:52:32.331100+00:00",
   "status": "completed",
   "current_stage": "finish",
   "platform": "sky130hd",
@@ -82,6 +82,13 @@
       }
     }
   },
+  "provenance": {
+    "repo_commit": "unknown",
+    "orfs_image_digest": null,
+    "pdk": "sky130hd",
+    "iverilog_version": null,
+    "num_cores": 4
+  },
   "docker_command": "fake",
   "docker_success": true,
   "docker_stdout_tail": "ok",
@@ -97,6 +104,6 @@
     "power_uw": null
   },
   "next_action": "Use search_logs_tool for detailed PPA/error verification.",
-  "finished_at": "2026-06-21T23:39:00.920625+00:00",
+  "finished_at": "2026-06-21T23:52:32.332425+00:00",
   "elapsed_sec": 0.0
 }

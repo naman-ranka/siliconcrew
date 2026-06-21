@@ -93,8 +93,18 @@ def test_context_user_executor_routes_by_session_user():
 def test_executor_falls_back_to_local_without_context():
     q = PerUserJobQueue()
     ex = ContextUserExecutor(q)
-    f = ex.submit(lambda: 42)
+    started = threading.Event()
+    release = threading.Event()
+
+    def job():
+        started.set()
+        release.wait(timeout=2)
+        return 42
+
+    # No session context → must be bucketed under the "local" pseudo-user.
+    f = ex.submit(job)
+    assert started.wait(timeout=2)
+    assert q.running_count("local") == 1  # proves the fallback bucket is "local"
+    release.set()
     assert f.result(timeout=2) == 42
-    # No session context → bucketed under the "local" pseudo-user.
-    assert q.running_count("local") == 0  # finished
     q.shutdown()
