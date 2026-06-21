@@ -14,6 +14,17 @@ from typing import Any, Dict, List, Optional
 from src.tools.run_docker import run_docker_command
 from src.tools.spec_manager import load_yaml_file
 from src.platform_engines.orfs_runner import OrfsRequest, get_orfs_runner
+from src.platform_engines.provenance import collect_provenance
+
+
+def _pinned_num_cores() -> int:
+    """Pinned ORFS P&R core count (determinism). From platform settings."""
+    try:
+        from src.platform_engines.settings import get_settings
+
+        return max(1, int(get_settings().num_cores))
+    except Exception:
+        return 4
 
 
 def _run_orfs_via_runner(
@@ -743,6 +754,9 @@ def _run_orfs(
         f"export CORE_UTILIZATION = {utilization}\n"
         f"export CORE_ASPECT_RATIO = {aspect_ratio}\n"
         f"export CORE_MARGIN = {core_margin}\n"
+        # Determinism: pin NUM_CORES so P&R parallelism (the only real source of
+        # run-to-run nondeterminism) is fixed and runs are reproducible.
+        f"export NUM_CORES = {_pinned_num_cores()}\n"
     )
     with open(config_mk, "w", encoding="utf-8") as f:
         f.write(config)
@@ -781,6 +795,9 @@ def _write_orfs_config(
         f"export CORE_UTILIZATION = {utilization}",
         f"export CORE_ASPECT_RATIO = {aspect_ratio}",
         f"export CORE_MARGIN = {core_margin}",
+        # Determinism: pin NUM_CORES (see _run_orfs). Overrides below may still
+        # set a different value explicitly if a retry intentionally varies it.
+        f"export NUM_CORES = {_pinned_num_cores()}",
     ]
     for key, value in (orfs_overrides or {}).items():
         lines.append(f"export {key} = {value}")
@@ -1017,6 +1034,9 @@ def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, 
         "check_notes": f"Retrying from stage '{args['start_stage']}' through '{args['max_stage']}'.",
         "stages": stages,
         "retry_prerequisites": copied_prereqs,
+        "provenance": collect_provenance(
+            pdk=args["platform"], num_cores=_pinned_num_cores()
+        ).as_dict(),
     }
     run_meta["stages"][args["start_stage"]]["status"] = "running"
     _persist_run_meta(run_dir, run_meta)
@@ -1164,6 +1184,11 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "auto_checks": asdict(auto_checks),
         "check_notes": constraints["note"],
         "stages": _init_stage_metadata(),
+        # Reproducibility stamp: repo commit, pinned ORFS image digest, PDK,
+        # iverilog version, and the pinned NUM_CORES used for this run.
+        "provenance": collect_provenance(
+            pdk=platform, num_cores=_pinned_num_cores()
+        ).as_dict(),
     }
     run_meta["stages"]["constraints"]["status"] = "running"
     _persist_run_meta(run_dir, run_meta)
