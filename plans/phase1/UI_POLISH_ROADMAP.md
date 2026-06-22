@@ -55,7 +55,7 @@ git push origin claude/integration-p1p2   # retry w/ backoff on network error
 | 5 | Runs timeline: elevation/hover/selected/compare states, lineage connectors, pin micro-interaction, loading skeleton (+ midpoint stepper active-highlight & connector-fill bug fixed) | ✅ done | `1315590` |
 | 6 | Console: tab styling, command block + copy, peek↔expanded transition, status dots (full scrollable+copyable per-run log; lint result auto-expand/pulse surface) | ✅ done | `921d477` |
 | 7 | Waveform: gridlines, hover tooltip, draggable cursor handle, segmented radix control, fit-to-window, dedup aliased nets (+midpoint BUG fixed: viewer now follows `selectedRunId`'s VCD, overriding a stale load, with manual-pick override until the run changes) | ✅ done | `a540753` |
-| 8 | Report / empty states / banner / agent rail: one EmptyState primitive, PPA hero polish, calmer welcome | ⬜ todo | |
+| 8 | Report / empty states / banner / agent rail: one EmptyState primitive, PPA hero polish, calmer welcome (midpoint fixed: ViewingBanner overflow → truncate; empty-state voice unified across viewers; brand-orange de-overloaded on neutral count badges) | ✅ done | `00516ca` |
 | 1b | Styled Radix tooltips replacing native `title` (update `getByTitle` tests) | ⬜ todo | |
 | 9 | a11y & contrast audit: AA on warm dark+light, reduced-motion, focus order, ARIA live regions | ⬜ todo | |
 
