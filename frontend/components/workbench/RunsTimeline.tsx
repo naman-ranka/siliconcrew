@@ -69,12 +69,23 @@ export function RunsTimeline() {
       <div key={r.id}>
         <div
           className={cn(
-            "group flex items-center gap-2 px-2 py-1.5 mx-1 rounded-md cursor-pointer",
+            "group flex items-center gap-2 px-2 py-1.5 mx-1 rounded-md cursor-pointer outline-none",
+            "focus-visible:ring-2 focus-visible:ring-primary/60",
             selected ? "bg-primary/10 border border-primary/40" : "border border-transparent hover:bg-surface-2",
             inCompare && "ring-1 ring-info/60"
           )}
           style={{ paddingLeft: 8 + depth * 14 }}
+          role="button"
+          tabIndex={0}
+          aria-pressed={selected}
+          aria-label={`${compareMode ? "Compare" : "View"} run ${r.id} — ${r.status}`}
           onClick={() => (compareMode ? void toggleCompare(r.id) : void selectRun(r.id))}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              compareMode ? void toggleCompare(r.id) : void selectRun(r.id);
+            }
+          }}
           data-run-id={r.id}
           data-run-kind={r.kind}
         >
@@ -97,10 +108,12 @@ export function RunsTimeline() {
           <button
             type="button"
             className={cn(
-              "shrink-0 text-muted-foreground hover:text-primary transition-opacity",
-              r.pinned ? "opacity-100 text-primary" : "opacity-0 group-hover:opacity-100"
+              "shrink-0 text-muted-foreground hover:text-primary transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/60 rounded",
+              r.pinned ? "opacity-100 text-primary" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             )}
             title={r.pinned ? "Unpin" : "Pin (protect from prune)"}
+            aria-label={r.pinned ? `Unpin ${r.id}` : `Pin ${r.id}`}
+            aria-pressed={r.pinned}
             onClick={(e) => {
               e.stopPropagation();
               void pinRun(r.id, !r.pinned);
@@ -124,6 +137,8 @@ export function RunsTimeline() {
             size="icon"
             className={cn("h-6 w-6", compareMode && "text-info")}
             title="Compare two runs"
+            aria-label="Compare two runs"
+            aria-pressed={compareMode}
             onClick={() => {
               setCompareMode((v) => !v);
               setCompareSel([]);
@@ -132,7 +147,7 @@ export function RunsTimeline() {
           >
             <GitCompare className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-6 w-6" title="Refresh" onClick={() => void loadRuns()}>
+          <Button variant="ghost" size="icon" className="h-6 w-6" title="Refresh runs" aria-label="Refresh runs" onClick={() => void loadRuns()}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
         </div>

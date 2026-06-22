@@ -103,7 +103,8 @@ export function FileTree() {
               >
                 <button
                   type="button"
-                  className="flex items-center gap-2 min-w-0 flex-1 text-left"
+                  aria-label={`Open ${f.name} (${f.role})`}
+                  className="flex items-center gap-2 min-w-0 flex-1 text-left outline-none rounded focus-visible:ring-2 focus-visible:ring-primary/60"
                   onClick={() => {
                     if (f.name.endsWith(".v") || f.name.endsWith(".sv")) {
                       selectCodeFile(f.name);
