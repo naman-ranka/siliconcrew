@@ -198,3 +198,6 @@ cvdp-pipeline/**/__pycache__/
 /.playwright-mcp/
 frontend/.playwright-mcp/
 /real-*.png
+
+# Persona/review scratch scripts (Playwright node)
+/frontend/*.mjs
