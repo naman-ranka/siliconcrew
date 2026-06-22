@@ -898,7 +898,7 @@ export const useStore = create<AppState>((set, get) => ({
         runId: run.id,
         summary:
           run.status === "passed"
-            ? `${run.id} passed (${run.top})`
+            ? `${run.id} passed (${run.top})${run.passMarkerFound ? " · TEST PASSED" : ""}`
             : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}` +
               // surface the human reason inline, not just behind the console chevron
               (run.failure?.firstFailureLine ? ` — ${run.failure.firstFailureLine.slice(0, 90)}` : ""),

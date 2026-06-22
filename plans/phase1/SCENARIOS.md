@@ -159,6 +159,31 @@ How to reproduce locally: `iverilog` on PATH, run `uvicorn api:app` (port 8000)
 - **Tests:** `tests/test_file_ops.py` (write + manifest reconcile + traversal
   reject); `tests/test_actions_api.py::test_save_code_*`.
 
+## 14. First-time-user genuine pipeline (subagent, in-app authoring)
+- **Method:** a subagent opened the running app as a newcomer and built designs
+  **from scratch in the in-app editor** (no uploads): an 8-bit adder + tb
+  (lint→sim→introduce a bug via the editor→fail→fix→pass) and a multi-module
+  mux2+top+tb. Both pipelines completed end-to-end in-app. Screenshots in
+  `screenshots/firstuser/`.
+- **Confirmed working:** in-app create/edit/save, the edit→re-run debug loop,
+  fail-state UX (red banner with the `$display` ERROR + open-waveform link),
+  the waveform scope tree incl. `top_tb.dut.m0/m1` hierarchy, auto role/top
+  detection, and the run-history audit trail.
+- **Issues found → fixed this pass:**
+  1. **(correctness) synthTop picked a leaf submodule** (`mux2`) instead of the
+     hierarchy root (`top`). Fixed `manifest._infer_tops` to choose the RTL
+     **root** (a module no other rtl module instantiates), preferring the tb's
+     DUT. Test: `test_manifest::test_synthtop_is_hierarchy_root_not_submodule`.
+  2. **No unsaved indicator / silent data-loss** when switching files mid-edit.
+     Added a **dirty indicator** ("unsaved" + dot), a **navigate-away confirm**
+     (tree switch restores the edited file), and a **beforeunload** guard.
+  3. **No keyboard save.** Added **Ctrl/Cmd+S**.
+  4. **Sim success was invisible** (only failure showed text). The pass console
+     line now shows `· TEST PASSED` when the marker is found.
+- **Deferred (Phase-2):** file **rename/delete** in the tree; an "unsaved" cue
+  in the file tree itself; syntax highlighting in the edit textarea (Monaco is
+  CDN-blocked in this env).
+
 ---
 
 ## Fresh-eyes review method (subagents)
