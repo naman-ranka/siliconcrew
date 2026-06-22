@@ -34,6 +34,8 @@ export function ViewingBanner() {
         "flex items-center gap-2 px-3 py-1.5 text-xs border-b border-info/20 bg-info/5"
       )}
       data-testid="viewing-banner"
+      role="status"
+      aria-live="polite"
     >
       <Eye className="h-3.5 w-3.5 text-info shrink-0" />
       <span className="text-muted-foreground shrink-0">Viewing</span>
@@ -54,7 +56,7 @@ export function ViewingBanner() {
       {!isLatest && latest && (
         <button
           type="button"
-          className="ml-auto flex items-center gap-1 text-info hover:underline shrink-0"
+          className="ml-auto flex items-center gap-1 text-info hover:underline shrink-0 rounded outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
           onClick={() => void selectRun(latest.id)}
         >
           jump to latest <CornerUpRight className="h-3 w-3" />

@@ -27,7 +27,7 @@
     --secondary-foreground: 40 18% 90%;
 
     --muted: 33 8% 17%;                /* Muted warm elements */
-    --muted-foreground: 38 8% 58%;     /* Dimmed warm text */
+    --muted-foreground: 38 8% 58%;     /* Dimmed warm text (AA ≥4.5 on surf 0–2) */
 
     --accent: 33 9% 19%;               /* Hover/active states (warm) */
     --accent-foreground: 40 18% 90%;
@@ -45,9 +45,12 @@
     --warning: 43 73% 49%;             /* Distinct yellow amber (#d6a221) */
     --warning-foreground: 0 0% 0%;
 
-    /* Run/status semantics (meaning, never decoration). */
+    /* Run/status semantics (meaning, never decoration).
+       status-fail is text/dot/border only here (solid fail buttons use
+       --destructive), so it's tuned a touch lighter to hit AA as text on the
+       warm dark surfaces. */
     --status-pass: 136 49% 49%;
-    --status-fail: 8 56% 54%;
+    --status-fail: 8 62% 62%;
     --status-warn: 43 73% 49%;
     --status-running: 210 47% 61%;     /* blue for "running" — never orange */
 
@@ -66,7 +69,7 @@
     /* Semantic text colors (warm) */
     --text-primary: 40 18% 90%;
     --text-secondary: 38 10% 66%;
-    --text-muted: 36 8% 48%;
+    --text-muted: 37 9% 56%;           /* nudged lighter → AA ≥4.5 on surf 0–2 */
 
     /* Motion language — one set of durations/easing across the app. */
     --ease: cubic-bezier(0.22, 1, 0.36, 1);
@@ -77,58 +80,64 @@
   }
 
   .light {
-    /* Warm "paper" theme — same Claude orange brand + blue accent, on warm
-       off-white surfaces (not cold blue-white). Status colors unchanged. */
-    --background: 40 30% 97%;          /* warm paper (#faf8f3) */
-    --foreground: 30 12% 14%;          /* warm near-black ink */
+    /* Warm "paper" theme — same Claude orange brand + blue accent on warm
+       off-white surfaces (hue ~36–42, low-but-present saturation so it reads
+       as warm paper, not cold grey-white). The elevation ladder mirrors dark:
+       surface-1 (cards/popovers) is the *brightest*, then surface-0 (app bg),
+       then surface-2, surface-3 step progressively deeper so panels separate.
+       All text/status tokens hit WCAG AA (≥4.5 normal) on surfaces 0–2. */
+    --background: 40 30% 95%;          /* warm paper app bg (#f4efe4) */
+    --foreground: 30 18% 16%;          /* warm near-black ink (AA ≥11:1) */
 
-    --card: 40 33% 99%;
-    --card-foreground: 30 12% 14%;
+    --card: 42 40% 99%;                /* brightest paper for cards */
+    --card-foreground: 30 18% 16%;
 
-    --popover: 40 33% 99%;
-    --popover-foreground: 30 12% 14%;
+    --popover: 42 40% 99%;
+    --popover-foreground: 30 18% 16%;
 
-    --primary: 14 63% 52%;             /* Claude orange, a touch deeper for AA on light */
+    --primary: 14 64% 44%;             /* Claude orange, deepened for AA on light */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 40 20% 93%;
-    --secondary-foreground: 30 12% 14%;
+    --secondary: 40 24% 91%;
+    --secondary-foreground: 30 18% 16%;
 
-    --muted: 40 18% 92%;
-    --muted-foreground: 33 8% 40%;
+    --muted: 40 22% 90%;
+    --muted-foreground: 36 13% 37%;    /* AA ≥4.5 on surfaces 0–2 */
 
-    --accent: 40 22% 90%;
-    --accent-foreground: 30 12% 14%;
+    --accent: 40 24% 88%;
+    --accent-foreground: 30 18% 16%;
 
-    --info: 210 55% 45%;               /* blue accent, darker for light bg */
+    --info: 210 62% 40%;               /* blue accent, darker for light bg (AA) */
     --info-foreground: 0 0% 100%;
 
-    --destructive: 8 60% 48%;
+    --destructive: 8 64% 46%;
     --destructive-foreground: 0 0% 100%;
-    --success: 136 45% 38%;
+    --success: 136 52% 30%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 80% 42%;
+    --warning: 34 92% 31%;
     --warning-foreground: 0 0% 100%;
 
-    --status-pass: 136 45% 38%;
-    --status-fail: 8 60% 48%;
-    --status-warn: 38 80% 42%;
-    --status-running: 210 55% 45%;
+    /* Status as text/dot/border on light — all AA as text on surfaces 0–2. */
+    --status-pass: 136 52% 30%;
+    --status-fail: 8 64% 43%;
+    --status-warn: 34 92% 31%;
+    --status-running: 210 62% 40%;
 
-    --border: 38 18% 86%;
-    --input: 38 18% 86%;
-    --ring: 14 63% 52%;
+    --border: 38 22% 83%;              /* warm, visible against bright cards */
+    --input: 38 22% 83%;
+    --ring: 14 64% 44%;
 
     --radius: 0.5rem;
 
-    --surface-0: 40 30% 97%;
-    --surface-1: 40 33% 99%;
-    --surface-2: 40 20% 93%;
-    --surface-3: 40 18% 89%;
+    /* Visible elevation ladder (perceptible luminance step each rung). */
+    --surface-0: 40 30% 95%;           /* app bg, slightly deeper */
+    --surface-1: 42 36% 98%;           /* elevated panels/cards — brightest */
+    --surface-2: 40 24% 91%;           /* headers / nested wells */
+    --surface-3: 38 20% 87%;           /* hover / deepest chips */
 
-    --text-primary: 30 12% 14%;
-    --text-secondary: 33 9% 34%;
-    --text-muted: 33 8% 48%;
+    --text-primary: 30 18% 16%;
+    --text-secondary: 34 14% 30%;
+    --text-muted: 36 12% 38%;          /* AA ≥4.5 on surfaces 0–2 */
   }
 }
 

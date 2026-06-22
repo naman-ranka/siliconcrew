@@ -224,7 +224,7 @@ export function RunsTimeline() {
             type="button"
             onClick={() => setRunKindFilter(f.id)}
             className={cn(
-              "text-[10px] px-2 py-0.5 rounded-full border",
+              "text-[10px] px-2 py-0.5 rounded-full border outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
               runKindFilter === f.id
                 ? "border-primary/50 bg-primary/10 text-primary"
                 : "border-border text-muted-foreground hover:bg-surface-2"

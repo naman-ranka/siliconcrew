@@ -145,9 +145,14 @@ export function Console() {
         </div>
       </div>
 
-      {/* Peek line (collapsed) — latest status one-liner + deep-link */}
+      {/* Peek line (collapsed) — latest status one-liner + deep-link.
+          aria-live=polite so a fresh sim/lint/synth result is announced. */}
       {!expanded && (
-        <div className="px-3 py-2 text-xs flex items-center gap-2 min-h-[2.25rem]">
+        <div
+          className="px-3 py-2 text-xs flex items-center gap-2 min-h-[2.25rem]"
+          role="status"
+          aria-live="polite"
+        >
           {last ? (
             <>
               <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", statusDotClass(last.status === "info" ? undefined : last.status))} />
@@ -155,7 +160,7 @@ export function Console() {
               {activeConsole === "sim" && last.status === "failed" && (
                 <button
                   type="button"
-                  className="ml-auto text-info hover:underline shrink-0"
+                  className="ml-auto text-info hover:underline shrink-0 rounded outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
                   onClick={() => setArtifactTab("waveform")}
                 >
                   open waveform →
@@ -184,7 +189,7 @@ export function Console() {
                 {activeConsole === "sim" && last.status === "failed" && (
                   <button
                     type="button"
-                    className="text-info hover:underline shrink-0"
+                    className="text-info hover:underline shrink-0 rounded outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
                     onClick={() => setArtifactTab("waveform")}
                   >
                     open waveform →
@@ -231,7 +236,7 @@ export function Console() {
                 {!editing ? (
                   <button
                     type="button"
-                    className="text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors duration-fast"
+                    className="text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors duration-fast rounded outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
                     onClick={() => setEditing(true)}
                   >
                     <Pencil className="h-3 w-3" /> edit &amp; re-run command
@@ -247,7 +252,11 @@ export function Console() {
                       <Button size="sm" className="h-6 gap-1 text-[10px]" onClick={rerun}>
                         <Play className="h-3 w-3" /> Re-run {activeConsole}
                       </Button>
-                      <button type="button" className="text-muted-foreground" onClick={() => setEditing(false)}>
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-foreground rounded outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                        onClick={() => setEditing(false)}
+                      >
                         cancel
                       </button>
                       <span className="text-[9px] text-muted-foreground">

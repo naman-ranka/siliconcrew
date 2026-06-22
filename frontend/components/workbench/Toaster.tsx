@@ -30,11 +30,13 @@ export function Toaster() {
       className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 w-[340px] max-w-[calc(100vw-2rem)]"
       role="region"
       aria-label="Notifications"
+      aria-live="polite"
     >
       {toasts.map((t) => (
         <div
           key={t.id}
           role="status"
+          aria-atomic="true"
           className={cn(
             "group flex items-start gap-2.5 rounded-lg border border-l-2 border-border bg-popover text-popover-foreground",
             "px-3 py-2.5 shadow-e3 animate-fade-in-up",
