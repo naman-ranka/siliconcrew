@@ -38,6 +38,11 @@ class PlatformSettings:
     orfs_service_url: str     # standalone ORFS HTTP service (orfs_engine=remote)
     orfs_service_token: str   # bearer token for that service
 
+    # Light EDA tools (xls / sby / cocotb) execution: "docker" | "native".
+    # native = subprocess in the per-session cwd (Cloud Run safe, no nested
+    # containers); docker = today's container path (local default).
+    sim_engine: str
+
     # Auth
     google_oauth_client_id: str  # OAuth audience; empty disables token verification
 
@@ -76,6 +81,7 @@ def get_settings() -> PlatformSettings:
     # Each engine defaults to its local impl, flipping to cloud under HOSTED,
     # but every choice is independently overridable for staged rollout.
     orfs_engine = _env("ORFS_ENGINE", "cloud_job" if hosted else "local_docker")
+    sim_engine = _env("SIM_ENGINE", "native" if hosted else "docker")
     workspace_engine = _env("WORKSPACE_ENGINE", "cloud" if hosted else "local")
     persistence_engine = _env("PERSISTENCE_ENGINE", "postgres" if hosted else "sqlite")
     llm_key_engine = _env("LLM_KEY_ENGINE", "byok" if hosted else "env")
@@ -89,6 +95,7 @@ def get_settings() -> PlatformSettings:
         gcp_region=_env("GCP_REGION", "us-central1"),
         orfs_service_url=_env("ORFS_SERVICE_URL"),
         orfs_service_token=_env("ORFS_SERVICE_TOKEN"),
+        sim_engine=sim_engine,
         google_oauth_client_id=_env("GOOGLE_OAUTH_CLIENT_ID"),
         workspace_engine=workspace_engine,
         workspace_bucket=_env("WORKSPACE_BUCKET"),
