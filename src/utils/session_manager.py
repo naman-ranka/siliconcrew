@@ -180,3 +180,71 @@ class SessionManager:
 
     def get_workspace_path(self, session_id):
         return os.path.join(self.base_dir, session_id)
+
+    # -------------------------------------------------------------------------
+    # Chat thread methods (a chat = a LangGraph thread_id; many per workspace)
+    #
+    # THE ONE RULE: threads are conversation history only. They all share the
+    # LIVE workspace bound from session_id; deleting a thread never touches
+    # files/runs. Owner/tenant scoping mirrors the session methods.
+    # -------------------------------------------------------------------------
+
+    def _short_title(self, text: str, limit: int = 48) -> str:
+        t = " ".join((text or "").split())
+        return (t[: limit - 1] + "…") if len(t) > limit else t
+
+    def ensure_default_thread(self, session_id, user_id=None) -> dict:
+        """Back-compat: a session's first/default thread has id == session_id.
+
+        Existing conversations were checkpointed under thread_id == session_id, so
+        they map in unchanged as "Chat 1"; only new chats get fresh UUIDs.
+        Idempotent — safe to call on every list/connect.
+        """
+        now = datetime.datetime.now()
+        self._store.ensure_thread(session_id, session_id, user_id, "Chat 1", None, now)
+        return self._store.get_thread(session_id, user_id=user_id)
+
+    def create_thread(self, session_id, user_id=None, title=None, model=None) -> dict:
+        """Create a new chat thread (fresh UUID id) under a session."""
+        import uuid
+
+        self.ensure_default_thread(session_id, user_id=user_id)  # so "Chat 1" exists
+        now = datetime.datetime.now()
+        thread_id = uuid.uuid4().hex
+        if not title:
+            n = self._store.count_threads(session_id, user_id=user_id) + 1
+            title = f"Chat {n}"
+        self._store.create_thread(thread_id, session_id, user_id, title, model, now)
+        return self._store.get_thread(thread_id, user_id=user_id)
+
+    def list_threads(self, session_id, user_id=None) -> list[dict]:
+        self.ensure_default_thread(session_id, user_id=user_id)
+        return self._store.list_threads(session_id, user_id=user_id)
+
+    def get_thread(self, thread_id, user_id=None) -> dict | None:
+        return self._store.get_thread(thread_id, user_id=user_id)
+
+    def rename_thread(self, thread_id, title, user_id=None):
+        self._store.update_thread(thread_id, user_id=user_id, title=title)
+
+    def set_thread_model(self, thread_id, model, user_id=None):
+        self._store.update_thread(thread_id, user_id=user_id, model=model)
+
+    def touch_thread(self, thread_id, user_id=None, auto_title_from: str | None = None):
+        """Bump last_active; auto-title an untitled/default thread on first message."""
+        now = datetime.datetime.now()
+        title = None
+        if auto_title_from:
+            existing = self._store.get_thread(thread_id, user_id=user_id)
+            cur = (existing or {}).get("title") if existing else None
+            if not cur or cur in ("Chat 1", "New chat"):
+                title = self._short_title(auto_title_from)
+        self._store.update_thread(thread_id, user_id=user_id, title=title, last_active=now)
+
+    def delete_thread(self, thread_id, user_id=None):
+        """Delete a conversation only — never the workspace files/runs."""
+        self._store.delete_thread(thread_id, user_id=user_id)
+
+    def thread_belongs_to_session(self, thread_id, session_id, user_id=None) -> bool:
+        t = self._store.get_thread(thread_id, user_id=user_id)
+        return bool(t and t.get("session_id") == session_id)

@@ -48,6 +48,18 @@ class MetadataStore(Protocol):
     def update_stats(self, session_id: str, input_t: int, output_t: int, cached_t: int,
                      total_t: int, cost: float, now: Any, user_id: Optional[str] = None) -> None: ...
     def delete_session(self, session_id: str, user_id: Optional[str] = None) -> None: ...
+    # chat threads (a chat = a LangGraph thread_id; many per session/workspace)
+    def create_thread(self, thread_id: str, session_id: str, user_id: Optional[str],
+                      title: str, model: Optional[str], now: Any) -> None: ...
+    def ensure_thread(self, thread_id: str, session_id: str, user_id: Optional[str],
+                      title: str, model: Optional[str], now: Any) -> None: ...
+    def get_thread(self, thread_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
+    def list_threads(self, session_id: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
+    def count_threads(self, session_id: str, user_id: Optional[str] = None) -> int: ...
+    def update_thread(self, thread_id: str, user_id: Optional[str] = None, *,
+                      title: Optional[str] = None, model: Optional[str] = None,
+                      last_active: Any = None) -> None: ...
+    def delete_thread(self, thread_id: str, user_id: Optional[str] = None) -> None: ...
 
 
 class DuplicateProject(Exception):
@@ -98,11 +110,29 @@ class SqliteMetadataStore:
                 )
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_threads (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    user_id TEXT,
+                    title TEXT,
+                    model TEXT,
+                    created_at TIMESTAMP,
+                    last_active TIMESTAMP
+                )
+                """
+            )
             self._migrate_columns(cur)
             # Tenant-scoped listing index (user_id, created_at).
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_session_user_created "
                 "ON session_metadata(user_id, created_at)"
+            )
+            # Thread listing index (newest-active first within a session).
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_thread_session_active "
+                "ON chat_threads(session_id, last_active)"
             )
             conn.commit()
 
@@ -258,6 +288,91 @@ class SqliteMetadataStore:
                     pass
             conn.commit()
 
+    # -- chat threads --
+
+    def create_thread(self, thread_id, session_id, user_id, title, model, now):
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (thread_id, session_id, user_id, title, model, now, now),
+            )
+            conn.commit()
+
+    def ensure_thread(self, thread_id, session_id, user_id, title, model, now):
+        """Insert the thread row only if absent (idempotent; never clobbers)."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (thread_id, session_id, user_id, title, model, now, now),
+            )
+            conn.commit()
+
+    def get_thread(self, thread_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                f"SELECT * FROM chat_threads WHERE id = ?{owner}", (thread_id, *oparams)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_threads(self, session_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f"SELECT * FROM chat_threads WHERE session_id = ?{owner} "
+                "ORDER BY last_active DESC, created_at DESC",
+                (session_id, *oparams),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_threads(self, session_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM chat_threads WHERE session_id = ?{owner}",
+                (session_id, *oparams),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None):
+        sets, params = [], []
+        if title is not None:
+            sets.append("title = ?"); params.append(title)
+        if model is not None:
+            sets.append("model = ?"); params.append(model)
+        if last_active is not None:
+            sets.append("last_active = ?"); params.append(last_active)
+        if not sets:
+            return
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE chat_threads SET {', '.join(sets)} WHERE id = ?{owner}",
+                (*params, thread_id, *oparams),
+            )
+            conn.commit()
+
+    def delete_thread(self, thread_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            cur = conn.execute(
+                f"DELETE FROM chat_threads WHERE id = ?{owner}", (thread_id, *oparams)
+            )
+            deleted = cur.rowcount
+            # Conversation-only: drop this thread's LangGraph checkpoints (same
+            # state.db). Never touches workspace files/runs.
+            if deleted:
+                for table in self._CHECKPOINT_TABLES:
+                    try:
+                        conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))
+                    except sqlite3.OperationalError:
+                        pass
+            conn.commit()
+
     def drop_all(self) -> None:
         """Used by clear_all_sessions: remove the underlying db file."""
         if os.path.exists(self.db_path):
@@ -325,8 +440,25 @@ class PostgresMetadataStore:
                 """
             )
             cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_threads (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    user_id TEXT,
+                    title TEXT,
+                    model TEXT,
+                    created_at TIMESTAMPTZ,
+                    last_active TIMESTAMPTZ
+                )
+                """
+            )
+            cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_session_user_created "
                 "ON session_metadata(user_id, created_at)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_thread_session_active "
+                "ON chat_threads(session_id, last_active)"
             )
             conn.commit()
 
@@ -414,6 +546,71 @@ class PostgresMetadataStore:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(f"DELETE FROM session_metadata WHERE session_id = %s{owner}", (session_id, *oparams))
             conn.commit()
+
+    # -- chat threads --
+
+    def create_thread(self, thread_id, session_id, user_id, title, model, now):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (thread_id, session_id, user_id, title, model, now, now),
+            )
+            conn.commit()
+
+    def ensure_thread(self, thread_id, session_id, user_id, title, model, now):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                (thread_id, session_id, user_id, title, model, now, now),
+            )
+            conn.commit()
+
+    def get_thread(self, thread_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        return self._one(f"SELECT * FROM chat_threads WHERE id = %s{owner}", (thread_id, *oparams))
+
+    def list_threads(self, session_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        return self._all(
+            f"SELECT * FROM chat_threads WHERE session_id = %s{owner} "
+            "ORDER BY last_active DESC, created_at DESC",
+            (session_id, *oparams),
+        )
+
+    def count_threads(self, session_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM chat_threads WHERE session_id = %s{owner}", (session_id, *oparams))
+            row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None):
+        sets, params = [], []
+        if title is not None:
+            sets.append("title = %s"); params.append(title)
+        if model is not None:
+            sets.append("model = %s"); params.append(model)
+        if last_active is not None:
+            sets.append("last_active = %s"); params.append(last_active)
+        if not sets:
+            return
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE chat_threads SET {', '.join(sets)} WHERE id = %s{owner}",
+                (*params, thread_id, *oparams),
+            )
+            conn.commit()
+
+    def delete_thread(self, thread_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(f"DELETE FROM chat_threads WHERE id = %s{owner}", (thread_id, *oparams))
+            conn.commit()
+        # Checkpoints live in the LangGraph store (sqlite state.db in self-host);
+        # Postgres deployments prune via the checkpointer's own retention.
 
     # -- helpers --
     @staticmethod
