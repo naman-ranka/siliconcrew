@@ -87,3 +87,38 @@ fixes were applied; then **fresh** personas re-reviewed.
   re-run; failure→RTL-line jump needs source mapping from the sim error.
 - The "AI assistant needs ANTHROPIC_API_KEY" notice is already a calm info banner
   but still draws first-run attention; consider persisting dismissal.
+
+---
+
+# Systematic visual-polish pass (full design-system) — roadmap
+
+User approved a **full systematic pass**: motion + skeleton loaders, styled
+tooltips + toasts, warm light "paper" theme, and an a11y/contrast audit. Worked
+in reviewable, committed slices; each: design critique → implement → review
+(persona/self, real data over HTTP) → tests green (Vitest + `npm run build`) →
+commit.
+
+- [x] **Slice 0 — Foundation** (commit `85e54d0`): motion tokens (--ease/--dur,
+  scale-in/fade-in-up/shimmer), warm elevation scale (e1/e2/e3), warm light
+  "paper" theme + first-class ThemeToggle. Fixed a build-blocking rules-of-hooks
+  bug in WaveformViewer. Screens: `screenshots/uipolish/slice0/`.
+- [ ] **Slice 1 — Tooltips + Toasts**: Radix HoverCard/Tooltip to replace native
+  `title` (slow); unified toast system (replace ad-hoc upload/notice banners);
+  update the 2 tests that select by `title`.
+- [ ] **Slice 2 — Shell & rhythm**: consistent panel-header height/padding,
+  dividers, density scale; motion on panel collapse + tab changes; skeleton
+  loaders for runs/manifest/report while loading.
+- [ ] **Slice 3 — Pipeline stepper**: refined stage chips (active/hover/busy/
+  disabled), connectors, status dots, hover-card explainers.
+- [ ] **Slice 4 — File tree**: row states, persistent affordance hints, drag-drop
+  polish, role badge system, upload via toast.
+- [ ] **Slice 5 — Runs timeline**: elevation/hover/selected/compare states,
+  lineage connectors, pin micro-interaction, compare-diff card, loading skeleton.
+- [ ] **Slice 6 — Console**: tab styling, command block w/ copy, peek↔expanded
+  transition, status dots.
+- [ ] **Slice 7 — Waveform**: gridlines, hover tooltip, draggable cursor handle,
+  segmented radix control, fit-to-window, dedup aliased nets (eng feedback).
+- [ ] **Slice 8 — Report / empty states / banner / agent rail**: one EmptyState
+  primitive, PPA hero polish, calmer welcome.
+- [ ] **Slice 9 — a11y & contrast audit**: AA on warm dark+light, reduced-motion,
+  focus order, ARIA live regions for run/sim status.
