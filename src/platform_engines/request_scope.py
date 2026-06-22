@@ -16,15 +16,16 @@ no-op.
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
-from typing import Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from src.utils.session_context import SessionContext, session_scope
 
 
 @contextmanager
 def session_request_scope(
-    session_id: str, user_id: Optional[str] = None, provider=None
+    session_id: str, user_id: Optional[str] = None, provider=None, tier: Optional[str] = None
 ) -> Iterator[str]:
     """Run a block as a fully-bound request for ``session_id``.
 
@@ -39,7 +40,9 @@ def session_request_scope(
         provider = get_workspace_provider()
 
     workspace = provider.workspace_for(session_id)
-    with session_scope(SessionContext(session_id=session_id, workspace=workspace, user_id=user_id)):
+    with session_scope(SessionContext(
+        session_id=session_id, workspace=workspace, user_id=user_id, tier=tier,
+    )):
         try:
             yield workspace
         finally:
@@ -48,3 +51,31 @@ def session_request_scope(
             sync = getattr(provider, "sync", None)
             if callable(sync):
                 sync(session_id)
+
+
+async def run_in_session(
+    session_id: str,
+    fn: Callable[..., Any],
+    *args,
+    user_id: Optional[str] = None,
+    tier: Optional[str] = None,
+    provider=None,
+    **kwargs,
+) -> Any:
+    """Run a sync callable inside a fully-bound session scope, off the event loop.
+
+    The scope is entered **inside the worker thread** so the task-local
+    ``SessionContext`` is set in the same context the callable runs in — the
+    correct way to propagate the seam across a thread boundary (a bare
+    ``run_in_executor`` would NOT carry the contextvar). This is what replaces
+    the MCP server's per-call ``os.environ["RTL_WORKSPACE"]`` mutation: each tool
+    invocation resolves its workspace from this scope, so concurrent MCP clients
+    are isolated with no shared process-global state.
+    """
+    loop = asyncio.get_event_loop()
+
+    def _invoke():
+        with session_request_scope(session_id, user_id=user_id, tier=tier, provider=provider):
+            return fn(*args, **kwargs)
+
+    return await loop.run_in_executor(None, _invoke)
