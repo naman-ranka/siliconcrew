@@ -90,36 +90,62 @@ fixes were applied; then **fresh** personas re-reviewed.
 
 ---
 
-# Systematic visual-polish pass (full design-system) — roadmap
+# Systematic visual-polish pass (full design-system) — COMPLETE
 
 User approved a **full systematic pass**: motion + skeleton loaders, styled
-tooltips + toasts, warm light "paper" theme, and an a11y/contrast audit. Worked
-in reviewable, committed slices; each: design critique → implement → review
-(persona/self, real data over HTTP) → tests green (Vitest + `npm run build`) →
-commit.
+tooltips + toasts, warm light "paper" theme, and an a11y/contrast audit. It ran
+as 11 reviewable, committed slices, each implemented by a single sequential
+subagent (context control) that self-verified (`tsc --noEmit` + Vitest +
+`npm run build`), committed with trailers, and ticked the tracker. The live
+source of truth — slice table with per-slice commit SHAs, standards, guardrails,
+and the midpoint-review→slice mapping — is **`UI_POLISH_ROADMAP.md`**.
 
-- [x] **Slice 0 — Foundation** (commit `85e54d0`): motion tokens (--ease/--dur,
-  scale-in/fade-in-up/shimmer), warm elevation scale (e1/e2/e3), warm light
-  "paper" theme + first-class ThemeToggle. Fixed a build-blocking rules-of-hooks
-  bug in WaveformViewer. Screens: `screenshots/uipolish/slice0/`.
-- [x] **Slice 1 — Toasts** (done): unified toast system (store `toasts`/`pushToast`/`dismissToast` + `Toaster`, warm elevation + status accent + scale/fade motion), wired to upload + sim pass/fail; 4 Vitest tests. Tooltip (Radix) swap deferred into the per-element slices (touches `getByTitle` tests).
-- [ ] **Slice 1b — Styled tooltips**: Radix HoverCard/Tooltip to replace native
-  `title` (slow); unified toast system (replace ad-hoc upload/notice banners);
-  update the 2 tests that select by `title`.
-- [ ] **Slice 2 — Shell & rhythm**: consistent panel-header height/padding,
-  dividers, density scale; motion on panel collapse + tab changes; skeleton
-  loaders for runs/manifest/report while loading.
-- [ ] **Slice 3 — Pipeline stepper**: refined stage chips (active/hover/busy/
-  disabled), connectors, status dots, hover-card explainers.
-- [ ] **Slice 4 — File tree**: row states, persistent affordance hints, drag-drop
-  polish, role badge system, upload via toast.
-- [ ] **Slice 5 — Runs timeline**: elevation/hover/selected/compare states,
-  lineage connectors, pin micro-interaction, compare-diff card, loading skeleton.
-- [ ] **Slice 6 — Console**: tab styling, command block w/ copy, peek↔expanded
-  transition, status dots.
-- [ ] **Slice 7 — Waveform**: gridlines, hover tooltip, draggable cursor handle,
-  segmented radix control, fit-to-window, dedup aliased nets (eng feedback).
-- [ ] **Slice 8 — Report / empty states / banner / agent rail**: one EmptyState
-  primitive, PPA hero polish, calmer welcome.
-- [ ] **Slice 9 — a11y & contrast audit**: AA on warm dark+light, reduced-motion,
-  focus order, ARIA live regions for run/sim status.
+All 11 slices are ✅ done:
+
+| # | Area | Commit |
+|---|---|---|
+| 0 | Foundation: motion/elevation tokens, warm "paper" light theme + toggle | `85e54d0` |
+| 1 | Unified toast system + 4 Vitest tests | `d8b68f4` |
+| 2 | Shell & rhythm: panel headers, tab/panel motion, skeleton loaders | `d1a71a2` |
+| 3 | Pipeline stepper: stage chips, connectors, status dots | `3d67725` |
+| 4 | File tree: row states, affordance hints, drag-drop, role badges | `0a13647` |
+| 5 | Runs timeline: elevation/hover/selected/compare, lineage, pin | `1315590` |
+| 6 | Console: tabs, command block + copy, full scrollable per-run log | `921d477` |
+| 7 | Waveform: gridlines, hover scrub, draggable cursor, radix, fit, dedup | `a540753` |
+| 8 | Report / empty states / banner / agent rail: EmptyState, PPA hero | `00516ca` |
+| 1b | Styled Radix tooltips, human-first toasts, sticky API-key banner | `aa59e9a` |
+| 9 | a11y & contrast: warm-light AA + elevation ladder, ARIA live, focus | `ebb9297` |
+
+## Midpoint review (after slices 0–4) → all 5 bugs fixed
+A live persona review (student + engineer, real iverilog) on the half-done pass
+caught 5 issues; each was folded into a later slice and re-verified:
+1. ViewingBanner clipped long failure strings → **truncate/ellipsis** (slice 8).
+2. Wave tab showed the first VCD, not the selected run's → **sync to
+   `selectedRunId`** with a manual-pick override (slice 7).
+3. Stepper highlight followed the artifact tab, not pipeline progress → highlight
+   follows `actionPending.*` when running (slice 5).
+4. Light theme not warm / elevation ladder collapsed → **warm paper theme +
+   visible surface ladder + WCAG AA** (slice 9).
+5. Console was a one-liner → **full scrollable, copyable per-run log** (slice 6).
+
+## Final review (full pass, dark + light, real iverilog)
+A fresh persona-review subagent re-captured the live app over HTTP (isolated
+headless Chrome, the real `final-ux-review` session with a genuine failing sim:
+`FAIL: SUB 9-4 expected 5 got 251`, iverilog 12.0) and inspected all 14 frames.
+- **All 5 midpoint fixes verified PASS on screen** (banner truncation; waveform
+  follows the selected run's VCD; stepper progress highlight; warm-paper light
+  theme with a visible elevation ladder + AA muted text; console expands to a
+  full 256px scrollable log).
+- All 14 screenshots are genuinely distinct (verified by md5). Capture-only nit
+  fixed in `uxdrive.mjs`: because a failed sim auto-jumps to the Waveform tab,
+  the "failing-run" frames now explicitly sit on the **Code** tab so they tell a
+  different story than the dedicated "wave" frames.
+- Screenshots: `screenshots/uipolish/final/` (01–12, dark + light pairs).
+
+## Verification (final)
+- Each slice gated on `npx tsc --noEmit && npm run test && npm run build` — all
+  green; Vitest at 28/28 by slice 9.
+- **Frontend-only, merge-safe**: no backend / action-API / auth / tenancy
+  changes. Backend follow-ups remain noted (not fixed) in `UI_POLISH_ROADMAP.md`:
+  `/chat/{id}/history` 500 on fresh sessions; sim-retry `parentRunId` lineage;
+  failure→RTL-line source mapping.

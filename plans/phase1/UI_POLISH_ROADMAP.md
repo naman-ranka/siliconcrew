@@ -65,6 +65,18 @@ Playwright over HTTP, real iverilog data) screenshots the live app and reports
 blunt feedback; findings feed back into the remaining slices. Screenshots:
 `plans/phase1/screenshots/uipolish/sliceN/`.
 
+## Final review (all slices done) — PASS
+Fresh persona-review subagent re-captured the live app (dark + light, isolated
+headless Chrome over HTTP, real `final-ux-review` session — genuine failing sim
+`FAIL: SUB 9-4 expected 5 got 251`, iverilog 12.0) and inspected all 14 frames.
+- All 5 midpoint fixes verified **PASS on screen** (banner truncation; waveform
+  follows selected run's VCD; stepper progress highlight; warm-paper light theme
+  + visible elevation ladder + AA; console full scrollable log).
+- All 14 screenshots genuinely distinct (md5-verified). Capture nit fixed in
+  `frontend/uxdrive.mjs`: failing-run frames now sit on the Code tab (a failed
+  sim auto-jumps to Wave, which made 07≈09 / 08≈10) so they differ from the wave
+  frames. Screenshots: `plans/phase1/screenshots/uipolish/final/` (01–12).
+
 ## Notes / deferrals
 - Live `next start` serves the built app; for visual checks use `npm run dev`
   (hot reload) on a spare port. `file:` is blocked — always HTTP.
