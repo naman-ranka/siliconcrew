@@ -39,6 +39,11 @@ export function ViewingBanner() {
       <span className="text-muted-foreground">Viewing</span>
       <span className="font-mono text-info bg-info/10 px-1.5 py-0.5 rounded">{run.id}</span>
       <span className="text-muted-foreground truncate">· {meta}</span>
+      {run.kind === "sim" && run.status === "failed" && run.failure?.firstFailureLine && (
+        <span className="text-status-fail font-mono truncate max-w-[40%]" title={run.failure.firstFailureLine}>
+          {run.failure.firstFailureLine}
+        </span>
+      )}
       {!isLatest && latest && (
         <button
           type="button"

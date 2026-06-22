@@ -58,23 +58,36 @@ export function ChatArea() {
         )}
       </div>
 
-      {/* Error banner */}
-      {chatError && (
-        <div className="flex items-center justify-between gap-3 bg-destructive/10 border-b border-destructive/20 px-4 py-2.5">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
-            <p className="text-sm text-destructive">{chatError}</p>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 shrink-0 hover:bg-destructive/20"
-            onClick={() => useStore.setState({ chatError: null })}
+      {/* Error banner. A missing-API-key is a config note, not a failure — the
+          lint/sim/synth tools work without the LLM — so render it calmly rather
+          than as an alarming red banner. */}
+      {chatError && (() => {
+        const isConfig = /api key|api_key/i.test(chatError);
+        return (
+          <div
+            className={
+              isConfig
+                ? "flex items-center justify-between gap-3 bg-info/10 border-b border-info/20 px-4 py-2"
+                : "flex items-center justify-between gap-3 bg-destructive/10 border-b border-destructive/20 px-4 py-2.5"
+            }
           >
-            <X className="h-3.5 w-3.5 text-destructive" />
-          </Button>
-        </div>
-      )}
+            <div className="flex items-center gap-2">
+              <AlertCircle className={isConfig ? "h-4 w-4 text-info shrink-0" : "h-4 w-4 text-destructive shrink-0"} />
+              <p className={isConfig ? "text-xs text-info" : "text-sm text-destructive"}>
+                {isConfig ? "AI assistant needs ANTHROPIC_API_KEY — lint/sim/synth work without it." : chatError}
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={isConfig ? "h-6 w-6 shrink-0 hover:bg-info/20" : "h-6 w-6 shrink-0 hover:bg-destructive/20"}
+              onClick={() => useStore.setState({ chatError: null })}
+            >
+              <X className={isConfig ? "h-3.5 w-3.5 text-info" : "h-3.5 w-3.5 text-destructive"} />
+            </Button>
+          </div>
+        );
+      })()}
 
       {/* Messages */}
       <MessageList />

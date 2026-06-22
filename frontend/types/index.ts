@@ -81,6 +81,7 @@ export interface WaveformData {
   filename: string;
   endtime: number;
   timescale?: string | null;
+  unitSeconds?: number | null; // seconds per VCD tick (for ns→tick cursor mapping)
   signalCount?: number;
   signals: WaveformSignal[];
 }
