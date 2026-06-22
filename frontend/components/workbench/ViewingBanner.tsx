@@ -35,15 +35,22 @@ export function ViewingBanner() {
       )}
       data-testid="viewing-banner"
     >
-      <Eye className="h-3.5 w-3.5 text-info" />
-      <span className="text-muted-foreground">Viewing</span>
-      <span className="font-mono text-info bg-info/10 px-1.5 py-0.5 rounded">{run.id}</span>
-      <span className="text-muted-foreground truncate">· {meta}</span>
-      {run.kind === "sim" && run.status === "failed" && run.failure?.firstFailureLine && (
-        <span className="text-status-fail font-mono truncate max-w-[40%]" title={run.failure.firstFailureLine}>
-          {run.failure.firstFailureLine}
-        </span>
-      )}
+      <Eye className="h-3.5 w-3.5 text-info shrink-0" />
+      <span className="text-muted-foreground shrink-0">Viewing</span>
+      <span className="font-mono text-info bg-info/10 px-1.5 py-0.5 rounded shrink-0">{run.id}</span>
+      {/* Detail row flexes and truncates so long failure strings ellipsize
+          instead of clipping at the right edge. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <span className="text-muted-foreground truncate shrink-0 max-w-[50%]">· {meta}</span>
+        {run.kind === "sim" && run.status === "failed" && run.failure?.firstFailureLine && (
+          <span
+            className="text-status-fail font-mono truncate min-w-0"
+            title={run.failure.firstFailureLine}
+          >
+            {run.failure.firstFailureLine}
+          </span>
+        )}
+      </div>
       {!isLatest && latest && (
         <button
           type="button"

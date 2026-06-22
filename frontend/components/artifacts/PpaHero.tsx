@@ -40,19 +40,19 @@ interface MetricCardProps {
 
 function MetricCard({ icon, label, value, unit, d, lowerIsBetter = true }: MetricCardProps) {
   return (
-    <div className="rounded-lg border border-border bg-surface-1 p-3 flex flex-col gap-1">
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground uppercase tracking-wide">
-        {icon}
+    <div className="rounded-lg border border-border bg-surface-1 p-3 flex flex-col gap-1.5 shadow-e1">
+      <div className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+        <span className="text-muted-foreground/70">{icon}</span>
         {label}
       </div>
-      <div className="text-lg font-semibold font-mono">
+      <div className="text-xl font-semibold font-mono tabular-nums leading-none text-foreground">
         {value}
-        {unit && <span className="text-xs text-muted-foreground ml-1">{unit}</span>}
+        {unit && <span className="text-xs font-normal text-muted-foreground ml-1">{unit}</span>}
       </div>
       {d && (
         <div
           className={cn(
-            "text-[10px] font-mono",
+            "text-[10px] font-mono tabular-nums",
             (lowerIsBetter ? d.better : !d.better) ? "text-status-pass" : "text-status-fail"
           )}
         >
@@ -86,30 +86,30 @@ export function PpaHero({ runs, runId }: { runs: RunSummary[]; runId: string | n
       {/* Timing hero */}
       <div
         className={cn(
-          "rounded-xl border p-4 mb-3 flex items-center gap-4",
+          "rounded-xl border p-4 mb-3 flex items-center gap-4 shadow-e1",
           violated ? "border-status-fail/40 bg-status-fail/5" : "border-status-pass/40 bg-status-pass/5"
         )}
       >
-        <div className={cn("h-10 w-10 rounded-lg flex items-center justify-center", violated ? "bg-status-fail/15" : "bg-status-pass/15")}>
+        <div className={cn("h-11 w-11 shrink-0 rounded-lg flex items-center justify-center", violated ? "bg-status-fail/15" : "bg-status-pass/15")}>
           <Clock className={cn("h-5 w-5", violated ? "text-status-fail" : "text-status-pass")} />
         </div>
-        <div className="flex flex-col">
-          <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Worst Negative Slack</span>
-          <span className={cn("text-2xl font-bold font-mono", violated ? "text-status-fail" : "text-status-pass")}>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Worst Negative Slack</span>
+          <span className={cn("text-2xl font-bold font-mono tabular-nums leading-none", violated ? "text-status-fail" : "text-status-pass")}>
             {timingKnown ? `${fmt(wns)} ns` : "—"}
           </span>
         </div>
-        <div className="ml-auto text-right">
+        <div className="ml-auto flex flex-col items-end gap-1 text-right">
           <span
             className={cn(
-              "text-sm font-semibold px-2 py-1 rounded",
+              "text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded-md",
               violated ? "bg-status-fail/15 text-status-fail" : "bg-status-pass/15 text-status-pass"
             )}
           >
-            {!timingKnown ? "unknown" : violated ? "TIMING VIOLATED" : "TIMING MET"}
+            {!timingKnown ? "Unknown" : violated ? "Timing violated" : "Timing met"}
           </span>
           {ppa.tnsNs != null && (
-            <div className="text-[11px] text-muted-foreground font-mono mt-1">TNS {fmt(ppa.tnsNs)} ns</div>
+            <div className="text-[11px] text-muted-foreground font-mono tabular-nums">TNS {fmt(ppa.tnsNs)} ns</div>
           )}
         </div>
       </div>

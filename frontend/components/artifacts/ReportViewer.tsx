@@ -8,6 +8,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
 import { PpaHero } from "./PpaHero";
+import { EmptyState } from "@/components/workbench/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -81,44 +82,45 @@ export function ReportViewer() {
   if (!report) {
     const hasPpa = runs.some((r) => r.kind === "synth" && r.ppa);
     return (
-      <div className="flex flex-col h-full">
-        {/* Even without a generated markdown report, surface PPA if a synth run exists. */}
-        {hasPpa && <PpaHero runs={runs} runId={ppaRunId} />}
-        <div className="flex flex-col items-center justify-center flex-1 text-muted-foreground p-8">
-        <div className="w-16 h-16 rounded-2xl bg-surface-2 flex items-center justify-center mb-4">
-          <FileText className="h-8 w-8" />
-        </div>
-        <p className="text-sm font-medium">No report yet</p>
-        <p className="text-xs mt-1 mb-2 text-center max-w-[260px]">
-          Run synthesis, then generate a report to get the timing/PPA summary and
-          spec-vs-result analysis.
-        </p>
-        <p className="text-[11px] mb-6 text-center max-w-[280px] text-muted-foreground/70">
-          Synthesis runs the OpenROAD flow in Docker; if Docker/ORFS isn&apos;t
-          available the synth step reports that in the console.
-        </p>
-        {synthesisRuns.length > 0 && (
-          <div className="mb-4 w-full max-w-[260px]">
-            <Select value={selectedSynthesisRunId || synthesisRuns[0]?.run_id} onValueChange={selectSynthesisRun}>
-              <SelectTrigger className="h-9 text-xs">
-                <SelectValue placeholder="Select synthesis run" />
-              </SelectTrigger>
-              <SelectContent>
-                {synthesisRuns.map((run) => (
-                  <SelectItem key={run.run_id} value={run.run_id} className="text-xs">
-                    {run.run_id} · {run.status}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-        <Button onClick={handleGenerate} size="sm" className="gap-2">
-          <FileOutput className="h-4 w-4" />
-          Generate Report
-        </Button>
-        </div>
-      </div>
+      <EmptyState
+        // Even without a generated markdown report, surface PPA if a synth run exists.
+        header={hasPpa ? <PpaHero runs={runs} runId={ppaRunId} /> : undefined}
+        icon={<FileText />}
+        headline="No report yet"
+        assistantHint={
+          <>
+            Synthesis runs the OpenROAD flow in Docker; if Docker/ORFS isn&apos;t
+            available the synth step reports that in the console.
+          </>
+        }
+        cta={
+          <>
+            {synthesisRuns.length > 0 && (
+              <div className="w-full max-w-[260px]">
+                <Select value={selectedSynthesisRunId || synthesisRuns[0]?.run_id} onValueChange={selectSynthesisRun}>
+                  <SelectTrigger className="h-9 text-xs">
+                    <SelectValue placeholder="Select synthesis run" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {synthesisRuns.map((run) => (
+                      <SelectItem key={run.run_id} value={run.run_id} className="text-xs">
+                        {run.run_id} · {run.status}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <Button onClick={handleGenerate} size="sm" className="gap-2">
+              <FileOutput className="h-4 w-4" />
+              Generate Report
+            </Button>
+          </>
+        }
+      >
+        Run synthesis, then generate a report to get the timing/PPA summary and
+        spec-vs-result analysis.
+      </EmptyState>
     );
   }
 

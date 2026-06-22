@@ -34,15 +34,15 @@ describe("selectPpaView", () => {
 });
 
 describe("PpaHero", () => {
-  it("shows TIMING MET in green when WNS >= 0", () => {
+  it("shows Timing met in green when WNS >= 0", () => {
     render(<PpaHero runs={[synth("synth_0001", { wnsNs: 0.85, areaUm2: 142, cells: 48 })]} runId="synth_0001" />);
-    expect(screen.getByText("TIMING MET")).toBeInTheDocument();
+    expect(screen.getByText("Timing met")).toBeInTheDocument();
     expect(screen.getByText(/0\.85 ns/)).toBeInTheDocument();
   });
 
-  it("shows TIMING VIOLATED when WNS < 0", () => {
+  it("shows Timing violated when WNS < 0", () => {
     render(<PpaHero runs={[synth("synth_0001", { wnsNs: -0.3 })]} runId="synth_0001" />);
-    expect(screen.getByText("TIMING VIOLATED")).toBeInTheDocument();
+    expect(screen.getByText("Timing violated")).toBeInTheDocument();
   });
 
   it("renders nothing when the run has no PPA", () => {

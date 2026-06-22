@@ -127,9 +127,11 @@ export function ArtifactsPanel() {
               <span className="text-xs">{tab.label}</span>
               {tab.badge !== undefined && tab.badge > 0 && (
                 <span className={cn(
+                  // Neutral COUNT badge — never the orange brand. Active tab gets
+                  // a slightly stronger neutral surface, not primary.
                   "ml-1 h-4 min-w-[16px] px-1 rounded-full text-[10px] font-medium flex items-center justify-center",
                   activeArtifactTab === tab.id
-                    ? "bg-primary text-primary-foreground"
+                    ? "bg-surface-3 text-foreground"
                     : "bg-surface-2 text-muted-foreground"
                 )}>
                   {tab.badge}

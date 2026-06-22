@@ -5,6 +5,7 @@ import { Layout as LayoutIcon, Loader2, AlertCircle } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { workspaceApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/workbench/EmptyState";
 import {
   Select,
   SelectContent,
@@ -74,15 +75,14 @@ export function LayoutViewer() {
 
   if (layoutFiles.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-8">
-        <div className="w-16 h-16 rounded-2xl bg-surface-2 flex items-center justify-center mb-4">
-          <LayoutIcon className="h-8 w-8" />
-        </div>
-        <p className="text-sm font-medium">No Layout Files</p>
-        <p className="text-xs mt-1 text-center max-w-[280px]">
-          GDS layout files will appear here after synthesis. Ask the agent to run synthesis on your design.
-        </p>
-      </div>
+      <EmptyState
+        icon={<LayoutIcon />}
+        headline="No layout yet"
+        assistantHint="…or ask the assistant to run synthesis for you."
+      >
+        Run synthesis to generate the GDS layout — it will appear here once the
+        flow completes.
+      </EmptyState>
     );
   }
 

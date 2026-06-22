@@ -5,6 +5,7 @@ import { Activity, RefreshCw, ZoomIn, ZoomOut, ChevronRight, ChevronDown, Crossh
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { EmptyState } from "@/components/workbench/EmptyState";
 import { cn } from "@/lib/utils";
 import {
   Select,
@@ -160,11 +161,13 @@ export function WaveformViewer() {
 
   if (options.length === 0 && !waveformData) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-        <Activity className="h-12 w-12 mb-4" />
-        <p className="text-sm">No waveforms yet</p>
-        <p className="text-xs mt-1">Run simulation to generate VCD waveforms</p>
-      </div>
+      <EmptyState
+        icon={<Activity />}
+        headline="No waveforms yet"
+        assistantHint="…or ask the assistant to write a testbench and simulate."
+      >
+        Run simulation to generate VCD waveforms from your testbench.
+      </EmptyState>
     );
   }
 

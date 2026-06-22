@@ -8,6 +8,7 @@ import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/workbench/EmptyState";
 import {
   Select,
   SelectContent,
@@ -201,14 +202,18 @@ export function CodeViewer() {
 
   if (codeFiles.length === 0 && !editing) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-        <Code className="h-12 w-12 mb-4" />
-        <p className="text-sm">No Verilog files yet</p>
-        <p className="text-xs mt-1 mb-4">Upload, write, or ask the agent to implement a design</p>
-        <Button size="sm" variant="outline" className="gap-1.5" onClick={startNew} disabled={!currentSession}>
-          <FilePlus className="h-4 w-4" /> New file
-        </Button>
-      </div>
+      <EmptyState
+        icon={<Code />}
+        headline="No Verilog files yet"
+        assistantHint="…or ask the assistant to implement a design for you."
+        cta={
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={startNew} disabled={!currentSession}>
+            <FilePlus className="h-4 w-4" /> New file
+          </Button>
+        }
+      >
+        Create a new file or upload existing Verilog to get started.
+      </EmptyState>
     );
   }
 
