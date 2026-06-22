@@ -50,7 +50,7 @@ git push origin claude/integration-p1p2   # retry w/ backoff on network error
 | 0 | Foundation: motion/elevation tokens, warm "paper" light theme + toggle (fixed build-blocking hook bug) | ✅ done | `85e54d0` |
 | 1 | Unified toast system (upload + sim pass/fail), 4 Vitest tests | ✅ done | `d8b68f4` |
 | 2 | Shell & rhythm: consistent panel headers/density, tab+panel motion, **skeleton loaders** (runs/manifest/report/code) | ✅ done | `d1a71a2` |
-| 3 | Pipeline stepper: refined stage chips (hover/active/busy/disabled), connectors, status dots | ⬜ todo | |
+| 3 | Pipeline stepper: refined stage chips (hover/active/busy/disabled), connectors, status dots | ✅ done | `3d67725` |
 | 4 | File tree: row states, persistent affordance hints, drag-drop polish, role-badge system | ⬜ todo | |
 | 5 | Runs timeline: elevation/hover/selected/compare states, lineage connectors, pin micro-interaction, loading skeleton | ⬜ todo | |
 | 6 | Console: tab styling, command block + copy, peek↔expanded transition, status dots | ⬜ todo | |
