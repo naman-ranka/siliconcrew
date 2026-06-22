@@ -95,6 +95,71 @@ def _job_executor() -> Any:
     return _ACTIVE_EXECUTOR if _ACTIVE_EXECUTOR is not None else _EXECUTOR
 
 
+# Quota enforcement around synthesis. None (default) = self-host, no enforcement.
+# In hosted mode settings.apply_platform_wiring installs a shared QuotaManager so
+# per-user concurrency / daily-run / monthly-compute caps are enforced fleet-wide.
+_QUOTA_MANAGER: Any = None
+
+
+def set_quota_manager(manager: Any) -> None:
+    """Install the quota manager enforced around synth submissions (None disables)."""
+    global _QUOTA_MANAGER
+    _QUOTA_MANAGER = manager
+
+
+def _quota_identity() -> tuple:
+    """(user_id, tier) for the current request, from the session context."""
+    try:
+        from src.utils.session_context import get_current_session
+
+        ctx = get_current_session()
+        if ctx:
+            return (ctx.user_id or ctx.session_id, ctx.tier or "user")
+    except Exception:
+        pass
+    return ("local", "user")
+
+
+def _reserve_synth_quota():
+    """Reserve a synth slot for the current user, or return an error envelope.
+
+    Returns ``(reservation, None)`` on success, or ``(None, error_dict)`` when a
+    cap is hit. ``reservation`` is None when no quota manager is installed
+    (self-host) — synthesis proceeds unchanged.
+    """
+    if _QUOTA_MANAGER is None:
+        return None, None
+    from src.platform_engines.quotas import QuotaExceeded
+
+    user_id, tier = _quota_identity()
+    try:
+        return _QUOTA_MANAGER.reserve_synth_run(user_id, tier), None
+    except QuotaExceeded as exc:
+        env = exc.to_envelope()
+        return None, {
+            "status": "rejected",
+            "ok": False,
+            "error": env["error"],
+            "check_notes": exc.message,
+            "next_action": "Wait for your in-flight run / quota window, or add capacity.",
+        }
+
+
+def _submit_with_quota_release(reservation, fn, *fn_args):
+    """Submit ``fn`` to the active executor, releasing the reservation when done."""
+    def runner():
+        try:
+            return fn(*fn_args)
+        finally:
+            if reservation is not None and _QUOTA_MANAGER is not None:
+                try:
+                    _QUOTA_MANAGER.release_synth_run(reservation)
+                except Exception:
+                    pass
+
+    return _job_executor().submit(runner)
+
+
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _POLL_CACHE: Dict[str, Dict[str, Any]] = {}
 _POLL_BACKOFF_STATE: Dict[str, Dict[str, Any]] = {}
@@ -1298,6 +1363,12 @@ def start_synthesis_job(
     run_equiv: bool = False,
     constraints_mode: str = "auto",
 ) -> Dict[str, Any]:
+    # Quota gate (hosted): reject before doing any work if the user is over a cap
+    # (concurrency / runs-per-day / monthly-compute). No-op in self-host.
+    reservation, quota_error = _reserve_synth_quota()
+    if quota_error is not None:
+        return quota_error
+
     _ensure_dir(workspace)
     run_id, run_dir = _allocate_run_dir(workspace)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
@@ -1320,7 +1391,7 @@ def start_synthesis_job(
     }
 
     with _JOB_LOCK:
-        future = _job_executor().submit(_job_worker, job_id, workspace, run_dir, args)
+        future = _submit_with_quota_release(reservation, _job_worker, job_id, workspace, run_dir, args)
         _JOBS[job_id] = {
             "future": future,
             "workspace": workspace,
@@ -1391,6 +1462,11 @@ def retry_pd_job(
     except FileNotFoundError as exc:
         return {"status": "error", "message": str(exc)}
 
+    # A PD retry is a synth run too — same quota gate.
+    reservation, quota_error = _reserve_synth_quota()
+    if quota_error is not None:
+        return quota_error
+
     pd_parameters = _pd_parameters_from_run(parent_run_dir, parent_meta)
     run_id, run_dir = _allocate_run_dir(workspace)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
@@ -1410,7 +1486,7 @@ def retry_pd_job(
     }
 
     with _JOB_LOCK:
-        future = _job_executor().submit(_retry_pd_worker, job_id, workspace, run_dir, args)
+        future = _submit_with_quota_release(reservation, _retry_pd_worker, job_id, workspace, run_dir, args)
         _JOBS[job_id] = {
             "future": future,
             "workspace": workspace,

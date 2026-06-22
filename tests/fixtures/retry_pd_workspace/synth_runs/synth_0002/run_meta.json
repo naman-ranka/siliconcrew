@@ -1,7 +1,7 @@
 {
   "run_id": "synth_0002",
-  "job_id": "job_94750d7462",
-  "created_at": "2026-06-21T23:52:32.268301+00:00",
+  "job_id": "job_d458125f66",
+  "created_at": "2026-06-22T00:22:54.295200+00:00",
   "status": "completed",
   "mode": "pd_retry",
   "parent_run_id": "synth_0001",
@@ -88,7 +88,7 @@
     "3_place.sdc": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/3_place.sdc"
   },
   "provenance": {
-    "repo_commit": "unknown",
+    "repo_commit": "9b0ccfdb164fe874d55d105b64944a996b92d5af",
     "orfs_image_digest": null,
     "pdk": "sky130hd",
     "iverilog_version": null,
@@ -107,6 +107,6 @@
     "power_uw": null
   },
   "next_action": "Inspect stage summaries and continue tuning.",
-  "finished_at": "2026-06-21T23:52:32.269072+00:00",
+  "finished_at": "2026-06-22T00:22:54.295997+00:00",
   "elapsed_sec": 0.0
 }

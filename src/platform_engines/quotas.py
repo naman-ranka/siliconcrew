@@ -104,6 +104,121 @@ class InMemoryQuotaStore:
             return self._concurrency.get(user_id, 0)
 
 
+class PostgresQuotaStore:
+    """Shared quota counters in Cloud SQL — caps survive horizontal scaling.
+
+    The concurrency acquire is the critical one: it must be atomic across
+    replicas. We do it inside a single transaction with ``SELECT ... FOR UPDATE``
+    so concurrent acquires on the same user serialize on the row lock — only one
+    instance can take the last slot. psycopg is lazy; ``connect`` is injectable
+    for tests.
+    """
+
+    def __init__(self, dsn: str, connect=None):
+        self._dsn = dsn
+        self._connect_fn = connect
+
+    def _connect(self):
+        if self._connect_fn is not None:
+            return self._connect_fn(self._dsn)
+        import psycopg  # lazy
+
+        return psycopg.connect(self._dsn)
+
+    def init_schema(self) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS quota_concurrency ("
+                "user_id TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0)"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS quota_daily ("
+                "user_id TEXT, day TEXT, count INTEGER NOT NULL DEFAULT 0, "
+                "PRIMARY KEY (user_id, day))"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS quota_monthly ("
+                "user_id TEXT, month TEXT, minutes DOUBLE PRECISION NOT NULL DEFAULT 0, "
+                "PRIMARY KEY (user_id, month))"
+            )
+            conn.commit()
+
+    def try_acquire_concurrency(self, user_id, limit):
+        # One transaction: ensure the row exists, lock it FOR UPDATE, then test +
+        # increment. The row lock is what makes this atomic across replicas.
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO quota_concurrency (user_id, count) VALUES (%s, 0) "
+                "ON CONFLICT (user_id) DO NOTHING",
+                (user_id,),
+            )
+            cur.execute("SELECT count FROM quota_concurrency WHERE user_id = %s FOR UPDATE", (user_id,))
+            row = cur.fetchone()
+            current = row[0] if row else 0
+            if current >= limit:
+                conn.commit()
+                return False
+            cur.execute("UPDATE quota_concurrency SET count = count + 1 WHERE user_id = %s", (user_id,))
+            conn.commit()
+            return True
+
+    def release_concurrency(self, user_id):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE quota_concurrency SET count = GREATEST(count - 1, 0) WHERE user_id = %s",
+                (user_id,),
+            )
+            conn.commit()
+
+    def get_concurrency(self, user_id):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT count FROM quota_concurrency WHERE user_id = %s", (user_id,))
+            row = cur.fetchone()
+            return row[0] if row else 0
+
+    def get_day_count(self, user_id, day_key):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT count FROM quota_daily WHERE user_id = %s AND day = %s", (user_id, day_key))
+            row = cur.fetchone()
+            return row[0] if row else 0
+
+    def incr_day_count(self, user_id, day_key):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO quota_daily (user_id, day, count) VALUES (%s, %s, 1) "
+                "ON CONFLICT (user_id, day) DO UPDATE SET count = quota_daily.count + 1",
+                (user_id, day_key),
+            )
+            conn.commit()
+
+    def get_month_minutes(self, user_id, month_key):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT minutes FROM quota_monthly WHERE user_id = %s AND month = %s", (user_id, month_key))
+            row = cur.fetchone()
+            return float(row[0]) if row else 0.0
+
+    def add_month_minutes(self, user_id, month_key, minutes):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO quota_monthly (user_id, month, minutes) VALUES (%s, %s, %s) "
+                "ON CONFLICT (user_id, month) DO UPDATE SET minutes = quota_monthly.minutes + %s",
+                (user_id, month_key, minutes, minutes),
+            )
+            conn.commit()
+
+
+def build_quota_manager(settings) -> "QuotaManager":
+    """Pick the quota store from settings: shared Postgres in hosted mode."""
+    if settings.persistence_engine == "postgres" and settings.database_url:
+        store = PostgresQuotaStore(settings.database_url)
+        try:
+            store.init_schema()
+        except Exception:
+            pass  # schema may already exist / be created out-of-band
+        return QuotaManager(store=store)
+    return QuotaManager(store=InMemoryQuotaStore())
+
+
 @dataclass
 class SynthReservation:
     user_id: str
