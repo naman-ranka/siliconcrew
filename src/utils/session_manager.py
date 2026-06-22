@@ -210,11 +210,25 @@ class SessionManager:
         title = "Chat 1" if thread_id == session_id else "New chat"
         self._store.ensure_thread(thread_id, session_id, user_id, title, model, now)
 
+    def _last_used_model(self, session_id, user_id=None) -> str | None:
+        """The creator's last-used model: newest thread with a model, else the
+        session's model. New chats inherit this."""
+        for t in self._store.list_threads(session_id, user_id=user_id):  # newest first
+            if t.get("model"):
+                return t["model"]
+        meta = self._store.get_session(session_id, user_id=user_id)
+        return (meta or {}).get("model_name")
+
     def create_thread(self, session_id, user_id=None, title=None, model=None) -> dict:
-        """Create a new chat thread (fresh UUID id) under a session."""
+        """Create a new chat thread (fresh UUID id) under a session.
+
+        New threads inherit the creator's last-used model when one isn't given.
+        """
         import uuid
 
         self.ensure_default_thread(session_id, user_id=user_id)  # so "Chat 1" exists
+        if model is None:
+            model = self._last_used_model(session_id, user_id=user_id)
         now = datetime.datetime.now()
         thread_id = uuid.uuid4().hex
         if not title:

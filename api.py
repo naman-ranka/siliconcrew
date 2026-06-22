@@ -23,7 +23,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, Tool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from src.agents.architect import create_architect_agent, load_system_prompt
-from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name
+from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name, model_catalog_entries
 from src.utils.session_manager import SessionManager
 from src.utils.session_context import SessionContext, set_current_session, session_scope
 from src.platform_engines.workspace_provider import get_workspace_provider
@@ -593,6 +593,45 @@ async def delete_key(provider: str, identity: Identity = Depends(require_signed_
     uid = _byok_user(identity)
     vault.delete_key(uid, provider)
     return {"ok": True, "provider": provider, "deleted": True}
+
+
+# =============================================================================
+# MODELS ENDPOINT (availability from usable provider keys; tenant-scoped)
+# =============================================================================
+
+_PROVIDER_ENV = {"gemini": "GOOGLE_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+
+
+def _usable_providers(identity: Identity) -> set:
+    """Which LLM providers are usable for THIS request — so we never offer a
+    model that would 500. Self-host: env keys. Hosted: the user's BYOK keys plus
+    the capped hosted Gemini tier."""
+    settings = get_settings()
+    if not settings.hosted:
+        return {p for p, env in _PROVIDER_ENV.items() if os.environ.get(env)}
+    usable = set()
+    uid = identity.user_id
+    if _KEY_VAULT is not None and uid:
+        for p in VALID_PROVIDERS:
+            try:
+                if _KEY_VAULT.has_key(uid, p):
+                    usable.add(p)
+            except Exception:
+                pass
+    if settings.hosted_gemini_key:
+        usable.add("gemini")  # hosted free tier (capped)
+    return usable
+
+
+@app.get("/api/models")
+async def list_models(identity: Identity = Depends(get_identity)):
+    """Model registry for the picker, with per-request availability."""
+    usable = _usable_providers(identity)
+    models = [
+        {**e, "available": e["provider"] in usable}
+        for e in model_catalog_entries()
+    ]
+    return {"models": models, "default": DEFAULT_MODEL}
 
 
 # =============================================================================
