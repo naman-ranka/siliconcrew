@@ -14,6 +14,7 @@ import { ViewingBanner } from "./ViewingBanner";
 import { Onboarding } from "./Onboarding";
 import { SessionPicker } from "./SessionPicker";
 import { ThemeToggle } from "./ThemeToggle";
+import { Toaster } from "./Toaster";
 import { Button } from "@/components/ui/button";
 import { CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRightOpen } from "lucide-react";
 
@@ -165,6 +166,8 @@ export function Workbench() {
           <span className="[writing-mode:vertical-rl] rotate-180">AI Assistant</span>
         </button>
       )}
+
+      <Toaster />
     </main>
   );
 }

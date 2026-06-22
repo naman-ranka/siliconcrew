@@ -192,6 +192,14 @@ export interface PpaDiff {
   rows: { metric: string; a: number | null; b: number | null; deltaPct?: number | null }[];
 }
 
+// Transient toast notifications (unified, replaces ad-hoc banners).
+export interface Toast {
+  id: string;
+  kind: "success" | "error" | "info" | "running";
+  title: string;
+  detail?: string;
+}
+
 // Console entries surfaced under the artifact viewers (lint/sim/synth).
 export type ConsoleChannel = "lint" | "sim" | "synth";
 export interface ConsoleEntry {

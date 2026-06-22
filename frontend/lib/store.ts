@@ -19,6 +19,7 @@ import type {
   FileRole,
   ConsoleChannel,
   ConsoleEntry,
+  Toast,
 } from "@/types";
 import { projectsApi, sessionsApi, chatApi, workspaceApi, workbenchApi } from "./api";
 import { generateId } from "./utils";
@@ -106,6 +107,9 @@ interface AppState {
   activeConsole: ConsoleChannel;
   actionPending: { lint: boolean; sim: boolean; synth: boolean };
   uploadNotice: string | null;
+  toasts: Toast[];
+  pushToast: (t: Omit<Toast, "id">, ttlMs?: number) => void;
+  dismissToast: (id: string) => void;
 
   loadWorkbench: () => Promise<void>;
   loadManifest: () => Promise<void>;
@@ -183,6 +187,19 @@ export const useStore = create<AppState>((set, get) => ({
   activeConsole: "sim",
   actionPending: { lint: false, sim: false, synth: false },
   uploadNotice: null,
+  toasts: [],
+
+  pushToast: (t, ttlMs = 5000) => {
+    const id = generateId();
+    set((s) => ({ toasts: [...s.toasts, { ...t, id }] }));
+    if (ttlMs > 0) {
+      setTimeout(() => {
+        useStore.setState((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) }));
+      }, ttlMs);
+    }
+  },
+
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })),
 
   // Project actions
   loadProjects: async () => {
@@ -811,6 +828,11 @@ export const useStore = create<AppState>((set, get) => ({
     // Store-driven so the confirmation shows regardless of which surface triggered
     // the upload (file-tree button, drag-drop, or the onboarding CTA).
     set({ uploadNotice: notice });
+    get().pushToast({
+      kind: "success",
+      title: `Uploaded ${res.uploaded.length} file(s)`,
+      detail: notShown.length ? `${notShown.length} non-design file(s) stored, not shown` : undefined,
+    });
     const token = ++_uploadNoticeToken;
     setTimeout(() => {
       if (_uploadNoticeToken === token) useStore.setState({ uploadNotice: null });
@@ -940,8 +962,18 @@ export const useStore = create<AppState>((set, get) => ({
       // otherwise reveal the waveform for the fresh run.
       const onCode = get().activeArtifactTab === "code";
       await get().selectRun(run.id, { keepTab: onCode });
+      get().pushToast(
+        run.status === "passed"
+          ? { kind: "success", title: `${run.id} passed`, detail: run.top ?? undefined }
+          : {
+              kind: "error",
+              title: `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`,
+              detail: run.failure?.firstFailureLine ?? undefined,
+            }
+      );
     } catch (e) {
       pushConsole(set, get, { channel: "sim", status: "failed", summary: friendlyError(e) });
+      get().pushToast({ kind: "error", title: "Simulation failed", detail: friendlyError(e) });
     } finally {
       set((s) => ({ actionPending: { ...s.actionPending, sim: false } }));
     }

@@ -102,7 +102,8 @@ commit.
   scale-in/fade-in-up/shimmer), warm elevation scale (e1/e2/e3), warm light
   "paper" theme + first-class ThemeToggle. Fixed a build-blocking rules-of-hooks
   bug in WaveformViewer. Screens: `screenshots/uipolish/slice0/`.
-- [ ] **Slice 1 — Tooltips + Toasts**: Radix HoverCard/Tooltip to replace native
+- [x] **Slice 1 — Toasts** (done): unified toast system (store `toasts`/`pushToast`/`dismissToast` + `Toaster`, warm elevation + status accent + scale/fade motion), wired to upload + sim pass/fail; 4 Vitest tests. Tooltip (Radix) swap deferred into the per-element slices (touches `getByTitle` tests).
+- [ ] **Slice 1b — Styled tooltips**: Radix HoverCard/Tooltip to replace native
   `title` (slow); unified toast system (replace ad-hoc upload/notice banners);
   update the 2 tests that select by `title`.
 - [ ] **Slice 2 — Shell & rhythm**: consistent panel-header height/padding,
