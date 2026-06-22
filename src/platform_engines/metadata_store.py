@@ -9,6 +9,17 @@ public API (which still owns the filesystem/workspace side).
   * :class:`SqliteMetadataStore` — today's schema + queries, encapsulated.
   * :class:`PostgresMetadataStore` — the same operations over psycopg (Cloud SQL).
 
+Multi-tenancy (the release gate)
+--------------------------------
+Every session/project row carries an owning ``user_id`` (tenant). Every read and
+mutation is filtered by it, *tenant-scoped by construction*. The ``user_id``
+argument is optional and defaults to ``None``:
+
+  * ``None``  → self-host / single-tenant: no tenant filter (today's behavior,
+    bit-for-bit). Legacy rows (NULL owner) remain visible here.
+  * a value  → hosted multi-tenant: the query only ever touches that tenant's
+    rows, so user A can never read/mutate user B's session or workspace.
+
 Only relational metadata moves here. Workspace *files* are externalized
 separately via :mod:`workspace_provider`; the two seams are independent.
 """
@@ -24,19 +35,19 @@ class MetadataStore(Protocol):
     # schema
     def init_schema(self) -> None: ...
     # projects
-    def create_project(self, slug: str, name: str, created_at: Any) -> None: ...
-    def get_project(self, project_id: str) -> Optional[Dict[str, Any]]: ...
-    def get_all_projects(self) -> List[Dict[str, Any]]: ...
-    def delete_project(self, project_id: str) -> None: ...
+    def create_project(self, slug: str, name: str, created_at: Any, user_id: Optional[str] = None) -> None: ...
+    def get_project(self, project_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
+    def get_all_projects(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
+    def delete_project(self, project_id: str, user_id: Optional[str] = None) -> None: ...
     # sessions
-    def upsert_session(self, session_id: str, session_name: str, model_name: str,
-                       project_id: Optional[str], now: Any) -> None: ...
-    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]: ...
-    def get_all_session_rows(self) -> List[Dict[str, Any]]: ...
-    def move_session(self, session_id: str, project_id: Optional[str]) -> None: ...
-    def update_stats(self, session_id: str, input_t: int, output_t: int,
-                     cached_t: int, total_t: int, cost: float, now: Any) -> None: ...
-    def delete_session(self, session_id: str) -> None: ...
+    def upsert_session(self, session_id: str, user_id: Optional[str], session_name: str,
+                       model_name: str, project_id: Optional[str], now: Any) -> None: ...
+    def get_session(self, session_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
+    def get_all_session_rows(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
+    def move_session(self, session_id: str, project_id: Optional[str], user_id: Optional[str] = None) -> None: ...
+    def update_stats(self, session_id: str, input_t: int, output_t: int, cached_t: int,
+                     total_t: int, cost: float, now: Any, user_id: Optional[str] = None) -> None: ...
+    def delete_session(self, session_id: str, user_id: Optional[str] = None) -> None: ...
 
 
 class DuplicateProject(Exception):
@@ -44,7 +55,7 @@ class DuplicateProject(Exception):
 
 
 # ---------------------------------------------------------------------------
-# SQLite — encapsulates exactly today's schema and queries.
+# SQLite — encapsulates today's schema and queries, plus the tenant column.
 # ---------------------------------------------------------------------------
 
 
@@ -65,6 +76,7 @@ class SqliteMetadataStore:
                 CREATE TABLE IF NOT EXISTS projects (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
+                    user_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -73,6 +85,7 @@ class SqliteMetadataStore:
                 """
                 CREATE TABLE IF NOT EXISTS session_metadata (
                     session_id TEXT PRIMARY KEY,
+                    user_id TEXT,
                     session_name TEXT,
                     model_name TEXT,
                     created_at TIMESTAMP,
@@ -85,18 +98,33 @@ class SqliteMetadataStore:
                 )
                 """
             )
-            existing = {row[1] for row in cur.execute("PRAGMA table_info(session_metadata)")}
-            if "session_name" not in existing:
-                cur.execute("ALTER TABLE session_metadata ADD COLUMN session_name TEXT")
-            if "updated_at" not in existing:
-                cur.execute("ALTER TABLE session_metadata ADD COLUMN updated_at TIMESTAMP")
-            if "project_id" not in existing:
-                cur.execute(
-                    "ALTER TABLE session_metadata ADD COLUMN project_id TEXT "
-                    "REFERENCES projects(id) ON DELETE SET NULL"
-                )
-                self._migrate_existing_groups(cur)
+            self._migrate_columns(cur)
+            # Tenant-scoped listing index (user_id, created_at).
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_user_created "
+                "ON session_metadata(user_id, created_at)"
+            )
             conn.commit()
+
+    def _migrate_columns(self, cur) -> None:
+        existing = {row[1] for row in cur.execute("PRAGMA table_info(session_metadata)")}
+        if "session_name" not in existing:
+            cur.execute("ALTER TABLE session_metadata ADD COLUMN session_name TEXT")
+        if "updated_at" not in existing:
+            cur.execute("ALTER TABLE session_metadata ADD COLUMN updated_at TIMESTAMP")
+        if "project_id" not in existing:
+            cur.execute(
+                "ALTER TABLE session_metadata ADD COLUMN project_id TEXT "
+                "REFERENCES projects(id) ON DELETE SET NULL"
+            )
+            self._migrate_existing_groups(cur)
+        # Tenant column. Legacy rows keep user_id NULL ("unowned"): visible only
+        # to unscoped (self-host) queries, never to a real tenant.
+        if "user_id" not in existing:
+            cur.execute("ALTER TABLE session_metadata ADD COLUMN user_id TEXT")
+        proj_cols = {row[1] for row in cur.execute("PRAGMA table_info(projects)")}
+        if "user_id" not in proj_cols:
+            cur.execute("ALTER TABLE projects ADD COLUMN user_id TEXT")
 
     def _migrate_existing_groups(self, cur) -> None:
         rows = cur.execute("SELECT session_id FROM session_metadata").fetchall()
@@ -108,83 +136,121 @@ class SqliteMetadataStore:
                 cur.execute("UPDATE session_metadata SET project_id = ? WHERE session_id = ?",
                             (project_slug, session_id))
 
-    def create_project(self, slug, name, created_at):
+    # -- projects --
+
+    def create_project(self, slug, name, created_at, user_id=None):
         with self._connect() as conn:
             try:
-                conn.execute("INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)",
-                             (slug, name, created_at))
+                conn.execute("INSERT INTO projects (id, name, user_id, created_at) VALUES (?, ?, ?, ?)",
+                             (slug, name, user_id, created_at))
                 conn.commit()
             except sqlite3.IntegrityError as exc:
                 raise DuplicateProject(slug) from exc
 
-    def get_project(self, project_id):
+    def get_project(self, project_id, user_id=None):
+        sql = "SELECT * FROM projects WHERE id = ?"
+        params: list = [project_id]
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            params.append(user_id)
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
-            row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+            row = conn.execute(sql, params).fetchone()
         return dict(row) if row else None
 
-    def get_all_projects(self):
+    def get_all_projects(self, user_id=None):
+        sql = "SELECT * FROM projects"
+        params: list = []
+        if user_id is not None:
+            sql += " WHERE user_id = ?"
+            params.append(user_id)
+        sql += " ORDER BY name ASC"
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT * FROM projects ORDER BY name ASC").fetchall()
+            rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
-    def delete_project(self, project_id):
+    def delete_project(self, project_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn:
-            conn.execute("UPDATE session_metadata SET project_id = NULL WHERE project_id = ?", (project_id,))
-            conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+            conn.execute(
+                f"UPDATE session_metadata SET project_id = NULL WHERE project_id = ?{owner}",
+                (project_id, *oparams),
+            )
+            conn.execute(f"DELETE FROM projects WHERE id = ?{owner}", (project_id, *oparams))
             conn.commit()
 
-    def upsert_session(self, session_id, session_name, model_name, project_id, now):
+    # -- sessions --
+
+    def upsert_session(self, session_id, user_id, session_name, model_name, project_id, now):
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO session_metadata (session_id, session_name, model_name, project_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO session_metadata (session_id, user_id, session_name, model_name, project_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
+                    -- owner is immutable once set (first writer wins).
+                    user_id = COALESCE(session_metadata.user_id, excluded.user_id),
                     session_name = COALESCE(session_metadata.session_name, excluded.session_name),
                     model_name = COALESCE(session_metadata.model_name, excluded.model_name),
                     project_id = COALESCE(excluded.project_id, session_metadata.project_id),
                     updated_at = excluded.updated_at
                 """,
-                (session_id, session_name, model_name, project_id, now, now),
+                (session_id, user_id, session_name, model_name, project_id, now, now),
             )
             conn.commit()
 
-    def get_session(self, session_id):
+    def get_session(self, session_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
-            row = conn.execute("SELECT * FROM session_metadata WHERE session_id = ?", (session_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT * FROM session_metadata WHERE session_id = ?{owner}",
+                (session_id, *oparams),
+            ).fetchone()
         return dict(row) if row else None
 
-    def get_all_session_rows(self):
+    def get_all_session_rows(self, user_id=None):
+        sql = "SELECT * FROM session_metadata"
+        params: list = []
+        if user_id is not None:
+            sql += " WHERE user_id = ?"
+            params.append(user_id)
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT * FROM session_metadata").fetchall()
+            rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
-    def move_session(self, session_id, project_id):
-        with self._connect() as conn:
-            conn.execute("UPDATE session_metadata SET project_id = ? WHERE session_id = ?",
-                         (project_id, session_id))
-            conn.commit()
-
-    def update_stats(self, session_id, input_t, output_t, cached_t, total_t, cost, now):
+    def move_session(self, session_id, project_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn:
             conn.execute(
-                """
+                f"UPDATE session_metadata SET project_id = ? WHERE session_id = ?{owner}",
+                (project_id, session_id, *oparams),
+            )
+            conn.commit()
+
+    def update_stats(self, session_id, input_t, output_t, cached_t, total_t, cost, now, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            conn.execute(
+                f"""
                 UPDATE session_metadata
                 SET input_tokens = ?, output_tokens = ?, cached_tokens = ?,
                     total_tokens = ?, total_cost = ?, updated_at = ?
-                WHERE session_id = ?
+                WHERE session_id = ?{owner}
                 """,
-                (input_t, output_t, cached_t, total_t, cost, now, session_id),
+                (input_t, output_t, cached_t, total_t, cost, now, session_id, *oparams),
             )
             conn.commit()
 
-    def delete_session(self, session_id):
+    def delete_session(self, session_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn:
-            conn.execute("DELETE FROM session_metadata WHERE session_id = ?", (session_id,))
+            conn.execute(
+                f"DELETE FROM session_metadata WHERE session_id = ?{owner}",
+                (session_id, *oparams),
+            )
             for table in self._CHECKPOINT_TABLES:
                 try:
                     conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (session_id,))
@@ -200,9 +266,13 @@ class SqliteMetadataStore:
             except PermissionError:
                 print("Could not delete database file. It might be in use.")
 
+    @staticmethod
+    def _owner_clause(user_id):
+        return (" AND user_id = ?", (user_id,)) if user_id is not None else ("", ())
+
 
 # ---------------------------------------------------------------------------
-# Postgres / Cloud SQL — same operations over psycopg (lazy import).
+# Postgres / Cloud SQL — same operations + tenant column over psycopg.
 # ---------------------------------------------------------------------------
 
 
@@ -231,6 +301,7 @@ class PostgresMetadataStore:
                 CREATE TABLE IF NOT EXISTS projects (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
+                    user_id TEXT,
                     created_at TIMESTAMPTZ DEFAULT now()
                 )
                 """
@@ -239,6 +310,7 @@ class PostgresMetadataStore:
                 """
                 CREATE TABLE IF NOT EXISTS session_metadata (
                     session_id TEXT PRIMARY KEY,
+                    user_id TEXT,
                     session_name TEXT,
                     model_name TEXT,
                     project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
@@ -252,78 +324,102 @@ class PostgresMetadataStore:
                 )
                 """
             )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_user_created "
+                "ON session_metadata(user_id, created_at)"
+            )
             conn.commit()
 
-    def create_project(self, slug, name, created_at):
+    def create_project(self, slug, name, created_at, user_id=None):
         import psycopg.errors as pg_errors  # lazy
 
         try:
             with self._connect() as conn, conn.cursor() as cur:
-                cur.execute("INSERT INTO projects (id, name, created_at) VALUES (%s, %s, %s)",
-                            (slug, name, created_at))
+                cur.execute("INSERT INTO projects (id, name, user_id, created_at) VALUES (%s, %s, %s, %s)",
+                            (slug, name, user_id, created_at))
                 conn.commit()
         except pg_errors.UniqueViolation as exc:
             raise DuplicateProject(slug) from exc
 
-    def get_project(self, project_id):
-        return self._one("SELECT * FROM projects WHERE id = %s", (project_id,))
+    def get_project(self, project_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        return self._one(f"SELECT * FROM projects WHERE id = %s{owner}", (project_id, *oparams))
 
-    def get_all_projects(self):
+    def get_all_projects(self, user_id=None):
+        if user_id is not None:
+            return self._all("SELECT * FROM projects WHERE user_id = %s ORDER BY name ASC", (user_id,))
         return self._all("SELECT * FROM projects ORDER BY name ASC")
 
-    def delete_project(self, project_id):
+    def delete_project(self, project_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute("UPDATE session_metadata SET project_id = NULL WHERE project_id = %s", (project_id,))
-            cur.execute("DELETE FROM projects WHERE id = %s", (project_id,))
+            cur.execute(
+                f"UPDATE session_metadata SET project_id = NULL WHERE project_id = %s{owner}",
+                (project_id, *oparams),
+            )
+            cur.execute(f"DELETE FROM projects WHERE id = %s{owner}", (project_id, *oparams))
             conn.commit()
 
-    def upsert_session(self, session_id, session_name, model_name, project_id, now):
+    def upsert_session(self, session_id, user_id, session_name, model_name, project_id, now):
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO session_metadata (session_id, session_name, model_name, project_id, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO session_metadata (session_id, user_id, session_name, model_name, project_id, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(session_id) DO UPDATE SET
+                    user_id = COALESCE(session_metadata.user_id, excluded.user_id),
                     session_name = COALESCE(session_metadata.session_name, excluded.session_name),
                     model_name = COALESCE(session_metadata.model_name, excluded.model_name),
                     project_id = COALESCE(excluded.project_id, session_metadata.project_id),
                     updated_at = excluded.updated_at
                 """,
-                (session_id, session_name, model_name, project_id, now, now),
+                (session_id, user_id, session_name, model_name, project_id, now, now),
             )
             conn.commit()
 
-    def get_session(self, session_id):
-        return self._one("SELECT * FROM session_metadata WHERE session_id = %s", (session_id,))
+    def get_session(self, session_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        return self._one(f"SELECT * FROM session_metadata WHERE session_id = %s{owner}", (session_id, *oparams))
 
-    def get_all_session_rows(self):
+    def get_all_session_rows(self, user_id=None):
+        if user_id is not None:
+            return self._all("SELECT * FROM session_metadata WHERE user_id = %s", (user_id,))
         return self._all("SELECT * FROM session_metadata")
 
-    def move_session(self, session_id, project_id):
-        with self._connect() as conn, conn.cursor() as cur:
-            cur.execute("UPDATE session_metadata SET project_id = %s WHERE session_id = %s",
-                        (project_id, session_id))
-            conn.commit()
-
-    def update_stats(self, session_id, input_t, output_t, cached_t, total_t, cost, now):
+    def move_session(self, session_id, project_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                """
+                f"UPDATE session_metadata SET project_id = %s WHERE session_id = %s{owner}",
+                (project_id, session_id, *oparams),
+            )
+            conn.commit()
+
+    def update_stats(self, session_id, input_t, output_t, cached_t, total_t, cost, now, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
                 UPDATE session_metadata
                 SET input_tokens = %s, output_tokens = %s, cached_tokens = %s,
                     total_tokens = %s, total_cost = %s, updated_at = %s
-                WHERE session_id = %s
+                WHERE session_id = %s{owner}
                 """,
-                (input_t, output_t, cached_t, total_t, cost, now, session_id),
+                (input_t, output_t, cached_t, total_t, cost, now, session_id, *oparams),
             )
             conn.commit()
 
-    def delete_session(self, session_id):
+    def delete_session(self, session_id, user_id=None):
+        owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM session_metadata WHERE session_id = %s", (session_id,))
+            cur.execute(f"DELETE FROM session_metadata WHERE session_id = %s{owner}", (session_id, *oparams))
             conn.commit()
 
     # -- helpers --
+    @staticmethod
+    def _owner_clause(user_id):
+        return (" AND user_id = %s", (user_id,)) if user_id is not None else ("", ())
+
     def _one(self, sql, params):
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(sql, params)
