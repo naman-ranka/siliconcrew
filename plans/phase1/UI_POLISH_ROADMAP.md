@@ -57,7 +57,7 @@ git push origin claude/integration-p1p2   # retry w/ backoff on network error
 | 7 | Waveform: gridlines, hover tooltip, draggable cursor handle, segmented radix control, fit-to-window, dedup aliased nets (+midpoint BUG fixed: viewer now follows `selectedRunId`'s VCD, overriding a stale load, with manual-pick override until the run changes) | ✅ done | `a540753` |
 | 8 | Report / empty states / banner / agent rail: one EmptyState primitive, PPA hero polish, calmer welcome (midpoint fixed: ViewingBanner overflow → truncate; empty-state voice unified across viewers; brand-orange de-overloaded on neutral count badges) | ✅ done | `00516ca` |
 | 1b | Styled Radix tooltips replacing native `title` (update `getByTitle` tests); human-first sim toasts; sticky-dismissible API-key banner | ✅ done | `aa59e9a` |
-| 9 | a11y & contrast audit: AA on warm dark+light, reduced-motion, focus order, ARIA live regions | ⬜ todo | |
+| 9 | a11y & contrast audit: warm-light "paper" fix + visible elevation ladder + WCAG AA on dark+light (incl. status/brand), ARIA live regions (Toaster/banner/console peek, polite), focus-visible audit, reduced-motion verified | ✅ done | `ebb9297` |
 
 ## Periodic review
 After ~every 2–3 slices, a fresh **persona-review subagent** (isolated headless
