@@ -201,6 +201,146 @@ already enforced inside `synthesis_manager.start_synthesis_job` / `retry_pd_job`
 (reads tier/user from the context bound by the scope). The handler just needs the
 scope + `require_signed_in`.
 
+### 3a. Wrapping Phase 1's `actions.py` router — the exact recipe
+
+Phase 1's action endpoints (`POST /lint|simulate|synthesize|...`) must each do
+three things, in this order: **(1) authenticate + ownership**, **(2) enter the
+request scope**, **(3) call the SiliconCrew tool inside it**. Quota for synth is
+handled *for you* in step 3.
+
+#### Step 0 — make the auth deps importable (one small extraction)
+
+The deps `get_identity`, `require_signed_in`, `_uid`, `_require_owned`,
+`verify_session_access` currently live in `api.py`. If `actions.py` is a separate
+`APIRouter` that `api.py` includes, importing them *from* `api.py` would be
+circular. Extract them into a tiny shared module both import — e.g.
+`src/web/deps.py` (ready to paste; pure-logic already lives in
+`platform_engines.auth`):
+
+```python
+# src/web/deps.py
+from typing import Optional
+from fastapi import Depends, Header, HTTPException
+from src.platform_engines.identity import Identity, AuthError
+from src.platform_engines import auth as auth_engine
+from src.utils.session_manager import SessionManager
+# Reuse the SAME SessionManager instance api.py builds. Simplest: construct it
+# in one place (e.g. src/web/state.py) and import it here and in api.py.
+from src.web.state import session_manager  # noqa
+
+def get_identity(authorization: Optional[str] = Header(default=None)) -> Identity:
+    try:
+        return auth_engine.authenticate(auth_engine.parse_bearer(authorization))
+    except AuthError as e:
+        raise HTTPException(401, detail={"code": e.code, "message": e.message})
+
+def require_signed_in(identity: Identity = Depends(get_identity)) -> Identity:
+    try:
+        auth_engine.ensure_signed_in(identity)
+    except AuthError as e:
+        raise HTTPException(403, detail={"code": e.code, "message": e.message})
+    return identity
+
+def uid(identity: Identity) -> Optional[str]:
+    return auth_engine.scoped_user_id(identity)
+
+def require_owned(session_id: str, identity: Identity) -> Optional[str]:
+    u = uid(identity)
+    if not session_manager.owns_session(session_id, u):
+        raise HTTPException(404, detail="Session not found")
+    return u
+
+def verify_session_access(session_id: str, identity: Identity = Depends(get_identity)) -> Optional[str]:
+    return require_owned(session_id, identity)
+```
+
+`api.py` then imports the same five names from `src/web/deps.py` instead of
+defining them locally (keeps a single source of truth; minimal shared-file
+churn). Self-host is unaffected: `authenticate` returns `LOCAL_IDENTITY` and
+`uid` is `None` (unscoped).
+
+#### Step 1+2+3 — the handler pattern (use `run_in_session`)
+
+Action tools are **sync** (they shell out to iverilog/ORFS). Calling them
+directly in an `async def` handler blocks the event loop, and a plain
+`with session_request_scope(...)` around a sync call doesn't get you off the
+loop. Use `await run_in_session(...)`: it offloads the tool to a worker thread
+**and** binds the workspace+identity contextvar *in that thread*.
+
+```python
+# src/web/actions.py
+from fastapi import APIRouter, Depends
+from src.platform_engines.identity import Identity
+from src.platform_engines.request_scope import run_in_session
+from src.web.deps import get_identity, require_signed_in, require_owned, uid
+from src.tools.wrappers import linter_tool, simulation_tool      # the @tool fns
+from src.tools.synthesis_manager import start_synthesis_job
+
+router = APIRouter()
+
+# Anonymous trial is allowed for lint/sim — get_identity (NOT require_signed_in).
+@router.post("/api/workspace/{session_id}/lint")
+async def lint(session_id: str, body: LintBody, identity: Identity = Depends(get_identity)):
+    u = require_owned(session_id, identity)                       # 404 if not owner
+    return await run_in_session(                                  # scope bound in worker
+        session_id, linter_tool.invoke, {"verilog_files": body.files},
+        user_id=u, tier=identity.tier,
+    )
+
+@router.post("/api/workspace/{session_id}/simulate")
+async def simulate(session_id: str, body: SimBody, identity: Identity = Depends(get_identity)):
+    u = require_owned(session_id, identity)
+    return await run_in_session(
+        session_id, simulation_tool.invoke,
+        {"verilog_files": body.files, "top_module": body.top, "mode": body.mode},
+        user_id=u, tier=identity.tier,
+    )
+
+# Synthesis/save require sign-in. Quota is enforced INSIDE start_synthesis_job —
+# do not reserve/release here. A cap hit comes back as a dict with
+# {"status": "rejected", "ok": False, "error": {...}} — surface it as-is (HTTP 200
+# body, or map to 429 if you prefer).
+@router.post("/api/workspace/{session_id}/synthesize")
+async def synthesize(session_id: str, body: SynthBody, identity: Identity = Depends(require_signed_in)):
+    u = require_owned(session_id, identity)
+    result = await run_in_session(
+        session_id, start_synthesis_job,
+        # start_synthesis_job(workspace, verilog_files, top_module, ...): pass
+        # workspace=None so it resolves from the scope via get_workspace_path(),
+        # OR pass the resolved path — see note below.
+        **synth_kwargs(body),
+        user_id=u, tier=identity.tier,
+    )
+    if result.get("status") == "rejected":
+        # quota/cap hit — already an error envelope
+        raise HTTPException(429, detail=result["error"])
+    return result   # {"job_id", "run_id", "status": "queued"}
+```
+
+Notes that bite:
+- **`start_synthesis_job` takes an explicit `workspace=` arg today.** Inside
+  `run_in_session` the scope is bound, so resolve it with
+  `from src.utils.workspace import get_workspace_path` and pass
+  `workspace=get_workspace_path()` from *inside* the worker — i.e. wrap it:
+  `await run_in_session(session_id, lambda: start_synthesis_job(get_workspace_path(), ...), user_id=u, tier=identity.tier)`.
+  (The `@tool` `start_synthesis` wrapper in `wrappers.py` already does this; if
+  the action layer calls the tool wrapper instead of the manager directly, just
+  pass `start_synthesis.invoke({...})` and it resolves the workspace itself.)
+- **Tier must be passed.** `tier=identity.tier` is what makes anonymous-synth
+  return `synth_not_allowed`. Omitting it defaults to `"user"` and silently
+  lets anonymous trials synth.
+- **`run_in_session` calls `provider.sync()` on exit**, so files an action
+  writes (VCDs, reports) persist to object storage in hosted mode automatically.
+- **Job polling endpoints** (`GET /jobs/{id}`, `GET /runs/{id}`) are reads of
+  the run dir / job map — wrap them in `require_owned` + (if they read workspace
+  files) `run_in_session` so the cloud workspace is staged in.
+
+#### One-line mental model
+`get_identity` (or `require_signed_in`) → `require_owned(session_id, identity)`
+→ `await run_in_session(session_id, tool, args, user_id=uid, tier=identity.tier)`.
+Auth + tenancy + workspace + sync + (for synth) quota all fall out of those three
+calls. No handler ever touches `QuotaManager` or `os.environ` directly.
+
 ---
 
 ## 4. Shareable surface for Phase 1 (drive a real synth without this backend)
