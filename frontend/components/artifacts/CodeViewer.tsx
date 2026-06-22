@@ -36,9 +36,13 @@ export function CodeViewer() {
   const [editing, setEditing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState("");
+  const [baseline, setBaseline] = useState("");   // content at edit start (dirty tracking)
+  const [editingFile, setEditingFile] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const dirty = editing && draft !== baseline;
 
   useEffect(() => {
     if (currentSession) loadCodeFiles();
@@ -87,6 +91,8 @@ export function CodeViewer() {
   const startEdit = () => {
     setCreating(false);
     setDraft(currentFile?.content ?? "");
+    setBaseline(currentFile?.content ?? "");
+    setEditingFile(selectedCodeFile);
     setSaveError(null);
     setEditing(true);
   };
@@ -95,15 +101,57 @@ export function CodeViewer() {
     setCreating(true);
     setNewName("");
     setDraft(NEW_TEMPLATE);
+    setBaseline(NEW_TEMPLATE);
+    setEditingFile(null);
     setSaveError(null);
     setEditing(true);
   };
 
   const cancelEdit = () => {
+    if (dirty && !window.confirm("Discard unsaved changes?")) return;
     setEditing(false);
     setCreating(false);
     setSaveError(null);
   };
+
+  // Ctrl/Cmd+S saves while editing.
+  useEffect(() => {
+    if (!editing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void handleSave();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, draft, creating, newName, selectedCodeFile]);
+
+  // Warn before leaving the page with unsaved edits.
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
+  // Guard the data-loss trap: selecting another file in the tree while editing
+  // with unsaved changes prompts instead of silently dropping the edit.
+  useEffect(() => {
+    if (!editing || creating) return;
+    if (editingFile && selectedCodeFile !== editingFile) {
+      if (dirty && !window.confirm(`Discard unsaved changes to ${editingFile}?`)) {
+        selectCodeFile(editingFile); // restore the file being edited
+      } else {
+        setEditing(false);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCodeFile]);
 
   const handleSave = async () => {
     const name = creating ? newName.trim() : selectedCodeFile;
@@ -172,7 +220,15 @@ export function CodeViewer() {
             </Select>
           )}
           {editing ? (
-            <span className="text-[11px] text-primary">{creating ? "new file" : "editing"}</span>
+            <span className="text-[11px] flex items-center gap-1">
+              <span className="text-primary">{creating ? "new file" : "editing"}</span>
+              {dirty && (
+                <span className="flex items-center gap-1 text-status-warn" title="Unsaved changes">
+                  <span className="h-1.5 w-1.5 rounded-full bg-status-warn" />
+                  unsaved
+                </span>
+              )}
+            </span>
           ) : (
             <span className="text-xs text-muted-foreground">
               {codeFiles.length} file{codeFiles.length !== 1 ? "s" : ""}
@@ -183,8 +239,8 @@ export function CodeViewer() {
         <div className="flex items-center gap-1">
           {editing ? (
             <>
-              <Button size="sm" className="h-7 gap-1 text-xs" onClick={handleSave} disabled={saving}>
-                <Save className="h-3.5 w-3.5" /> {saving ? "Saving…" : "Save"}
+              <Button size="sm" className="h-7 gap-1 text-xs" onClick={handleSave} disabled={saving} title="Save (Ctrl/Cmd+S)">
+                <Save className="h-3.5 w-3.5" /> {saving ? "Saving…" : dirty ? "Save •" : "Save"}
               </Button>
               <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={cancelEdit} disabled={saving}>
                 <X className="h-3.5 w-3.5" /> Cancel

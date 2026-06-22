@@ -144,23 +144,34 @@ def _infer_tops(workspace: str, files: List[DesignFile]) -> tuple[str, str]:
                 tb_text = text
                 break
 
-    # synthTop = an rtl module instantiated by the testbench, else first rtl module.
+    # synthTop = the ROOT of the RTL hierarchy (the module no other rtl module
+    # instantiates), preferring the DUT the testbench instantiates. This fixes
+    # multi-module designs where the old "first rtl module" guess picked a leaf
+    # submodule (e.g. `mux2`) instead of the real top (`top`).
     rtl_modules: List[str] = []
     rtl_module_set: set[str] = set()
+    instantiated_by_rtl: set[str] = set()
     for f in files:
         if f.role == "rtl":
             text = _read_text(os.path.join(workspace, f.path))
             for m in _modules_in(text):
                 rtl_modules.append(m)
                 rtl_module_set.add(m)
+            for inst in _instances_in(text):
+                instantiated_by_rtl.add(inst)
 
-    if tb_text:
-        for inst in _instances_in(tb_text):
-            if inst in rtl_module_set:
-                synth_top = inst
-                break
-    if not synth_top and rtl_modules:
-        synth_top = rtl_modules[0]
+    # Roots = rtl modules that are never instantiated by another rtl module.
+    roots = [m for m in rtl_modules if m not in instantiated_by_rtl]
+    tb_insts = [i for i in _instances_in(tb_text) if i in rtl_module_set] if tb_text else []
+
+    # 1) a root the testbench instantiates (the DUT); 2) the sole/first root;
+    # 3) any module the tb instantiates; 4) first rtl module.
+    synth_top = (
+        next((i for i in tb_insts if i in roots), "")
+        or (roots[0] if roots else "")
+        or (tb_insts[0] if tb_insts else "")
+        or (rtl_modules[0] if rtl_modules else "")
+    )
 
     return synth_top, sim_top
 

@@ -95,6 +95,25 @@ def test_reconcile_adds_new_and_drops_missing(tmp_path):
     assert {f.name for f in reread2.files} == {"counter_tb.v"}
 
 
+def test_synthtop_is_hierarchy_root_not_submodule(tmp_path):
+    # Regression: multi-module design where the tb's DUT (`top`) instantiates a
+    # submodule (`mux2`). synthTop must be the root `top`, never the leaf `mux2`.
+    ws = str(tmp_path)
+    _write(ws, "mux2.v", "module mux2(input a, input b, input s, output y); assign y = s?b:a; endmodule\n")
+    _write(ws, "top.v",
+           "module top(input [1:0] a, input [1:0] b, input s, output [1:0] y);\n"
+           "  mux2 m0(.a(a[0]),.b(b[0]),.s(s),.y(y[0]));\n"
+           "  mux2 m1(.a(a[1]),.b(b[1]),.s(s),.y(y[1]));\n"
+           "endmodule\n")
+    _write(ws, "top_tb.v",
+           "module top_tb; reg [1:0] a,b; reg s; wire [1:0] y;\n"
+           "  top dut(.a(a),.b(b),.s(s),.y(y));\n"
+           "  initial begin a=1;b=2;s=0; #1 $finish; end\nendmodule\n")
+    mani = m.build_manifest(ws, "t")
+    assert mani.simTop == "top_tb"
+    assert mani.synthTop == "top"  # not "mux2"
+
+
 def test_files_for_stage(tmp_path):
     ws = str(tmp_path)
     _write(ws, "counter.v", DUT)
