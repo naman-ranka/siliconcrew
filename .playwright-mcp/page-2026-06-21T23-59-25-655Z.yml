@@ -1,0 +1,124 @@
+- main [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - img [ref=e7]
+        - generic [ref=e13]: SiliconCrew
+        - generic [ref=e14]: Workbench
+      - button "Select session" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: Select session
+        - img [ref=e19]
+    - link "Chat view" [ref=e22] [cursor=pointer]:
+      - /url: /
+      - button "Chat view" [ref=e23]:
+        - img [ref=e24]
+        - text: Chat view
+  - generic [ref=e27]:
+    - generic [ref=e28]:
+      - button "Spec no spec" [disabled] [ref=e29]:
+        - img [ref=e31]
+        - generic [ref=e34]:
+          - generic [ref=e35]: Spec
+          - generic [ref=e37]: no spec
+      - generic [ref=e38]: →
+    - generic [ref=e39]:
+      - button "RTL none" [disabled] [ref=e40]:
+        - img [ref=e42]
+        - generic [ref=e46]:
+          - generic [ref=e47]: RTL
+          - generic [ref=e49]: none
+      - generic [ref=e50]: →
+    - generic [ref=e51]:
+      - button "Lint run run lint" [disabled] [ref=e52]:
+        - img [ref=e54]
+        - generic [ref=e57]:
+          - generic [ref=e58]:
+            - text: Lint
+            - generic [ref=e59]: run
+          - generic [ref=e61]: run lint
+      - generic [ref=e62]: →
+    - generic [ref=e63]:
+      - button "Simulate run run sim" [disabled] [ref=e64]:
+        - img [ref=e66]
+        - generic [ref=e70]:
+          - generic [ref=e71]:
+            - text: Simulate
+            - generic [ref=e72]: run
+          - generic [ref=e74]: run sim
+      - generic [ref=e75]: →
+    - generic [ref=e76]:
+      - button "Synthesize run run synth" [disabled] [ref=e77]:
+        - img [ref=e79]
+        - generic [ref=e82]:
+          - generic [ref=e83]:
+            - text: Synthesize
+            - generic [ref=e84]: run
+          - generic [ref=e86]: run synth
+      - generic [ref=e87]: →
+    - button "Signoff —" [disabled] [ref=e89]:
+      - img [ref=e91]
+      - generic [ref=e94]:
+        - generic [ref=e95]: Signoff
+        - generic [ref=e97]: —
+  - generic [ref=e98]:
+    - generic [ref=e100]:
+      - generic [ref=e102]:
+        - generic [ref=e103]:
+          - generic [ref=e104]: Files
+          - button "Upload" [disabled]:
+            - img
+            - text: Upload
+        - generic [ref=e106]: No files yet. Upload RTL / testbench to begin.
+      - generic [ref=e107]:
+        - generic [ref=e108]:
+          - generic [ref=e109]: Runs
+          - generic [ref=e110]:
+            - button "Compare two runs" [ref=e111] [cursor=pointer]:
+              - img [ref=e112]
+            - button "Refresh" [ref=e117] [cursor=pointer]:
+              - img [ref=e118]
+        - generic [ref=e123]:
+          - button "All" [ref=e124] [cursor=pointer]
+          - button "Sim" [ref=e125] [cursor=pointer]
+          - button "Synth" [ref=e126] [cursor=pointer]
+        - generic [ref=e128]: No runs yet. Use the pipeline to Lint / Simulate / Synthesize.
+    - separator [ref=e129]
+    - generic [ref=e131]:
+      - generic [ref=e133]: Artifacts hidden
+      - generic [ref=e134]:
+        - generic [ref=e135]:
+          - img [ref=e136]
+          - button "Lint" [ref=e138] [cursor=pointer]: Lint
+          - button "Sim" [ref=e140] [cursor=pointer]: Sim
+          - button "Synth" [ref=e142] [cursor=pointer]: Synth
+          - button [ref=e145] [cursor=pointer]:
+            - img [ref=e146]
+        - generic [ref=e149]: No sim output yet.
+    - separator [ref=e150]
+    - generic [ref=e152]:
+      - generic [ref=e153]:
+        - img [ref=e154]
+        - generic [ref=e156]: AI Assistant
+        - generic [ref=e157]: same tools · same workspace
+      - generic [ref=e159]:
+        - generic [ref=e161]:
+          - img [ref=e163]
+          - generic [ref=e166]:
+            - heading "SiliconCrew Architect" [level=1] [ref=e167]
+            - paragraph [ref=e168]: AI-powered RTL design
+        - generic [ref=e170]:
+          - img [ref=e172]
+          - heading "Select a Session" [level=2] [ref=e175]
+          - paragraph [ref=e176]: Choose an existing session from the sidebar or create a new one to start designing hardware with AI assistance.
+        - generic [ref=e179]:
+          - generic [ref=e180]:
+            - textbox "Select or create a session to start" [disabled] [ref=e181]
+            - generic [ref=e182]:
+              - button "Send" [disabled]:
+                - img
+                - text: Send
+          - generic [ref=e183]:
+            - generic [ref=e184]:
+              - img [ref=e185]
+              - generic [ref=e187]: AI-powered RTL design assistant
+            - generic [ref=e188]: Shift + Enter for new line
