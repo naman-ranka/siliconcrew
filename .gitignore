@@ -200,4 +200,6 @@ frontend/.playwright-mcp/
 /real-*.png
 
 # Persona/review scratch scripts (Playwright node)
-/frontend/*.mjs
+/frontend/_*.js
+/frontend/explore_*.mjs
+/frontend/_*.mjs
