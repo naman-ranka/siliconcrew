@@ -2,13 +2,29 @@
 
 import { useStore } from "@/lib/store";
 import { ChevronDown, Plus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 /** Minimal session switcher for the workbench top bar. */
 export function SessionPicker() {
   const { sessions, currentSession, selectSession, createSession, loadWorkbench } = useStore();
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on Escape or click outside (standard popover affordances).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onClick);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onClick);
+    };
+  }, [open]);
 
   const pick = async (id: string) => {
     setOpen(false);
@@ -25,10 +41,13 @@ export function SessionPicker() {
   };
 
   return (
-    <div className="relative">
+    <div className="relative" ref={ref}>
       <button
         type="button"
-        className="flex items-center gap-2 text-sm rounded-md px-2 py-1 hover:bg-surface-2"
+        className="flex items-center gap-2 text-sm rounded-md px-2 py-1 hover:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Switch session"
         onClick={() => setOpen((v) => !v)}
       >
         <span className="font-medium truncate max-w-[200px]">

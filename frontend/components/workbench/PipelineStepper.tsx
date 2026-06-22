@@ -129,18 +129,21 @@ export function PipelineStepper() {
           <div key={stage.id} className="flex items-center">
             <button
               type="button"
-              disabled={disabled}
+              disabled={disabled || (stage.isAction && stage.pending)}
               onClick={stage.onClick}
               data-stage={stage.id}
               data-status={stage.status ?? "none"}
               title={stage.isAction ? `Run ${stage.name}` : `View ${stage.name}`}
+              aria-label={stage.isAction ? `Run ${stage.name}` : `View ${stage.name}`}
+              aria-pressed={isActive}
+              aria-busy={stage.pending || undefined}
               className={cn(
                 "group flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all min-w-[112px]",
-                "border",
+                "border outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
                 isActive
                   ? "border-primary/60 bg-primary/10"
                   : "border-transparent hover:bg-surface-2",
-                disabled && "opacity-50 cursor-not-allowed"
+                (disabled || (stage.isAction && stage.pending)) && "opacity-50 cursor-not-allowed"
               )}
             >
               <span className={cn("shrink-0", isActive ? "text-primary" : "text-muted-foreground")}>
