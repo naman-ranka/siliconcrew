@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yaml
@@ -27,6 +27,8 @@ from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name
 from src.utils.session_manager import SessionManager
 from src.utils.session_context import SessionContext, set_current_session
 from src.platform_engines.workspace_provider import get_workspace_provider
+from src.platform_engines.identity import Action, AuthError, Identity
+from src.platform_engines import auth as auth_engine
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.tools.design_report import save_design_report
 from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
@@ -255,6 +257,11 @@ async def lifespan(app: FastAPI):
     if not os.path.exists(WORKSPACE_DIR):
         os.makedirs(WORKSPACE_DIR)
 
+    # Single wiring point: select + bind cloud engines (quota store, per-user
+    # job queue, ORFS runner, BYOK vault) from settings. No-op in self-host.
+    from src.platform_engines.settings import apply_platform_wiring
+    apply_platform_wiring()
+
     yield
 
     # Shutdown
@@ -283,17 +290,66 @@ app.add_middleware(
 
 
 # =============================================================================
+# AUTH DEPENDENCIES
+# =============================================================================
+
+def get_identity(authorization: Optional[str] = Header(default=None)) -> Identity:
+    """Resolve the caller's Identity from the Authorization header.
+
+    Self-host: always the trusted local user. Hosted: verified OAuth user, or an
+    anonymous trial when no token is present. A *present but invalid* token 401s.
+    """
+    try:
+        return auth_engine.authenticate(auth_engine.parse_bearer(authorization))
+    except AuthError as e:
+        raise HTTPException(status_code=401, detail={"code": e.code, "message": e.message})
+
+
+def require_signed_in(identity: Identity = Depends(get_identity)) -> Identity:
+    """Dependency for save/synth/MCP endpoints — rejects the anonymous trial."""
+    try:
+        auth_engine.ensure_signed_in(identity)
+    except AuthError as e:
+        raise HTTPException(status_code=403, detail={"code": e.code, "message": e.message})
+    return identity
+
+
+def _uid(identity: Identity) -> Optional[str]:
+    """Tenant id to scope metadata by (None in self-host)."""
+    return auth_engine.scoped_user_id(identity)
+
+
+def _require_owned(session_id: str, identity: Identity) -> str:
+    """404 unless the caller owns the session; returns the scoped user id."""
+    uid = _uid(identity)
+    if not session_manager.owns_session(session_id, uid):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return uid
+
+
+def verify_session_access(session_id: str, identity: Identity = Depends(get_identity)) -> Optional[str]:
+    """Dependency for workspace/artifact reads: enforce tenant ownership (404).
+
+    FastAPI binds ``session_id`` from the route's path param. Attach to any
+    ``/api/workspace/{session_id}/...`` endpoint so a tenant can never read
+    another tenant's files. Returns the scoped user id for optional use.
+    """
+    return _require_owned(session_id, identity)
+
+
+# =============================================================================
 # SESSION ENDPOINTS
 # =============================================================================
 
 @app.get("/api/sessions", response_model=List[SessionResponse])
-async def list_sessions():
-    """List all sessions."""
-    sessions = session_manager.get_all_sessions()
+async def list_sessions(identity: Identity = Depends(get_identity)):
+    """List the caller's sessions (tenant-scoped in hosted mode)."""
+    uid = _uid(identity)
+    sessions = session_manager.get_all_sessions(user_id=uid)
     result = []
 
     for session_id in sessions:
-        meta = session_manager.get_session_metadata(session_id)
+        meta = session_manager.get_session_metadata(session_id, user_id=uid)
         result.append(SessionResponse(
             id=session_id,
             name=meta.get("session_name") if meta else None,
@@ -309,14 +365,15 @@ async def list_sessions():
 
 
 @app.post("/api/sessions", response_model=SessionResponse)
-async def create_session(data: SessionCreate):
-    """Create a new session."""
+async def create_session(data: SessionCreate, identity: Identity = Depends(require_signed_in)):
+    """Create (save) a new session. Requires sign-in (anonymous → use /trial-session)."""
+    uid = _uid(identity)
     try:
         model_name = normalize_model_name(data.model)
         session_id = session_manager.create_session(
-            tag=data.name, model_name=model_name, project_id=data.project_id
+            tag=data.name, model_name=model_name, project_id=data.project_id, user_id=uid
         )
-        meta = session_manager.get_session_metadata(session_id)
+        meta = session_manager.get_session_metadata(session_id, user_id=uid)
 
         return SessionResponse(
             id=session_id,
@@ -334,10 +391,42 @@ async def create_session(data: SessionCreate):
         raise HTTPException(status_code=409, detail=str(e))
 
 
+@app.post("/api/trial-session", response_model=SessionResponse)
+async def create_trial_session(data: SessionCreate, identity: Identity = Depends(get_identity)):
+    """Anonymous-trial session creation path (lint/sim only).
+
+    Available to anonymous users; the session is owned by the (anonymous)
+    identity so tenancy still applies, and synth/save remain blocked downstream
+    by quotas + capability gating.
+    """
+    uid = _uid(identity)
+    try:
+        model_name = normalize_model_name(data.model)
+        session_id = session_manager.create_session(
+            tag=data.name, model_name=model_name, project_id=data.project_id, user_id=uid
+        )
+        meta = session_manager.get_session_metadata(session_id, user_id=uid)
+        return SessionResponse(
+            id=session_id,
+            name=meta.get("session_name") if meta else data.name,
+            model_name=model_name,
+            project_id=data.project_id,
+            created_at=str(meta.get("created_at")) if meta else None,
+            updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
+            total_tokens=0,
+            total_cost=0.0,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
 @app.get("/api/sessions/{session_id:path}", response_model=SessionResponse)
-async def get_session(session_id: str):
-    """Get session details."""
-    meta = session_manager.get_session_metadata(session_id)
+async def get_session(session_id: str, identity: Identity = Depends(get_identity)):
+    """Get session details (only if the caller owns it)."""
+    uid = _uid(identity)
+    meta = session_manager.get_session_metadata(session_id, user_id=uid)
     if not meta:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -354,27 +443,22 @@ async def get_session(session_id: str):
 
 
 @app.delete("/api/sessions/{session_id:path}")
-async def delete_session(session_id: str):
-    """Delete a session."""
-    workspace = session_manager.get_workspace_path(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    session_manager.delete_session(session_id)
+async def delete_session(session_id: str, identity: Identity = Depends(require_signed_in)):
+    """Delete a session (owner only)."""
+    uid = _require_owned(session_id, identity)
+    session_manager.delete_session(session_id, user_id=uid)
     return {"status": "deleted", "session_id": session_id}
 
 
 @app.patch("/api/sessions/{session_id:path}", response_model=SessionResponse)
-async def patch_session(session_id: str, data: SessionPatch):
-    """Move a session to a different project (or remove from project)."""
-    meta = session_manager.get_session_metadata(session_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Session not found")
+async def patch_session(session_id: str, data: SessionPatch, identity: Identity = Depends(require_signed_in)):
+    """Move a session to a different project (owner only)."""
+    uid = _require_owned(session_id, identity)
     try:
-        session_manager.move_session_to_project(session_id, data.project_id)
+        session_manager.move_session_to_project(session_id, data.project_id, user_id=uid)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    meta = session_manager.get_session_metadata(session_id)
+    meta = session_manager.get_session_metadata(session_id, user_id=uid)
     return SessionResponse(
         id=session_id,
         name=meta.get("session_name"),
@@ -392,28 +476,29 @@ async def patch_session(session_id: str, data: SessionPatch):
 # =============================================================================
 
 @app.get("/api/projects", response_model=List[ProjectResponse])
-async def list_projects():
-    """List all projects."""
-    projects = session_manager.get_all_projects()
+async def list_projects(identity: Identity = Depends(get_identity)):
+    """List the caller's projects (tenant-scoped in hosted mode)."""
+    projects = session_manager.get_all_projects(user_id=_uid(identity))
     return [ProjectResponse(id=p["id"], name=p["name"], created_at=str(p.get("created_at") or "")) for p in projects]
 
 
 @app.post("/api/projects", response_model=ProjectResponse, status_code=201)
-async def create_project(data: ProjectCreate):
-    """Create a new project."""
+async def create_project(data: ProjectCreate, identity: Identity = Depends(require_signed_in)):
+    """Create a new project (requires sign-in)."""
     try:
-        project = session_manager.create_project(data.name)
+        project = session_manager.create_project(data.name, user_id=_uid(identity))
         return ProjectResponse(id=project["id"], name=project["name"], created_at=str(project["created_at"]))
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
 
 @app.delete("/api/projects/{project_id}")
-async def delete_project(project_id: str):
-    """Delete a project (sessions are kept, unassigned)."""
-    if not session_manager.get_project(project_id):
+async def delete_project(project_id: str, identity: Identity = Depends(require_signed_in)):
+    """Delete a project (owner only; sessions are kept, unassigned)."""
+    uid = _uid(identity)
+    if not session_manager.get_project(project_id, user_id=uid):
         raise HTTPException(status_code=404, detail="Project not found")
-    session_manager.delete_project(project_id)
+    session_manager.delete_project(project_id, user_id=uid)
     return {"status": "deleted", "project_id": project_id}
 
 
@@ -422,15 +507,16 @@ async def delete_project(project_id: str):
 # =============================================================================
 
 @app.get("/api/chat/{session_id:path}/history")
-async def get_chat_history(session_id: str) -> List[Dict[str, Any]]:
-    """Get chat history for a session."""
+async def get_chat_history(session_id: str, identity: Identity = Depends(get_identity)) -> List[Dict[str, Any]]:
+    """Get chat history for a session (owner only)."""
+    uid = _require_owned(session_id, identity)
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
         async with open_checkpointer(DB_PATH) as memory:
-            meta = session_manager.get_session_metadata(session_id)
+            meta = session_manager.get_session_metadata(session_id, user_id=uid)
             model_name = normalize_model_name(meta.get("model_name", DEFAULT_MODEL) if meta else DEFAULT_MODEL)
 
             agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
@@ -489,8 +575,21 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for streaming chat."""
     await websocket.accept()
 
-    # Session existence is checked against the session manager's metadata/dir.
-    if not os.path.exists(session_manager.get_workspace_path(session_id)):
+    # Authenticate the connection. Browsers can't set headers on a WebSocket, so
+    # the token rides a query param (?token=...). Self-host needs none (local
+    # trusted user); hosted verifies the OAuth token or grants an anonymous trial.
+    token = websocket.query_params.get("token")
+    try:
+        identity = auth_engine.authenticate(token, session_hint=session_id)
+    except AuthError as e:
+        await websocket.send_json({"type": "error", "error": e.message, "code": e.code})
+        await websocket.close()
+        return
+    uid = _uid(identity)
+
+    # Tenant check: the caller must own this session (404 otherwise). In self-host
+    # uid is None and this is true for any existing session.
+    if not session_manager.owns_session(session_id, uid):
         await websocket.send_json({"type": "error", "error": "Session not found"})
         await websocket.close()
         return
@@ -502,13 +601,15 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
     _ws_provider = get_workspace_provider()
     workspace = _ws_provider.workspace_for(session_id)
 
-    # Bind this connection's task to its session/workspace. Each WebSocket runs
-    # in its own asyncio task, so this contextvar is task-local and isolated
-    # across concurrent users — replacing the process-global RTL_WORKSPACE
-    # mutation that raced. Tools resolve the workspace via get_workspace_path(),
-    # which now prefers this context. Propagation through LangGraph tool
-    # execution is covered by tests/test_session_context_propagation.py.
-    set_current_session(SessionContext(session_id=session_id, workspace=workspace, user_id=None))
+    # Bind this connection's task to its session/workspace/identity. Each
+    # WebSocket runs in its own asyncio task, so this contextvar is task-local
+    # and isolated across concurrent users — replacing the process-global
+    # RTL_WORKSPACE mutation that raced. The user_id + tier flow to tenant-scoped
+    # queries and to quota enforcement around synthesis. Propagation through
+    # LangGraph tool execution is covered by tests/test_session_context_propagation.py.
+    set_current_session(SessionContext(
+        session_id=session_id, workspace=workspace, user_id=uid, tier=identity.tier,
+    ))
 
     try:
         while True:
@@ -526,7 +627,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
             # Initialize agent with AsyncSqliteSaver (supports async streaming/state)
             async with open_checkpointer(DB_PATH) as memory:
-                meta = session_manager.get_session_metadata(session_id)
+                meta = session_manager.get_session_metadata(session_id, user_id=uid)
                 model_name = normalize_model_name(meta.get("model_name", DEFAULT_MODEL) if meta else DEFAULT_MODEL)
 
                 agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
@@ -632,13 +733,13 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
                     # Update token usage
                     if total_input_tokens > 0 or total_output_tokens > 0:
-                        current_meta = session_manager.get_session_metadata(session_id)
+                        current_meta = session_manager.get_session_metadata(session_id, user_id=uid)
                         if current_meta:
                             new_input = current_meta.get("input_tokens", 0) + total_input_tokens
                             new_output = current_meta.get("output_tokens", 0) + total_output_tokens
                             cached = current_meta.get("cached_tokens", 0)
                             new_cost = calculate_cost(new_input, new_output, model_name)
-                            session_manager.update_session_stats(session_id, new_input, new_output, cached, new_cost)
+                            session_manager.update_session_stats(session_id, new_input, new_output, cached, new_cost, user_id=uid)
 
                     # Persist any workspace changes back to durable storage in
                     # hosted mode (cloud provider). No-op for the local provider.
@@ -676,7 +777,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 # =============================================================================
 
 @app.get("/api/workspace/{session_id:path}/files")
-async def list_workspace_files(session_id: str) -> List[FileInfo]:
+async def list_workspace_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[FileInfo]:
     """List all files in the workspace."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -716,7 +817,7 @@ async def list_workspace_files(session_id: str) -> List[FileInfo]:
 
 
 @app.get("/api/workspace/{session_id:path}/spec")
-async def get_spec(session_id: str) -> SpecResponse:
+async def get_spec(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> SpecResponse:
     """Get the latest spec file."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -750,7 +851,7 @@ async def get_spec(session_id: str) -> SpecResponse:
 
 
 @app.get("/api/workspace/{session_id:path}/code")
-async def get_code_files(session_id: str) -> List[CodeFile]:
+async def get_code_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[CodeFile]:
     """Get all Verilog/SystemVerilog files."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -773,7 +874,7 @@ async def get_code_files(session_id: str) -> List[CodeFile]:
 
 
 @app.get("/api/workspace/{session_id:path}/code/{filename:path}")
-async def get_code_file(session_id: str, filename: str) -> CodeFile:
+async def get_code_file(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)) -> CodeFile:
     """Get a specific code file."""
     workspace = session_manager.get_workspace_path(session_id)
     file_path = os.path.join(workspace, filename)
@@ -794,7 +895,7 @@ async def get_code_file(session_id: str, filename: str) -> CodeFile:
 
 
 @app.get("/api/workspace/{session_id:path}/waveforms")
-async def list_waveform_files(session_id: str) -> List[str]:
+async def list_waveform_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
     """List VCD files in the workspace."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -804,7 +905,7 @@ async def list_waveform_files(session_id: str) -> List[str]:
 
 
 @app.get("/api/workspace/{session_id:path}/waveform/{filename:path}")
-async def get_waveform_data(session_id: str, filename: str):
+async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)):
     """Get parsed VCD waveform data."""
     workspace = session_manager.get_workspace_path(session_id)
     vcd_path = os.path.join(workspace, filename)
@@ -867,7 +968,7 @@ async def get_waveform_data(session_id: str, filename: str):
 
 
 @app.get("/api/workspace/{session_id:path}/synthesis-runs", response_model=List[SynthesisRunResponse])
-async def get_synthesis_runs(session_id: str):
+async def get_synthesis_runs(session_id: str, _acl: Optional[str] = Depends(verify_session_access)):
     """List synthesis runs for a workspace."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -877,7 +978,7 @@ async def get_synthesis_runs(session_id: str):
 
 
 @app.get("/api/workspace/{session_id:path}/report", response_model=ReportResponse)
-async def get_report(session_id: str, run_id: Optional[str] = Query(default=None)) -> ReportResponse:
+async def get_report(session_id: str, run_id: Optional[str] = Query(default=None), _acl: Optional[str] = Depends(verify_session_access)) -> ReportResponse:
     """Get the latest available report or a report for a specific synthesis run."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -894,7 +995,7 @@ async def get_report(session_id: str, run_id: Optional[str] = Query(default=None
 
 
 @app.post("/api/workspace/{session_id:path}/report/generate", response_model=ReportResponse)
-async def generate_report(session_id: str, run_id: Optional[str] = Query(default=None)) -> ReportResponse:
+async def generate_report(session_id: str, run_id: Optional[str] = Query(default=None), _acl: Optional[str] = Depends(verify_session_access)) -> ReportResponse:
     """Generate a design report for the selected synthesis run or latest available run."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -916,7 +1017,7 @@ async def generate_report(session_id: str, run_id: Optional[str] = Query(default
 
 
 @app.get("/api/workspace/{session_id:path}/layouts")
-async def list_layout_files(session_id: str) -> List[str]:
+async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
     """List GDS files in the workspace."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -933,7 +1034,7 @@ async def list_layout_files(session_id: str) -> List[str]:
 
 
 @app.get("/api/workspace/{session_id:path}/schematics")
-async def list_schematic_files(session_id: str) -> List[str]:
+async def list_schematic_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
     """List SVG schematic files in the workspace."""
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
@@ -943,7 +1044,7 @@ async def list_schematic_files(session_id: str) -> List[str]:
 
 
 @app.get("/api/workspace/{session_id:path}/file/{filename:path}")
-async def get_file_content(session_id: str, filename: str):
+async def get_file_content(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)):
     """Get raw file content."""
     workspace = session_manager.get_workspace_path(session_id)
     file_path = os.path.join(workspace, filename)

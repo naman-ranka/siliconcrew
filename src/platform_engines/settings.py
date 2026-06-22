@@ -30,11 +30,16 @@ class PlatformSettings:
     hosted: bool
 
     # ORFS execution
-    orfs_engine: str          # "local_docker" | "cloud_job"
+    orfs_engine: str          # "local_docker" | "cloud_job" | "remote"
     orfs_image: str           # repo/name:tag (cloud should pin @sha256:...)
     cloud_run_job: str        # Cloud Run Job resource name (cloud only)
     gcp_project: str
     gcp_region: str
+    orfs_service_url: str     # standalone ORFS HTTP service (orfs_engine=remote)
+    orfs_service_token: str   # bearer token for that service
+
+    # Auth
+    google_oauth_client_id: str  # OAuth audience; empty disables token verification
 
     # Workspace storage
     workspace_engine: str     # "local" | "cloud"
@@ -82,6 +87,9 @@ def get_settings() -> PlatformSettings:
         cloud_run_job=_env("ORFS_CLOUD_RUN_JOB", "siliconcrew-orfs"),
         gcp_project=_env("GCP_PROJECT"),
         gcp_region=_env("GCP_REGION", "us-central1"),
+        orfs_service_url=_env("ORFS_SERVICE_URL"),
+        orfs_service_token=_env("ORFS_SERVICE_TOKEN"),
+        google_oauth_client_id=_env("GOOGLE_OAUTH_CLIENT_ID"),
         workspace_engine=workspace_engine,
         workspace_bucket=_env("WORKSPACE_BUCKET"),
         workspace_scratch_dir=_env("WORKSPACE_SCRATCH_DIR", "/tmp/siliconcrew-scratch"),
@@ -98,3 +106,45 @@ def get_settings() -> PlatformSettings:
 def reset_settings_cache() -> None:
     """Test hook: drop the cached settings so env overrides take effect."""
     get_settings.cache_clear()
+
+
+_WIRED = False
+
+
+def apply_platform_wiring(force: bool = False) -> None:
+    """The single wiring point: bind cloud engines from settings, once.
+
+    Called at app startup (api.py, mcp_server.py). No-op in self-host — the
+    engine factories already default to local impls, so nothing changes. In
+    hosted mode this installs the per-user job queue and the shared quota
+    manager so synthesis is governed across the fleet. All imports are lazy so
+    importing this module never drags in cloud deps.
+    """
+    global _WIRED
+    if _WIRED and not force:
+        return
+
+    settings = get_settings()
+    if settings.hosted:
+        # Replace the process-global ThreadPoolExecutor with a per-user queue so
+        # one tenant's backlog cannot starve others (and enforce 1 synth/user).
+        from src.platform_engines.job_queue import ContextUserExecutor, PerUserJobQueue
+        from src.tools import synthesis_manager
+
+        synthesis_manager.set_job_executor(
+            ContextUserExecutor(PerUserJobQueue(global_workers=8, per_user_limit=1))
+        )
+
+        # Shared quota manager (Postgres-backed under hosted+Postgres) enforced
+        # around every synth submission. See quotas.build_quota_manager.
+        from src.platform_engines.quotas import build_quota_manager
+
+        synthesis_manager.set_quota_manager(build_quota_manager(settings))
+
+    _WIRED = True
+
+
+def reset_wiring() -> None:
+    """Test hook: allow apply_platform_wiring to run again."""
+    global _WIRED
+    _WIRED = False
