@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Code, RefreshCw, Copy, Check, Download, FileCode } from "lucide-react";
-import Editor from "@monaco-editor/react";
+import Editor, { loader } from "@monaco-editor/react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,12 +24,34 @@ export function CodeViewer() {
     currentSession,
   } = useStore();
   const [copied, setCopied] = useState(false);
+  // Monaco loads its worker bundle from a CDN; on restricted networks that is
+  // blocked and the editor hangs forever on "Loading…". Fall back to a
+  // read-only syntax-highlighted view so the (secondary) code tab always works.
+  const [editorMode, setEditorMode] = useState<"loading" | "monaco" | "fallback">("loading");
 
   useEffect(() => {
     if (currentSession) {
       loadCodeFiles();
     }
   }, [currentSession, loadCodeFiles]);
+
+  useEffect(() => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) setEditorMode((m) => (m === "loading" ? "fallback" : m));
+    }, 4000);
+    loader
+      .init()
+      .then(() => {
+        done = true;
+        setEditorMode("monaco");
+      })
+      .catch(() => {
+        done = true;
+        setEditorMode("fallback");
+      });
+    return () => clearTimeout(timer);
+  }, []);
 
   const currentFile = codeFiles.find((f) => f.filename === selectedCodeFile);
 
@@ -131,9 +155,9 @@ export function CodeViewer() {
         </div>
       </div>
 
-      {/* Editor */}
-      <div className="flex-1">
-        {currentFile && (
+      {/* Editor (Monaco when available; highlighted fallback otherwise) */}
+      <div className="flex-1 min-h-0 overflow-auto">
+        {currentFile && editorMode === "monaco" && (
           <Editor
             height="100%"
             language="systemverilog"
@@ -150,6 +174,22 @@ export function CodeViewer() {
               automaticLayout: true,
             }}
           />
+        )}
+        {currentFile && editorMode === "fallback" && (
+          <SyntaxHighlighter
+            language="verilog"
+            style={oneDark}
+            showLineNumbers
+            customStyle={{ margin: 0, height: "100%", background: "transparent", fontSize: 13 }}
+            codeTagProps={{ style: { fontFamily: "JetBrains Mono, monospace" } }}
+          >
+            {currentFile.content}
+          </SyntaxHighlighter>
+        )}
+        {currentFile && editorMode === "loading" && (
+          <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+            Loading editor…
+          </div>
         )}
       </div>
     </div>

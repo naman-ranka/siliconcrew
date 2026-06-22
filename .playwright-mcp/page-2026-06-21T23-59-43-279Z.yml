@@ -1,0 +1,263 @@
+- generic [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - img [ref=e7]
+          - generic [ref=e13]: SiliconCrew
+          - generic [ref=e14]: Workbench
+        - button "real-counter" [ref=e189] [cursor=pointer]:
+          - generic [ref=e18]: real-counter
+          - img [ref=e19]
+      - link "Chat view" [ref=e22] [cursor=pointer]:
+        - /url: /
+        - button "Chat view" [ref=e23]:
+          - img [ref=e24]
+          - text: Chat view
+    - generic [ref=e27]:
+      - generic [ref=e28]:
+        - button "Spec counter" [ref=e190] [cursor=pointer]:
+          - img [ref=e31]
+          - generic [ref=e34]:
+            - generic [ref=e35]: Spec
+            - generic [ref=e37]: counter
+        - generic [ref=e38]: →
+      - generic [ref=e39]:
+        - button "RTL 1 file(s)" [ref=e191] [cursor=pointer]:
+          - img [ref=e42]
+          - generic [ref=e46]:
+            - generic [ref=e47]: RTL
+            - generic [ref=e49]: 1 file(s)
+        - generic [ref=e50]: →
+      - generic [ref=e51]:
+        - button "Lint run run lint" [ref=e52] [cursor=pointer]:
+          - img [ref=e54]
+          - generic [ref=e57]:
+            - generic [ref=e58]:
+              - text: Lint
+              - generic [ref=e59]: run
+            - generic [ref=e61]: run lint
+        - generic [ref=e62]: →
+      - generic [ref=e63]:
+        - button "Simulate run passed" [ref=e193] [cursor=pointer]:
+          - img [ref=e66]
+          - generic [ref=e70]:
+            - generic [ref=e71]:
+              - text: Simulate
+              - generic [ref=e72]: run
+            - generic [ref=e74]: passed
+        - generic [ref=e75]: →
+      - generic [ref=e76]:
+        - button "Synthesize run run synth" [ref=e77] [cursor=pointer]:
+          - img [ref=e79]
+          - generic [ref=e82]:
+            - generic [ref=e83]:
+              - text: Synthesize
+              - generic [ref=e84]: run
+            - generic [ref=e86]: run synth
+        - generic [ref=e87]: →
+      - button "Signoff —" [ref=e89] [cursor=pointer]:
+        - img [ref=e91]
+        - generic [ref=e94]:
+          - generic [ref=e95]: Signoff
+          - generic [ref=e97]: —
+    - generic [ref=e98]:
+      - generic [ref=e100]:
+        - generic [ref=e102]:
+          - generic [ref=e103]:
+            - generic [ref=e104]: Files
+            - button "Upload" [ref=e195] [cursor=pointer]:
+              - img [ref=e196]
+              - text: Upload
+          - generic [ref=e105]:
+            - generic [ref=e199]:
+              - button "counter.v synthesis top candidate" [ref=e200] [cursor=pointer]:
+                - img [ref=e202]
+                - generic [ref=e207]: counter.v
+                - img "synthesis top candidate" [ref=e208]
+              - generic [ref=e210]: RTL
+              - combobox "Role for counter.v" [ref=e211]:
+                - option "rtl" [selected]
+                - option "tb"
+                - option "sdc"
+                - option "include"
+                - option "other"
+            - generic [ref=e212]:
+              - button "counter_tb.v simulation top candidate" [ref=e213] [cursor=pointer]:
+                - img [ref=e215]
+                - generic [ref=e219]: counter_tb.v
+                - img "simulation top candidate" [ref=e220]
+              - generic [ref=e222]: TB
+              - combobox "Role for counter_tb.v" [ref=e223]:
+                - option "rtl"
+                - option "tb" [selected]
+                - option "sdc"
+                - option "include"
+                - option "other"
+          - generic [ref=e224]:
+            - generic [ref=e225]:
+              - img [ref=e226]
+              - text: "synthTop: counter"
+            - generic [ref=e228]:
+              - img [ref=e229]
+              - text: "simTop: counter_tb"
+            - generic [ref=e231]: "clk: 10ns · sky130hd"
+        - generic [ref=e107]:
+          - generic [ref=e108]:
+            - generic [ref=e109]: Runs
+            - generic [ref=e110]:
+              - button "Compare two runs" [ref=e111] [cursor=pointer]:
+                - img [ref=e112]
+              - button "Refresh" [ref=e117] [cursor=pointer]:
+                - img [ref=e118]
+          - generic [ref=e123]:
+            - button "All" [ref=e124] [cursor=pointer]
+            - button "Sim" [ref=e125] [cursor=pointer]
+            - button "Synth" [ref=e126] [cursor=pointer]
+          - generic [ref=e127]:
+            - generic [ref=e233] [cursor=pointer]:
+              - img [ref=e236]
+              - generic [ref=e240]:
+                - generic [ref=e241]:
+                  - text: sim_0002
+                  - generic [ref=e242]: · counter_tb
+                - generic [ref=e243]: passed · 2m ago
+              - button "Pin (protect from prune)" [ref=e244]:
+                - img [ref=e245]
+            - generic [ref=e250] [cursor=pointer]:
+              - img [ref=e253]
+              - generic [ref=e257]:
+                - generic [ref=e258]:
+                  - text: sim_0001
+                  - generic [ref=e259]: · counter_tb
+                - generic [ref=e260]: passed · 10m ago
+              - button "Pin (protect from prune)" [ref=e261]:
+                - img [ref=e262]
+      - separator [ref=e129]
+      - generic [ref=e131]:
+        - generic [ref=e266]:
+          - img [ref=e267]
+          - generic [ref=e270]: Viewing
+          - generic [ref=e271]: sim_0002
+          - generic [ref=e272]: · latest sim · counter_tb · passed
+        - generic [ref=e273]:
+          - generic [ref=e274]:
+            - generic [ref=e275]:
+              - heading "Artifacts" [level=2] [ref=e276]
+              - generic [ref=e277]: "2"
+            - button [ref=e279] [cursor=pointer]:
+              - img [ref=e280]
+          - generic [ref=e283]:
+            - tablist [ref=e284]:
+              - tab "Spec" [ref=e285] [cursor=pointer]:
+                - img [ref=e287]
+                - generic [ref=e290]: Spec
+              - tab "Code 2" [active] [selected] [ref=e291] [cursor=pointer]:
+                - img [ref=e293]
+                - generic [ref=e296]: Code
+                - generic [ref=e297]: "2"
+              - tab "Wave" [ref=e298] [cursor=pointer]:
+                - img [ref=e300]
+                - generic [ref=e302]: Wave
+              - tab "Schem" [ref=e303] [cursor=pointer]:
+                - img [ref=e305]
+                - generic [ref=e311]: Schem
+              - tab "Layout" [ref=e312] [cursor=pointer]:
+                - img [ref=e314]
+                - generic [ref=e316]: Layout
+              - tab "Report" [ref=e317] [cursor=pointer]:
+                - img [ref=e319]
+                - generic [ref=e321]: Report
+            - tabpanel "Code 2" [ref=e322]:
+              - generic [ref=e323]:
+                - generic [ref=e324]:
+                  - generic [ref=e325]:
+                    - combobox [ref=e326] [cursor=pointer]:
+                      - img [ref=e327]
+                      - generic: counter.v
+                      - img [ref=e332]
+                    - generic [ref=e334]: 2 files
+                  - generic [ref=e335]:
+                    - button [ref=e336] [cursor=pointer]:
+                      - img [ref=e337]
+                    - button [ref=e342] [cursor=pointer]:
+                      - img [ref=e343]
+                    - button [ref=e346] [cursor=pointer]:
+                      - img [ref=e347]
+                - code [ref=e352]:
+                  - generic [ref=e353]: "1"
+                  - text: "module counter #(parameter WIDTH=8) ("
+                  - generic [ref=e354]: "2"
+                  - text: input clk, input rst, input en,
+                  - generic [ref=e355]: "3"
+                  - text: output reg [WIDTH-1:0] count
+                  - generic [ref=e356]: "4"
+                  - text: );
+                  - generic [ref=e357]: "5"
+                  - text: always @(posedge clk) begin
+                  - generic [ref=e358]: "6"
+                  - text: if (rst) count <= 0;
+                  - generic [ref=e359]: "7"
+                  - text: else if (en) count <= count + 1;
+                  - generic [ref=e360]: "8"
+                  - text: end
+                  - generic [ref=e361]: "9"
+                  - text: endmodule
+                  - generic [ref=e362]: "10"
+        - generic [ref=e134]:
+          - generic [ref=e135]:
+            - img [ref=e136]
+            - button "Lint" [ref=e138] [cursor=pointer]: Lint
+            - button "Sim" [ref=e140] [cursor=pointer]: Sim
+            - button "Synth" [ref=e142] [cursor=pointer]: Synth
+            - button [ref=e145] [cursor=pointer]:
+              - img [ref=e146]
+          - generic [ref=e149]: No sim output yet.
+      - separator [ref=e150]
+      - generic [ref=e152]:
+        - generic [ref=e153]:
+          - img [ref=e154]
+          - generic [ref=e156]: AI Assistant
+          - generic [ref=e157]: same tools · same workspace
+        - generic [ref=e159]:
+          - generic [ref=e161]:
+            - img [ref=e363]
+            - generic [ref=e166]:
+              - heading "real-counter" [level=1] [ref=e365]
+              - paragraph [ref=e168]: claude-sonnet-4-6
+          - generic [ref=e366]:
+            - generic [ref=e367]:
+              - img [ref=e368]
+              - paragraph [ref=e370]: "Missing API key for provider 'anthropic'. Set environment variable: ANTHROPIC_API_KEY."
+            - button [ref=e371] [cursor=pointer]:
+              - img [ref=e372]
+          - generic [ref=e376]:
+            - img [ref=e378]
+            - heading "Welcome to SiliconCrew" [level=2] [ref=e380]
+            - paragraph [ref=e381]: I can help you design digital hardware. Describe what you need, and I'll create specifications, implement RTL, and verify your designs.
+            - generic [ref=e382]:
+              - button "Design an 8-bit counter with async reset and enable" [ref=e383] [cursor=pointer]:
+                - paragraph [ref=e384]: Design an 8-bit counter
+                - paragraph [ref=e385]: with async reset and enable
+              - button "Create a FIFO buffer 16 entries deep, 8-bit width" [ref=e386] [cursor=pointer]:
+                - paragraph [ref=e387]: Create a FIFO buffer
+                - paragraph [ref=e388]: 16 entries deep, 8-bit width
+              - button "Design a simple ALU add, sub, and, or operations" [ref=e389] [cursor=pointer]:
+                - paragraph [ref=e390]: Design a simple ALU
+                - paragraph [ref=e391]: add, sub, and, or operations
+              - button "Build an FSM controller for a traffic light system" [ref=e392] [cursor=pointer]:
+                - paragraph [ref=e393]: Build an FSM controller
+                - paragraph [ref=e394]: for a traffic light system
+          - generic [ref=e179]:
+            - generic [ref=e180]:
+              - textbox "Describe your RTL design requirements..." [ref=e395]
+              - generic [ref=e182]:
+                - button "Send" [disabled]:
+                  - img
+                  - text: Send
+            - generic [ref=e183]:
+              - generic [ref=e184]:
+                - img [ref=e185]
+                - generic [ref=e187]: Using claude-sonnet-4-6
+              - generic [ref=e188]: Shift + Enter for new line
+  - alert [ref=e396]

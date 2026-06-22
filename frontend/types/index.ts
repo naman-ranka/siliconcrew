@@ -68,13 +68,20 @@ export interface CodeFile {
 export interface WaveformSignal {
   name: string;
   full_name: string;
+  scope?: string;
+  width?: number;
+  isBus?: boolean;
   times: number[];
   values: number[];
+  valuesStr?: string[];
+  xFlags?: boolean[];
 }
 
 export interface WaveformData {
   filename: string;
   endtime: number;
+  timescale?: string | null;
+  signalCount?: number;
   signals: WaveformSignal[];
 }
 

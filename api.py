@@ -821,41 +821,72 @@ async def get_waveform_data(session_id: str, filename: str):
         vcd = VCDVCD(vcd_path)
         signals = vcd.get_signals()
         endtime = vcd.endtime
+        timescale = None
+        try:
+            ts = getattr(vcd, "timescale", None)
+            if isinstance(ts, dict):
+                timescale = ts.get("timescale") or ts.get("unit")
+            elif ts:
+                timescale = str(ts)
+        except Exception:
+            timescale = None
 
-        # Parse signals
+        # Parse signals, PRESERVING hierarchy (scope path), width, and x/z state
+        # so the viewer can build a scope tree and show unknowns — not the old
+        # leaf-only/collapsed view that lost the dut.* vs tb.* distinction.
         signal_data = []
-        for sig_name in signals[:20]:  # Limit to 20 signals
+        seen = set()
+        for sig_name in signals[:128]:
+            if sig_name in seen:
+                continue
+            seen.add(sig_name)
             try:
                 sig = vcd[sig_name]
                 tv = sig.tv
+                width = int(getattr(sig, "size", 1) or 1)
 
-                times = []
-                values = []
+                # full_name like "counter_tb.dut.count[7:0]" → scope/leaf/bus-range
+                base = sig_name.rsplit("[", 1)[0]
+                parts = base.split(".")
+                leaf = parts[-1]
+                scope = ".".join(parts[:-1]) if len(parts) > 1 else ""
+
+                times, values, values_str, x_flags = [], [], [], []
                 for t, v in tv:
                     times.append(t)
+                    s = str(v).lower()
+                    has_x = ("x" in s) or ("z" in s)
+                    x_flags.append(has_x)
+                    values_str.append(str(v))
                     try:
-                        if isinstance(v, str):
-                            v_clean = v.lower().replace('x', '0').replace('z', '0')
-                            val = int(v_clean, 2) if v_clean else 0
-                        else:
-                            val = int(v)
+                        cleaned = s.replace("x", "0").replace("z", "0")
+                        values.append(int(cleaned, 2) if cleaned else 0)
                     except ValueError:
-                        val = 0
-                    values.append(val)
+                        values.append(0)
 
                 signal_data.append({
-                    "name": sig_name.split('.')[-1],
+                    "name": leaf,
                     "full_name": sig_name,
+                    "scope": scope,
+                    "width": width,
+                    "isBus": width > 1,
                     "times": times,
-                    "values": values
+                    "values": values,
+                    "valuesStr": values_str,
+                    "xFlags": x_flags,
                 })
-            except:
+            except Exception:
                 continue
+
+        # Stable, hierarchy-aware ordering: by scope depth then name.
+        signal_data.sort(key=lambda s: (s["scope"].count("."), s["scope"], s["name"]))
 
         return {
             "filename": filename,
             "endtime": endtime,
-            "signals": signal_data
+            "timescale": timescale,
+            "signalCount": len(signal_data),
+            "signals": signal_data,
         }
 
     except ImportError:
