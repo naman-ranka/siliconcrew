@@ -124,7 +124,19 @@ export function PipelineStepper() {
     },
   ];
 
-  const activeId: StageId =
+  // The highlighted stage should read as "what's current". A running (or
+  // just-triggered) action is the strongest signal of where the pipeline is —
+  // running Sim must light up Simulate even if the center stays on the Code
+  // tab. Only fall back to the artifact-tab mapping when nothing is pending.
+  const pendingStage: StageId | null = actionPending.synth
+    ? "synth"
+    : actionPending.sim
+    ? "sim"
+    : actionPending.lint
+    ? "lint"
+    : null;
+
+  const tabStage: StageId =
     activeArtifactTab === "spec"
       ? "spec"
       : activeArtifactTab === "code"
@@ -135,6 +147,8 @@ export function PipelineStepper() {
       ? "synth"
       : "lint";
 
+  const activeId: StageId = pendingStage ?? tabStage;
+
   return (
     <div className="flex items-stretch gap-0.5 px-3 py-1.5 border-b border-border bg-surface-1 overflow-x-auto">
       {stages.map((stage, i) => {
@@ -142,8 +156,11 @@ export function PipelineStepper() {
         const isBusy = !!(stage.isAction && stage.pending);
         const isDisabled = disabled || isBusy;
         const verb = stage.isAction ? `Run ${stage.name}` : `View ${stage.name}`;
-        // Connector after this stage is "filled" once the pipeline has reached it.
-        const connectorFilled = !!stage.reached;
+        // The connector between this stage and the next "leads into" the next
+        // stage — fill it once progress has reached the next stage (or this one
+        // is running), so the line advances visibly as lint/sim/synth complete.
+        const next = stages[i + 1];
+        const connectorFilled = !!next?.reached;
         return (
           <div key={stage.id} className="flex items-center">
             <button

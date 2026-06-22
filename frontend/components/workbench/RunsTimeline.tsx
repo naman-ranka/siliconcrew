@@ -5,7 +5,7 @@ import { useStore } from "@/lib/store";
 import { workbenchApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { statusDotClass, statusTextClass, relativeTime } from "./runStatus";
-import { Pin, PinOff, GitBranch, Waves, Cpu, GitCompare, RefreshCw } from "lucide-react";
+import { Pin, PinOff, Waves, Cpu, GitCompare, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PanelHeader } from "./PanelHeader";
@@ -89,19 +89,40 @@ export function RunsTimeline() {
     }
   };
 
-  const renderRow = (r: RunSummary, depth: number) => {
+  const renderRow = (r: RunSummary, depth: number, isLastChild = false) => {
     const selected = r.id === selectedRunId;
     const inCompare = compareSel.includes(r.id);
+    const children = childrenByParent.get(r.id) ?? [];
     return (
-      <div key={r.id}>
+      <div key={r.id} className="relative">
+        {/* Lineage tree: a real connector from the parent's spine down into the
+            child row, with an elbow. Indent is reserved by the connector gutter,
+            not bare padding, so retries read as a branch off their parent. */}
+        {depth > 0 && (
+          <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0" style={{ width: depth * 16 }}>
+            <span
+              className="absolute top-0 w-px bg-border"
+              style={{ left: (depth - 1) * 16 + 11, bottom: isLastChild ? "50%" : 0 }}
+            />
+            <span
+              className="absolute h-px bg-border"
+              style={{ left: (depth - 1) * 16 + 11, width: 9, top: "50%" }}
+            />
+          </span>
+        )}
         <div
           className={cn(
-            "group flex items-center gap-2 px-2 py-1.5 mx-1 rounded-md cursor-pointer outline-none",
+            "group relative flex items-center gap-2 px-2 py-1.5 mx-1 rounded-md cursor-pointer outline-none",
+            "transition-all duration-fast ease-swift",
             "focus-visible:ring-2 focus-visible:ring-primary/60",
-            selected ? "bg-primary/10 border border-primary/40" : "border border-transparent hover:bg-surface-2",
+            selected
+              ? "bg-primary/10 shadow-e1"
+              : inCompare
+              ? "bg-surface-2"
+              : "hover:bg-surface-2",
             inCompare && "ring-1 ring-info/60"
           )}
-          style={{ paddingLeft: 8 + depth * 14 }}
+          style={{ paddingLeft: 8 + depth * 16 }}
           role="button"
           tabIndex={0}
           aria-pressed={selected}
@@ -116,9 +137,16 @@ export function RunsTimeline() {
           data-run-id={r.id}
           data-run-kind={r.kind}
         >
-          {depth > 0 && <GitBranch className="h-3 w-3 text-muted-foreground/60 shrink-0" />}
+          {/* Selected accent bar — sits inside the rounded row. */}
+          <span
+            aria-hidden
+            className={cn(
+              "absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary transition-opacity duration-fast ease-swift",
+              selected ? "opacity-100" : "opacity-0"
+            )}
+          />
           <span className={cn("h-2 w-2 rounded-full shrink-0", statusDotClass(r.status))} />
-          <span className="shrink-0 text-muted-foreground">
+          <span className={cn("shrink-0", selected ? "text-primary" : "text-muted-foreground")}>
             {r.kind === "sim" ? <Waves className="h-3.5 w-3.5" /> : <Cpu className="h-3.5 w-3.5" />}
           </span>
           <div className="flex flex-col min-w-0 flex-1 leading-tight">
@@ -126,17 +154,23 @@ export function RunsTimeline() {
               {r.id}
               {r.top ? <span className="text-muted-foreground"> · {r.top}</span> : null}
             </span>
-            <span className="text-[10px] text-muted-foreground">
-              {r.status}
-              {r.kind === "sim" && r.failure?.timeNs != null ? ` @ ${r.failure.timeNs}ns` : ""}
-              {r.createdAt ? ` · ${relativeTime(r.createdAt)}` : ""}
+            <span className="text-[10px]">
+              <span className={statusTextClass(r.status)}>{r.status}</span>
+              {r.kind === "sim" && r.failure?.timeNs != null ? (
+                <span className="text-muted-foreground"> @ {r.failure.timeNs}ns</span>
+              ) : null}
+              {r.createdAt ? <span className="text-muted-foreground"> · {relativeTime(r.createdAt)}</span> : null}
             </span>
           </div>
           <button
             type="button"
             className={cn(
-              "shrink-0 text-muted-foreground hover:text-primary transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/60 rounded",
-              r.pinned ? "opacity-100 text-primary" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              "shrink-0 rounded outline-none transition-all duration-fast ease-swift",
+              "hover:scale-110 active:scale-95",
+              "focus-visible:ring-2 focus-visible:ring-primary/60",
+              r.pinned
+                ? "text-primary opacity-100"
+                : "text-muted-foreground opacity-0 hover:text-primary group-hover:opacity-60 group-hover:hover:opacity-100 focus-visible:opacity-100"
             )}
             title={r.pinned ? "Unpin" : "Pin (protect from prune)"}
             aria-label={r.pinned ? `Unpin ${r.id}` : `Pin ${r.id}`}
@@ -149,7 +183,7 @@ export function RunsTimeline() {
             {r.pinned ? <Pin className="h-3.5 w-3.5" /> : <PinOff className="h-3.5 w-3.5" />}
           </button>
         </div>
-        {(childrenByParent.get(r.id) ?? []).map((c) => renderRow(c, depth + 1))}
+        {children.map((c, ci) => renderRow(c, depth + 1, ci === children.length - 1))}
       </div>
     );
   };
