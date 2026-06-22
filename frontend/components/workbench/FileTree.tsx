@@ -15,13 +15,20 @@ const ROLE_LABEL: Record<FileRole, string> = {
   tb: "TB",
   sdc: "SDC",
   include: "INC",
-  other: "—",
+  other: "OTHER",
 };
 
+/**
+ * Role badge palette is deliberately kept OFF the orange brand for status:
+ * RTL=info (the DUT, the "blue" anchor), TB=primary-tint (the test side — this
+ * is a design distinction, not a status), SDC/INC/OTHER use neutral surface
+ * tones. No status-pass/warn/fail tokens here — those stay reserved for run
+ * status so the file list reads calm.
+ */
 const ROLE_BADGE: Record<FileRole, string> = {
-  rtl: "bg-info/15 text-info border-info/30",
-  tb: "bg-primary/15 text-primary border-primary/30",
-  sdc: "bg-status-warn/15 text-status-warn border-status-warn/30",
+  rtl: "bg-info/12 text-info border-info/25",
+  tb: "bg-primary/12 text-primary border-primary/25",
+  sdc: "bg-surface-3 text-foreground/70 border-border",
   include: "bg-surface-3 text-muted-foreground border-border",
   other: "bg-surface-3 text-muted-foreground border-border",
 };
@@ -43,6 +50,20 @@ function roleIcon(role: FileRole) {
 
 const ROLES: FileRole[] = ["rtl", "tb", "sdc", "include", "other"];
 
+/** Small reusable inline role badge. */
+function RoleBadge({ role }: { role: FileRole }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center justify-center text-[9px] font-semibold leading-none tracking-wide px-1.5 py-0.5 rounded border shrink-0",
+        ROLE_BADGE[role]
+      )}
+    >
+      {ROLE_LABEL[role]}
+    </span>
+  );
+}
+
 /**
  * The file tree is manifest-driven: every file shows its derived role (which
  * decides what reaches each stage) and the role is user-overridable inline.
@@ -51,7 +72,7 @@ const ROLES: FileRole[] = ["rtl", "tb", "sdc", "include", "other"];
  * and a transient upload confirmation.
  */
 export function FileTree() {
-  const { manifest, manifestLoading, setFileRole, uploadFiles, selectCodeFile, setArtifactTab, currentSession, uploadNotice } = useStore();
+  const { manifest, manifestLoading, setFileRole, uploadFiles, selectCodeFile, setArtifactTab, currentSession, uploadNotice, selectedCodeFile, activeArtifactTab } = useStore();
   const fileInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -88,13 +109,18 @@ export function FileTree() {
 
   return (
     <div
-      className={cn("flex flex-col min-h-0", dragging && "ring-2 ring-primary/60 ring-inset")}
+      className="relative flex flex-col min-h-0"
       onDragOver={(e) => {
         if (!currentSession) return;
         e.preventDefault();
         setDragging(true);
       }}
-      onDragLeave={() => setDragging(false)}
+      onDragLeave={(e) => {
+        // Only clear when the pointer actually leaves the container, not when it
+        // crosses between child rows.
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        setDragging(false);
+      }}
       onDrop={(e) => {
         e.preventDefault();
         setDragging(false);
@@ -110,7 +136,7 @@ export function FileTree() {
           title="Upload Verilog / SDC files (or drag & drop here)"
           onClick={() => fileInput.current?.click()}
         >
-          <Upload className="h-3.5 w-3.5" />
+          <Upload className={cn("h-3.5 w-3.5", busy && "animate-pulse")} />
           {busy ? "Uploading…" : "Upload"}
         </Button>
         <input
@@ -126,6 +152,17 @@ export function FileTree() {
       {uploadNotice && (
         <div className="px-3 py-1 text-[10px] text-status-pass bg-status-pass/10 border-b border-border" role="status">
           {uploadNotice}
+        </div>
+      )}
+
+      {/* Drag-and-drop overlay: calm ring + hint, animated in. */}
+      {dragging && currentSession && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center animate-fade-in motion-reduce:animate-none">
+          <div className="absolute inset-1.5 rounded-lg border-2 border-dashed border-primary/50 bg-primary/5" />
+          <div className="relative flex items-center gap-2 rounded-md bg-surface-1 px-3 py-1.5 text-xs font-medium text-foreground shadow-e2 border border-primary/30">
+            <Upload className="h-3.5 w-3.5 text-primary" />
+            Drop to upload
+          </div>
         </div>
       )}
 
@@ -148,25 +185,47 @@ export function FileTree() {
           files.map((f) => {
             const isSynthTop = manifest?.synthTop && f.role === "rtl";
             const isSimTop = manifest?.simTop && f.role === "tb";
+            const openable = f.name.endsWith(".v") || f.name.endsWith(".sv");
+            const isSelected = openable && activeArtifactTab === "code" && selectedCodeFile === f.name;
             return (
               <div
                 key={f.name}
-                className="group flex items-center gap-1.5 px-2 py-1 mx-1 rounded-md hover:bg-surface-2"
+                className={cn(
+                  "group relative flex items-center gap-1.5 pl-2.5 pr-2 py-1 mx-1 rounded-md transition-colors duration-fast ease-swift",
+                  isSelected
+                    ? "bg-primary/10 text-foreground"
+                    : "hover:bg-surface-2"
+                )}
                 title={f.path}
               >
+                {/* Left accent for the open file. */}
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-full bg-primary transition-opacity duration-fast ease-swift",
+                    isSelected ? "opacity-100" : "opacity-0"
+                  )}
+                />
                 <button
                   type="button"
                   aria-label={`Open ${f.name} (${f.role})`}
-                  className="flex items-center gap-2 min-w-0 flex-1 text-left outline-none rounded focus-visible:ring-2 focus-visible:ring-primary/60"
+                  aria-current={isSelected ? "true" : undefined}
+                  disabled={!openable}
+                  className={cn(
+                    "flex items-center gap-2 min-w-0 flex-1 text-left outline-none rounded focus-visible:ring-2 focus-visible:ring-primary/60",
+                    openable ? "cursor-pointer" : "cursor-default"
+                  )}
                   onClick={() => {
-                    if (f.name.endsWith(".v") || f.name.endsWith(".sv")) {
+                    if (openable) {
                       selectCodeFile(f.name);
                       setArtifactTab("code");
                     }
                   }}
                 >
-                  <span className="text-muted-foreground shrink-0">{roleIcon(f.role)}</span>
-                  <span className="text-xs font-mono truncate">{f.name}</span>
+                  <span className={cn("shrink-0", isSelected ? "text-primary" : "text-muted-foreground")}>
+                    {roleIcon(f.role)}
+                  </span>
+                  <span className={cn("text-xs font-mono truncate", isSelected && "font-medium")}>{f.name}</span>
                   {isSynthTop && (
                     <Crown className="h-3 w-3 text-info shrink-0" aria-label="synthesis top candidate" />
                   )}
@@ -174,29 +233,36 @@ export function FileTree() {
                     <FlaskConical className="h-3 w-3 text-primary shrink-0" aria-label="simulation top candidate" />
                   )}
                 </button>
+
                 <button
                   type="button"
                   aria-label={`Download ${f.name}`}
                   title={`Download ${f.name}`}
                   onClick={() => void downloadFile(f.name)}
-                  className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 outline-none focus-visible:ring-2 focus-visible:ring-primary/60 rounded"
+                  className={cn(
+                    "shrink-0 rounded p-0.5 outline-none transition-all duration-fast ease-swift",
+                    "text-muted-foreground/40 hover:text-foreground hover:bg-surface-3",
+                    "group-hover:text-muted-foreground/70 group-focus-within:text-muted-foreground/70",
+                    "focus-visible:opacity-100 focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-primary/60"
+                  )}
                 >
                   <Download className="h-3 w-3" />
                 </button>
-                <span
-                  className={cn(
-                    "text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0",
-                    ROLE_BADGE[f.role]
-                  )}
-                >
-                  {ROLE_LABEL[f.role]}
-                </span>
+
+                <RoleBadge role={f.role} />
+
                 <select
                   aria-label={`Role for ${f.name}`}
                   title={`Change role for ${f.name}`}
                   value={f.role}
                   onChange={(e) => void setFileRole(f.name, e.target.value as FileRole)}
-                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity bg-surface-1 border border-border rounded text-[10px] px-1 py-0.5 text-muted-foreground"
+                  className={cn(
+                    "shrink-0 rounded border text-[10px] px-1 py-0.5 outline-none transition-all duration-fast ease-swift cursor-pointer",
+                    "bg-surface-1 border-border text-muted-foreground/50",
+                    "group-hover:text-muted-foreground group-hover:border-border",
+                    "group-focus-within:text-muted-foreground",
+                    "hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-primary/60"
+                  )}
                 >
                   {ROLES.map((r) => (
                     <option key={r} value={r}>
@@ -211,14 +277,22 @@ export function FileTree() {
       </div>
 
       {manifest && (
-        <div className="px-3 py-2 border-t border-border text-[10px] text-muted-foreground space-y-0.5 font-mono">
-          <div className="flex items-center gap-1" title="Top module used for synthesis">
-            <Crown className="h-3 w-3 text-info" /> synthTop: {manifest.synthTop || "—"}
+        <div className="px-3 py-2 border-t border-border text-[10px] text-muted-foreground space-y-1 font-mono">
+          <div className="flex items-center gap-1.5 min-w-0" title="Top module used for synthesis">
+            <Crown className="h-3 w-3 text-info shrink-0" />
+            <span className="text-muted-foreground/70">synthTop</span>
+            <span className="truncate text-foreground/80">{manifest.synthTop || "—"}</span>
           </div>
-          <div className="flex items-center gap-1" title="Testbench top used for simulation">
-            <FlaskConical className="h-3 w-3 text-primary" /> simTop: {manifest.simTop || "—"}
+          <div className="flex items-center gap-1.5 min-w-0" title="Testbench top used for simulation">
+            <FlaskConical className="h-3 w-3 text-primary shrink-0" />
+            <span className="text-muted-foreground/70">simTop</span>
+            <span className="truncate text-foreground/80">{manifest.simTop || "—"}</span>
           </div>
-          <div>clk: {manifest.clockPeriodNs}ns · {manifest.platform}</div>
+          <div className="flex items-center gap-1.5 pt-0.5 text-muted-foreground/70">
+            <span>clk {manifest.clockPeriodNs}ns</span>
+            <span aria-hidden="true">·</span>
+            <span>{manifest.platform}</span>
+          </div>
         </div>
       )}
     </div>

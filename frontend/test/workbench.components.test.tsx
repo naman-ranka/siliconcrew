@@ -55,8 +55,12 @@ describe("FileTree", () => {
     expect(screen.getByText("RTL")).toBeInTheDocument();
     expect(screen.getByText("TB")).toBeInTheDocument();
     expect(screen.getByText("SDC")).toBeInTheDocument();
-    expect(screen.getByText(/synthTop: decoder/)).toBeInTheDocument();
-    expect(screen.getByText(/simTop: decoder_tb/)).toBeInTheDocument();
+    // Footer surfaces the synthTop/simTop anchors (label + value rendered in
+    // separate spans for alignment).
+    expect(screen.getByText("synthTop")).toBeInTheDocument();
+    expect(screen.getByText("decoder")).toBeInTheDocument();
+    expect(screen.getByText("simTop")).toBeInTheDocument();
+    expect(screen.getByText("decoder_tb")).toBeInTheDocument();
   });
 });
 
