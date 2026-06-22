@@ -58,4 +58,41 @@ describe("WaveformViewer", () => {
     // resolves the cursor to tick 112000, the last change)
     expect(screen.getByText("=0x14")).toBeInTheDocument();
   });
+
+  it("dedups aliased nets (same leaf + identical tv across scopes renders once)", () => {
+    // The dut copy of `count` is an exact alias of the tb copy → must collapse.
+    useStore.setState({
+      waveformData: {
+        filename: "counter.vcd",
+        endtime: 112000,
+        timescale: "1ps",
+        unitSeconds: 1e-12,
+        signalCount: 3,
+        signals: [
+          { name: "clk", full_name: "counter_tb.clk", scope: "counter_tb", width: 1, isBus: false, times: [0, 5000], values: [0, 1], valuesStr: ["0", "1"], xFlags: [false, false] },
+          { name: "count", full_name: "counter_tb.count", scope: "counter_tb", width: 8, isBus: true, times: [0, 15000, 112000], values: [0, 2, 20], valuesStr: ["0", "2", "20"], xFlags: [false, false, false] },
+          { name: "count", full_name: "counter_tb.dut.count", scope: "counter_tb.dut", width: 8, isBus: true, times: [0, 15000, 112000], values: [0, 2, 20], valuesStr: ["0", "2", "20"], xFlags: [false, false, false] },
+        ],
+      } as any,
+    });
+    render(<WaveformViewer />);
+    expect(screen.getAllByText("count")).toHaveLength(1);
+  });
+
+  it("follows the selected run's VCD even when another VCD is already loaded", async () => {
+    const { selectWaveform } = useStore.getState();
+    const spy = vi.fn(selectWaveform);
+    useStore.setState({ selectWaveform: spy as any });
+    const { rerender } = render(<WaveformViewer />);
+    spy.mockClear();
+    // Select a different sim run whose VCD differs from the loaded one.
+    useStore.setState({
+      runs: [
+        { id: "sim_0003", kind: "sim", status: "failed", createdAt: null, top: "counter_tb", pinned: false, vcdPath: "sim_runs/sim_0003/counter.vcd", failure: { type: "test_failed", timeNs: 50 } },
+      ] as any,
+      selectedRunId: "sim_0003",
+    });
+    rerender(<WaveformViewer />);
+    expect(spy).toHaveBeenCalledWith("sim_runs/sim_0003/counter.vcd");
+  });
 });

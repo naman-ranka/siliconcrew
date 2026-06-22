@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Activity, RefreshCw, ZoomIn, ZoomOut, ChevronRight, ChevronDown, Crosshair } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, RefreshCw, ZoomIn, ZoomOut, ChevronRight, ChevronDown, Crosshair, Maximize2 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -17,6 +17,9 @@ import type { WaveformSignal } from "@/types";
 
 const NAME_COL = 168; // px
 const LANE_H = 26;
+const BASE_LANE = 800; // px of lane width at 100% zoom
+const MIN_LANE = 600;
+const END_PAD = 28; // breathing room so an end-of-sim cursor isn't flush to the edge
 
 export function WaveformViewer() {
   const {
@@ -33,25 +36,61 @@ export function WaveformViewer() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [manualCursor, setManualCursor] = useState<number | null>(null); // ticks; user-placed
   const [radix, setRadix] = useState<"hex" | "dec">("hex");
+  const [hoverTicks, setHoverTicks] = useState<number | null>(null); // ticks; mouse-move scrub
+  const [dragging, setDragging] = useState(false);
 
-  // reset a user-dropped cursor when the waveform changes
+  // Measure the lane viewport so "Fit" can scale the whole sim to the panel.
+  const laneViewportRef = useRef<HTMLDivElement>(null);
+  const lanesRef = useRef<HTMLDivElement>(null);
+
+  // Track which run's VCD we auto-loaded, and whether the user has manually
+  // overridden the VCD for the *current* selected run. Both are refs so the
+  // sync effect doesn't re-run when they change (and never desyncs hook order).
+  const syncedRunIdRef = useRef<string | null>(null);
+  const manualOverrideRef = useRef(false);
+  // Latest clientX→ticks mapper, kept in a ref so the window-bound drag effect
+  // (declared before the early return for stable hook order) can use the current
+  // scale/endtime without depending on values computed after that return.
+  const xToTicksRef = useRef<(clientX: number) => number | null>(() => null);
+
+  // reset a user-dropped cursor / hover when the waveform changes
   useEffect(() => {
     setManualCursor(null);
+    setHoverTicks(null);
   }, [selectedWaveform]);
 
   useEffect(() => {
     if (currentSession) loadWaveforms();
   }, [currentSession, loadWaveforms]);
 
-  // Keep the waveform in sync with the selected sim run, so opening the Wave tab
-  // for an existing/reloaded run shows its isolated VCD without an extra click.
-  // Only auto-loads when nothing is selected yet — respects a manual VCD choice.
+  // Keep the waveform in sync with the SELECTED sim run. The viewer must follow
+  // selectedRunId: when the selected run changes, load THAT run's VCD even if a
+  // different VCD is already loaded (the midpoint bug: Wave tab showed sim_0001
+  // while the banner viewed sim_0003). A manual dropdown pick overrides until the
+  // selected run changes again, at which point the new run's VCD wins.
   useEffect(() => {
     const run = runs.find((r) => r.id === selectedRunId);
-    if (run?.kind === "sim" && run.vcdPath && !selectedWaveform) {
+    if (!(run?.kind === "sim" && run.vcdPath)) return;
+    if (selectedRunId !== syncedRunIdRef.current) {
+      // The selected run changed → adopt its VCD and clear any manual override.
+      syncedRunIdRef.current = selectedRunId ?? null;
+      manualOverrideRef.current = false;
+      if (run.vcdPath !== selectedWaveform) void selectWaveform(run.vcdPath);
+    } else if (!manualOverrideRef.current && !selectedWaveform) {
+      // Same run, nothing loaded yet (e.g. after a refresh) → adopt its VCD.
       void selectWaveform(run.vcdPath);
     }
   }, [selectedRunId, runs, selectedWaveform, selectWaveform]);
+
+  // Wrap selectWaveform so a manual dropdown pick records the override; the
+  // selected run's VCD will reclaim the view once the run changes again.
+  const handlePickWaveform = useCallback(
+    (file: string) => {
+      manualOverrideRef.current = true;
+      void selectWaveform(file);
+    },
+    [selectWaveform]
+  );
 
   // The selected sim run pins the failure time → a red cursor in the waveform,
   // so a user can see *when* it went wrong without reading the log.
@@ -66,14 +105,25 @@ export function WaveformViewer() {
   );
 
   // Group signals by scope, preserving the hierarchy-aware order from the API.
+  // Dedup aliased nets: `$dumpvars` lists a port and its connected net under both
+  // `tb` and `tb.dut`, so the same signal renders twice. We collapse a signal
+  // when an earlier signal has the same leaf name + identical time/value vector
+  // (a true alias), keeping the first (shallowest-scope) occurrence. The culprit
+  // highlight + `exp` badge then renders only once.
   const groups = useMemo(() => {
+    const seen = new Map<string, WaveformSignal>(); // alias key → kept signal
+    const aliasKey = (s: WaveformSignal) =>
+      `${s.name}|${(s.width ?? 1)}|${s.times.join(",")}|${s.values.join(",")}`;
     const map = new Map<string, WaveformSignal[]>();
     for (const s of waveformData?.signals ?? []) {
+      const key = aliasKey(s);
+      if (seen.has(key)) continue; // duplicate net under a different scope — drop it
+      seen.set(key, s);
       const scope = s.scope || "(top)";
       if (!map.has(scope)) map.set(scope, []);
       map.get(scope)!.push(s);
     }
-    return Array.from(map.entries());
+    return Array.from(map.entries()).filter(([, sigs]) => sigs.length > 0);
   }, [waveformData]);
 
   // Parse the testbench's failure line ("y=251 expected 5 …") so we can flag the
@@ -87,6 +137,27 @@ export function WaveformViewer() {
     return m ? { signal: m[1], actual: m[2], expected: m[3] } : null;
   }, [runs, selectedRunId]);
 
+  // Dragging the cursor handle: bind window listeners so the drag keeps tracking
+  // even when the pointer leaves the lane host. Declared before any early return
+  // to keep hook order stable; reads the live mapper via xToTicksRef.
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: MouseEvent) => {
+      const t = xToTicksRef.current(e.clientX);
+      if (t != null) {
+        setHoverTicks(t);
+        setManualCursor(t);
+      }
+    };
+    const onUp = () => setDragging(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [dragging]);
+
   if (options.length === 0 && !waveformData) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
@@ -98,8 +169,7 @@ export function WaveformViewer() {
   }
 
   const endtime = waveformData?.endtime || 1000;
-  const laneWidth = Math.max(600, 800 * zoom);
-  const END_PAD = 28; // breathing room so an end-of-sim cursor isn't flush to the edge
+  const laneWidth = Math.max(MIN_LANE, BASE_LANE * zoom);
   const scale = (laneWidth - END_PAD) / endtime;
 
   // The failure time is in ns; VCD lanes are in the dump's own ticks (ps when
@@ -114,24 +184,26 @@ export function WaveformViewer() {
   // Active cursor = the user's dropped cursor, else the failure marker.
   const activeCursor = manualCursor != null ? Math.min(Math.max(0, manualCursor), endtime) : failTicks;
   const activeX = activeCursor != null ? activeCursor * scale : null;
+  const hoverX = hoverTicks != null ? hoverTicks * scale : null;
 
   const fmtBus = (value: number, isX: boolean, raw?: string): string => {
     if (isX) return (raw ?? "x").toUpperCase();
     return radix === "hex" ? "0x" + value.toString(16).toUpperCase() : String(value);
   };
 
-  // Value of a signal at the active cursor (last change at or before that tick).
-  const valueAtCursor = (signal: WaveformSignal): string | null => {
-    if (activeCursor == null) return null;
+  // Value of a signal at a given tick (last change at or before that tick).
+  const valueAt = (signal: WaveformSignal, at: number | null): string | null => {
+    if (at == null) return null;
     let idx = -1;
     for (let i = 0; i < signal.times.length; i++) {
-      if (signal.times[i] <= activeCursor) idx = i;
+      if (signal.times[i] <= at) idx = i;
       else break;
     }
     if (idx < 0) return null;
     if (signal.xFlags?.[idx]) return (signal.valuesStr?.[idx] ?? "x").toUpperCase();
     return (signal.width ?? 1) > 1 ? fmtBus(signal.values[idx], false) : String(signal.values[idx]);
   };
+  const valueAtCursor = (signal: WaveformSignal): string | null => valueAt(signal, activeCursor);
 
   // ns label for a tick position (inverse of toTicks), for the cursor readout.
   const ticksToNs = (ticks: number) => (secPerTick && secPerTick < 1 ? (ticks * secPerTick) / 1e-9 : ticks);
@@ -142,6 +214,36 @@ export function WaveformViewer() {
       next.has(scope) ? next.delete(scope) : next.add(scope);
       return next;
     });
+
+  // Map a clientX onto a tick position within the lane area (null if over names).
+  const xToTicks = (clientX: number): number | null => {
+    const host = lanesRef.current;
+    if (!host) return null;
+    const x = clientX - host.getBoundingClientRect().left - NAME_COL;
+    if (x < 0) return null;
+    return Math.min(Math.max(0, x / scale), endtime);
+  };
+  xToTicksRef.current = xToTicks;
+
+  const handleLanesMove = (e: React.MouseEvent) => {
+    const t = xToTicks(e.clientX);
+    if (t == null) {
+      if (!dragging) setHoverTicks(null);
+      return;
+    }
+    setHoverTicks(t);
+    if (dragging) setManualCursor(t);
+  };
+
+  // Fit: choose a zoom so the whole sim spans the visible lane viewport width.
+  const handleFit = () => {
+    const vp = laneViewportRef.current;
+    if (!vp) return;
+    const avail = vp.clientWidth - NAME_COL;
+    if (avail <= 0) return;
+    const target = (avail + END_PAD) / BASE_LANE;
+    setZoom(Math.min(4, Math.max(0.5, Math.round(target * 100) / 100)));
+  };
 
   const renderLane = (signal: WaveformSignal) => {
     const width = laneWidth;
@@ -225,11 +327,11 @@ export function WaveformViewer() {
   const ticks = Array.from({ length: tickCount + 1 }, (_, i) => Math.round((endtime / tickCount) * i));
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full" data-testid="waveform-viewer">
       {/* Header */}
       <div className="flex items-center justify-between p-3 border-b border-border">
         <div className="flex items-center gap-2">
-          <Select value={selectedWaveform || ""} onValueChange={selectWaveform}>
+          <Select value={selectedWaveform || ""} onValueChange={handlePickWaveform}>
             <SelectTrigger className="h-8 w-[230px]">
               <Activity className="h-4 w-4 mr-2" />
               <SelectValue placeholder="Select VCD file" />
@@ -259,8 +361,12 @@ export function WaveformViewer() {
           )}
         </div>
         <div className="flex items-center gap-1">
-          {/* radix toggle for buses */}
-          <div className="flex rounded-md border border-border overflow-hidden mr-1" role="group" aria-label="Bus radix">
+          {/* segmented radix control for buses */}
+          <div
+            className="flex items-center rounded-md border border-border bg-surface-1 p-0.5 mr-1"
+            role="group"
+            aria-label="Bus radix"
+          >
             {(["hex", "dec"] as const).map((r) => (
               <button
                 key={r}
@@ -268,19 +374,24 @@ export function WaveformViewer() {
                 onClick={() => setRadix(r)}
                 aria-pressed={radix === r}
                 className={cn(
-                  "px-1.5 py-0.5 text-[10px] font-mono uppercase",
-                  radix === r ? "bg-surface-3 text-foreground" : "text-muted-foreground hover:bg-surface-2"
+                  "px-2 py-0.5 text-[10px] font-mono uppercase rounded-[3px] transition-colors [transition-duration:var(--dur-fast)] [transition-timing-function:var(--ease)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  radix === r
+                    ? "bg-surface-3 text-foreground shadow-e1"
+                    : "text-muted-foreground hover:text-foreground hover:bg-surface-2"
                 )}
               >
                 {r}
               </button>
             ))}
           </div>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Zoom out" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}>
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="Fit to window" aria-label="Fit waveform to window" onClick={handleFit}>
+            <Maximize2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="Zoom out" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}>
             <ZoomOut className="h-3.5 w-3.5" />
           </Button>
-          <span className="text-xs text-muted-foreground w-12 text-center">{Math.round(zoom * 100)}%</span>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Zoom in" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, z + 0.25))}>
+          <span className="text-xs text-muted-foreground w-12 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="Zoom in" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, Math.round((z + 0.25) * 100) / 100))}>
             <ZoomIn className="h-3.5 w-3.5" />
           </Button>
           <Button variant="ghost" size="icon" className="h-7 w-7" title="Refresh" aria-label="Refresh waveforms" onClick={() => loadWaveforms()}>
@@ -290,7 +401,7 @@ export function WaveformViewer() {
       </div>
 
       {/* Waveform display */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1" viewportRef={laneViewportRef}>
         {waveformData ? (
           <div className="min-w-full">
             {/* Time ruler */}
@@ -312,14 +423,41 @@ export function WaveformViewer() {
             </div>
 
             <div
+              ref={lanesRef}
               className="relative"
               onClick={(e) => {
-                const x = e.clientX - e.currentTarget.getBoundingClientRect().left - NAME_COL;
-                if (x < 0) return; // clicked in the name column
-                setManualCursor(Math.min(Math.max(0, x / scale), endtime));
+                const t = xToTicks(e.clientX);
+                if (t != null) setManualCursor(t);
+              }}
+              onMouseMove={handleLanesMove}
+              onMouseLeave={() => {
+                if (!dragging) setHoverTicks(null);
               }}
               title="Click to place a measurement cursor"
             >
+              {/* Faint vertical gridlines aligned to the ruler ticks, behind lanes. */}
+              <div className="absolute inset-0 z-0 pointer-events-none" aria-hidden>
+                {ticks.map((t, i) => (
+                  <div
+                    key={i}
+                    className="absolute top-0 bottom-0 w-px bg-border/40"
+                    style={{ left: NAME_COL + t * scale }}
+                  />
+                ))}
+              </div>
+
+              {/* hover scrub guide (calm, dashed) */}
+              {hoverX != null && hoverTicks != null && (
+                <div
+                  className="absolute top-0 bottom-0 z-20 pointer-events-none border-l border-dashed border-muted-foreground/50"
+                  style={{ left: NAME_COL + hoverX }}
+                >
+                  <span className="absolute top-0 left-1 text-[9px] text-muted-foreground font-mono bg-background/85 px-1 rounded whitespace-nowrap">
+                    {Math.round(ticksToNs(hoverTicks))}ns
+                  </span>
+                </div>
+              )}
+
               {/* failure cursor (red) across all lanes */}
               {failX != null && (
                 <div
@@ -331,13 +469,29 @@ export function WaveformViewer() {
                   </span>
                 </div>
               )}
-              {/* user-placed measurement cursor (blue) */}
+              {/* user-placed measurement cursor (blue) with a draggable handle */}
               {manualCursor != null && activeX != null && (
                 <div
-                  className="absolute top-0 bottom-0 w-px bg-info z-20 pointer-events-none"
+                  className="absolute top-0 bottom-0 w-px bg-info z-30"
                   style={{ left: NAME_COL + activeX }}
                 >
-                  <span className="absolute top-0 left-1 text-[9px] text-info font-mono bg-background/80 px-1 rounded">
+                  {/* grab handle to scrub the cursor */}
+                  <button
+                    type="button"
+                    aria-label="Drag measurement cursor"
+                    title="Drag to scrub"
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      setDragging(true);
+                    }}
+                    className={cn(
+                      "absolute -top-0.5 -translate-x-1/2 h-3 w-3 rounded-sm bg-info border border-background",
+                      "cursor-ew-resize shadow-e1 pointer-events-auto",
+                      dragging && "ring-2 ring-info/40"
+                    )}
+                  />
+                  <span className="absolute top-3.5 left-1 text-[9px] text-info font-mono bg-background/80 px-1 rounded pointer-events-none">
                     {Math.round(ticksToNs(activeCursor!))}ns
                   </span>
                 </div>
@@ -350,7 +504,7 @@ export function WaveformViewer() {
                     <button
                       type="button"
                       onClick={() => toggle(scope)}
-                      className="flex items-center gap-1 w-full px-2 py-1 bg-surface-2/60 hover:bg-surface-2 border-b border-border text-left"
+                      className="flex items-center gap-1 w-full px-2 py-1 bg-surface-2/60 hover:bg-surface-2 border-b border-border text-left relative z-10"
                     >
                       {isCollapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                       <span className="text-[10px] font-mono text-info truncate">{scope}</span>
@@ -359,12 +513,13 @@ export function WaveformViewer() {
                     {!isCollapsed &&
                       sigs.map((signal) => {
                         const vAtCursor = valueAtCursor(signal);
+                        const vAtHover = hoverTicks != null ? valueAt(signal, hoverTicks) : null;
                         const isCulprit = failInfo != null && signal.name === failInfo.signal;
                         return (
                           <div
                             key={signal.full_name}
                             className={cn(
-                              "flex items-center border-b border-border/60 hover:bg-surface-1",
+                              "flex items-center border-b border-border/60 hover:bg-surface-1 relative z-10",
                               isCulprit && "bg-status-fail/10"
                             )}
                           >
@@ -387,15 +542,20 @@ export function WaveformViewer() {
                                   exp {failInfo!.expected}
                                 </span>
                               )}
-                              {vAtCursor != null && (
+                              {/* hover value takes precedence so scrubbing reads live */}
+                              {(vAtHover ?? vAtCursor) != null && (
                                 <span
                                   className={cn(
                                     "ml-auto text-[10px] font-semibold tabular-nums",
-                                    isCulprit ? "text-status-fail" : "text-info"
+                                    vAtHover != null
+                                      ? "text-muted-foreground"
+                                      : isCulprit
+                                      ? "text-status-fail"
+                                      : "text-info"
                                   )}
-                                  title="value at the active cursor"
+                                  title={vAtHover != null ? "value at the hovered time" : "value at the active cursor"}
                                 >
-                                  ={vAtCursor}
+                                  ={vAtHover ?? vAtCursor}
                                 </span>
                               )}
                             </div>
