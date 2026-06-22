@@ -1,7 +1,7 @@
 {
   "run_id": "synth_0002",
-  "job_id": "job_7ce90bfef5",
-  "created_at": "2026-06-22T03:09:18.144350+00:00",
+  "job_id": "job_ffd4245904",
+  "created_at": "2026-06-22T21:56:33.319040+00:00",
   "status": "completed",
   "mode": "pd_retry",
   "parent_run_id": "synth_0001",
@@ -107,6 +107,6 @@
     "power_uw": null
   },
   "next_action": "Inspect stage summaries and continue tuning.",
-  "finished_at": "2026-06-22T03:09:18.145195+00:00",
+  "finished_at": "2026-06-22T21:56:33.320249+00:00",
   "elapsed_sec": 0.0
 }

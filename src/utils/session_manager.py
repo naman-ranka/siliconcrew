@@ -204,6 +204,12 @@ class SessionManager:
         self._store.ensure_thread(session_id, session_id, user_id, "Chat 1", None, now)
         return self._store.get_thread(session_id, user_id=user_id)
 
+    def ensure_thread(self, thread_id, session_id, user_id=None, model=None) -> None:
+        """Idempotently ensure a thread row exists (used by the WS on connect)."""
+        now = datetime.datetime.now()
+        title = "Chat 1" if thread_id == session_id else "New chat"
+        self._store.ensure_thread(thread_id, session_id, user_id, title, model, now)
+
     def create_thread(self, session_id, user_id=None, title=None, model=None) -> dict:
         """Create a new chat thread (fresh UUID id) under a session."""
         import uuid

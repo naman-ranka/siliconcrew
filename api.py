@@ -100,6 +100,36 @@ class MessageResponse(BaseModel):
     tool_results: Optional[List[Dict[str, Any]]] = None
 
 
+class ThreadCreate(BaseModel):
+    title: Optional[str] = None
+    model: Optional[str] = None
+
+
+class ThreadPatch(BaseModel):
+    title: Optional[str] = None
+    model: Optional[str] = None
+
+
+class ThreadResponse(BaseModel):
+    id: str
+    session_id: str
+    title: Optional[str] = None
+    model: Optional[str] = None
+    created_at: Optional[str] = None
+    last_active: Optional[str] = None
+
+
+def _thread_to_response(t: dict) -> "ThreadResponse":
+    return ThreadResponse(
+        id=t["id"],
+        session_id=t.get("session_id"),
+        title=t.get("title"),
+        model=t.get("model"),
+        created_at=str(t["created_at"]) if t.get("created_at") else None,
+        last_active=str(t["last_active"]) if t.get("last_active") else None,
+    )
+
+
 class FileInfo(BaseModel):
     name: str
     path: str
@@ -569,68 +599,116 @@ async def delete_key(provider: str, identity: Identity = Depends(require_signed_
 # CHAT ENDPOINTS
 # =============================================================================
 
+async def _read_thread_history(thread_id: str, model_name: str) -> List[Dict[str, Any]]:
+    """Read one LangGraph thread's messages as API history (keyed by thread_id).
+
+    Shared by the legacy /api/chat/{session_id}/history (thread_id == session_id =
+    Chat 1) and the per-thread history endpoint. Workspace is irrelevant here —
+    this only reads conversation state.
+    """
+    async with open_checkpointer(DB_PATH) as memory:
+        agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+        config = {"configurable": {"thread_id": thread_id}}
+        current_state = await agent_graph.aget_state(config)
+
+        if not current_state.values or "messages" not in current_state.values:
+            return []
+
+        messages = current_state.values["messages"]
+        history: List[Dict[str, Any]] = []
+        for msg in messages:
+            if isinstance(msg, SystemMessage):
+                continue
+            elif isinstance(msg, HumanMessage):
+                history.append({"role": "user", "content": get_clean_content(msg)})
+            elif isinstance(msg, AIMessage):
+                entry = {"role": "assistant", "content": get_clean_content(msg), "tool_calls": []}
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    entry["tool_calls"] = [format_tool_call_for_api(tc) for tc in msg.tool_calls]
+                history.append(entry)
+            elif hasattr(msg, "tool_call_id"):
+                result = format_tool_result_for_api(msg.content)
+                if history and history[-1]["role"] == "assistant":
+                    history[-1].setdefault("tool_results", []).append(
+                        {"tool_call_id": msg.tool_call_id, **result}
+                    )
+        return history
+
+
+def _session_model(session_id: str, uid: Optional[str]) -> str:
+    meta = session_manager.get_session_metadata(session_id, user_id=uid)
+    return normalize_model_name(meta.get("model_name", DEFAULT_MODEL) if meta else DEFAULT_MODEL)
+
+
 @app.get("/api/chat/{session_id:path}/history")
 async def get_chat_history(session_id: str, identity: Identity = Depends(get_identity)) -> List[Dict[str, Any]]:
-    """Get chat history for a session (owner only)."""
+    """Get chat history for a session's default thread (Chat 1; owner only)."""
     uid = _require_owned(session_id, identity)
     workspace = session_manager.get_workspace_path(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
-
     try:
-        async with open_checkpointer(DB_PATH) as memory:
-            meta = session_manager.get_session_metadata(session_id, user_id=uid)
-            model_name = normalize_model_name(meta.get("model_name", DEFAULT_MODEL) if meta else DEFAULT_MODEL)
-
-            agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
-            config = {"configurable": {"thread_id": session_id}}
-
-            current_state = await agent_graph.aget_state(config)
-
-            if not current_state.values or "messages" not in current_state.values:
-                return []
-
-            messages = current_state.values["messages"]
-            history = []
-
-            for msg in messages:
-                if isinstance(msg, SystemMessage):
-                    continue
-                elif isinstance(msg, HumanMessage):
-                    history.append({
-                        "role": "user",
-                        "content": get_clean_content(msg)
-                    })
-                elif isinstance(msg, AIMessage):
-                    entry = {
-                        "role": "assistant",
-                        "content": get_clean_content(msg),
-                        "tool_calls": []
-                    }
-
-                    if hasattr(msg, "tool_calls") and msg.tool_calls:
-                        entry["tool_calls"] = [
-                            format_tool_call_for_api(tc) for tc in msg.tool_calls
-                        ]
-
-                    history.append(entry)
-
-                elif hasattr(msg, "tool_call_id"):
-                    # Tool result - attach to previous assistant message
-                    result = format_tool_result_for_api(msg.content)
-                    if history and history[-1]["role"] == "assistant":
-                        if "tool_results" not in history[-1]:
-                            history[-1]["tool_results"] = []
-                        history[-1]["tool_results"].append({
-                            "tool_call_id": msg.tool_call_id,
-                            **result
-                        })
-
-            return history
-
+        # Back-compat: the default thread id == session_id.
+        return await _read_thread_history(session_id, _session_model(session_id, uid))
     except Exception as e:
         print(f"[ERROR] Loading history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# CHAT THREAD ENDPOINTS (a chat = a thread_id; many per workspace, owner-scoped)
+# =============================================================================
+
+@app.get("/api/sessions/{session_id:path}/threads", response_model=List[ThreadResponse])
+async def list_threads(session_id: str, identity: Identity = Depends(get_identity)):
+    """List this session's chat threads (newest active first). Ensures Chat 1."""
+    uid = _require_owned(session_id, identity)
+    return [_thread_to_response(t) for t in session_manager.list_threads(session_id, user_id=uid)]
+
+
+@app.post("/api/sessions/{session_id:path}/threads", response_model=ThreadResponse, status_code=201)
+async def create_thread(session_id: str, data: ThreadCreate, identity: Identity = Depends(get_identity)):
+    """Start a fresh chat in this workspace (own conversation; shared files)."""
+    uid = _require_owned(session_id, identity)
+    model = normalize_model_name(data.model) if data.model else None
+    t = session_manager.create_thread(session_id, user_id=uid, title=data.title, model=model)
+    return _thread_to_response(t)
+
+
+@app.get("/api/sessions/{session_id:path}/threads/{tid}/history")
+async def get_thread_history(session_id: str, tid: str, identity: Identity = Depends(get_identity)) -> List[Dict[str, Any]]:
+    """History for one thread (owner-checked; thread must belong to the session)."""
+    uid = _require_owned(session_id, identity)
+    if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    try:
+        return await _read_thread_history(tid, _session_model(session_id, uid))
+    except Exception as e:
+        print(f"[ERROR] Loading thread history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/sessions/{session_id:path}/threads/{tid}", response_model=ThreadResponse)
+async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: Identity = Depends(get_identity)):
+    """Rename a thread and/or set its model (owner-checked)."""
+    uid = _require_owned(session_id, identity)
+    if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if data.title is not None:
+        session_manager.rename_thread(tid, data.title, user_id=uid)
+    if data.model is not None:
+        session_manager.set_thread_model(tid, normalize_model_name(data.model), user_id=uid)
+    return _thread_to_response(session_manager.get_thread(tid, user_id=uid))
+
+
+@app.delete("/api/sessions/{session_id:path}/threads/{tid}")
+async def delete_thread(session_id: str, tid: str, identity: Identity = Depends(get_identity)):
+    """Delete a conversation only — never the workspace files/runs."""
+    uid = _require_owned(session_id, identity)
+    if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    session_manager.delete_thread(tid, user_id=uid)
+    return {"status": "deleted", "thread_id": tid}
 
 
 @app.websocket("/api/chat/{session_id:path}")
@@ -656,6 +734,12 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
         await websocket.send_json({"type": "error", "error": "Session not found"})
         await websocket.close()
         return
+
+    # The chat thread (LangGraph thread_id) this connection talks to. May be
+    # overridden per-message. Defaults to the session's "Chat 1" (id == session_id)
+    # for back-compat. The WORKSPACE stays bound from session_id regardless of
+    # which thread is active — threads share the live workspace.
+    conn_thread_id = websocket.query_params.get("thread_id") or session_id
 
     # Materialize the workspace via the active WorkspaceProvider. Locally this is
     # the same workspace/<session_id> directory the session manager uses; in
@@ -684,17 +768,29 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 await websocket.send_json({"type": "error", "error": "Empty message"})
                 continue
 
-            # Workspace is bound via the task-local session context at connection
-            # start (see set_current_session above) — no global env mutation.
-            print(f"[CHAT] Session: {session_id} | Message: {message[:50]}...")
+            # Resolve the chat thread for this turn (per-message override → the
+            # connection default → Chat 1). The workspace stays bound to
+            # session_id; only the conversation checkpoint key varies.
+            thread_id = data.get("thread_id") or conn_thread_id or session_id
+            session_manager.ensure_thread(thread_id, session_id, user_id=uid)
+            # Bump activity + auto-title an untitled thread from the first message.
+            session_manager.touch_thread(thread_id, user_id=uid, auto_title_from=message)
 
-            # Initialize agent with AsyncSqliteSaver (supports async streaming/state)
+            print(f"[CHAT] Session: {session_id} | Thread: {thread_id} | Message: {message[:50]}...")
+
+            # Initialize agent with AsyncSqliteSaver (supports async streaming/state).
+            # The model is read from the ACTIVE THREAD (falls back to the session's
+            # model, then DEFAULT) so each chat can use a different model.
             async with open_checkpointer(DB_PATH) as memory:
+                thread_row = session_manager.get_thread(thread_id, user_id=uid)
+                thread_model = (thread_row or {}).get("model")
                 meta = session_manager.get_session_metadata(session_id, user_id=uid)
-                model_name = normalize_model_name(meta.get("model_name", DEFAULT_MODEL) if meta else DEFAULT_MODEL)
+                model_name = normalize_model_name(
+                    thread_model or (meta.get("model_name") if meta else None) or DEFAULT_MODEL
+                )
 
                 agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
-                config = {"configurable": {"thread_id": session_id}, "recursion_limit": 50}
+                config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
 
                 # Check for corrupted state
                 snapshot = await agent_graph.aget_state(config)
