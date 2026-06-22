@@ -29,6 +29,8 @@ from src.utils.session_context import SessionContext, set_current_session
 from src.platform_engines.workspace_provider import get_workspace_provider
 from src.platform_engines.identity import Action, AuthError, Identity
 from src.platform_engines import auth as auth_engine
+from src.platform_engines.llm_keys import build_key_vault, VALID_PROVIDERS
+from src.platform_engines.settings import get_settings
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.tools.design_report import save_design_report
 from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
@@ -48,6 +50,10 @@ DB_PATH = os.path.join(_DATA_DIR, "state.db")
 
 # Initialize Session Manager
 session_manager = SessionManager(base_dir=WORKSPACE_DIR, db_path=DB_PATH)
+
+# BYOK vault (envelope-encrypted user API keys). None when BYOK isn't configured
+# (no KMS / master key) — the /api/keys endpoints then return 503.
+_KEY_VAULT = build_key_vault(get_settings(), db_path=os.path.join(_DATA_DIR, "byok.db"))
 
 
 # =============================================================================
@@ -500,6 +506,60 @@ async def delete_project(project_id: str, identity: Identity = Depends(require_s
         raise HTTPException(status_code=404, detail="Project not found")
     session_manager.delete_project(project_id, user_id=uid)
     return {"status": "deleted", "project_id": project_id}
+
+
+# =============================================================================
+# BYOK KEY ENDPOINTS (envelope-encrypted; require sign-in)
+# =============================================================================
+
+class KeyUpsert(BaseModel):
+    api_key: str
+
+
+def _byok_user(identity: Identity) -> str:
+    """Owner id for a BYOK key. Requires a real (hosted) user id."""
+    uid = _uid(identity)
+    if uid is None:
+        # Self-host uses env keys; BYOK-per-user has no meaning without tenancy.
+        raise HTTPException(status_code=400, detail="BYOK is only available in hosted mode.")
+    return uid
+
+
+def _require_vault():
+    if _KEY_VAULT is None:
+        raise HTTPException(status_code=503, detail="BYOK key storage is not configured on this server.")
+    return _KEY_VAULT
+
+
+@app.get("/api/keys")
+async def list_keys(identity: Identity = Depends(require_signed_in)):
+    """List which providers the caller has a stored key for (never the keys)."""
+    vault = _require_vault()
+    uid = _byok_user(identity)
+    return {"providers": [p for p in VALID_PROVIDERS if vault.has_key(uid, p)]}
+
+
+@app.put("/api/keys/{provider}")
+async def put_key(provider: str, data: KeyUpsert, identity: Identity = Depends(require_signed_in)):
+    """Store (envelope-encrypt) the caller's API key for a provider."""
+    if provider not in VALID_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{provider}'.")
+    if not data.api_key.strip():
+        raise HTTPException(status_code=400, detail="api_key must not be empty.")
+    vault = _require_vault()
+    vault.store_key(_byok_user(identity), provider, data.api_key.strip())
+    return {"ok": True, "provider": provider, "stored": True}
+
+
+@app.delete("/api/keys/{provider}")
+async def delete_key(provider: str, identity: Identity = Depends(require_signed_in)):
+    """Remove the caller's stored key for a provider."""
+    if provider not in VALID_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{provider}'.")
+    vault = _require_vault()
+    uid = _byok_user(identity)
+    vault.delete_key(uid, provider)
+    return {"ok": True, "provider": provider, "deleted": True}
 
 
 # =============================================================================

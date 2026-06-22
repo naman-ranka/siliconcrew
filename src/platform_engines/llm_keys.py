@@ -131,6 +131,96 @@ class InMemoryWrappedKeyStore:
         self._d.pop((user_id, provider), None)
 
 
+class SqliteWrappedKeyStore:
+    """Persist wrapped (encrypted) BYOK blobs in SQLite (self-host / single node)."""
+
+    def __init__(self, db_path: str):
+        import os as _os
+
+        self.db_path = _os.path.abspath(db_path)
+        self._init()
+
+    def _connect(self):
+        import sqlite3
+
+        return sqlite3.connect(self.db_path)
+
+    def _init(self):
+        with self._connect() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS byok_keys ("
+                "user_id TEXT NOT NULL, provider TEXT NOT NULL, blob TEXT NOT NULL, "
+                "PRIMARY KEY (user_id, provider))"
+            )
+            conn.commit()
+
+    def put(self, user_id, provider, blob):
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO byok_keys (user_id, provider, blob) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, provider) DO UPDATE SET blob = excluded.blob",
+                (user_id, provider, blob),
+            )
+            conn.commit()
+
+    def get(self, user_id, provider):
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT blob FROM byok_keys WHERE user_id = ? AND provider = ?",
+                (user_id, provider),
+            ).fetchone()
+        return row[0] if row else None
+
+    def delete(self, user_id, provider):
+        with self._connect() as conn:
+            conn.execute("DELETE FROM byok_keys WHERE user_id = ? AND provider = ?", (user_id, provider))
+            conn.commit()
+
+
+class PostgresWrappedKeyStore:
+    """Persist wrapped BYOK blobs in Cloud SQL (shared across replicas)."""
+
+    def __init__(self, dsn: str, connect=None):
+        self._dsn = dsn
+        self._connect_fn = connect
+
+    def _connect(self):
+        if self._connect_fn is not None:
+            return self._connect_fn(self._dsn)
+        import psycopg  # lazy
+
+        return psycopg.connect(self._dsn)
+
+    def init_schema(self):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS byok_keys ("
+                "user_id TEXT NOT NULL, provider TEXT NOT NULL, blob TEXT NOT NULL, "
+                "PRIMARY KEY (user_id, provider))"
+            )
+            conn.commit()
+
+    def put(self, user_id, provider, blob):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO byok_keys (user_id, provider, blob) VALUES (%s, %s, %s) "
+                "ON CONFLICT (user_id, provider) DO UPDATE SET blob = excluded.blob",
+                (user_id, provider, blob),
+            )
+            conn.commit()
+
+    def get(self, user_id, provider):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT blob FROM byok_keys WHERE user_id = %s AND provider = %s", (user_id, provider))
+            row = cur.fetchone()
+        return row[0] if row else None
+
+    def delete(self, user_id, provider):
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM byok_keys WHERE user_id = %s AND provider = %s", (user_id, provider))
+            conn.commit()
+
+
 class EnvelopeKeyVault:
     """Store/retrieve BYOK keys with envelope encryption.
 
@@ -169,6 +259,9 @@ class EnvelopeKeyVault:
 
     def has_key(self, user_id: str, provider: str) -> bool:
         return self._store.get(user_id, provider) is not None
+
+    def delete_key(self, user_id: str, provider: str) -> None:
+        self._store.delete(user_id, provider)
 
 
 # ---------------------------------------------------------------------------
@@ -293,3 +386,60 @@ class ByokHostedLlmKeyProvider:
     @property
     def limiter(self) -> HostedTierLimiter:
         return self._limiter
+
+
+# ---------------------------------------------------------------------------
+# Factories — built once from settings (the single wiring point).
+# ---------------------------------------------------------------------------
+
+VALID_PROVIDERS = ("gemini", "openai", "anthropic")
+
+
+def _derive_master_key(secret: str) -> bytes:
+    """Derive a 32-byte master key from a configured secret string."""
+    import hashlib
+
+    return hashlib.sha256(secret.encode("utf-8")).digest()
+
+
+def build_key_vault(settings, db_path: Optional[str] = None) -> Optional[EnvelopeKeyVault]:
+    """Construct the BYOK vault from settings, or None if BYOK isn't configured.
+
+    KEK selection:
+      * ``KMS_KEY_URI`` set → Cloud KMS wraps the DEK (production).
+      * else ``SILICONCREW_MASTER_KEY`` set → local master key (self-host BYOK).
+      * else → None (BYOK disabled; endpoints return 503).
+
+    Persistence: Postgres in hosted+Postgres, else SQLite at ``db_path``.
+    """
+    if settings.persistence_engine == "postgres" and settings.database_url:
+        store: WrappedKeyStore = PostgresWrappedKeyStore(settings.database_url)
+        try:
+            store.init_schema()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    elif db_path:
+        store = SqliteWrappedKeyStore(db_path)
+    else:
+        return None
+
+    if settings.kms_key_uri:
+        kek: KekProvider = KmsKekProvider(settings.kms_key_uri)
+    else:
+        master = os.environ.get("SILICONCREW_MASTER_KEY")
+        if not master:
+            return None
+        kek = LocalKekProvider(_derive_master_key(master))
+
+    return EnvelopeKeyVault(store, FernetDataCipher(), kek)
+
+
+def build_llm_key_provider(settings, vault: Optional[EnvelopeKeyVault]) -> LlmKeyProvider:
+    """Pick the LLM key provider: env keys (self-host) or BYOK+hosted (hosted)."""
+    if settings.llm_key_engine == "byok" and vault is not None:
+        return ByokHostedLlmKeyProvider(
+            vault,
+            hosted_gemini_key=settings.hosted_gemini_key,
+            hosted_model=settings.hosted_gemini_model,
+        )
+    return EnvLlmKeyProvider()
