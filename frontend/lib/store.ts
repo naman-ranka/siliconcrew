@@ -105,6 +105,10 @@ interface AppState {
   lintResult: LintResult | null;
   consoleEntries: ConsoleEntry[];
   activeConsole: ConsoleChannel;
+  // Monotonic counter the Console watches to draw attention to a fresh result
+  // (auto-expand + pulse) — e.g. a lint result that would otherwise be a quiet
+  // one-liner while the center stays on Code. Carries which channel to focus.
+  consoleAttention: { tick: number; channel: ConsoleChannel } | null;
   actionPending: { lint: boolean; sim: boolean; synth: boolean };
   // Section-load flags drive skeleton loaders so a section shows shimmer rows
   // instead of flashing an empty/"No …" state before content lands.
@@ -191,6 +195,7 @@ export const useStore = create<AppState>((set, get) => ({
   lintResult: null,
   consoleEntries: [],
   activeConsole: "sim",
+  consoleAttention: null,
   actionPending: { lint: false, sim: false, synth: false },
   runsLoading: false,
   manifestLoading: false,
@@ -952,6 +957,9 @@ export const useStore = create<AppState>((set, get) => ({
           .map((d) => `${d.file ?? ""}:${d.line ?? "?"} ${d.severity}: ${d.message}`)
           .join("\n"),
       });
+      // Lint has no center-artifact surface, so make the result noticeable:
+      // ask the Console to auto-expand + pulse on the Lint channel.
+      bumpConsoleAttention(set, "lint");
     } catch (e) {
       pushConsole(set, get, { channel: "lint", status: "failed", summary: friendlyError(e) });
     } finally {
@@ -1088,6 +1096,18 @@ function sleep(ms: number): Promise<void> {
 
 // Token so a newer upload notice isn't cleared early by an older timeout.
 let _uploadNoticeToken = 0;
+
+// Bump the attention counter so the Console auto-expands + pulses on a fresh
+// result for `channel`. Monotonic tick lets the component fire its effect even
+// when the channel is unchanged between consecutive results.
+let _consoleAttentionTick = 0;
+function bumpConsoleAttention(
+  set: (fn: (s: AppState) => Partial<AppState>) => void,
+  channel: ConsoleChannel
+) {
+  _consoleAttentionTick += 1;
+  set(() => ({ consoleAttention: { tick: _consoleAttentionTick, channel } }));
+}
 
 // Append a console entry, collapsing the most recent "running" entry on the
 // same channel so a finished action replaces its own spinner line.

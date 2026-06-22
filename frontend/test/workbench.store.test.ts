@@ -80,6 +80,10 @@ describe("workbench store: runLint", () => {
     const lintEntry = s.consoleEntries.find((e) => e.channel === "lint");
     expect(lintEntry?.status).toBe("failed");
     expect(lintEntry?.command).toContain("iverilog");
+    // A fresh lint result raises console attention (auto-expand + pulse cue)
+    // on the lint channel, since lint has no center-artifact surface.
+    expect(s.consoleAttention?.channel).toBe("lint");
+    expect(s.consoleAttention?.tick).toBeGreaterThan(0);
   });
 });
 
