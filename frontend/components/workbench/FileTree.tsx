@@ -5,6 +5,7 @@ import { useStore } from "@/lib/store";
 import { workspaceApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { IconTooltip } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PanelHeader } from "./PanelHeader";
 import { Upload, FileCode2, FileTerminal, FileClock, FileType2, File as FileIcon, Crown, FlaskConical, Download } from "lucide-react";
@@ -227,27 +228,36 @@ export function FileTree() {
                   </span>
                   <span className={cn("text-xs font-mono truncate", isSelected && "font-medium")}>{f.name}</span>
                   {isSynthTop && (
-                    <Crown className="h-3 w-3 text-info shrink-0" aria-label="synthesis top candidate" />
+                    <IconTooltip label="Synthesis top (DUT)">
+                      <span className="shrink-0 inline-flex" aria-label="Synthesis top (DUT)" role="img">
+                        <Crown className="h-3 w-3 text-info" />
+                      </span>
+                    </IconTooltip>
                   )}
                   {isSimTop && (
-                    <FlaskConical className="h-3 w-3 text-primary shrink-0" aria-label="simulation top candidate" />
+                    <IconTooltip label="Testbench top">
+                      <span className="shrink-0 inline-flex" aria-label="Testbench top" role="img">
+                        <FlaskConical className="h-3 w-3 text-primary" />
+                      </span>
+                    </IconTooltip>
                   )}
                 </button>
 
-                <button
-                  type="button"
-                  aria-label={`Download ${f.name}`}
-                  title={`Download ${f.name}`}
-                  onClick={() => void downloadFile(f.name)}
-                  className={cn(
-                    "shrink-0 rounded p-0.5 outline-none transition-all duration-fast ease-swift",
-                    "text-muted-foreground/40 hover:text-foreground hover:bg-surface-3",
-                    "group-hover:text-muted-foreground/70 group-focus-within:text-muted-foreground/70",
-                    "focus-visible:opacity-100 focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-primary/60"
-                  )}
-                >
-                  <Download className="h-3 w-3" />
-                </button>
+                <IconTooltip label={`Download ${f.name}`}>
+                  <button
+                    type="button"
+                    aria-label={`Download ${f.name}`}
+                    onClick={() => void downloadFile(f.name)}
+                    className={cn(
+                      "shrink-0 rounded p-0.5 outline-none transition-all duration-fast ease-swift",
+                      "text-muted-foreground/40 hover:text-foreground hover:bg-surface-3",
+                      "group-hover:text-muted-foreground/70 group-focus-within:text-muted-foreground/70",
+                      "focus-visible:opacity-100 focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-primary/60"
+                    )}
+                  >
+                    <Download className="h-3 w-3" />
+                  </button>
+                </IconTooltip>
 
                 <RoleBadge role={f.role} />
 

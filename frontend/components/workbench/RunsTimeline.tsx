@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { statusDotClass, statusTextClass, relativeTime } from "./runStatus";
 import { Pin, PinOff, Waves, Cpu, GitCompare, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { IconTooltip } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PanelHeader } from "./PanelHeader";
 import type { PpaDiff, RunSummary } from "@/types";
@@ -162,26 +163,27 @@ export function RunsTimeline() {
               {r.createdAt ? <span className="text-muted-foreground"> · {relativeTime(r.createdAt)}</span> : null}
             </span>
           </div>
-          <button
-            type="button"
-            className={cn(
-              "shrink-0 rounded outline-none transition-all duration-fast ease-swift",
-              "hover:scale-110 active:scale-95",
-              "focus-visible:ring-2 focus-visible:ring-primary/60",
-              r.pinned
-                ? "text-primary opacity-100"
-                : "text-muted-foreground opacity-0 hover:text-primary group-hover:opacity-60 group-hover:hover:opacity-100 focus-visible:opacity-100"
-            )}
-            title={r.pinned ? "Unpin" : "Pin (protect from prune)"}
-            aria-label={r.pinned ? `Unpin ${r.id}` : `Pin ${r.id}`}
-            aria-pressed={r.pinned}
-            onClick={(e) => {
-              e.stopPropagation();
-              void pinRun(r.id, !r.pinned);
-            }}
-          >
-            {r.pinned ? <Pin className="h-3.5 w-3.5" /> : <PinOff className="h-3.5 w-3.5" />}
-          </button>
+          <IconTooltip label={r.pinned ? "Unpin" : "Pin (protect from prune)"} side="left">
+            <button
+              type="button"
+              className={cn(
+                "shrink-0 rounded outline-none transition-all duration-fast ease-swift",
+                "hover:scale-110 active:scale-95",
+                "focus-visible:ring-2 focus-visible:ring-primary/60",
+                r.pinned
+                  ? "text-primary opacity-100"
+                  : "text-muted-foreground opacity-0 hover:text-primary group-hover:opacity-60 group-hover:hover:opacity-100 focus-visible:opacity-100"
+              )}
+              aria-label={r.pinned ? `Unpin ${r.id}` : `Pin ${r.id}`}
+              aria-pressed={r.pinned}
+              onClick={(e) => {
+                e.stopPropagation();
+                void pinRun(r.id, !r.pinned);
+              }}
+            >
+              {r.pinned ? <Pin className="h-3.5 w-3.5" /> : <PinOff className="h-3.5 w-3.5" />}
+            </button>
+          </IconTooltip>
         </div>
         {children.map((c, ci) => renderRow(c, depth + 1, ci === children.length - 1))}
       </div>
@@ -191,25 +193,28 @@ export function RunsTimeline() {
   return (
     <div className="flex flex-col min-h-0 border-t border-border">
       <PanelHeader label="Runs">
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn("h-6 w-6", compareMode && "text-info")}
-          title="Compare two runs"
-          aria-label="Compare two runs"
-          aria-pressed={compareMode}
-          onClick={() => {
-            setCompareMode((v) => !v);
-            setCompareSel([]);
-            setDiff(null);
-            setSimDiff(null);
-          }}
-        >
-          <GitCompare className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant="ghost" size="icon" className="h-6 w-6" title="Refresh runs" aria-label="Refresh runs" onClick={() => void loadRuns()}>
-          <RefreshCw className="h-3.5 w-3.5" />
-        </Button>
+        <IconTooltip label="Compare two runs">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn("h-6 w-6", compareMode && "text-info")}
+            aria-label="Compare two runs"
+            aria-pressed={compareMode}
+            onClick={() => {
+              setCompareMode((v) => !v);
+              setCompareSel([]);
+              setDiff(null);
+              setSimDiff(null);
+            }}
+          >
+            <GitCompare className="h-3.5 w-3.5" />
+          </Button>
+        </IconTooltip>
+        <IconTooltip label="Refresh runs">
+          <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Refresh runs" onClick={() => void loadRuns()}>
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        </IconTooltip>
       </PanelHeader>
 
       <div className="flex gap-1 px-3 pt-2 pb-2">

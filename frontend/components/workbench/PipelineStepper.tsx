@@ -4,6 +4,7 @@ import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { statusDotClass, latestOfKind } from "./runStatus";
 import type { RunStatus } from "@/types";
+import { IconTooltip } from "@/components/ui/tooltip";
 import { FileText, Code2, CheckCircle2, Waves, Cpu, BadgeCheck, Loader2, Play } from "lucide-react";
 
 type StageId = "spec" | "rtl" | "lint" | "sim" | "synth" | "signoff";
@@ -163,13 +164,21 @@ export function PipelineStepper() {
         const connectorFilled = !!next?.reached;
         return (
           <div key={stage.id} className="flex items-center">
+            <IconTooltip
+              side="bottom"
+              label={
+                <span className="flex flex-col gap-0.5">
+                  <span className="font-medium">{verb}</span>
+                  <span className="text-popover-foreground/70">{stage.desc}</span>
+                </span>
+              }
+            >
             <button
               type="button"
               disabled={isDisabled}
               onClick={stage.onClick}
               data-stage={stage.id}
               data-status={stage.status ?? "none"}
-              title={`${verb} — ${stage.desc}`}
               aria-label={`${verb} — ${stage.desc}`}
               aria-pressed={isActive}
               aria-busy={stage.pending || undefined}
@@ -233,6 +242,7 @@ export function PipelineStepper() {
                 </span>
               </span>
             </button>
+            </IconTooltip>
             {i < stages.length - 1 && (
               <span aria-hidden className="flex w-4 shrink-0 items-center justify-center">
                 <span

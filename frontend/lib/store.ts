@@ -992,13 +992,20 @@ export const useStore = create<AppState>((set, get) => ({
       // otherwise reveal the waveform for the fresh run.
       const onCode = get().activeArtifactTab === "code";
       await get().selectRun(run.id, { keepTab: onCode });
+      // Human-first titles: lead with the action ("Simulation passed/failed"),
+      // demote the run id into the detail line (a run id reads like a DB key).
       get().pushToast(
         run.status === "passed"
-          ? { kind: "success", title: `${run.id} passed`, detail: run.top ?? undefined }
+          ? {
+              kind: "success",
+              title: "Simulation passed",
+              detail: [run.id, run.top].filter(Boolean).join(" · ") || undefined,
+            }
           : {
               kind: "error",
-              title: `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`,
-              detail: run.failure?.firstFailureLine ?? undefined,
+              title: `Simulation failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`,
+              detail:
+                [run.id, run.failure?.firstFailureLine].filter(Boolean).join(" — ") || undefined,
             }
       );
     } catch (e) {

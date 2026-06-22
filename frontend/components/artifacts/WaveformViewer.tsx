@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, RefreshCw, ZoomIn, ZoomOut, ChevronRight, ChevronDown, Crosshair, Maximize2 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
+import { IconTooltip } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmptyState } from "@/components/workbench/EmptyState";
 import { cn } from "@/lib/utils";
@@ -387,19 +388,27 @@ export function WaveformViewer() {
               </button>
             ))}
           </div>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Fit to window" aria-label="Fit waveform to window" onClick={handleFit}>
-            <Maximize2 className="h-3.5 w-3.5" />
-          </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Zoom out" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}>
-            <ZoomOut className="h-3.5 w-3.5" />
-          </Button>
+          <IconTooltip label="Fit to window">
+            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Fit waveform to window" onClick={handleFit}>
+              <Maximize2 className="h-3.5 w-3.5" />
+            </Button>
+          </IconTooltip>
+          <IconTooltip label="Zoom out">
+            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}>
+              <ZoomOut className="h-3.5 w-3.5" />
+            </Button>
+          </IconTooltip>
           <span className="text-xs text-muted-foreground w-12 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Zoom in" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, Math.round((z + 0.25) * 100) / 100))}>
-            <ZoomIn className="h-3.5 w-3.5" />
-          </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Refresh" aria-label="Refresh waveforms" onClick={() => loadWaveforms()}>
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
+          <IconTooltip label="Zoom in">
+            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, Math.round((z + 0.25) * 100) / 100))}>
+              <ZoomIn className="h-3.5 w-3.5" />
+            </Button>
+          </IconTooltip>
+          <IconTooltip label="Refresh waveforms">
+            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Refresh waveforms" onClick={() => loadWaveforms()}>
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+          </IconTooltip>
         </div>
       </div>
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./ChatInput";
 import { useStore } from "@/lib/store";
@@ -7,8 +8,20 @@ import { formatTokens, formatCost } from "@/lib/utils";
 import { Cpu, Zap, Coins, Hash, AlertCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+const API_KEY_NOTICE_DISMISSED = "sc-apikey-notice-dismissed";
+
 export function ChatArea() {
   const { currentSession, chatError } = useStore();
+  // The API-key note competes with toasts as a second notification channel, so
+  // make its dismissal sticky (localStorage) — once waved off it stays gone.
+  const [apiNoticeDismissed, setApiNoticeDismissed] = useState(false);
+  useEffect(() => {
+    try {
+      setApiNoticeDismissed(localStorage.getItem(API_KEY_NOTICE_DISMISSED) === "1");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -63,6 +76,8 @@ export function ChatArea() {
           than as an alarming red banner. */}
       {chatError && (() => {
         const isConfig = /api key|api_key/i.test(chatError);
+        // Stay dismissed across the session once the user has waved off the note.
+        if (isConfig && apiNoticeDismissed) return null;
         return (
           <div
             className={
@@ -81,7 +96,18 @@ export function ChatArea() {
               variant="ghost"
               size="icon"
               className={isConfig ? "h-6 w-6 shrink-0 hover:bg-info/20" : "h-6 w-6 shrink-0 hover:bg-destructive/20"}
-              onClick={() => useStore.setState({ chatError: null })}
+              aria-label="Dismiss notice"
+              onClick={() => {
+                if (isConfig) {
+                  setApiNoticeDismissed(true);
+                  try {
+                    localStorage.setItem(API_KEY_NOTICE_DISMISSED, "1");
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                useStore.setState({ chatError: null });
+              }}
             >
               <X className={isConfig ? "h-3.5 w-3.5 text-info" : "h-3.5 w-3.5 text-destructive"} />
             </Button>

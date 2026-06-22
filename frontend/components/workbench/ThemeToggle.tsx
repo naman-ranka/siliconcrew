@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { IconTooltip } from "@/components/ui/tooltip";
 
 type Theme = "dark" | "light";
 
@@ -29,16 +30,18 @@ export function ThemeToggle() {
     }
   };
 
+  const label = theme === "dark" ? "Switch to light (paper)" : "Switch to dark";
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="h-8 w-8 transition-colors duration-base"
-      onClick={toggle}
-      title={theme === "dark" ? "Switch to light (paper)" : "Switch to dark"}
-      aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-    >
-      {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-    </Button>
+    <IconTooltip label={label}>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 transition-colors duration-base"
+        onClick={toggle}
+        aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+      >
+        {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+      </Button>
+    </IconTooltip>
   );
 }

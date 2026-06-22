@@ -89,7 +89,7 @@ describe("PipelineStepper", () => {
     const runLint = vi.fn();
     useStore.setState({ runLint: runLint as any });
     render(<PipelineStepper />);
-    fireEvent.click(screen.getByTitle(/Run Lint/));
+    fireEvent.click(screen.getByRole("button", { name: /Run Lint/ }));
     expect(runLint).toHaveBeenCalled();
   });
 });

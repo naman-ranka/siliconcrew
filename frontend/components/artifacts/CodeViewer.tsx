@@ -7,6 +7,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
+import { IconTooltip } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/workbench/EmptyState";
 import {
@@ -278,21 +279,31 @@ export function CodeViewer() {
             </>
           ) : (
             <>
-              <Button variant="ghost" size="icon" className="h-7 w-7" title="New file" onClick={startNew}>
-                <FilePlus className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7" title="Edit" onClick={startEdit} disabled={!currentFile}>
-                <Pencil className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7" title="Refresh" onClick={() => loadCodeFiles()}>
-                <RefreshCw className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy" onClick={handleCopy}>
-                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7" title="Download" onClick={handleDownload} disabled={!currentFile}>
-                <Download className="h-3.5 w-3.5" />
-              </Button>
+              <IconTooltip label="New file">
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="New file" onClick={startNew}>
+                  <FilePlus className="h-3.5 w-3.5" />
+                </Button>
+              </IconTooltip>
+              <IconTooltip label="Edit">
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Edit" onClick={startEdit} disabled={!currentFile}>
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              </IconTooltip>
+              <IconTooltip label="Refresh">
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Refresh file" onClick={() => loadCodeFiles()}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
+              </IconTooltip>
+              <IconTooltip label="Copy">
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Copy code" onClick={handleCopy}>
+                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                </Button>
+              </IconTooltip>
+              <IconTooltip label="Download">
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Download file" onClick={handleDownload} disabled={!currentFile}>
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              </IconTooltip>
             </>
           )}
         </div>

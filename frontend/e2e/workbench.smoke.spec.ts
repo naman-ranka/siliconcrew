@@ -168,23 +168,23 @@ test("workbench: upload → lint → sim (fail) → waveform → fix → re-run 
   await page.screenshot({ path: "e2e-artifacts/wb-1-upload.png", fullPage: true });
 
   // Run Lint → console shows the exact command
-  await page.getByTitle("Run Lint").click();
+  await page.locator('button[data-stage="lint"]').click();
   await expect(page.getByText(/Lint passed/i)).toBeVisible();
   await page.screenshot({ path: "e2e-artifacts/wb-2-lint.png", fullPage: true });
 
   // Run Sim → run timeline gets sim_0001 (fail), banner + waveform appear
-  await page.getByTitle("Run Sim").click();
+  await page.locator('button[data-stage="sim"]').click();
   await expect(page.getByTestId("viewing-banner")).toBeVisible();
   await expect(page.locator('[data-run-id="sim_0001"]')).toBeVisible();
   await page.screenshot({ path: "e2e-artifacts/wb-3-sim-fail.png", fullPage: true });
 
   // "fix" → re-run sim → pass (sim_0002)
-  await page.getByTitle("Run Sim").click();
+  await page.locator('button[data-stage="sim"]').click();
   await expect(page.locator('[data-run-id="sim_0002"]')).toBeVisible();
   await page.screenshot({ path: "e2e-artifacts/wb-4-sim-pass.png", fullPage: true });
 
   // Run Synth → poll → completed → report shows timing slack (met)
-  await page.getByTitle("Run Synth").click();
+  await page.locator('button[data-stage="synth"]').click();
   await expect(page.locator('[data-run-id="synth_0001"]')).toBeVisible({ timeout: 15000 });
   await expect(page.getByText(/met/i).first()).toBeVisible({ timeout: 15000 });
   await page.screenshot({ path: "e2e-artifacts/wb-5-report.png", fullPage: true });
