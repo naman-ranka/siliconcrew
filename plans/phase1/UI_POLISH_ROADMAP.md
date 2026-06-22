@@ -53,7 +53,7 @@ git push origin claude/integration-p1p2   # retry w/ backoff on network error
 | 3 | Pipeline stepper: refined stage chips (hover/active/busy/disabled), connectors, status dots | ✅ done | `3d67725` |
 | 4 | File tree: row states, persistent affordance hints, drag-drop polish, role-badge system | ✅ done | `0a13647` |
 | 5 | Runs timeline: elevation/hover/selected/compare states, lineage connectors, pin micro-interaction, loading skeleton (+ midpoint stepper active-highlight & connector-fill bug fixed) | ✅ done | `1315590` |
-| 6 | Console: tab styling, command block + copy, peek↔expanded transition, status dots | ⬜ todo | |
+| 6 | Console: tab styling, command block + copy, peek↔expanded transition, status dots (full scrollable+copyable per-run log; lint result auto-expand/pulse surface) | ✅ done | `921d477` |
 | 7 | Waveform: gridlines, hover tooltip, draggable cursor handle, segmented radix control, fit-to-window, dedup aliased nets | ⬜ todo | |
 | 8 | Report / empty states / banner / agent rail: one EmptyState primitive, PPA hero polish, calmer welcome | ⬜ todo | |
 | 1b | Styled Radix tooltips replacing native `title` (update `getByTitle` tests) | ⬜ todo | |
