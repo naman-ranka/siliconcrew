@@ -49,26 +49,20 @@ const ROLES: FileRole[] = ["rtl", "tb", "sdc", "include", "other"];
  * and a transient upload confirmation.
  */
 export function FileTree() {
-  const { manifest, setFileRole, uploadFiles, selectCodeFile, setArtifactTab, currentSession } = useStore();
+  const { manifest, setFileRole, uploadFiles, selectCodeFile, setArtifactTab, currentSession, uploadNotice } = useStore();
   const fileInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
 
   const files = manifest?.files ?? [];
 
   const onUpload = async (list: FileList | null) => {
     if (!list || list.length === 0) return;
     setBusy(true);
-    setNote(null);
     try {
-      const res = await uploadFiles(Array.from(list));
-      const n = res?.uploaded.length ?? 0;
-      setNote(
-        `✓ Uploaded ${n} file(s)` +
-          (res?.notShown.length ? ` · ${res.notShown.length} non-design file(s) stored, not shown` : "")
-      );
-      setTimeout(() => setNote(null), 5000);
+      // The confirmation banner is store-driven (uploadNotice) so it shows
+      // regardless of which surface triggered the upload.
+      await uploadFiles(Array.from(list));
     } finally {
       setBusy(false);
       if (fileInput.current) fileInput.current.value = "";
@@ -128,9 +122,9 @@ export function FileTree() {
         />
       </div>
 
-      {note && (
+      {uploadNotice && (
         <div className="px-3 py-1 text-[10px] text-status-pass bg-status-pass/10 border-b border-border" role="status">
-          {note}
+          {uploadNotice}
         </div>
       )}
 

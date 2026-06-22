@@ -105,6 +105,7 @@ interface AppState {
   consoleEntries: ConsoleEntry[];
   activeConsole: ConsoleChannel;
   actionPending: { lint: boolean; sim: boolean; synth: boolean };
+  uploadNotice: string | null;
 
   loadWorkbench: () => Promise<void>;
   loadManifest: () => Promise<void>;
@@ -181,6 +182,7 @@ export const useStore = create<AppState>((set, get) => ({
   consoleEntries: [],
   activeConsole: "sim",
   actionPending: { lint: false, sim: false, synth: false },
+  uploadNotice: null,
 
   // Project actions
   loadProjects: async () => {
@@ -803,12 +805,20 @@ export const useStore = create<AppState>((set, get) => ({
     // like .txt) — so the upload isn't a silent black box (hobbyist feedback).
     const shown = new Set(res.manifest.files.map((f) => f.name));
     const notShown = res.uploaded.filter((n) => !shown.has(n));
+    const notice =
+      `✓ Uploaded ${res.uploaded.length} file(s)` +
+      (notShown.length ? ` · ${notShown.length} non-design file(s) stored, not shown` : "");
+    // Store-driven so the confirmation shows regardless of which surface triggered
+    // the upload (file-tree button, drag-drop, or the onboarding CTA).
+    set({ uploadNotice: notice });
+    const token = ++_uploadNoticeToken;
+    setTimeout(() => {
+      if (_uploadNoticeToken === token) useStore.setState({ uploadNotice: null });
+    }, 5000);
     pushConsole(set, get, {
       channel: get().activeConsole,
       status: "info",
-      summary:
-        `Uploaded ${res.uploaded.length} file(s): ${res.uploaded.join(", ")}` +
-        (notShown.length ? ` — ${notShown.length} non-design file(s) stored but not shown` : ""),
+      summary: notice,
     });
     await get().refreshWorkspace();
     return { uploaded: res.uploaded, notShown };
@@ -1021,6 +1031,9 @@ function friendlyError(e: unknown): string {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// Token so a newer upload notice isn't cleared early by an older timeout.
+let _uploadNoticeToken = 0;
 
 // Append a console entry, collapsing the most recent "running" entry on the
 // same channel so a finished action replaces its own spinner line.

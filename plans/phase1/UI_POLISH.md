@@ -51,6 +51,18 @@ fixes were applied; then **fresh** personas re-reviewed.
 
 ---
 
+## After-review results (fresh personas, live app)
+- **Student:** all 5 newcomer fixes confirmed; onboarding clarity rated **9/10
+  vs ~3/10** before. Biggest win: the empty-state "Let's build a chip" card.
+- **Engineer:** all 6 debug-loop fixes **confirmed** against a real failing run
+  (culprit `y` row red + `exp 5`; fail cursor 28px off the edge; click-drop blue
+  cursor with per-signal value-at-cursor; hex/dec rebase; historical-run console
+  backfill; sim-aware compare; edit→re-run stays on Code).
+- **Hobbyist:** download / drag-drop affordances / non-design-file note / path
+  tooltip confirmed. Found the upload banner only fired on the non-design path —
+  **fixed**: the confirmation is now store-driven (`uploadNotice`) so design-only
+  uploads via *any* surface (file-tree button, drag-drop, onboarding CTA) show it.
+
 ## Verification
 - `npm run test` (Vitest) — 17 pass. `npm run e2e` (Playwright mock flow) — 3 pass. `tsc --noEmit` clean.
 - Core backend suites green (manifest/file_ops/actions/sim_isolation/real_flows/
@@ -58,12 +70,20 @@ fixes were applied; then **fresh** personas re-reviewed.
   environment-only (BYOK/KMS, LLM provider keys, Docker for cocotb/sby, the `mcp`
   package) and unrelated to this frontend-only pass.
 
-## What still needs real synth / real users (not done here)
+## What still needs real synth / real users (flagged by the after-review)
 - **Synthesis/Report/Layout with real data** — needs ORFS in Docker (absent
-  here). Empty/error states were polished; PPA hero is unit-tested but a live
+  here). Empty/error states were polished; the PPA hero is unit-tested but a live
   PPA/timing/GDS screenshot awaits a real synth run.
-- **Waveform**: measurement-between-edges (Δt), fit-to-window, and de-duplicating
-  aliased nets across `tb`/`tb.dut` scopes.
-- **Runs lineage**: sim retries don't nest (backend `parentRunId` not set on
-  re-run) — a backend follow-up, noted not changed.
-- **Failure → RTL line jump**: needs source mapping from the sim error.
+- **Waveform (engineer's remaining Top 3):** dedup aliased nets across
+  `tb`/`tb.dut` scopes (the culprit row + `exp` badge currently render twice);
+  two-cursor A→B Δt measurement; fit-to-window / zoom-to-failure for very short
+  or very long sims.
+- **First-run polish (student):** native `title` tooltips are slow to appear — a
+  styled hover-card would teach better; the footer's `synthTop/simTop/clk` could
+  use the same plain-language treatment.
+- **Backend follow-ups (not changed — frontend-only pass):**
+  `GET /api/chat/{session}/history` returns 500 on a fresh session (first-run
+  console noise); sim retries don't nest because `parentRunId` isn't set on
+  re-run; failure→RTL-line jump needs source mapping from the sim error.
+- The "AI assistant needs ANTHROPIC_API_KEY" notice is already a calm info banner
+  but still draws first-run attention; consider persisting dismissal.
