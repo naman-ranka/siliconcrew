@@ -131,6 +131,50 @@ RUN_REAL_ORFS=1 ORFS_IMAGE="${REPO}/orfs@sha256:..." pytest tests/test_orfs_runn
   expensive path. Scale-to-zero keeps idle cost ~0.
 - Watch: Cloud Run Job vCPU-seconds, Cloud SQL tier, egress, GCS storage.
 
+## Light EDA tools without Docker (`SIM_ENGINE`)
+
+ORFS runs as an isolated Cloud Run Job. The three lighter engines — **XLS**
+(DSLX→Verilog), **SymbiYosys** (formal), **cocotb** — run via the `ToolEngine`
+seam (`src/platform_engines/tool_engine.py`), selected once by `SIM_ENGINE`:
+
+| `SIM_ENGINE` | Engine | Where it runs | Default |
+|---|---|---|---|
+| `docker` | `DockerToolEngine` | a container via `run_docker_command` | **local** (plug-and-play) |
+| `native` | `NativeToolEngine` | a subprocess in the per-session workspace cwd | **hosted** (Cloud Run has no nested containers) |
+
+Hosted uses `native` because Cloud Run cannot run nested containers; native sims
+are subprocesses (<~1s overhead), keeping the interactive edit-run loop fast.
+The hosted image (`Dockerfile`, `INSTALL_NATIVE_TOOLCHAINS=1`) ships the
+binaries: `iverilog`/`yosys` (base) + cocotb (pip) + `build-essential` + `z3` +
+`sby` + Google XLS on PATH. **Verify the XLS release tarball** lands its binaries
+on PATH (`XLS_RELEASE_URL`); a failed download leaves native XLS reporting
+`interpreter_main: not found` (clean error, not a hang).
+
+### Isolation — honest scope (NOT container-grade)
+
+Native subprocesses share the **app's Cloud Run instance**, and Cloud Run may
+serve **multiple requests per instance** — so this is **per-instance**, not
+**per-run**, isolation (weaker than Docker-per-run). It is made safe-enough by:
+
+- **Per-session cwd:** every tool runs in its own session workspace dir (the
+  tenancy seam), never a shared dir; cross-tenant paths can't be reached.
+- **Timeouts + tree-kill:** each tool has a hard timeout; the native engine puts
+  the subprocess in its own process group and SIGKILLs the whole tree on expiry.
+- **Build artifacts off-workspace:** cocotb builds in a unique `/tmp/sc_build_*`.
+
+Operational recommendations (do these for true per-request isolation):
+
+- **Set Cloud Run `containerConcurrency = 1`** on the app service so one instance
+  handles one request at a time → effectively per-run isolation for native sims.
+- Run the app process as a **non-root user** (Cloud Run already sandboxes each
+  instance with gVisor; non-root + read-only base FS further limits blast radius).
+- Keep per-user synth/compute quotas (already enforced) to bound abuse.
+
+Do **not** describe native mode as "fully isolated / container-grade." For
+untrusted multi-tenant workloads needing strict per-run isolation without
+concurrency=1, run the light tools as Cloud Run Jobs too (same seam can grow a
+`cloud_job` `ToolEngine`), trading the ~6s cold-start the interactive loop avoids.
+
 ## Security notes
 
 - BYOK keys are envelope-encrypted (KMS KEK wraps a per-key DEK); only wrapped
