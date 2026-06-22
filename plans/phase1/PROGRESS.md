@@ -68,6 +68,22 @@ gitignored and regenerated on each `npm run e2e`).
 | Sim (pass) — re-run after fix, new `sim_0002` in the timeline | `screenshots/wb-4-sim-pass.png` |
 | Report — pipeline all green, unified timeline, timing-first PPA | `screenshots/wb-5-report.png` |
 
+## Chat threads (many conversations per workspace)
+- ✅ **Data model**: `chat_threads` (sqlite + postgres), tenant-scoped
+  `{id, session_id, user_id, title, model, created_at, last_active}` + index
+  `(session_id, last_active)`; `SessionManager` wrappers + `ensure_default_thread`
+  (zero-migration: default thread `id == session_id`, legacy histories = "Chat 1").
+  Tests: `tests/test_chat_threads.py` (CRUD, tenant red-team, back-compat).
+- ✅ **Endpoints** (owner-checked, tenant-scoped): `GET/POST /api/sessions/{id}/threads`,
+  `GET .../threads/{tid}/history`, `PATCH .../threads/{tid}`, `DELETE .../threads/{tid}`.
+  Legacy `/api/chat/{id}/history` still serves Chat 1.
+- ✅ **WS** keys the LangGraph checkpoint by `thread_id` (per-message → `?thread_id`
+  → Chat 1) while the workspace stays bound from `session_id` — threads share the
+  live workspace. Auto-title from first message; new thread → empty → prompt injected.
+- ✅ **Frontend**: `ThreadSwitcher` (＋New chat, rename, delete, a11y) + thread-aware
+  store/WS. Tests: `frontend/test/chat.threads.store.test.ts` (8),
+  `frontend/e2e/chat-threads.spec.ts` (workspace-unchanged + switcher screenshot).
+
 ## Scenario-driven hardening (real, not mocks)
 See `plans/phase1/SCENARIOS.md` for the full log. Done in this pass, all run
 against **real iverilog 12.0** (lint/sim/waveform) over the live app:
