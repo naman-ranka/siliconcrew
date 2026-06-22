@@ -48,7 +48,8 @@ class SessionContext:
 
     session_id: str
     workspace: str
-    user_id: Optional[str] = None  # reserved for Phase 2 tenancy / auth
+    user_id: Optional[str] = None  # Phase 2 tenancy / auth (None = self-host)
+    tier: Optional[str] = None     # "user" | "anonymous"; quota policy selector
 
 
 _current: contextvars.ContextVar[Optional[SessionContext]] = contextvars.ContextVar(
