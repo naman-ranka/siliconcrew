@@ -1,15 +1,15 @@
 {
   "run_id": "synth_0001",
-  "job_id": "job_8251eebdcc",
-  "created_at": "2026-06-21T23:52:32.331100+00:00",
+  "job_id": "job_9a08f8d561",
+  "created_at": "2026-06-22T03:09:18.594258+00:00",
   "status": "completed",
   "current_stage": "finish",
   "platform": "sky130hd",
-  "top_module": "counter",
+  "top_module": "counter_stage_status",
   "input_files": [
-    "counter.v"
+    "counter_stage_status.v"
   ],
-  "spec_file": "counter_spec.yaml",
+  "spec_file": "counter_stage_status_spec.yaml",
   "requested_clock_period_ns": 10.0,
   "effective_clock_period_ns": 10.0,
   "clock_period_ns": 10.0,
@@ -40,45 +40,29 @@
     },
     "floorplan": {
       "status": "completed",
-      "artifacts": {
-        "report": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_reports/sky130hd/counter/base/2_floorplan_final.rpt",
-        "odb": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/2_floorplan.odb"
-      }
+      "artifacts": {}
     },
     "place": {
       "status": "completed",
-      "artifacts": {
-        "log": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_logs/sky130hd/counter/base/3_3_place_gp.json",
-        "odb": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/3_place.odb"
-      }
+      "artifacts": {}
     },
     "cts": {
       "status": "completed",
-      "artifacts": {
-        "report": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_reports/sky130hd/counter/base/4_cts_final.rpt",
-        "odb": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/4_cts.odb"
-      }
+      "artifacts": {}
     },
     "grt": {
       "status": "completed",
-      "artifacts": {
-        "log": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_logs/sky130hd/counter/base/5_1_grt.log",
-        "odb": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/5_1_grt.odb"
-      }
+      "artifacts": {}
     },
     "route": {
       "status": "completed",
-      "artifacts": {
-        "report": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_reports/sky130hd/counter/base/5_route_drc.rpt",
-        "odb": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/5_route.odb"
-      }
+      "artifacts": {}
     },
     "finish": {
       "status": "completed",
       "artifacts": {
-        "report": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_reports/sky130hd/counter/base/6_finish.rpt",
-        "sdc": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/6_final.sdc",
-        "netlist": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/6_final.v"
+        "report": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_reports/sky130hd/counter_stage_status/base/6_finish.rpt",
+        "netlist": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter_stage_status/base/6_final.v"
       }
     }
   },
@@ -93,17 +77,17 @@
   "docker_success": true,
   "docker_stdout_tail": "ok",
   "docker_stderr_tail": "",
-  "netlist_path": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter/base/6_final.v",
+  "netlist_path": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter_stage_status/base/6_final.v",
   "stdcell_manifest_version": null,
   "stdcell_files_used": [],
   "summary_metrics": {
     "area_um2": null,
     "cell_count": null,
-    "wns_ns": 0.12,
+    "wns_ns": 0.01,
     "tns_ns": null,
     "power_uw": null
   },
   "next_action": "Use search_logs_tool for detailed PPA/error verification.",
-  "finished_at": "2026-06-21T23:52:32.332425+00:00",
+  "finished_at": "2026-06-22T03:09:18.595430+00:00",
   "elapsed_sec": 0.0
 }

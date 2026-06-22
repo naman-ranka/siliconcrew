@@ -29,6 +29,33 @@ requests. This pass closes that. Status: ✅ done · 🟡 in progress · ⬜ not
 | I6 | **`GcpCloudRunJobClient`** — submit Cloud Run Job execution, poll+logs, behind `CloudJobOrfsRunner` | ✅ | `tests/test_gcp_clients.py` (fake GCP) |
 | I7 | **Standalone ORFS service + `RemoteOrfsRunner`** — token-authed HTTP runner + client + contract doc | ✅ | `tests/test_orfs_service.py` (loopback E2E) |
 
+### What is now wired into the live request path vs. deploy-time
+
+**Wired & enforced in-process (tested):**
+- Tenancy: `user_id` on every session/project row; every metadata query filtered;
+  api.py REST + WS + all `/api/workspace/{id}/*` reads guarded by ownership;
+  MCP session ops tenant-scoped. Red-team test is the gate.
+- Auth: OAuth/Bearer dependency on api.py (REST + WS via `?token=`) and an MCP
+  identity; synth/save/MCP require sign-in, anonymous trial for lint/sim
+  (`POST /api/trial-session`). Self-host = trusted local user, unscoped.
+- MCP env race removed: per-call `session_request_scope`/`run_in_session`; no
+  `RTL_WORKSPACE` mutation; concurrency test.
+- Quotas: `reserve_synth_run`/`release` around `start_synthesis_job` +
+  `retry_pd_job`; per-user job queue; shared Postgres store (`SELECT FOR UPDATE`).
+- BYOK: `PUT/DELETE/GET /api/keys/{provider}` via `EnvelopeKeyVault` (KMS or
+  local master key; sqlite/Postgres persistence).
+- Single wiring point: `settings.apply_platform_wiring()` (no-op self-host),
+  called from api.py + mcp_server startup.
+
+**Deploy-time only (owner runs; code + IaC + runbook provided, no auto-spend):**
+- Real Cloud Run Job execution via `GcpCloudRunJobClient` (unit-tested w/ fake;
+  real run gated by `RUN_REAL_CLOUD_RUN=1`).
+- Real GCS workspace round-trip, Cloud SQL, Cloud KMS, OAuth verification.
+- The standalone ORFS HTTP service deployment (`create_app`); a live synth
+  through `RemoteOrfsRunner` needs a running service + Docker/ORFS image.
+- Hosted read endpoints staging object-storage workspaces to local scratch
+  (ownership is enforced now; cloud file staging for reads is a follow-up).
+
 ## Posture
 
 Deploy-ready, owner goes live. Local/self-host behavior is unchanged: every
@@ -50,8 +77,9 @@ behavior, now behind interfaces.
 All Phase-2 slices land green locally with stdlib + fakes (no Docker, no GCP):
 
 ```
-100 passed, 3 skipped
-  (skips: langchain-dep workspace test, RUN_REAL_ORFS smoke, one optional-dep path)
+Phase 2 platform + integration suite: 129 passed, 4 skipped
+Full suite: 250 passed, 5 skipped, (11 failed + 9 errors = pre-existing, below)
+  skips: langchain-dep workspace test, RUN_REAL_ORFS, RUN_REAL_CLOUD_RUN, etc.
 ```
 
 Pre-existing, unrelated to this work (verified identical on the pre-Phase-2 base
