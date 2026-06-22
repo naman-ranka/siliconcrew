@@ -7,6 +7,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -25,6 +26,7 @@ export function CodeViewer() {
     selectCodeFile,
     saveCodeFile,
     currentSession,
+    codeLoading,
   } = useStore();
   const [copied, setCopied] = useState(false);
   // Monaco loads its worker bundle from a CDN; on restricted networks that is
@@ -176,6 +178,26 @@ export function CodeViewer() {
       setSaving(false);
     }
   };
+
+  if (codeFiles.length === 0 && !editing && codeLoading) {
+    return (
+      <div className="flex flex-col h-full" aria-hidden="true">
+        <div className="flex items-center justify-between p-3 border-b border-border gap-2">
+          <Skeleton className="h-8 w-[200px]" />
+          <div className="flex items-center gap-1">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-7 w-7" />
+            ))}
+          </div>
+        </div>
+        <div className="flex-1 p-4 space-y-2">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <Skeleton key={i} className="h-3" style={{ width: `${40 + ((i * 13) % 55)}%` }} />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   if (codeFiles.length === 0 && !editing) {
     return (

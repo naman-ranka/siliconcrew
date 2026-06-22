@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 import { statusDotClass, statusTextClass, relativeTime } from "./runStatus";
 import { Pin, PinOff, GitBranch, Waves, Cpu, GitCompare, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { PanelHeader } from "./PanelHeader";
 import type { PpaDiff, RunSummary } from "@/types";
 
 const FILTERS: { id: "all" | "sim" | "synth"; label: string }[] = [
@@ -29,6 +31,7 @@ export function RunsTimeline() {
     selectRun,
     pinRun,
     loadRuns,
+    runsLoading,
     currentSession,
   } = useStore();
 
@@ -153,32 +156,29 @@ export function RunsTimeline() {
 
   return (
     <div className="flex flex-col min-h-0 border-t border-border">
-      <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Runs</span>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn("h-6 w-6", compareMode && "text-info")}
-            title="Compare two runs"
-            aria-label="Compare two runs"
-            aria-pressed={compareMode}
-            onClick={() => {
-              setCompareMode((v) => !v);
-              setCompareSel([]);
-              setDiff(null);
-              setSimDiff(null);
-            }}
-          >
-            <GitCompare className="h-3.5 w-3.5" />
-          </Button>
-          <Button variant="ghost" size="icon" className="h-6 w-6" title="Refresh runs" aria-label="Refresh runs" onClick={() => void loadRuns()}>
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
+      <PanelHeader label="Runs">
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn("h-6 w-6", compareMode && "text-info")}
+          title="Compare two runs"
+          aria-label="Compare two runs"
+          aria-pressed={compareMode}
+          onClick={() => {
+            setCompareMode((v) => !v);
+            setCompareSel([]);
+            setDiff(null);
+            setSimDiff(null);
+          }}
+        >
+          <GitCompare className="h-3.5 w-3.5" />
+        </Button>
+        <Button variant="ghost" size="icon" className="h-6 w-6" title="Refresh runs" aria-label="Refresh runs" onClick={() => void loadRuns()}>
+          <RefreshCw className="h-3.5 w-3.5" />
+        </Button>
+      </PanelHeader>
 
-      <div className="flex gap-1 px-3 pb-2">
+      <div className="flex gap-1 px-3 pt-2 pb-2">
         {FILTERS.map((f) => (
           <button
             key={f.id}
@@ -203,7 +203,20 @@ export function RunsTimeline() {
       )}
 
       <div className="flex-1 overflow-y-auto thin-scrollbar pb-1 max-h-[40vh]">
-        {runs.length === 0 ? (
+        {runsLoading && runs.length === 0 ? (
+          <div className="px-1 space-y-1" aria-hidden="true">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-2 px-2 py-1.5 mx-1">
+                <Skeleton className="h-2 w-2 rounded-full" />
+                <Skeleton className="h-3.5 w-3.5 rounded" />
+                <div className="flex flex-col gap-1 flex-1">
+                  <Skeleton className="h-2.5 w-[60%]" />
+                  <Skeleton className="h-2 w-[40%]" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : runs.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
             No runs yet. Use the pipeline to Lint / Simulate / Synthesize.
           </div>

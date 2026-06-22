@@ -9,6 +9,7 @@ import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
 import { PpaHero } from "./PpaHero";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -29,6 +30,7 @@ export function ReportViewer() {
     loadSynthesisRuns,
     runs,
     selectedRunId,
+    reportLoading,
   } = useStore();
 
   // PPA hero sources the unified run record (has ppa); prefer the report's run.
@@ -60,6 +62,21 @@ export function ReportViewer() {
       console.error("Failed to generate report:", error);
     }
   };
+
+  if (!report && reportLoading) {
+    return (
+      <div className="flex flex-col h-full p-6 gap-4" aria-hidden="true">
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-5 w-1/3" />
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-11/12" />
+        <Skeleton className="h-3 w-4/5" />
+        <Skeleton className="h-32 w-full mt-2" />
+        <Skeleton className="h-3 w-3/4" />
+        <Skeleton className="h-3 w-2/3" />
+      </div>
+    );
+  }
 
   if (!report) {
     const hasPpa = runs.some((r) => r.kind === "synth" && r.ppa);

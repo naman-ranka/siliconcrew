@@ -5,6 +5,8 @@ import { useStore } from "@/lib/store";
 import { workspaceApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { PanelHeader } from "./PanelHeader";
 import { Upload, FileCode2, FileTerminal, FileClock, FileType2, File as FileIcon, Crown, FlaskConical, Download } from "lucide-react";
 import type { FileRole } from "@/types";
 
@@ -49,7 +51,7 @@ const ROLES: FileRole[] = ["rtl", "tb", "sdc", "include", "other"];
  * and a transient upload confirmation.
  */
 export function FileTree() {
-  const { manifest, setFileRole, uploadFiles, selectCodeFile, setArtifactTab, currentSession, uploadNotice } = useStore();
+  const { manifest, manifestLoading, setFileRole, uploadFiles, selectCodeFile, setArtifactTab, currentSession, uploadNotice } = useStore();
   const fileInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -99,8 +101,7 @@ export function FileTree() {
         void onUpload(e.dataTransfer.files);
       }}
     >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Files</span>
+      <PanelHeader label="Files">
         <Button
           variant="ghost"
           size="sm"
@@ -120,7 +121,7 @@ export function FileTree() {
           aria-label="Upload design files"
           onChange={(e) => void onUpload(e.target.files)}
         />
-      </div>
+      </PanelHeader>
 
       {uploadNotice && (
         <div className="px-3 py-1 text-[10px] text-status-pass bg-status-pass/10 border-b border-border" role="status">
@@ -129,7 +130,17 @@ export function FileTree() {
       )}
 
       <div className="flex-1 overflow-y-auto thin-scrollbar py-1">
-        {files.length === 0 ? (
+        {manifestLoading && !manifest ? (
+          <div className="px-2 py-1 space-y-1.5" aria-hidden="true">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-2 px-2 py-1">
+                <Skeleton className="h-3.5 w-3.5 rounded" />
+                <Skeleton className="h-3 flex-1" style={{ maxWidth: `${70 - i * 8}%` }} />
+                <Skeleton className="h-3.5 w-7 rounded" />
+              </div>
+            ))}
+          </div>
+        ) : files.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
             {dragging ? "Drop files to upload" : "No files yet — drag & drop, or use Upload."}
           </div>

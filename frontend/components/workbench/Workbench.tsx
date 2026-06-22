@@ -10,6 +10,7 @@ import { PipelineStepper } from "./PipelineStepper";
 import { FileTree } from "./FileTree";
 import { RunsTimeline } from "./RunsTimeline";
 import { Console } from "./Console";
+import { PanelHeader } from "./PanelHeader";
 import { ViewingBanner } from "./ViewingBanner";
 import { Onboarding } from "./Onboarding";
 import { SessionPicker } from "./SessionPicker";
@@ -131,11 +132,9 @@ export function Workbench() {
         {/* Right — agent rail (shares tools, workspace, runs); collapsible. */}
         {chatOpen && (
           <Panel defaultSize={28} minSize={18} maxSize={42}>
-            <div className="flex flex-col h-full border-l border-border min-h-0">
-              <div className="flex items-center gap-2 h-9 px-3 border-b border-border bg-surface-1 shrink-0">
-                <MessageSquare className="h-3.5 w-3.5 text-primary" />
-                <span className="text-xs font-semibold">AI Assistant</span>
-                <span className="text-[10px] text-muted-foreground ml-auto mr-1">same tools · same workspace</span>
+            <div className="flex flex-col h-full border-l border-border min-h-0 animate-fade-in">
+              <PanelHeader label="AI Assistant" icon={<MessageSquare className="h-3.5 w-3.5 text-primary" />}>
+                <span className="text-[10px] text-muted-foreground mr-1 hidden lg:inline">same tools · same workspace</span>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -145,7 +144,7 @@ export function Workbench() {
                 >
                   <PanelRightClose className="h-4 w-4" />
                 </Button>
-              </div>
+              </PanelHeader>
               <div className="flex-1 min-h-0">
                 <ChatArea />
               </div>
@@ -160,7 +159,7 @@ export function Workbench() {
           type="button"
           onClick={() => setChatOpen(true)}
           title="Open AI Assistant"
-          className="fixed right-0 top-1/2 -translate-y-1/2 z-50 flex items-center gap-1 bg-surface-2 border border-border border-r-0 rounded-l-md px-2 py-3 text-xs text-muted-foreground hover:text-primary hover:bg-surface-3"
+          className="fixed right-0 top-1/2 -translate-y-1/2 z-50 flex items-center gap-1 bg-surface-2 border border-border border-r-0 rounded-l-md px-2 py-3 text-xs text-muted-foreground shadow-e1 transition-[transform,colors] duration-base ease-swift hover:text-primary hover:bg-surface-3 hover:-translate-x-0.5 animate-fade-in"
         >
           <PanelRightOpen className="h-4 w-4" />
           <span className="[writing-mode:vertical-rl] rotate-180">AI Assistant</span>

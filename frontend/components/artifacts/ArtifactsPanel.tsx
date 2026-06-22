@@ -83,19 +83,17 @@ export function ArtifactsPanel() {
   return (
     <div className="flex flex-col h-full bg-surface-0 border-l border-border animate-slide-in-right">
       {/* Header */}
-      <div className="flex items-center justify-between h-14 px-4 border-b border-border bg-surface-1">
-        <div className="flex items-center gap-2">
-          <h2 className="font-semibold text-sm">Artifacts</h2>
-          {totalArtifacts > 0 && (
-            <span className="text-xs text-muted-foreground bg-surface-2 px-2 py-0.5 rounded-full">
-              {totalArtifacts}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
+      <div className="flex items-center gap-2 h-9 px-3 border-b border-border bg-surface-1 shrink-0">
+        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Artifacts</h2>
+        {totalArtifacts > 0 && (
+          <span className="text-[10px] text-muted-foreground bg-surface-2 px-1.5 py-0.5 rounded-full">
+            {totalArtifacts}
+          </span>
+        )}
+        <div className="flex items-center gap-1 ml-auto">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-surface-2" onClick={toggleArtifacts}>
+              <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-surface-2" onClick={toggleArtifacts}>
                 <PanelRightClose className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -141,27 +139,27 @@ export function ArtifactsPanel() {
           ))}
         </TabsList>
 
-        <TabsContent value="spec" className="flex-1 m-0 data-[state=inactive]:hidden overflow-hidden">
+        <TabsContent value="spec" className="flex-1 m-0 data-[state=inactive]:hidden data-[state=active]:animate-fade-in overflow-hidden">
           <SpecViewer />
         </TabsContent>
 
-        <TabsContent value="code" className="flex-1 m-0 data-[state=inactive]:hidden overflow-hidden">
+        <TabsContent value="code" className="flex-1 m-0 data-[state=inactive]:hidden data-[state=active]:animate-fade-in overflow-hidden">
           <CodeViewer />
         </TabsContent>
 
-        <TabsContent value="waveform" className="flex-1 m-0 data-[state=inactive]:hidden overflow-hidden">
+        <TabsContent value="waveform" className="flex-1 m-0 data-[state=inactive]:hidden data-[state=active]:animate-fade-in overflow-hidden">
           <WaveformViewer />
         </TabsContent>
 
-        <TabsContent value="schematic" className="flex-1 m-0 data-[state=inactive]:hidden overflow-hidden">
+        <TabsContent value="schematic" className="flex-1 m-0 data-[state=inactive]:hidden data-[state=active]:animate-fade-in overflow-hidden">
           <SchematicViewer />
         </TabsContent>
 
-        <TabsContent value="layout" className="flex-1 m-0 data-[state=inactive]:hidden overflow-hidden">
+        <TabsContent value="layout" className="flex-1 m-0 data-[state=inactive]:hidden data-[state=active]:animate-fade-in overflow-hidden">
           <LayoutViewer />
         </TabsContent>
 
-        <TabsContent value="report" className="flex-1 m-0 data-[state=inactive]:hidden overflow-hidden">
+        <TabsContent value="report" className="flex-1 m-0 data-[state=inactive]:hidden data-[state=active]:animate-fade-in overflow-hidden">
           <ReportViewer />
         </TabsContent>
       </Tabs>

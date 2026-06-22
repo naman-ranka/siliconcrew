@@ -106,6 +106,12 @@ interface AppState {
   consoleEntries: ConsoleEntry[];
   activeConsole: ConsoleChannel;
   actionPending: { lint: boolean; sim: boolean; synth: boolean };
+  // Section-load flags drive skeleton loaders so a section shows shimmer rows
+  // instead of flashing an empty/"No …" state before content lands.
+  runsLoading: boolean;
+  manifestLoading: boolean;
+  reportLoading: boolean;
+  codeLoading: boolean;
   uploadNotice: string | null;
   toasts: Toast[];
   pushToast: (t: Omit<Toast, "id">, ttlMs?: number) => void;
@@ -186,6 +192,10 @@ export const useStore = create<AppState>((set, get) => ({
   consoleEntries: [],
   activeConsole: "sim",
   actionPending: { lint: false, sim: false, synth: false },
+  runsLoading: false,
+  manifestLoading: false,
+  reportLoading: false,
+  codeLoading: false,
   uploadNotice: null,
   toasts: [],
 
@@ -681,6 +691,7 @@ export const useStore = create<AppState>((set, get) => ({
     const { currentSession } = get();
     if (!currentSession) return;
 
+    set({ codeLoading: true });
     try {
       const codeFiles = await workspaceApi.getCodeFiles(currentSession.id);
       set({
@@ -689,6 +700,8 @@ export const useStore = create<AppState>((set, get) => ({
       });
     } catch {
       set({ codeFiles: [], selectedCodeFile: null });
+    } finally {
+      set({ codeLoading: false });
     }
   },
 
@@ -762,12 +775,15 @@ export const useStore = create<AppState>((set, get) => ({
     const { currentSession } = get();
     if (!currentSession) return;
 
+    set({ reportLoading: true });
     try {
       const targetRunId = runId === undefined ? get().selectedSynthesisRunId : runId;
       const report = await workspaceApi.getReport(currentSession.id, targetRunId);
       set({ report });
     } catch {
       set({ report: null });
+    } finally {
+      set({ reportLoading: false });
     }
   },
 
@@ -798,11 +814,14 @@ export const useStore = create<AppState>((set, get) => ({
   loadManifest: async () => {
     const { currentSession } = get();
     if (!currentSession) return;
+    set({ manifestLoading: true });
     try {
       const manifest = await workbenchApi.getManifest(currentSession.id);
       set({ manifest });
     } catch {
       set({ manifest: null });
+    } finally {
+      set({ manifestLoading: false });
     }
   },
 
@@ -849,6 +868,7 @@ export const useStore = create<AppState>((set, get) => ({
   loadRuns: async () => {
     const { currentSession, runKindFilter } = get();
     if (!currentSession) return;
+    set({ runsLoading: true });
     try {
       const runs = await workbenchApi.listRuns(currentSession.id, runKindFilter);
       set((state) => ({
@@ -858,6 +878,8 @@ export const useStore = create<AppState>((set, get) => ({
       }));
     } catch {
       set({ runs: [] });
+    } finally {
+      set({ runsLoading: false });
     }
   },
 
