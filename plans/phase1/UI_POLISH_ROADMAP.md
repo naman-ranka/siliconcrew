@@ -52,7 +52,7 @@ git push origin claude/integration-p1p2   # retry w/ backoff on network error
 | 2 | Shell & rhythm: consistent panel headers/density, tab+panel motion, **skeleton loaders** (runs/manifest/report/code) | ✅ done | `d1a71a2` |
 | 3 | Pipeline stepper: refined stage chips (hover/active/busy/disabled), connectors, status dots | ✅ done | `3d67725` |
 | 4 | File tree: row states, persistent affordance hints, drag-drop polish, role-badge system | ✅ done | `0a13647` |
-| 5 | Runs timeline: elevation/hover/selected/compare states, lineage connectors, pin micro-interaction, loading skeleton | ⬜ todo | |
+| 5 | Runs timeline: elevation/hover/selected/compare states, lineage connectors, pin micro-interaction, loading skeleton (+ midpoint stepper active-highlight & connector-fill bug fixed) | ✅ done | `1315590` |
 | 6 | Console: tab styling, command block + copy, peek↔expanded transition, status dots | ⬜ todo | |
 | 7 | Waveform: gridlines, hover tooltip, draggable cursor handle, segmented radix control, fit-to-window, dedup aliased nets | ⬜ todo | |
 | 8 | Report / empty states / banner / agent rail: one EmptyState primitive, PPA hero polish, calmer welcome | ⬜ todo | |
@@ -79,9 +79,10 @@ Live persona review (student + engineer, real iverilog). Screenshots:
 - **BUG — Wave tab opens the first VCD, not the selected run's** (view sim_0003 →
   shows sim_0001) → **Slice 7** (sync waveform to selectedRunId even when a VCD
   is already loaded; respect a manual override).
-- **BUG — Stepper active-highlight follows the artifact tab, not pipeline
-  progress** (ran Sim, box stayed on RTL); connector `reached`→fill inconsistent
-  → **Slice 5** (small stepper revision alongside runs timeline).
+- ~~**BUG — Stepper active-highlight follows the artifact tab, not pipeline
+  progress** (ran Sim, box stayed on RTL); connector `reached`→fill inconsistent~~
+  → **Slice 5** ✅ fixed (`1315590`): highlight follows `actionPending.*`
+  when running, else artifact tab; connectors fill on next-stage reached.
 - **Light theme not warm / elevation ladder collapses** (surfaces 0/1/2 ~equal,
   muted-text contrast borderline) → **Slice 9** (+theme): add warm hue shift,
   distinct surface ladder, WCAG AA recheck.
