@@ -3,15 +3,15 @@
     {
       "run_id": "synth_0002",
       "status": "completed",
-      "updated_at": "2026-06-22T21:56:33.321735+00:00"
+      "updated_at": "2026-06-22T22:17:53.432687+00:00"
     }
   ],
   "jobs": [
     {
-      "job_id": "job_ffd4245904",
+      "job_id": "job_1f4e486f3d",
       "run_id": "synth_0002",
       "status": "completed",
-      "updated_at": "2026-06-22T21:56:33.321735+00:00"
+      "updated_at": "2026-06-22T22:17:53.432687+00:00"
     }
   ]
 }

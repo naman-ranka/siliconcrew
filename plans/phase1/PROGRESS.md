@@ -84,6 +84,23 @@ gitignored and regenerated on each `npm run e2e`).
   store/WS. Tests: `frontend/test/chat.threads.store.test.ts` (8),
   `frontend/e2e/chat-threads.spec.ts` (workspace-unchanged + switcher screenshot).
 
+## Model selector (per chat thread)
+- ✅ **`GET /api/models`**: registry from `model_catalog` (id/label/provider/tier/
+  hint + pricing) with per-request `available` from usable provider keys (env in
+  self-host; user BYOK + capped hosted Gemini otherwise) — never offers a model
+  that 500s. Tenant-scoped via `get_identity`.
+- ✅ **Model lives on the thread**: `chat_threads.model`; the WS reads the active
+  thread's model (`thread → session → DEFAULT` via `normalize_model_name →
+  create_architect_agent`). New threads inherit the creator's last-used model.
+  Set via `PATCH .../threads/{tid}` (or the picker). Tests:
+  `tests/test_model_selector.py`.
+- ✅ **Picker** (`components/chat/ModelPicker`, composer bottom-left): provider-
+  grouped popover (Anthropic/OpenAI/Google) with capability hints + cost,
+  checkmark on current, unavailable greyed + "needs key"; a11y (aria
+  menuitemradio, focus-visible, Escape/click-outside). Tests:
+  `frontend/test/model.picker.store.test.ts` (3), `frontend/e2e/model-picker.spec.ts`
+  (+ grouped-popover screenshot).
+
 ## Scenario-driven hardening (real, not mocks)
 See `plans/phase1/SCENARIOS.md` for the full log. Done in this pass, all run
 against **real iverilog 12.0** (lint/sim/waveform) over the live app:
