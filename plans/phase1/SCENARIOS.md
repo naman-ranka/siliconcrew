@@ -136,6 +136,29 @@ How to reproduce locally: `iverilog` on PATH, run `uvicorn api:app` (port 8000)
 - **Fix (UI):** config/missing-key errors render as a calm blue info note
   ("AI assistant needs ANTHROPIC_API_KEY — lint/sim/synth work without it").
 
+## 13. In-app code editing — the "user updates code → re-run" loop
+- **Expected (the prompt's scenario):** a user fixes RTL in the workbench and
+  re-runs sim, all in-app.
+- **What broke:** the Code tab was **read-only** (Monaco `readOnly:true`) and
+  there was **no save endpoint** — the only human fix paths were re-upload or the
+  agent (needs an API key). Genuine in-app editing did not exist. (Phase 1
+  treated the editor as "secondary"; this scenario showed that's too thin.)
+- **Fix (arch + UI), one write path:**
+  - `src/tools/file_ops.py::write_file(workspace, path, content)` is the single
+    source of truth (path-traversal guard + manifest reconcile). BOTH the REST
+    save action (`PUT /api/workspace/{id}/code/{filename}`) and the agent
+    `write_file` tool route through it — a human Save and an agent edit are now
+    one tracked mutation (the future git-commit chokepoint).
+  - `CodeViewer` is editable: **Edit / Save / Cancel** (editable Monaco, or a
+    plain textarea when the Monaco CDN is blocked) plus **New file** to write RTL
+    from scratch (filename validation, dirty/error states).
+  - The AI rail is **collapsible** so the editor/waveform get full width
+    (re-review feedback).
+- **Verified:** real re-upload fix loop (`sim_0001 failed` → corrected counter.v
+  → `sim_0002 passed`) at the API level; in-app edit→Save→re-run in the browser.
+- **Tests:** `tests/test_file_ops.py` (write + manifest reconcile + traversal
+  reject); `tests/test_actions_api.py::test_save_code_*`.
+
 ---
 
 ## Fresh-eyes review method (subagents)
