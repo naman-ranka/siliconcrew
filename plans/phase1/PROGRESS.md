@@ -68,6 +68,30 @@ gitignored and regenerated on each `npm run e2e`).
 | Sim (pass) — re-run after fix, new `sim_0002` in the timeline | `screenshots/wb-4-sim-pass.png` |
 | Report — pipeline all green, unified timeline, timing-first PPA | `screenshots/wb-5-report.png` |
 
+## Scenario-driven hardening (real, not mocks)
+See `plans/phase1/SCENARIOS.md` for the full log. Done in this pass, all run
+against **real iverilog 12.0** (lint/sim/waveform) over the live app:
+- ✅ Real single-module + real multi-module (cpu) end-to-end flows.
+- ✅ Failure paths reproduced + fixed + regression-tested: lint syntax error,
+  sim mismatch (`test_failed` + failure cursor), compile failure (missing
+  module), no-pass-marker, synth-with-ORFS-unavailable (graceful, no hang).
+- ✅ Waveform brought to demo quality: hierarchy/scope tree, bus hex, x/z,
+  time ruler, and a **correctly-placed failure cursor** (fixed a real ns-vs-ps
+  units bug) with a per-signal value-at-cursor readout.
+- ✅ Report: timing-hero + PPA cards + compare-vs-previous (`PpaHero`), honest
+  ORFS-aware empty state.
+- ✅ Code tab offline fallback (Monaco CDN blocked → syntax highlighter).
+- ✅ Calmer AI-key banner; failure reason surfaced in banner + console peek.
+- ✅ Fresh-eyes UX review via a Playwright subagent (its findings drove the
+  cursor/localization/banner fixes); 10 review screenshots in
+  `screenshots/review/`, before/after in `screenshots/after-*.png`.
+- Boundary: real synthesis (ORFS/Docker) + PPA/GDS are Phase 2 (not runnable
+  here); the synth path is verified to fail fast and explain why.
+
+New tests: `tests/test_real_flows.py` (7 real-iverilog scenarios),
+`frontend/test/waveform.test.tsx`, `frontend/test/ppa-hero.test.tsx`.
+Totals now: pytest real-subset 36 passing; Vitest 17 passing; Playwright 3.
+
 ## Architecture notes / Phase-2 seams
 - The action layer is a standalone `APIRouter` (`src/api/actions.py`) built from
   a `resolve_workspace(session_id)` callable — **no dependency on the agent

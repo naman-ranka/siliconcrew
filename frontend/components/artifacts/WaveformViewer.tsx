@@ -35,6 +35,16 @@ export function WaveformViewer() {
     if (currentSession) loadWaveforms();
   }, [currentSession, loadWaveforms]);
 
+  // Keep the waveform in sync with the selected sim run, so opening the Wave tab
+  // for an existing/reloaded run shows its isolated VCD without an extra click.
+  // Only auto-loads when nothing is selected yet — respects a manual VCD choice.
+  useEffect(() => {
+    const run = runs.find((r) => r.id === selectedRunId);
+    if (run?.kind === "sim" && run.vcdPath && !selectedWaveform) {
+      void selectWaveform(run.vcdPath);
+    }
+  }, [selectedRunId, runs, selectedWaveform, selectWaveform]);
+
   // The selected sim run pins the failure time → a red cursor in the waveform,
   // so a user can see *when* it went wrong without reading the log.
   const cursorTime = useMemo(() => {
@@ -71,7 +81,33 @@ export function WaveformViewer() {
   const endtime = waveformData?.endtime || 1000;
   const laneWidth = Math.max(600, 800 * zoom);
   const scale = laneWidth / endtime;
-  const cursorX = cursorTime != null ? cursorTime * scale : null;
+
+  // The failure time is in ns; VCD lanes are in the dump's own ticks (ps when
+  // the TB declares `timescale 1ns/1ps`, else raw ~ns). Convert via unitSeconds
+  // so the cursor lands at the real failure point, not pinned at x=0.
+  const secPerTick = waveformData?.unitSeconds ?? null;
+  const cursorTicks =
+    cursorTime == null
+      ? null
+      : secPerTick && secPerTick < 1
+      ? (cursorTime * 1e-9) / secPerTick
+      : cursorTime;
+  const clampedCursor = cursorTicks == null ? null : Math.min(Math.max(0, cursorTicks), endtime);
+  const cursorX = clampedCursor != null ? clampedCursor * scale : null;
+
+  // Value of a signal at the cursor (last change at or before the cursor tick) —
+  // lets a user read the offending value (e.g. count=20) right at the failure.
+  const valueAtCursor = (signal: WaveformSignal): string | null => {
+    if (clampedCursor == null) return null;
+    let idx = -1;
+    for (let i = 0; i < signal.times.length; i++) {
+      if (signal.times[i] <= clampedCursor) idx = i;
+      else break;
+    }
+    if (idx < 0) return null;
+    if (signal.xFlags?.[idx]) return (signal.valuesStr?.[idx] ?? "x").toUpperCase();
+    return (signal.width ?? 1) > 1 ? "0x" + signal.values[idx].toString(16).toUpperCase() : String(signal.values[idx]);
+  };
 
   const toggle = (scope: string) =>
     setCollapsed((prev) => {
@@ -246,21 +282,32 @@ export function WaveformViewer() {
                       <span className="text-[9px] text-muted-foreground">({sigs.length})</span>
                     </button>
                     {!isCollapsed &&
-                      sigs.map((signal) => (
-                        <div key={signal.full_name} className="flex items-center border-b border-border/60 hover:bg-surface-1">
-                          <div
-                            style={{ width: NAME_COL }}
-                            className="shrink-0 px-2 py-1 text-xs font-mono truncate flex items-center gap-1"
-                            title={signal.full_name}
-                          >
-                            <span className="truncate">{signal.name}</span>
-                            {(signal.width ?? 1) > 1 && (
-                              <span className="text-[9px] text-muted-foreground">[{signal.width}]</span>
-                            )}
+                      sigs.map((signal) => {
+                        const vAtCursor = valueAtCursor(signal);
+                        return (
+                          <div key={signal.full_name} className="flex items-center border-b border-border/60 hover:bg-surface-1">
+                            <div
+                              style={{ width: NAME_COL }}
+                              className="shrink-0 px-2 py-1 text-xs font-mono flex items-center gap-1"
+                              title={signal.full_name}
+                            >
+                              <span className="truncate">{signal.name}</span>
+                              {(signal.width ?? 1) > 1 && (
+                                <span className="text-[9px] text-muted-foreground">[{signal.width}]</span>
+                              )}
+                              {vAtCursor != null && (
+                                <span
+                                  className="ml-auto text-[10px] text-info font-semibold tabular-nums"
+                                  title={`value at cursor (${cursorTime}ns)`}
+                                >
+                                  ={vAtCursor}
+                                </span>
+                              )}
+                            </div>
+                            <div className="shrink-0">{renderLane(signal)}</div>
                           </div>
-                          <div className="shrink-0">{renderLane(signal)}</div>
-                        </div>
-                      ))}
+                        );
+                      })}
                   </div>
                 );
               })}

@@ -885,7 +885,9 @@ export const useStore = create<AppState>((set, get) => ({
         summary:
           run.status === "passed"
             ? `${run.id} passed (${run.top})`
-            : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`,
+            : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}` +
+              // surface the human reason inline, not just behind the console chevron
+              (run.failure?.firstFailureLine ? ` — ${run.failure.firstFailureLine.slice(0, 90)}` : ""),
         detail: [run.failure?.firstFailureLine, run.stdoutTail, run.stderrTail].filter(Boolean).join("\n"),
       });
       await get().selectRun(run.id);
@@ -925,11 +927,22 @@ export const useStore = create<AppState>((set, get) => ({
         pushConsole(set, get, { channel: "synth", status: "running", runId, summary: `${runId} ${state}${stage ? ` · ${stage}` : ""}` });
         if (state === "completed" || state === "failed") {
           await get().loadRuns();
+          // On failure, surface whatever the job knows (notes + log tail) so the
+          // user sees *why* (e.g. ORFS/Docker unavailable) instead of just "failed".
+          const notes = job.check_notes;
+          const logTail = Array.isArray(job.last_log_lines) ? (job.last_log_lines as string[]).slice(-12).join("\n") : "";
+          const detail =
+            state === "failed"
+              ? [typeof notes === "string" ? notes : "", logTail, job.next_action as string]
+                  .filter(Boolean)
+                  .join("\n")
+              : undefined;
           pushConsole(set, get, {
             channel: "synth",
             status: state === "completed" ? "passed" : "failed",
             runId,
             summary: `${runId} ${state}`,
+            detail,
           });
           if (state === "completed") await get().selectRun(runId);
           break;

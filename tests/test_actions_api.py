@@ -18,9 +18,10 @@ from src.api.actions import build_actions_router
 
 SID = "proj/sess"  # exercise the :path session id (slashes allowed)
 
-DUT = "module counter(input clk, output reg [7:0] q); always @(posedge clk) q<=q+1; endmodule\n"
-TB = ('module counter_tb; reg clk; wire [7:0] q; counter d(.clk(clk),.q(q));\n'
-      'initial begin $dumpfile("dump.vcd"); #10 $finish; end endmodule\n')
+DUT = "module counter(input clk, output reg [7:0] q); initial q=0; always @(posedge clk) q<=q+1; endmodule\n"
+TB = ('module counter_tb; reg clk=0; wire [7:0] q; counter d(.clk(clk),.q(q));\n'
+      'always #5 clk=~clk;\n'
+      'initial begin $dumpfile("dump.vcd"); $dumpvars(0,counter_tb); #40 $display("TEST PASSED"); $finish; end endmodule\n')
 
 
 @pytest.fixture()

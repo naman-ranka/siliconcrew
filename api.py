@@ -821,15 +821,25 @@ async def get_waveform_data(session_id: str, filename: str):
         vcd = VCDVCD(vcd_path)
         signals = vcd.get_signals()
         endtime = vcd.endtime
+        # Resolve the VCD time unit so the frontend can place a failure cursor
+        # (which is given in ns) at the right x — VCDs dump in their own ticks
+        # (ps when the TB declares `timescale 1ns/1ps`, otherwise raw).
         timescale = None
+        unit_seconds = None
+        _UNIT_S = {"s": 1.0, "ms": 1e-3, "us": 1e-6, "ns": 1e-9, "ps": 1e-12, "fs": 1e-15}
         try:
             ts = getattr(vcd, "timescale", None)
             if isinstance(ts, dict):
-                timescale = ts.get("timescale") or ts.get("unit")
+                unit = str(ts.get("unit") or "").lower()
+                mag = float(ts.get("magnitude") or 1)
+                if unit in _UNIT_S:
+                    unit_seconds = mag * _UNIT_S[unit]
+                    timescale = f"{int(mag) if mag == int(mag) else mag}{unit}"
             elif ts:
                 timescale = str(ts)
         except Exception:
             timescale = None
+            unit_seconds = None
 
         # Parse signals, PRESERVING hierarchy (scope path), width, and x/z state
         # so the viewer can build a scope tree and show unknowns — not the old
@@ -885,6 +895,7 @@ async def get_waveform_data(session_id: str, filename: str):
             "filename": filename,
             "endtime": endtime,
             "timescale": timescale,
+            "unitSeconds": unit_seconds,  # seconds per VCD tick (None/1.0 = unknown)
             "signalCount": len(signal_data),
             "signals": signal_data,
         }

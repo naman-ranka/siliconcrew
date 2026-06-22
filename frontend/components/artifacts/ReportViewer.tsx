@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
+import { PpaHero } from "./PpaHero";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -26,7 +27,12 @@ export function ReportViewer() {
     selectedSynthesisRunId,
     selectSynthesisRun,
     loadSynthesisRuns,
+    runs,
+    selectedRunId,
   } = useStore();
+
+  // PPA hero sources the unified run record (has ppa); prefer the report's run.
+  const ppaRunId = report?.run_id ?? selectedRunId ?? selectedSynthesisRunId;
 
   useEffect(() => {
     if (currentSession) {
@@ -56,14 +62,23 @@ export function ReportViewer() {
   };
 
   if (!report) {
+    const hasPpa = runs.some((r) => r.kind === "synth" && r.ppa);
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-8">
+      <div className="flex flex-col h-full">
+        {/* Even without a generated markdown report, surface PPA if a synth run exists. */}
+        {hasPpa && <PpaHero runs={runs} runId={ppaRunId} />}
+        <div className="flex flex-col items-center justify-center flex-1 text-muted-foreground p-8">
         <div className="w-16 h-16 rounded-2xl bg-surface-2 flex items-center justify-center mb-4">
           <FileText className="h-8 w-8" />
         </div>
         <p className="text-sm font-medium">No report yet</p>
-        <p className="text-xs mt-1 mb-6 text-center max-w-[200px]">
-          Generate a report for the latest synthesis run to get a summary with metrics and analysis
+        <p className="text-xs mt-1 mb-2 text-center max-w-[260px]">
+          Run synthesis, then generate a report to get the timing/PPA summary and
+          spec-vs-result analysis.
+        </p>
+        <p className="text-[11px] mb-6 text-center max-w-[280px] text-muted-foreground/70">
+          Synthesis runs the OpenROAD flow in Docker; if Docker/ORFS isn&apos;t
+          available the synth step reports that in the console.
         </p>
         {synthesisRuns.length > 0 && (
           <div className="mb-4 w-full max-w-[260px]">
@@ -85,6 +100,7 @@ export function ReportViewer() {
           <FileOutput className="h-4 w-4" />
           Generate Report
         </Button>
+        </div>
       </div>
     );
   }
@@ -145,6 +161,8 @@ export function ReportViewer() {
 
       {/* Content - Using native overflow for better scroll */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
+        {/* Timing-hero + PPA + compare-vs-previous (the artifact-first star) */}
+        <PpaHero runs={runs} runId={ppaRunId} />
         <div className="p-6 prose prose-sm dark:prose-invert max-w-none">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
