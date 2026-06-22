@@ -76,6 +76,17 @@ export function WaveformViewer() {
     return Array.from(map.entries());
   }, [waveformData]);
 
+  // Parse the testbench's failure line ("y=251 expected 5 …") so we can flag the
+  // offending signal and show expected-vs-actual — the #1 ask of a failure view.
+  // (Declared before any early return so hook order stays stable.)
+  const failInfo = useMemo(() => {
+    const run = runs.find((r) => r.id === selectedRunId);
+    const line = run?.kind === "sim" ? run.failure?.firstFailureLine : null;
+    if (!line) return null;
+    const m = line.match(/([A-Za-z_]\w*)\s*=\s*(\w+)\s+expected\s+(\w+)/i);
+    return m ? { signal: m[1], actual: m[2], expected: m[3] } : null;
+  }, [runs, selectedRunId]);
+
   if (options.length === 0 && !waveformData) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
@@ -103,16 +114,6 @@ export function WaveformViewer() {
   // Active cursor = the user's dropped cursor, else the failure marker.
   const activeCursor = manualCursor != null ? Math.min(Math.max(0, manualCursor), endtime) : failTicks;
   const activeX = activeCursor != null ? activeCursor * scale : null;
-
-  // Parse the testbench's failure line ("y=251 expected 5 …") so we can flag the
-  // offending signal and show expected-vs-actual — the #1 ask of a failure view.
-  const failInfo = useMemo(() => {
-    const run = runs.find((r) => r.id === selectedRunId);
-    const line = run?.kind === "sim" ? run.failure?.firstFailureLine : null;
-    if (!line) return null;
-    const m = line.match(/([A-Za-z_]\w*)\s*=\s*(\w+)\s+expected\s+(\w+)/i);
-    return m ? { signal: m[1], actual: m[2], expected: m[3] } : null;
-  }, [runs, selectedRunId]);
 
   const fmtBus = (value: number, isX: boolean, raw?: string): string => {
     if (isX) return (raw ?? "x").toUpperCase();

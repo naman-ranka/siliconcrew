@@ -67,38 +67,68 @@
     --text-primary: 40 18% 90%;
     --text-secondary: 38 10% 66%;
     --text-muted: 36 8% 48%;
+
+    /* Motion language — one set of durations/easing across the app. */
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-in: cubic-bezier(0.4, 0, 0.2, 1);
+    --dur-fast: 120ms;
+    --dur-base: 180ms;
+    --dur-slow: 280ms;
   }
 
   .light {
-    --background: 0 0% 100%;
-    --foreground: 224 71% 4%;
+    /* Warm "paper" theme — same Claude orange brand + blue accent, on warm
+       off-white surfaces (not cold blue-white). Status colors unchanged. */
+    --background: 40 30% 97%;          /* warm paper (#faf8f3) */
+    --foreground: 30 12% 14%;          /* warm near-black ink */
 
-    --card: 0 0% 100%;
-    --card-foreground: 224 71% 4%;
+    --card: 40 33% 99%;
+    --card-foreground: 30 12% 14%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 224 71% 4%;
+    --popover: 40 33% 99%;
+    --popover-foreground: 30 12% 14%;
 
-    --primary: 220 90% 56%;
+    --primary: 14 63% 52%;             /* Claude orange, a touch deeper for AA on light */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 220 14% 96%;
-    --secondary-foreground: 224 71% 4%;
+    --secondary: 40 20% 93%;
+    --secondary-foreground: 30 12% 14%;
 
-    --muted: 220 14% 96%;
-    --muted-foreground: 220 9% 46%;
+    --muted: 40 18% 92%;
+    --muted-foreground: 33 8% 40%;
 
-    --accent: 220 14% 96%;
-    --accent-foreground: 224 71% 4%;
+    --accent: 40 22% 90%;
+    --accent-foreground: 30 12% 14%;
 
-    --destructive: 0 84% 60%;
+    --info: 210 55% 45%;               /* blue accent, darker for light bg */
+    --info-foreground: 0 0% 100%;
+
+    --destructive: 8 60% 48%;
     --destructive-foreground: 0 0% 100%;
+    --success: 136 45% 38%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 80% 42%;
+    --warning-foreground: 0 0% 100%;
 
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
-    --ring: 220 90% 56%;
+    --status-pass: 136 45% 38%;
+    --status-fail: 8 60% 48%;
+    --status-warn: 38 80% 42%;
+    --status-running: 210 55% 45%;
+
+    --border: 38 18% 86%;
+    --input: 38 18% 86%;
+    --ring: 14 63% 52%;
 
     --radius: 0.5rem;
+
+    --surface-0: 40 30% 97%;
+    --surface-1: 40 33% 99%;
+    --surface-2: 40 20% 93%;
+    --surface-3: 40 18% 89%;
+
+    --text-primary: 30 12% 14%;
+    --text-secondary: 33 9% 34%;
+    --text-muted: 33 8% 48%;
   }
 }
 

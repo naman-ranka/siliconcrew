@@ -13,6 +13,7 @@ import { Console } from "./Console";
 import { ViewingBanner } from "./ViewingBanner";
 import { Onboarding } from "./Onboarding";
 import { SessionPicker } from "./SessionPicker";
+import { ThemeToggle } from "./ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRightOpen } from "lucide-react";
 
@@ -79,6 +80,7 @@ export function Workbench() {
           <SessionPicker />
         </div>
         <div className="flex items-center gap-1">
+          <ThemeToggle />
           <Link href="/">
             <Button variant="ghost" size="sm" className="gap-1.5 text-xs">
               <MessagesSquare className="h-3.5 w-3.5" /> Chat view
