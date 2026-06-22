@@ -70,3 +70,32 @@ blunt feedback; findings feed back into the remaining slices. Screenshots:
   (hot reload) on a spare port. `file:` is blocked — always HTTP.
 - Backend follow-ups (out of scope here): `/chat/{id}/history` 500 on fresh
   sessions; sim-retry `parentRunId` lineage; failure→RTL-line source mapping.
+
+## Midpoint review findings (after slices 0–4) → slice mapping
+Live persona review (student + engineer, real iverilog). Screenshots:
+`screenshots/uipolish/midpoint/`. Fold each into the mapped slice:
+- **BUG — ViewingBanner overflow** clips long failure strings (no ellipsis) on
+  every center tab → **Slice 8** (quick: truncate/wrap).
+- **BUG — Wave tab opens the first VCD, not the selected run's** (view sim_0003 →
+  shows sim_0001) → **Slice 7** (sync waveform to selectedRunId even when a VCD
+  is already loaded; respect a manual override).
+- **BUG — Stepper active-highlight follows the artifact tab, not pipeline
+  progress** (ran Sim, box stayed on RTL); connector `reached`→fill inconsistent
+  → **Slice 5** (small stepper revision alongside runs timeline).
+- **Light theme not warm / elevation ladder collapses** (surfaces 0/1/2 ~equal,
+  muted-text contrast borderline) → **Slice 9** (+theme): add warm hue shift,
+  distinct surface ladder, WCAG AA recheck.
+- **Console is a one-liner** — need full scrollable, copyable per-run log (raw
+  iverilog + all $display); sync console tab to the viewed run → **Slice 6**.
+- **Lint has no visible result surface** (center stays on Code) → **Slice 6**.
+- **Toast title machine-first** ("sim_0003 failed") — lead human ("Simulation
+  failed @ 6ns"), demote id; reconcile with the persistent API-key banner (two
+  notification channels) → **Slice 1b**.
+- **Empty-state voice inconsistent** (Report "run synthesis" vs Schem/Layout "ask
+  the agent") — standardize + same CTA pattern → **Slice 8**.
+- **Icon tooltips missing** in file tree (crown=synthTop, flask=tb, download) →
+  **Slice 1b**.
+- **Brand orange overloaded** (used for neutral count badges e.g. Code "2") —
+  reserve orange for primary/active only → **Slice 8/9**.
+- Note: skeleton loaders couldn't be observed (dev loads too fast on a tiny
+  workspace) — verify under throttling before claiming slice 2's skeletons land.
