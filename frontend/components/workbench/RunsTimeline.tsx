@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { workbenchApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { statusDotClass, relativeTime } from "./runStatus";
+import { statusDotClass, statusTextClass, relativeTime } from "./runStatus";
 import { Pin, PinOff, GitBranch, Waves, Cpu, GitCompare, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { PpaDiff, RunSummary } from "@/types";
@@ -35,6 +35,11 @@ export function RunsTimeline() {
   const [compareMode, setCompareMode] = useState(false);
   const [compareSel, setCompareSel] = useState<string[]>([]);
   const [diff, setDiff] = useState<PpaDiff | null>(null);
+  const [simDiff, setSimDiff] = useState<{
+    a: RunSummary;
+    b: RunSummary;
+    rows: { metric: string; a: string; b: string }[];
+  } | null>(null);
 
   const childrenByParent = new Map<string, RunSummary[]>();
   for (const r of runs) {
@@ -51,13 +56,32 @@ export function RunsTimeline() {
       ? compareSel.filter((x) => x !== id)
       : [...compareSel, id].slice(-2);
     setCompareSel(next);
-    if (next.length === 2 && currentSession) {
-      try {
-        setDiff(await workbenchApi.compareRuns(currentSession.id, next[0], next[1]));
-      } catch {
-        setDiff(null);
-      }
-    } else {
+    setDiff(null);
+    setSimDiff(null);
+    if (next.length !== 2 || !currentSession) return;
+    const [ra, rb] = next.map((id) => runs.find((r) => r.id === id));
+    // Sim runs have no PPA — a synth PPA table would be all dashes. Build a
+    // sim-aware diff locally (status / failure time / pass marker) instead.
+    if (ra?.kind === "sim" && rb?.kind === "sim") {
+      setSimDiff({
+        a: ra,
+        b: rb,
+        rows: [
+          { metric: "Status", a: ra.status, b: rb.status },
+          { metric: "Top", a: ra.top ?? "—", b: rb.top ?? "—" },
+          {
+            metric: "Failure @",
+            a: ra.failure?.timeNs != null ? `${ra.failure.timeNs}ns` : "—",
+            b: rb.failure?.timeNs != null ? `${rb.failure.timeNs}ns` : "—",
+          },
+          { metric: "Pass marker", a: ra.passMarkerFound ? "yes" : "no", b: rb.passMarkerFound ? "yes" : "no" },
+        ],
+      });
+      return;
+    }
+    try {
+      setDiff(await workbenchApi.compareRuns(currentSession.id, next[0], next[1]));
+    } catch {
       setDiff(null);
     }
   };
@@ -143,6 +167,7 @@ export function RunsTimeline() {
               setCompareMode((v) => !v);
               setCompareSel([]);
               setDiff(null);
+              setSimDiff(null);
             }}
           >
             <GitCompare className="h-3.5 w-3.5" />
@@ -173,7 +198,7 @@ export function RunsTimeline() {
 
       {compareMode && (
         <div className="px-3 pb-2 text-[10px] text-info">
-          {compareSel.length < 2 ? `Select ${2 - compareSel.length} more run(s) to compare` : "Comparing PPA"}
+          {compareSel.length < 2 ? `Select ${2 - compareSel.length} more run(s) to compare` : "Comparing"}
         </div>
       )}
 
@@ -186,6 +211,24 @@ export function RunsTimeline() {
           roots.map((r) => renderRow(r, 0))
         )}
       </div>
+
+      {simDiff && (
+        <div className="border-t border-border p-2 text-[10px] font-mono">
+          <div className="text-info mb-1">
+            {simDiff.a.id} → {simDiff.b.id}
+          </div>
+          {simDiff.rows.map((row) => (
+            <div key={row.metric} className="flex justify-between gap-2">
+              <span className="text-muted-foreground">{row.metric}</span>
+              <span className="text-right">
+                <span className={row.metric === "Status" ? statusTextClass(simDiff.a.status) : ""}>{row.a}</span>
+                <span className="text-muted-foreground"> → </span>
+                <span className={row.metric === "Status" ? statusTextClass(simDiff.b.status) : ""}>{row.b}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {diff && (
         <div className="border-t border-border p-2 text-[10px] font-mono">

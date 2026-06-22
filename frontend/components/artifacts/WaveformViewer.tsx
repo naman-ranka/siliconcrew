@@ -5,6 +5,7 @@ import { Activity, RefreshCw, ZoomIn, ZoomOut, ChevronRight, ChevronDown, Crossh
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -30,6 +31,13 @@ export function WaveformViewer() {
   } = useStore();
   const [zoom, setZoom] = useState(1);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [manualCursor, setManualCursor] = useState<number | null>(null); // ticks; user-placed
+  const [radix, setRadix] = useState<"hex" | "dec">("hex");
+
+  // reset a user-dropped cursor when the waveform changes
+  useEffect(() => {
+    setManualCursor(null);
+  }, [selectedWaveform]);
 
   useEffect(() => {
     if (currentSession) loadWaveforms();
@@ -80,34 +88,52 @@ export function WaveformViewer() {
 
   const endtime = waveformData?.endtime || 1000;
   const laneWidth = Math.max(600, 800 * zoom);
-  const scale = laneWidth / endtime;
+  const END_PAD = 28; // breathing room so an end-of-sim cursor isn't flush to the edge
+  const scale = (laneWidth - END_PAD) / endtime;
 
   // The failure time is in ns; VCD lanes are in the dump's own ticks (ps when
   // the TB declares `timescale 1ns/1ps`, else raw ~ns). Convert via unitSeconds
   // so the cursor lands at the real failure point, not pinned at x=0.
   const secPerTick = waveformData?.unitSeconds ?? null;
-  const cursorTicks =
-    cursorTime == null
-      ? null
-      : secPerTick && secPerTick < 1
-      ? (cursorTime * 1e-9) / secPerTick
-      : cursorTime;
-  const clampedCursor = cursorTicks == null ? null : Math.min(Math.max(0, cursorTicks), endtime);
-  const cursorX = clampedCursor != null ? clampedCursor * scale : null;
+  const toTicks = (ns: number) => (secPerTick && secPerTick < 1 ? (ns * 1e-9) / secPerTick : ns);
+  const failTicks =
+    cursorTime == null ? null : Math.min(Math.max(0, toTicks(cursorTime)), endtime);
+  const failX = failTicks != null ? failTicks * scale : null;
 
-  // Value of a signal at the cursor (last change at or before the cursor tick) —
-  // lets a user read the offending value (e.g. count=20) right at the failure.
+  // Active cursor = the user's dropped cursor, else the failure marker.
+  const activeCursor = manualCursor != null ? Math.min(Math.max(0, manualCursor), endtime) : failTicks;
+  const activeX = activeCursor != null ? activeCursor * scale : null;
+
+  // Parse the testbench's failure line ("y=251 expected 5 …") so we can flag the
+  // offending signal and show expected-vs-actual — the #1 ask of a failure view.
+  const failInfo = useMemo(() => {
+    const run = runs.find((r) => r.id === selectedRunId);
+    const line = run?.kind === "sim" ? run.failure?.firstFailureLine : null;
+    if (!line) return null;
+    const m = line.match(/([A-Za-z_]\w*)\s*=\s*(\w+)\s+expected\s+(\w+)/i);
+    return m ? { signal: m[1], actual: m[2], expected: m[3] } : null;
+  }, [runs, selectedRunId]);
+
+  const fmtBus = (value: number, isX: boolean, raw?: string): string => {
+    if (isX) return (raw ?? "x").toUpperCase();
+    return radix === "hex" ? "0x" + value.toString(16).toUpperCase() : String(value);
+  };
+
+  // Value of a signal at the active cursor (last change at or before that tick).
   const valueAtCursor = (signal: WaveformSignal): string | null => {
-    if (clampedCursor == null) return null;
+    if (activeCursor == null) return null;
     let idx = -1;
     for (let i = 0; i < signal.times.length; i++) {
-      if (signal.times[i] <= clampedCursor) idx = i;
+      if (signal.times[i] <= activeCursor) idx = i;
       else break;
     }
     if (idx < 0) return null;
     if (signal.xFlags?.[idx]) return (signal.valuesStr?.[idx] ?? "x").toUpperCase();
-    return (signal.width ?? 1) > 1 ? "0x" + signal.values[idx].toString(16).toUpperCase() : String(signal.values[idx]);
+    return (signal.width ?? 1) > 1 ? fmtBus(signal.values[idx], false) : String(signal.values[idx]);
   };
+
+  // ns label for a tick position (inverse of toTicks), for the cursor readout.
+  const ticksToNs = (ticks: number) => (secPerTick && secPerTick < 1 ? (ticks * secPerTick) / 1e-9 : ticks);
 
   const toggle = (scope: string) =>
     setCollapsed((prev) => {
@@ -132,7 +158,9 @@ export function WaveformViewer() {
             const isX = signal.xFlags?.[i];
             const label = isX
               ? (signal.valuesStr?.[i] ?? "x").toUpperCase()
-              : signal.values[i].toString(16).toUpperCase();
+              : radix === "hex"
+              ? signal.values[i].toString(16).toUpperCase()
+              : String(signal.values[i]);
             return (
               <g key={i}>
                 <line x1={x} y1={4} x2={x} y2={h - 4} className="stroke-primary" strokeWidth={1} />
@@ -218,16 +246,43 @@ export function WaveformViewer() {
               <Crosshair className="h-3.5 w-3.5" /> fail @ {cursorTime}ns
             </span>
           )}
+          {manualCursor != null && (
+            <button
+              type="button"
+              onClick={() => setManualCursor(null)}
+              className="text-[11px] text-info font-mono hover:underline"
+              title="Clear the placed cursor"
+            >
+              cursor @ {Math.round(ticksToNs(manualCursor))}ns ✕
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}>
+          {/* radix toggle for buses */}
+          <div className="flex rounded-md border border-border overflow-hidden mr-1" role="group" aria-label="Bus radix">
+            {(["hex", "dec"] as const).map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRadix(r)}
+                aria-pressed={radix === r}
+                className={cn(
+                  "px-1.5 py-0.5 text-[10px] font-mono uppercase",
+                  radix === r ? "bg-surface-3 text-foreground" : "text-muted-foreground hover:bg-surface-2"
+                )}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="Zoom out" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}>
             <ZoomOut className="h-3.5 w-3.5" />
           </Button>
           <span className="text-xs text-muted-foreground w-12 text-center">{Math.round(zoom * 100)}%</span>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setZoom((z) => Math.min(4, z + 0.25))}>
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="Zoom in" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4, z + 0.25))}>
             <ZoomIn className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => loadWaveforms()}>
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="Refresh" aria-label="Refresh waveforms" onClick={() => loadWaveforms()}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -255,15 +310,34 @@ export function WaveformViewer() {
               </div>
             </div>
 
-            <div className="relative">
-              {/* failure cursor across all lanes */}
-              {cursorX != null && (
+            <div
+              className="relative"
+              onClick={(e) => {
+                const x = e.clientX - e.currentTarget.getBoundingClientRect().left - NAME_COL;
+                if (x < 0) return; // clicked in the name column
+                setManualCursor(Math.min(Math.max(0, x / scale), endtime));
+              }}
+              title="Click to place a measurement cursor"
+            >
+              {/* failure cursor (red) across all lanes */}
+              {failX != null && (
                 <div
                   className="absolute top-0 bottom-0 w-px bg-status-fail z-20 pointer-events-none"
-                  style={{ left: NAME_COL + cursorX }}
+                  style={{ left: NAME_COL + failX }}
                 >
-                  <span className="absolute -top-0 left-1 text-[9px] text-status-fail font-mono bg-background/80 px-1 rounded">
-                    {cursorTime}ns
+                  <span className="absolute top-0 left-1 text-[9px] text-status-fail font-mono bg-background/80 px-1 rounded">
+                    fail {cursorTime}ns
+                  </span>
+                </div>
+              )}
+              {/* user-placed measurement cursor (blue) */}
+              {manualCursor != null && activeX != null && (
+                <div
+                  className="absolute top-0 bottom-0 w-px bg-info z-20 pointer-events-none"
+                  style={{ left: NAME_COL + activeX }}
+                >
+                  <span className="absolute top-0 left-1 text-[9px] text-info font-mono bg-background/80 px-1 rounded">
+                    {Math.round(ticksToNs(activeCursor!))}ns
                   </span>
                 </div>
               )}
@@ -284,21 +358,41 @@ export function WaveformViewer() {
                     {!isCollapsed &&
                       sigs.map((signal) => {
                         const vAtCursor = valueAtCursor(signal);
+                        const isCulprit = failInfo != null && signal.name === failInfo.signal;
                         return (
-                          <div key={signal.full_name} className="flex items-center border-b border-border/60 hover:bg-surface-1">
+                          <div
+                            key={signal.full_name}
+                            className={cn(
+                              "flex items-center border-b border-border/60 hover:bg-surface-1",
+                              isCulprit && "bg-status-fail/10"
+                            )}
+                          >
                             <div
                               style={{ width: NAME_COL }}
                               className="shrink-0 px-2 py-1 text-xs font-mono flex items-center gap-1"
                               title={signal.full_name}
                             >
-                              <span className="truncate">{signal.name}</span>
+                              <span className={cn("truncate", isCulprit && "text-status-fail font-semibold")}>
+                                {signal.name}
+                              </span>
                               {(signal.width ?? 1) > 1 && (
                                 <span className="text-[9px] text-muted-foreground">[{signal.width}]</span>
                               )}
+                              {isCulprit && (
+                                <span
+                                  className="text-[9px] text-status-fail border border-status-fail/40 rounded px-1"
+                                  title={`testbench expected ${failInfo!.expected}, got ${failInfo!.actual}`}
+                                >
+                                  exp {failInfo!.expected}
+                                </span>
+                              )}
                               {vAtCursor != null && (
                                 <span
-                                  className="ml-auto text-[10px] text-info font-semibold tabular-nums"
-                                  title={`value at cursor (${cursorTime}ns)`}
+                                  className={cn(
+                                    "ml-auto text-[10px] font-semibold tabular-nums",
+                                    isCulprit ? "text-status-fail" : "text-info"
+                                  )}
+                                  title="value at the active cursor"
                                 >
                                   ={vAtCursor}
                                 </span>

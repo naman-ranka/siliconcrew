@@ -109,9 +109,9 @@ interface AppState {
   loadWorkbench: () => Promise<void>;
   loadManifest: () => Promise<void>;
   setFileRole: (name: string, role: FileRole) => Promise<void>;
-  uploadFiles: (files: File[]) => Promise<void>;
+  uploadFiles: (files: File[]) => Promise<{ uploaded: string[]; notShown: string[] }>;
   loadRuns: () => Promise<void>;
-  selectRun: (runId: string | null) => Promise<void>;
+  selectRun: (runId: string | null, opts?: { keepTab?: boolean }) => Promise<void>;
   pinRun: (runId: string, pinned: boolean) => Promise<void>;
   setRunKindFilter: (kind: "all" | "sim" | "synth") => void;
   setActiveConsole: (channel: ConsoleChannel) => void;
@@ -796,15 +796,22 @@ export const useStore = create<AppState>((set, get) => ({
 
   uploadFiles: async (files: File[]) => {
     const { currentSession } = get();
-    if (!currentSession || files.length === 0) return;
+    if (!currentSession || files.length === 0) return { uploaded: [], notShown: [] };
     const res = await workbenchApi.uploadFiles(currentSession.id, files);
     set({ manifest: res.manifest });
+    // Files the server stored but the manifest doesn't surface (non-design types
+    // like .txt) — so the upload isn't a silent black box (hobbyist feedback).
+    const shown = new Set(res.manifest.files.map((f) => f.name));
+    const notShown = res.uploaded.filter((n) => !shown.has(n));
     pushConsole(set, get, {
       channel: get().activeConsole,
       status: "info",
-      summary: `Uploaded ${res.uploaded.length} file(s): ${res.uploaded.join(", ")}`,
+      summary:
+        `Uploaded ${res.uploaded.length} file(s): ${res.uploaded.join(", ")}` +
+        (notShown.length ? ` — ${notShown.length} non-design file(s) stored but not shown` : ""),
     });
     await get().refreshWorkspace();
+    return { uploaded: res.uploaded, notShown };
   },
 
   loadRuns: async () => {
@@ -829,7 +836,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   setActiveConsole: (channel) => set({ activeConsole: channel }),
 
-  selectRun: async (runId: string | null) => {
+  selectRun: async (runId: string | null, opts?: { keepTab?: boolean }) => {
     set({ selectedRunId: runId });
     if (!runId) return;
     const run = get().runs.find((r) => r.id === runId);
@@ -837,14 +844,29 @@ export const useStore = create<AppState>((set, get) => ({
 
     if (run.kind === "sim") {
       set({ activeConsole: "sim" });
+      // Backfill the console from the selected run's stored record so a user
+      // landing on a historical failure sees its command + ERROR immediately
+      // (not "No sim output yet").
+      pushConsole(set, get, {
+        channel: "sim",
+        status: run.status === "running" ? "running" : run.status,
+        runId: run.id,
+        command: [run.compileCommand, run.simCommand].filter(Boolean).join("\n") || undefined,
+        summary:
+          run.status === "passed"
+            ? `${run.id} passed (${run.top})${run.passMarkerFound ? " · TEST PASSED" : ""}`
+            : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}` +
+              (run.failure?.firstFailureLine ? ` — ${run.failure.firstFailureLine.slice(0, 90)}` : ""),
+        detail: [run.failure?.firstFailureLine, run.stdoutTail, run.stderrTail].filter(Boolean).join("\n") || undefined,
+      });
       if (run.vcdPath) {
         await get().selectWaveform(run.vcdPath);
-        set({ artifactsVisible: true, activeArtifactTab: "waveform" });
+        if (!opts?.keepTab) set({ artifactsVisible: true, activeArtifactTab: "waveform" });
       }
     } else {
       set({ activeConsole: "synth", selectedSynthesisRunId: runId });
       await get().loadReport(runId);
-      set({ artifactsVisible: true, activeArtifactTab: "report" });
+      if (!opts?.keepTab) set({ artifactsVisible: true, activeArtifactTab: "report" });
     }
   },
 
@@ -877,7 +899,7 @@ export const useStore = create<AppState>((set, get) => ({
           .join("\n"),
       });
     } catch (e) {
-      pushConsole(set, get, { channel: "lint", status: "failed", summary: errMsg(e) });
+      pushConsole(set, get, { channel: "lint", status: "failed", summary: friendlyError(e) });
     } finally {
       set((s) => ({ actionPending: { ...s.actionPending, lint: false } }));
     }
@@ -904,9 +926,12 @@ export const useStore = create<AppState>((set, get) => ({
               (run.failure?.firstFailureLine ? ` — ${run.failure.firstFailureLine.slice(0, 90)}` : ""),
         detail: [run.failure?.firstFailureLine, run.stdoutTail, run.stderrTail].filter(Boolean).join("\n"),
       });
-      await get().selectRun(run.id);
+      // Keep the user on the Code tab if they're mid-iteration (edit→re-run),
+      // otherwise reveal the waveform for the fresh run.
+      const onCode = get().activeArtifactTab === "code";
+      await get().selectRun(run.id, { keepTab: onCode });
     } catch (e) {
-      pushConsole(set, get, { channel: "sim", status: "failed", summary: errMsg(e) });
+      pushConsole(set, get, { channel: "sim", status: "failed", summary: friendlyError(e) });
     } finally {
       set((s) => ({ actionPending: { ...s.actionPending, sim: false } }));
     }
@@ -964,7 +989,7 @@ export const useStore = create<AppState>((set, get) => ({
         interval = Math.min(interval * 1.5, 30000);
       }
     } catch (e) {
-      pushConsole(set, get, { channel: "synth", status: "failed", summary: errMsg(e) });
+      pushConsole(set, get, { channel: "synth", status: "failed", summary: friendlyError(e) });
     } finally {
       set((s) => ({ actionPending: { ...s.actionPending, synth: false } }));
     }
@@ -973,6 +998,24 @@ export const useStore = create<AppState>((set, get) => ({
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+// Translate the backend's terse action errors into plain language + a next step
+// (the #1 quit-point for newcomers, per the first-time-user review).
+function friendlyError(e: unknown): string {
+  const raw = errMsg(e);
+  const r = raw.toLowerCase();
+  if (r.includes("no simtop"))
+    return "No testbench found. Simulation needs a testbench (a *_tb.v that instantiates your design). Add or upload one, then Run Sim.";
+  if (r.includes("no rtl/tb") || (r.includes("no files") && r.includes("simulate")))
+    return "Nothing to simulate yet — add or upload your Verilog (RTL + a testbench) first.";
+  if (r.includes("no rtl files") || r.includes("no_rtl"))
+    return "No RTL to lint yet — add or upload a .v file, then Run Lint.";
+  if (r.includes("no synthtop"))
+    return "No top module for synthesis. Add your RTL (the design's top module), then Run Synth.";
+  if (r.includes("no rtl files to synthesize"))
+    return "Nothing to synthesize yet — add or upload your RTL first.";
+  return raw;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -989,9 +1032,19 @@ function pushConsole(
   const full: ConsoleEntry = { ...entry, ts: new Date().toISOString() };
   set((s) => {
     const entries = [...s.consoleEntries];
-    const lastIdx = entries.length - 1;
-    if (lastIdx >= 0 && entries[lastIdx].channel === entry.channel && entries[lastIdx].status === "running") {
-      entries[lastIdx] = full;
+    const last = entries[entries.length - 1];
+    // Collapse a finished action onto its own spinner line…
+    if (last && last.channel === entry.channel && last.status === "running") {
+      entries[entries.length - 1] = full;
+    } else if (
+      // …and skip exact re-selections (same channel+run+summary) so re-clicking
+      // a historical run doesn't spam the console.
+      last &&
+      last.channel === entry.channel &&
+      last.runId === entry.runId &&
+      last.summary === entry.summary
+    ) {
+      return {};
     } else {
       entries.push(full);
     }

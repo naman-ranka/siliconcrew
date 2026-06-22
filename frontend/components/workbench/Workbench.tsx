@@ -11,6 +11,7 @@ import { FileTree } from "./FileTree";
 import { RunsTimeline } from "./RunsTimeline";
 import { Console } from "./Console";
 import { ViewingBanner } from "./ViewingBanner";
+import { Onboarding } from "./Onboarding";
 import { SessionPicker } from "./SessionPicker";
 import { Button } from "@/components/ui/button";
 import { CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRightOpen } from "lucide-react";
@@ -25,10 +26,18 @@ import { CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRigh
  *   right  — the agent rail (same tools, same workspace, same runs)
  */
 export function Workbench() {
-  const { currentSession, loadSessions, selectSession, loadWorkbench, artifactsVisible } = useStore();
+  const { currentSession, loadSessions, selectSession, loadWorkbench, artifactsVisible, manifest, runs, activeArtifactTab } = useStore();
   // The agent rail is collapsible so the waveform/report get full width when the
   // user is driving the pipeline themselves (re-review feedback).
   const [chatOpen, setChatOpen] = useState(true);
+
+  // First-run guidance: empty workspace, nothing run yet, and not actively in the
+  // editor (so "Write a file" still reaches the Code tab).
+  const showOnboarding =
+    !!currentSession &&
+    (manifest?.files.length ?? 0) === 0 &&
+    runs.length === 0 &&
+    activeArtifactTab !== "code";
 
   // Ensure a session is active and the workbench data is loaded. A single
   // deterministic effect (reading fresh state via getState) avoids the races a
@@ -66,6 +75,7 @@ export function Workbench() {
             </span>
           </div>
           <div className="h-5 w-px bg-border" />
+          <span className="text-[11px] text-muted-foreground hidden sm:inline">Session</span>
           <SessionPicker />
         </div>
         <div className="flex items-center gap-1">
@@ -99,7 +109,9 @@ export function Workbench() {
           <div className="flex flex-col h-full min-h-0">
             <ViewingBanner />
             <div className="flex-1 min-h-0">
-              {artifactsVisible ? (
+              {showOnboarding ? (
+                <Onboarding />
+              ) : artifactsVisible ? (
                 <ArtifactsPanel />
               ) : (
                 <div className="h-full flex items-center justify-center text-sm text-muted-foreground">

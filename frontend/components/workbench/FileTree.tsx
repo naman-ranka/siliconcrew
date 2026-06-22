@@ -2,9 +2,10 @@
 
 import { useRef, useState } from "react";
 import { useStore } from "@/lib/store";
+import { workspaceApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Upload, FileCode2, FileTerminal, FileClock, FileType2, File as FileIcon, Crown, FlaskConical } from "lucide-react";
+import { Upload, FileCode2, FileTerminal, FileClock, FileType2, File as FileIcon, Crown, FlaskConical, Download } from "lucide-react";
 import type { FileRole } from "@/types";
 
 const ROLE_LABEL: Record<FileRole, string> = {
@@ -44,27 +45,66 @@ const ROLES: FileRole[] = ["rtl", "tb", "sdc", "include", "other"];
  * The file tree is manifest-driven: every file shows its derived role (which
  * decides what reaches each stage) and the role is user-overridable inline.
  * synthTop/simTop are marked so the design's two anchors are always visible.
+ * Supports drag-and-drop upload, per-file download (so it's not a black box),
+ * and a transient upload confirmation.
  */
 export function FileTree() {
   const { manifest, setFileRole, uploadFiles, selectCodeFile, setArtifactTab, currentSession } = useStore();
   const fileInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
 
   const files = manifest?.files ?? [];
 
   const onUpload = async (list: FileList | null) => {
     if (!list || list.length === 0) return;
     setBusy(true);
+    setNote(null);
     try {
-      await uploadFiles(Array.from(list));
+      const res = await uploadFiles(Array.from(list));
+      const n = res?.uploaded.length ?? 0;
+      setNote(
+        `✓ Uploaded ${n} file(s)` +
+          (res?.notShown.length ? ` · ${res.notShown.length} non-design file(s) stored, not shown` : "")
+      );
+      setTimeout(() => setNote(null), 5000);
     } finally {
       setBusy(false);
       if (fileInput.current) fileInput.current.value = "";
     }
   };
 
+  const downloadFile = async (name: string) => {
+    if (!currentSession) return;
+    try {
+      const { content } = await workspaceApi.getFile(currentSession.id, name);
+      const url = URL.createObjectURL(new Blob([content], { type: "text/plain" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      /* non-fatal */
+    }
+  };
+
   return (
-    <div className="flex flex-col min-h-0">
+    <div
+      className={cn("flex flex-col min-h-0", dragging && "ring-2 ring-primary/60 ring-inset")}
+      onDragOver={(e) => {
+        if (!currentSession) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        void onUpload(e.dataTransfer.files);
+      }}
+    >
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Files</span>
         <Button
@@ -72,10 +112,11 @@ export function FileTree() {
           size="sm"
           className="h-6 gap-1 text-xs"
           disabled={!currentSession || busy}
+          title="Upload Verilog / SDC files (or drag & drop here)"
           onClick={() => fileInput.current?.click()}
         >
           <Upload className="h-3.5 w-3.5" />
-          Upload
+          {busy ? "Uploading…" : "Upload"}
         </Button>
         <input
           ref={fileInput}
@@ -87,10 +128,16 @@ export function FileTree() {
         />
       </div>
 
+      {note && (
+        <div className="px-3 py-1 text-[10px] text-status-pass bg-status-pass/10 border-b border-border" role="status">
+          {note}
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto thin-scrollbar py-1">
         {files.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            No files yet. Upload RTL / testbench to begin.
+            {dragging ? "Drop files to upload" : "No files yet — drag & drop, or use Upload."}
           </div>
         ) : (
           files.map((f) => {
@@ -99,7 +146,8 @@ export function FileTree() {
             return (
               <div
                 key={f.name}
-                className="group flex items-center gap-2 px-2 py-1 mx-1 rounded-md hover:bg-surface-2"
+                className="group flex items-center gap-1.5 px-2 py-1 mx-1 rounded-md hover:bg-surface-2"
+                title={f.path}
               >
                 <button
                   type="button"
@@ -121,6 +169,15 @@ export function FileTree() {
                     <FlaskConical className="h-3 w-3 text-primary shrink-0" aria-label="simulation top candidate" />
                   )}
                 </button>
+                <button
+                  type="button"
+                  aria-label={`Download ${f.name}`}
+                  title={`Download ${f.name}`}
+                  onClick={() => void downloadFile(f.name)}
+                  className="shrink-0 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 outline-none focus-visible:ring-2 focus-visible:ring-primary/60 rounded"
+                >
+                  <Download className="h-3 w-3" />
+                </button>
                 <span
                   className={cn(
                     "text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0",
@@ -131,9 +188,10 @@ export function FileTree() {
                 </span>
                 <select
                   aria-label={`Role for ${f.name}`}
+                  title={`Change role for ${f.name}`}
                   value={f.role}
                   onChange={(e) => void setFileRole(f.name, e.target.value as FileRole)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity bg-surface-1 border border-border rounded text-[10px] px-1 py-0.5 text-muted-foreground"
+                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity bg-surface-1 border border-border rounded text-[10px] px-1 py-0.5 text-muted-foreground"
                 >
                   {ROLES.map((r) => (
                     <option key={r} value={r}>
@@ -149,10 +207,10 @@ export function FileTree() {
 
       {manifest && (
         <div className="px-3 py-2 border-t border-border text-[10px] text-muted-foreground space-y-0.5 font-mono">
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1" title="Top module used for synthesis">
             <Crown className="h-3 w-3 text-info" /> synthTop: {manifest.synthTop || "—"}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1" title="Testbench top used for simulation">
             <FlaskConical className="h-3 w-3 text-primary" /> simTop: {manifest.simTop || "—"}
           </div>
           <div>clk: {manifest.clockPeriodNs}ns · {manifest.platform}</div>

@@ -196,14 +196,17 @@ export function CodeViewer() {
       <div className="flex items-center justify-between p-3 border-b border-border gap-2">
         <div className="flex items-center gap-2 min-w-0">
           {creating ? (
-            <input
-              autoFocus
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="filename.v"
-              aria-label="New filename"
-              className="h-8 w-[200px] bg-surface-1 border border-border rounded px-2 text-xs font-mono"
-            />
+            <div className="flex flex-col">
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="filename.v"
+                aria-label="New filename"
+                className="h-8 w-[200px] bg-surface-1 border border-border rounded px-2 text-xs font-mono outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+              />
+              <span className="text-[9px] text-muted-foreground mt-0.5">ends in .v · .sv · .vh · .svh</span>
+            </div>
           ) : (
             <Select value={selectedCodeFile || ""} onValueChange={selectCodeFile} disabled={editing}>
               <SelectTrigger className="h-8 w-[200px]">

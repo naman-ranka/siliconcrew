@@ -14,6 +14,7 @@ interface Stage {
   icon: React.ReactNode;
   status?: RunStatus;
   statusText: string;
+  desc: string; // plain-language explanation (newcomer tooltip)
   onClick: () => void;
   pending?: boolean;
   isAction?: boolean;
@@ -52,6 +53,7 @@ export function PipelineStepper() {
       name: "Spec",
       icon: <FileText className="h-4 w-4" />,
       statusText: manifest ? `${manifest.synthTop || "—"}` : "no spec",
+      desc: "Design intent — the module, its ports, and the clock.",
       onClick: () => setArtifactTab("spec"),
     },
     {
@@ -60,6 +62,7 @@ export function PipelineStepper() {
       icon: <Code2 className="h-4 w-4" />,
       status: hasRtl ? "passed" : undefined,
       statusText: hasRtl ? `${manifest!.files.filter((f) => f.role === "rtl").length} file(s)` : "none",
+      desc: "Your Verilog/SystemVerilog source files.",
       onClick: () => setArtifactTab("code"),
     },
     {
@@ -72,6 +75,7 @@ export function PipelineStepper() {
           ? `${lintResult.warnings.length} warn`
           : `${lintResult.errors.length} err`
         : "run lint",
+      desc: "Check the RTL compiles — catches syntax errors fast.",
       pending: actionPending.lint,
       isAction: true,
       onClick: () => void runLint(),
@@ -86,6 +90,7 @@ export function PipelineStepper() {
           ? `fail${latestSim.failure?.timeNs != null ? ` @ ${latestSim.failure.timeNs}ns` : ""}`
           : latestSim.status
         : "run sim",
+      desc: "Run the testbench and check the design behaves (needs a *_tb).",
       pending: actionPending.sim,
       isAction: true,
       onClick: () => void runSim(),
@@ -96,6 +101,7 @@ export function PipelineStepper() {
       icon: <Cpu className="h-4 w-4" />,
       status: latestSynth?.status,
       statusText: latestSynth ? latestSynth.status : "run synth",
+      desc: "Map RTL to real gates + place & route (OpenROAD).",
       pending: actionPending.synth,
       isAction: true,
       onClick: () => void runSynth(),
@@ -106,6 +112,7 @@ export function PipelineStepper() {
       icon: <BadgeCheck className="h-4 w-4" />,
       status: latestSynth?.status === "passed" ? "passed" : undefined,
       statusText: report || latestSynth?.reportAvailable ? "report" : "—",
+      desc: "Final timing/area/power report for the synthesized design.",
       onClick: () => setArtifactTab("report"),
     },
   ];
@@ -133,8 +140,8 @@ export function PipelineStepper() {
               onClick={stage.onClick}
               data-stage={stage.id}
               data-status={stage.status ?? "none"}
-              title={stage.isAction ? `Run ${stage.name}` : `View ${stage.name}`}
-              aria-label={stage.isAction ? `Run ${stage.name}` : `View ${stage.name}`}
+              title={`${stage.isAction ? `Run ${stage.name}` : `View ${stage.name}`} — ${stage.desc}`}
+              aria-label={`${stage.isAction ? `Run ${stage.name}` : `View ${stage.name}`} — ${stage.desc}`}
               aria-pressed={isActive}
               aria-busy={stage.pending || undefined}
               className={cn(
