@@ -31,26 +31,26 @@ class SessionManager:
     # Project methods
     # -------------------------------------------------------------------------
 
-    def create_project(self, name: str) -> dict:
+    def create_project(self, name: str, user_id: str | None = None) -> dict:
         """Create a new project. Returns the project dict."""
         slug = self._slugify(name)
         now = datetime.datetime.now()
         try:
-            self._store.create_project(slug, name, now)
+            self._store.create_project(slug, name, now, user_id=user_id)
         except DuplicateProject:
             raise ValueError(f"Project '{slug}' already exists.")
         return {"id": slug, "name": name, "created_at": str(now)}
 
-    def get_all_projects(self) -> list[dict]:
-        """Return all projects ordered by name."""
-        return self._store.get_all_projects()
+    def get_all_projects(self, user_id: str | None = None) -> list[dict]:
+        """Return all projects ordered by name (tenant-scoped when user_id given)."""
+        return self._store.get_all_projects(user_id=user_id)
 
-    def get_project(self, project_id: str) -> dict | None:
-        return self._store.get_project(project_id)
+    def get_project(self, project_id: str, user_id: str | None = None) -> dict | None:
+        return self._store.get_project(project_id, user_id=user_id)
 
-    def delete_project(self, project_id: str):
+    def delete_project(self, project_id: str, user_id: str | None = None):
         """Delete a project and unassign its sessions (sessions are NOT deleted)."""
-        self._store.delete_project(project_id)
+        self._store.delete_project(project_id, user_id=user_id)
 
     # -------------------------------------------------------------------------
     # Session methods
@@ -78,28 +78,31 @@ class SessionManager:
             raise ValueError("Invalid tag format.")
         return path
 
-    def _upsert_session_metadata(self, session_id, session_name, model_name, project_id=None):
+    def _upsert_session_metadata(self, session_id, session_name, model_name, project_id=None, user_id=None):
         now = datetime.datetime.now()
-        self._store.upsert_session(session_id, session_name, model_name, project_id, now)
+        self._store.upsert_session(session_id, user_id, session_name, model_name, project_id, now)
 
-    def get_all_sessions(self):
-        """Returns session IDs sorted by updated_at/created_at (newest first)."""
+    def get_all_sessions(self, user_id: str | None = None):
+        """Returns session IDs sorted by updated_at/created_at (newest first).
+
+        When ``user_id`` is given, only that tenant's sessions are returned.
+        """
         if not os.path.exists(self.base_dir):
             return []
-        rows = self._store.get_all_session_rows()
+        rows = self._store.get_all_session_rows(user_id=user_id)
         result = [r for r in rows if os.path.isdir(os.path.join(self.base_dir, r["session_id"]))]
         result.sort(key=lambda x: str(x.get("updated_at") or x.get("created_at") or ""), reverse=True)
         return [r["session_id"] for r in result]
 
-    def create_session(self, tag, model_name="gemini-3-flash-preview", project_id=None):
-        """Creates a new session directory.
+    def create_session(self, tag, model_name="gemini-3-flash-preview", project_id=None, user_id=None):
+        """Creates a new session directory owned by ``user_id`` (the tenant).
         If project_id given, the filesystem path is project_id/tag (maintains
         backward-compat with the slash-convention). project_id is also stored
         as metadata so the project is first-class.
         """
         if project_id:
-            # Ensure the project exists in DB
-            if not self.get_project(project_id):
+            # Ensure the project exists in DB (within the tenant's scope).
+            if not self.get_project(project_id, user_id=user_id):
                 raise ValueError(f"Project '{project_id}' not found.")
             session_id = self._normalize_tag(f"{project_id}/{tag}")
         else:
@@ -111,42 +114,57 @@ class SessionManager:
             raise FileExistsError(f"Session '{session_id}' already exists.")
 
         os.makedirs(path)
-        self._upsert_session_metadata(session_id, tag, model_name, project_id)
+        self._upsert_session_metadata(session_id, tag, model_name, project_id, user_id=user_id)
         return session_id
 
-    def ensure_session(self, tag, model_name="gemini-3-flash-preview"):
+    def ensure_session(self, tag, model_name="gemini-3-flash-preview", user_id=None):
         """Ensure a session has both a workspace directory and metadata row."""
         session_id = self._normalize_tag(tag)
         path = self._session_path(session_id)
         os.makedirs(path, exist_ok=True)
-        self._upsert_session_metadata(session_id, tag, model_name)
+        self._upsert_session_metadata(session_id, tag, model_name, user_id=user_id)
         return session_id
 
-    def get_session_metadata(self, session_id):
-        """Retrieves metadata for a session. Returns dict or None."""
-        return self._store.get_session(session_id)
+    def get_session_metadata(self, session_id, user_id=None):
+        """Retrieves metadata for a session (tenant-scoped when user_id given).
 
-    def move_session_to_project(self, session_id: str, project_id: str | None):
+        Returns None if the session does not exist OR is not owned by user_id —
+        the load-bearing check for cross-tenant isolation.
+        """
+        return self._store.get_session(session_id, user_id=user_id)
+
+    def owns_session(self, session_id, user_id) -> bool:
+        """True iff ``session_id`` exists and is owned by ``user_id``.
+
+        With ``user_id=None`` (self-host) this is true for any existing session.
+        """
+        return self._store.get_session(session_id, user_id=user_id) is not None
+
+    def move_session_to_project(self, session_id: str, project_id: str | None, user_id=None):
         """Reassign a session to a different project (or no project).
         This is a metadata-only operation — the workspace directory is NOT moved.
         """
-        if project_id is not None and not self.get_project(project_id):
+        if project_id is not None and not self.get_project(project_id, user_id=user_id):
             raise ValueError(f"Project '{project_id}' not found.")
-        self._store.move_session(session_id, project_id)
+        self._store.move_session(session_id, project_id, user_id=user_id)
 
-    def update_session_stats(self, session_id, input_t, output_t, cached_t, cost):
+    def update_session_stats(self, session_id, input_t, output_t, cached_t, cost, user_id=None):
         """Updates token stats and bumps updated_at for a session."""
         self._store.update_stats(
             session_id, input_t, output_t, cached_t,
-            input_t + output_t + cached_t, cost, datetime.datetime.now(),
+            input_t + output_t + cached_t, cost, datetime.datetime.now(), user_id=user_id,
         )
 
-    def delete_session(self, session_id):
-        """Deletes a session directory and its metadata."""
+    def delete_session(self, session_id, user_id=None):
+        """Deletes a session directory and its metadata (tenant-scoped)."""
+        # Guard the filesystem delete behind the ownership check so a tenant
+        # cannot rmtree another tenant's workspace by guessing the id.
+        if user_id is not None and not self.owns_session(session_id, user_id):
+            raise PermissionError(f"Session '{session_id}' not found for this user.")
         session_path = os.path.join(self.base_dir, session_id)
         if os.path.exists(session_path):
             shutil.rmtree(session_path)
-        self._store.delete_session(session_id)
+        self._store.delete_session(session_id, user_id=user_id)
 
     def clear_all_sessions(self):
         """Deletes all workspace folders and the database."""

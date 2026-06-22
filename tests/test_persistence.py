@@ -40,9 +40,10 @@ def test_project_crud_and_duplicate(store):
 def test_session_upsert_preserves_existing_name_and_project(store):
     now = datetime.datetime.now()
     store.create_project("proj", "Proj", now)
-    store.upsert_session("proj/s1", "s1", "gemini-3-flash-preview", "proj", now)
+    # Signature: upsert_session(session_id, user_id, session_name, model_name, project_id, now)
+    store.upsert_session("proj/s1", None, "s1", "gemini-3-flash-preview", "proj", now)
     # A later upsert with NULLs must NOT clobber existing name/project (COALESCE).
-    store.upsert_session("proj/s1", None, None, None, now)
+    store.upsert_session("proj/s1", None, None, None, None, now)
     row = store.get_session("proj/s1")
     assert row["session_name"] == "s1"
     assert row["project_id"] == "proj"
@@ -52,7 +53,7 @@ def test_session_upsert_preserves_existing_name_and_project(store):
 def test_delete_project_unassigns_sessions(store):
     now = datetime.datetime.now()
     store.create_project("proj", "Proj", now)
-    store.upsert_session("proj/s1", "s1", "m", "proj", now)
+    store.upsert_session("proj/s1", None, "s1", "m", "proj", now)
     store.delete_project("proj")
     assert store.get_project("proj") is None
     # Session survives, now unassigned.
@@ -62,7 +63,7 @@ def test_delete_project_unassigns_sessions(store):
 def test_update_stats_and_move(store):
     now = datetime.datetime.now()
     store.create_project("p2", "P2", now)
-    store.upsert_session("s2", "s2", "m", None, now)
+    store.upsert_session("s2", None, "s2", "m", None, now)
     store.update_stats("s2", 10, 20, 5, 35, 0.42, now)
     row = store.get_session("s2")
     assert row["input_tokens"] == 10 and row["total_tokens"] == 35 and row["total_cost"] == 0.42
@@ -72,7 +73,7 @@ def test_update_stats_and_move(store):
 
 def test_delete_session(store):
     now = datetime.datetime.now()
-    store.upsert_session("gone", "gone", "m", None, now)
+    store.upsert_session("gone", None, "gone", "m", None, now)
     store.delete_session("gone")
     assert store.get_session("gone") is None
 

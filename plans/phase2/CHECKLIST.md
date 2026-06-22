@@ -14,6 +14,21 @@ ends runnable + tested. Status: ✅ done · 🟡 in progress · ⬜ not started.
 | 7 | **Determinism + provenance** — pin `NUM_CORES`/seed in `config.mk`; stamp `Provenance` on runs | ✅ | `tests/test_provenance_determinism.py` |
 | 8 | **IaC + runbook** — Terraform for Cloud Run/Jobs/GCS/Cloud SQL/AR/KMS + deploy runbook | ✅ | `deploy/terraform/*`, `deploy/RUNBOOK.md` (reviewed, not live-applied) |
 
+## Last-mile integration (wire engines into the live request path)
+
+The seams/IaC/crypto above are excellent but were not yet enforced on live
+requests. This pass closes that. Status: ✅ done · 🟡 in progress · ⬜ not started.
+
+| # | Slice | Status | Verification |
+|---|-------|--------|--------------|
+| I1 | **Schema tenancy** — `user_id` on every session/project row, filter every query, `(user_id, created_at)` index, legacy migration | ✅ | `tests/test_tenancy_redteam.py` (RED-TEAM gate) |
+| I2 | **Auth wiring** — OAuth/Bearer dependency, bind `user_id` into SessionContext, gate synth/save/MCP to signed-in, anonymous trial for lint/sim | ✅ | `tests/test_auth.py` |
+| I3 | **MCP env race** — remove `os.environ["RTL_WORKSPACE"]` mutations, wrap tools in `session_request_scope`, concurrency test | ✅ | `tests/test_mcp_isolation.py` |
+| I4 | **Quota enforcement** — reserve/release around synth in handlers; Postgres quota store w/ `SELECT FOR UPDATE` | ✅ | `tests/test_quota_enforcement.py` |
+| I5 | **BYOK endpoints** — `PUT/DELETE /api/keys/{provider}`, KMS KEK wired, sqlite/PG key store | ✅ | `tests/test_byok_endpoints.py` |
+| I6 | **`GcpCloudRunJobClient`** — submit Cloud Run Job execution, poll+logs, behind `CloudJobOrfsRunner` | ✅ | `tests/test_gcp_clients.py` (fake GCP) |
+| I7 | **Standalone ORFS service + `RemoteOrfsRunner`** — token-authed HTTP runner + client + contract doc | ✅ | `tests/test_orfs_service.py` (loopback E2E) |
+
 ## Posture
 
 Deploy-ready, owner goes live. Local/self-host behavior is unchanged: every
