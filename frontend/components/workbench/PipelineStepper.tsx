@@ -4,7 +4,7 @@ import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { statusDotClass, latestOfKind } from "./runStatus";
 import type { RunStatus } from "@/types";
-import { FileText, Code2, CheckCircle2, Waves, Cpu, BadgeCheck, Loader2 } from "lucide-react";
+import { FileText, Code2, CheckCircle2, Waves, Cpu, BadgeCheck, Loader2, Play } from "lucide-react";
 
 type StageId = "spec" | "rtl" | "lint" | "sim" | "synth" | "signoff";
 
@@ -18,13 +18,15 @@ interface Stage {
   onClick: () => void;
   pending?: boolean;
   isAction?: boolean;
+  reached?: boolean; // pipeline progress has arrived at / through this stage
 }
 
 /**
  * The pipeline IS the spine: Spec→RTL→Lint→Sim→Synth→Signoff with live status.
  * It doubles as the run actions — Lint/Sim/Synth trigger the action endpoints,
  * the rest jump to the relevant artifact. Status is carried by a colored dot
- * (meaning), the brand orange marks the active/primary stage.
+ * (meaning), the brand orange marks the active/primary stage. Connectors between
+ * stages fill in as the pipeline advances, reading as a real stepper.
  */
 export function PipelineStepper() {
   const {
@@ -42,7 +44,6 @@ export function PipelineStepper() {
   } = useStore();
 
   const hasRtl = !!manifest?.files.some((f) => f.role === "rtl");
-  const hasTb = !!manifest?.files.some((f) => f.role === "tb");
   const latestSim = latestOfKind(runs, "sim");
   const latestSynth = latestOfKind(runs, "synth");
   const disabled = !currentSession;
@@ -54,6 +55,7 @@ export function PipelineStepper() {
       icon: <FileText className="h-4 w-4" />,
       statusText: manifest ? `${manifest.synthTop || "—"}` : "no spec",
       desc: "Design intent — the module, its ports, and the clock.",
+      reached: !!manifest,
       onClick: () => setArtifactTab("spec"),
     },
     {
@@ -63,6 +65,7 @@ export function PipelineStepper() {
       status: hasRtl ? "passed" : undefined,
       statusText: hasRtl ? `${manifest!.files.filter((f) => f.role === "rtl").length} file(s)` : "none",
       desc: "Your Verilog/SystemVerilog source files.",
+      reached: hasRtl,
       onClick: () => setArtifactTab("code"),
     },
     {
@@ -78,6 +81,7 @@ export function PipelineStepper() {
       desc: "Check the RTL compiles — catches syntax errors fast.",
       pending: actionPending.lint,
       isAction: true,
+      reached: !!lintResult,
       onClick: () => void runLint(),
     },
     {
@@ -93,6 +97,7 @@ export function PipelineStepper() {
       desc: "Run the testbench and check the design behaves (needs a *_tb).",
       pending: actionPending.sim,
       isAction: true,
+      reached: !!latestSim,
       onClick: () => void runSim(),
     },
     {
@@ -104,6 +109,7 @@ export function PipelineStepper() {
       desc: "Map RTL to real gates + place & route (OpenROAD).",
       pending: actionPending.synth,
       isAction: true,
+      reached: !!latestSynth,
       onClick: () => void runSynth(),
     },
     {
@@ -113,6 +119,7 @@ export function PipelineStepper() {
       status: latestSynth?.status === "passed" ? "passed" : undefined,
       statusText: report || latestSynth?.reportAvailable ? "report" : "—",
       desc: "Final timing/area/power report for the synthesized design.",
+      reached: latestSynth?.status === "passed" || !!report,
       onClick: () => setArtifactTab("report"),
     },
   ];
@@ -129,51 +136,96 @@ export function PipelineStepper() {
       : "lint";
 
   return (
-    <div className="flex items-stretch gap-1 px-3 py-2 border-b border-border bg-surface-1 overflow-x-auto">
+    <div className="flex items-stretch gap-0.5 px-3 py-1.5 border-b border-border bg-surface-1 overflow-x-auto">
       {stages.map((stage, i) => {
         const isActive = stage.id === activeId;
+        const isBusy = !!(stage.isAction && stage.pending);
+        const isDisabled = disabled || isBusy;
+        const verb = stage.isAction ? `Run ${stage.name}` : `View ${stage.name}`;
+        // Connector after this stage is "filled" once the pipeline has reached it.
+        const connectorFilled = !!stage.reached;
         return (
           <div key={stage.id} className="flex items-center">
             <button
               type="button"
-              disabled={disabled || (stage.isAction && stage.pending)}
+              disabled={isDisabled}
               onClick={stage.onClick}
               data-stage={stage.id}
               data-status={stage.status ?? "none"}
-              title={`${stage.isAction ? `Run ${stage.name}` : `View ${stage.name}`} — ${stage.desc}`}
-              aria-label={`${stage.isAction ? `Run ${stage.name}` : `View ${stage.name}`} — ${stage.desc}`}
+              title={`${verb} — ${stage.desc}`}
+              aria-label={`${verb} — ${stage.desc}`}
               aria-pressed={isActive}
               aria-busy={stage.pending || undefined}
               className={cn(
-                "group flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all min-w-[112px]",
-                "border outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
+                "group relative flex h-9 items-center gap-2 rounded-lg px-2.5 text-left min-w-[108px]",
+                "border outline-none transition-all duration-base ease-swift",
+                "focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-surface-1",
                 isActive
-                  ? "border-primary/60 bg-primary/10"
-                  : "border-transparent hover:bg-surface-2",
-                (disabled || (stage.isAction && stage.pending)) && "opacity-50 cursor-not-allowed"
+                  ? "border-primary/60 bg-primary/10 shadow-e1"
+                  : isDisabled
+                  ? "border-transparent"
+                  : "border-transparent hover:border-border hover:bg-surface-2 active:scale-[0.98]",
+                isDisabled && "opacity-50 cursor-not-allowed"
               )}
             >
-              <span className={cn("shrink-0", isActive ? "text-primary" : "text-muted-foreground")}>
-                {stage.pending ? <Loader2 className="h-4 w-4 animate-spin" /> : stage.icon}
-              </span>
-              <span className="flex flex-col leading-tight">
-                <span className={cn("text-xs font-medium flex items-center gap-1.5", isActive && "text-foreground")}>
-                  {stage.name}
-                  {stage.isAction && (
-                    <span className="text-[9px] uppercase tracking-wide text-primary/70 group-hover:text-primary">
-                      run
+              <span
+                className={cn(
+                  "relative shrink-0 transition-colors duration-base ease-swift",
+                  isActive
+                    ? "text-primary"
+                    : stage.isAction && !isDisabled
+                    ? "text-foreground/70 group-hover:text-primary"
+                    : "text-muted-foreground"
+                )}
+              >
+                {isBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : stage.isAction && !isDisabled ? (
+                  <>
+                    {/* default: stage icon; hover: run glyph — clearer "click to run" affordance */}
+                    <span className="block transition-opacity duration-base ease-swift group-hover:opacity-0">
+                      {stage.icon}
                     </span>
+                    <Play className="absolute inset-0 h-4 w-4 fill-current opacity-0 transition-opacity duration-base ease-swift group-hover:opacity-100" />
+                  </>
+                ) : (
+                  stage.icon
+                )}
+              </span>
+              <span className="flex min-w-0 flex-col leading-tight">
+                <span
+                  className={cn(
+                    "flex items-center gap-1.5 text-xs font-medium transition-colors duration-base ease-swift",
+                    isActive ? "text-foreground" : "text-foreground/80"
                   )}
+                >
+                  {stage.name}
                 </span>
                 <span className="flex items-center gap-1.5">
-                  {stage.status && <span className={cn("h-1.5 w-1.5 rounded-full", statusDotClass(stage.status))} />}
-                  <span className="text-[10px] text-muted-foreground font-mono truncate max-w-[88px]">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full transition-all duration-base ease-swift",
+                      stage.status
+                        ? statusDotClass(stage.status)
+                        : "scale-75 bg-muted-foreground/30"
+                    )}
+                  />
+                  <span className="truncate max-w-[80px] font-mono text-[11px] text-muted-foreground">
                     {stage.statusText}
                   </span>
                 </span>
               </span>
             </button>
-            {i < stages.length - 1 && <span className="text-muted-foreground/40 px-0.5 select-none">→</span>}
+            {i < stages.length - 1 && (
+              <span aria-hidden className="flex w-4 shrink-0 items-center justify-center">
+                <span
+                  className={cn(
+                    "h-px w-full transition-colors duration-base ease-swift",
+                    connectorFilled ? "bg-primary/40" : "bg-border"
+                  )}
+                />
+              </span>
+            )}
           </div>
         );
       })}
