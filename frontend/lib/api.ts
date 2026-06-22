@@ -1,6 +1,7 @@
 import type {
   Project,
   Session,
+  ChatThread,
   Message,
   FileInfo,
   SpecData,
@@ -79,16 +80,53 @@ export const sessionsApi = {
     }),
 };
 
+// Chat thread API — many conversations per workspace (session).
+export const threadsApi = {
+  list: (sessionId: string) =>
+    apiFetch<ChatThread[]>(`/api/sessions/${encodeSessionId(sessionId)}/threads`),
+
+  create: (sessionId: string, title?: string, model?: string) =>
+    apiFetch<ChatThread>(`/api/sessions/${encodeSessionId(sessionId)}/threads`, {
+      method: "POST",
+      body: JSON.stringify({ title: title ?? null, model: model ?? null }),
+    }),
+
+  getHistory: (sessionId: string, threadId: string) =>
+    apiFetch<Message[]>(
+      `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}/history`
+    ),
+
+  patch: (sessionId: string, threadId: string, body: { title?: string; model?: string }) =>
+    apiFetch<ChatThread>(
+      `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}`,
+      { method: "PATCH", body: JSON.stringify(body) }
+    ),
+
+  delete: (sessionId: string, threadId: string) =>
+    apiFetch<{ status: string }>(
+      `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}`,
+      { method: "DELETE" }
+    ),
+};
+
 // Chat API
 export const chatApi = {
+  // Legacy session-level history (defaults to the session's "Chat 1").
   getHistory: (sessionId: string) =>
     apiFetch<Message[]>(`/api/chat/${encodeSessionId(sessionId)}/history`),
 
-  // WebSocket connection for streaming
-  createConnection: (sessionId: string): WebSocket => {
+  // Per-thread history (the general form).
+  getThreadHistory: (sessionId: string, threadId: string) =>
+    threadsApi.getHistory(sessionId, threadId),
+
+  // WebSocket connection for streaming. The active chat thread rides as a query
+  // param so the server keys the LangGraph checkpoint by thread while the
+  // workspace stays bound from session_id.
+  createConnection: (sessionId: string, threadId?: string | null): WebSocket => {
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsHost = process.env.NEXT_PUBLIC_WS_URL || `${wsProtocol}//${window.location.hostname}:8000`;
-    return new WebSocket(`${wsHost}/api/chat/${encodeSessionId(sessionId)}`);
+    const q = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : "";
+    return new WebSocket(`${wsHost}/api/chat/${encodeSessionId(sessionId)}${q}`);
   },
 };
 

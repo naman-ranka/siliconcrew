@@ -17,6 +17,17 @@ export interface Session {
   total_cost: number;
 }
 
+// Chat thread types — a chat = a LangGraph thread_id; many per workspace.
+// Threads share the LIVE workspace (files/runs); only the conversation differs.
+export interface ChatThread {
+  id: string;
+  session_id: string;
+  title: string | null;
+  model: string | null;
+  created_at: string | null;
+  last_active: string | null;
+}
+
 // Message types
 export interface ToolCall {
   id: string;

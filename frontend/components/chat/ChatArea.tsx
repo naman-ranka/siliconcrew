@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./ChatInput";
+import { ThreadSwitcher } from "./ThreadSwitcher";
 import { useStore } from "@/lib/store";
 import { formatTokens, formatCost } from "@/lib/utils";
 import { Cpu, Zap, Coins, Hash, AlertCircle, X } from "lucide-react";
@@ -37,11 +38,10 @@ export function ChatArea() {
                   <Zap className="h-4 w-4 text-yellow-500" />
                 )}
               </div>
-              <div>
-                <h1 className="font-semibold text-sm">{currentSession.name ?? currentSession.id}</h1>
-                <p className="text-xs text-muted-foreground">
-                  {currentSession.model_name || "gemini-3-flash-preview"}
-                </p>
+              <div className="min-w-0">
+                <h1 className="font-semibold text-sm truncate">{currentSession.name ?? currentSession.id}</h1>
+                {/* Chat switcher: many conversations per workspace (shared files). */}
+                <ThreadSwitcher />
               </div>
             </>
           ) : (

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   Project,
   Session,
+  ChatThread,
   Message,
   ToolCall,
   ToolResult,
@@ -21,7 +22,7 @@ import type {
   ConsoleEntry,
   Toast,
 } from "@/types";
-import { projectsApi, sessionsApi, chatApi, workspaceApi, workbenchApi } from "./api";
+import { projectsApi, sessionsApi, threadsApi, chatApi, workspaceApi, workbenchApi } from "./api";
 import { generateId } from "./utils";
 
 interface AppState {
@@ -44,9 +45,16 @@ interface AppState {
   streamingMessage: Message | null;
   chatError: string | null;
 
+  // Chat threads (many conversations per workspace). The active thread keys the
+  // LangGraph checkpoint; all threads share the live workspace.
+  threads: ChatThread[];
+  activeThreadId: string | null;
+  threadsLoading: boolean;
+
   // WebSocket
   ws: WebSocket | null;
   wsSessionId: string | null;
+  wsThreadId: string | null;
 
   // Sidebar state
   sidebarCollapsed: boolean;
@@ -79,6 +87,13 @@ interface AppState {
   loadChatHistory: () => Promise<void>;
   sendMessage: (content: string) => void;
   stopStreaming: () => void;
+
+  // Chat thread actions
+  loadThreads: () => Promise<void>;
+  newThread: () => Promise<void>;
+  selectThread: (threadId: string) => Promise<void>;
+  deleteThread: (threadId: string) => Promise<void>;
+  renameThread: (threadId: string, title: string) => Promise<void>;
 
   toggleSidebar: () => void;
   toggleArtifacts: () => void;
@@ -165,8 +180,13 @@ export const useStore = create<AppState>((set, get) => ({
   streamingMessage: null,
   chatError: null,
 
+  threads: [],
+  activeThreadId: null,
+  threadsLoading: false,
+
   ws: null,
   wsSessionId: null,
+  wsThreadId: null,
 
   sidebarCollapsed: false,
 
@@ -280,8 +300,11 @@ export const useStore = create<AppState>((set, get) => ({
         sessions: [session, ...state.sessions],
         currentSession: session,
         messages: [],
+        threads: [],
+        activeThreadId: null,
         ws: null,
         wsSessionId: null,
+        wsThreadId: null,
         files: [],
         spec: null,
         codeFiles: [],
@@ -290,6 +313,8 @@ export const useStore = create<AppState>((set, get) => ({
         report: null,
         artifactsVisible: false,
       }));
+      // Materialize the session's default thread ("Chat 1") for the switcher.
+      await get().loadThreads();
     } catch (error) {
       throw error;
     }
@@ -326,8 +351,11 @@ export const useStore = create<AppState>((set, get) => ({
     set({
       currentSession: session,
       messages: [],
+      threads: [],
+      activeThreadId: null,
       ws: null,
       wsSessionId: null,
+      wsThreadId: null,
       spec: null,
       codeFiles: [],
       selectedCodeFile: null,
@@ -341,7 +369,8 @@ export const useStore = create<AppState>((set, get) => ({
     });
 
     if (session) {
-      // Load chat history and workspace data
+      // Threads first (sets activeThreadId), then that thread's history, then files.
+      await get().loadThreads();
       await get().loadChatHistory();
       await get().refreshWorkspace();
     }
@@ -349,11 +378,13 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Chat actions
   loadChatHistory: async () => {
-    const { currentSession } = get();
+    const { currentSession, activeThreadId } = get();
     if (!currentSession) return;
 
     try {
-      const history = await chatApi.getHistory(currentSession.id);
+      const history = activeThreadId
+        ? await chatApi.getThreadHistory(currentSession.id, activeThreadId)
+        : await chatApi.getHistory(currentSession.id);
       const messages: Message[] = history.map((msg) => ({
         id: generateId(),
         role: msg.role as "user" | "assistant",
@@ -369,9 +400,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   sendMessage: (content: string) => {
-    const { currentSession, ws: existingWs, wsSessionId, messages } = get();
+    const { currentSession, ws: existingWs, wsSessionId, wsThreadId, activeThreadId, messages } = get();
     if (!currentSession || !content.trim()) return;
     const messageContent = content;
+    // The chat thread this message belongs to (defaults to Chat 1 = session id).
+    const threadId = activeThreadId || currentSession.id;
 
     // Add user message
     const userMessage: Message = {
@@ -384,26 +417,27 @@ export const useStore = create<AppState>((set, get) => ({
 
     set({ messages: [...messages, userMessage] });
 
-    // Create or reuse WebSocket
+    // Create or reuse WebSocket. Reconnect when the session OR the active thread
+    // changed, so each chat checkpoints under its own thread_id.
     let ws = existingWs;
-    const sessionMismatch = wsSessionId !== currentSession.id;
-    if (ws && (ws.readyState !== WebSocket.OPEN || sessionMismatch)) {
+    const mismatch = wsSessionId !== currentSession.id || wsThreadId !== threadId;
+    if (ws && (ws.readyState !== WebSocket.OPEN || mismatch)) {
       ws.close();
       ws = null;
     }
 
     if (!ws) {
-      ws = chatApi.createConnection(currentSession.id);
+      ws = chatApi.createConnection(currentSession.id, threadId);
       const socket = ws;
-      set({ ws: socket, wsSessionId: currentSession.id });
+      set({ ws: socket, wsSessionId: currentSession.id, wsThreadId: threadId });
 
       socket.onopen = () => {
         // Ignore stale socket opens after session/socket replacement.
         if (get().ws !== socket) return;
-        socket.send(JSON.stringify({ message: messageContent }));
+        socket.send(JSON.stringify({ message: messageContent, thread_id: threadId }));
       };
     } else {
-      ws.send(JSON.stringify({ message: messageContent }));
+      ws.send(JSON.stringify({ message: messageContent, thread_id: threadId }));
     }
 
     // Create streaming message placeholder
@@ -490,6 +524,8 @@ export const useStore = create<AppState>((set, get) => ({
           }
           // Final workspace refresh after completion
           get().refreshWorkspace();
+          // Reflect server-side auto-title / last-active reordering in the switcher.
+          get().loadThreads();
           break;
 
         case "error":
@@ -513,7 +549,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     socket.onclose = () => {
       if (get().ws !== socket) return;
-      set({ ws: null, wsSessionId: null });
+      set({ ws: null, wsSessionId: null, wsThreadId: null });
     };
   },
 
@@ -536,8 +572,81 @@ export const useStore = create<AppState>((set, get) => ({
         streamingMessage: null,
         ws: null,
         wsSessionId: null,
+        wsThreadId: null,
       });
     }
+  },
+
+  // Chat thread actions — many conversations per workspace. Threads share the
+  // LIVE workspace; switching a thread only swaps the conversation history.
+  loadThreads: async () => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set({ threadsLoading: true });
+    try {
+      const threads = await threadsApi.list(currentSession.id);
+      const cur = get().activeThreadId;
+      // Keep the active thread if it still exists; else land on newest-active.
+      const active = cur && threads.some((t) => t.id === cur) ? cur : threads[0]?.id ?? null;
+      set({ threads, activeThreadId: active, threadsLoading: false });
+    } catch (error) {
+      set({
+        threadsLoading: false,
+        chatError: error instanceof Error ? error.message : "Failed to load chats",
+      });
+    }
+  },
+
+  newThread: async () => {
+    const { currentSession, ws } = get();
+    if (!currentSession) return;
+    const thread = await threadsApi.create(currentSession.id);
+    if (ws) ws.close();
+    set((state) => ({
+      threads: [thread, ...state.threads],
+      activeThreadId: thread.id,
+      messages: [],
+      ws: null,
+      wsSessionId: null,
+      wsThreadId: null,
+      chatError: null,
+    }));
+  },
+
+  selectThread: async (threadId: string) => {
+    const { currentSession, activeThreadId, ws } = get();
+    if (!currentSession || threadId === activeThreadId) return;
+    if (ws) ws.close();
+    set({ activeThreadId: threadId, messages: [], ws: null, wsSessionId: null, wsThreadId: null });
+    await get().loadChatHistory();
+  },
+
+  deleteThread: async (threadId: string) => {
+    const { currentSession, activeThreadId, threads, ws } = get();
+    if (!currentSession) return;
+    await threadsApi.delete(currentSession.id, threadId);
+    const remaining = threads.filter((t) => t.id !== threadId);
+    const wasActive = activeThreadId === threadId;
+    if (wasActive && ws) ws.close();
+    set({
+      threads: remaining,
+      activeThreadId: wasActive ? remaining[0]?.id ?? null : activeThreadId,
+      ...(wasActive ? { messages: [], ws: null, wsSessionId: null, wsThreadId: null } : {}),
+    });
+    if (wasActive) {
+      // Re-materialize (ensures a Chat 1 exists) and load the next conversation.
+      await get().loadThreads();
+      await get().loadChatHistory();
+    }
+  },
+
+  renameThread: async (threadId: string, title: string) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    await threadsApi.patch(currentSession.id, threadId, { title });
+    set((state) => ({
+      threads: state.threads.map((t) => (t.id === threadId ? { ...t, title } : t)),
+    }));
   },
 
   // UI actions
