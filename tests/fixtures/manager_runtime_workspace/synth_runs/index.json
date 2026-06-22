@@ -1,0 +1,17 @@
+{
+  "runs": [
+    {
+      "run_id": "synth_0001",
+      "status": "completed",
+      "updated_at": "2026-06-22T03:09:18.596574+00:00"
+    }
+  ],
+  "jobs": [
+    {
+      "job_id": "job_9a08f8d561",
+      "run_id": "synth_0001",
+      "status": "completed",
+      "updated_at": "2026-06-22T03:09:18.596574+00:00"
+    }
+  ]
+}

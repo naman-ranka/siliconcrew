@@ -13,6 +13,42 @@ from typing import Any, Dict, List, Optional
 
 from src.tools.run_docker import run_docker_command
 from src.tools.spec_manager import load_yaml_file
+from src.platform_engines.orfs_runner import OrfsRequest, get_orfs_runner
+from src.platform_engines.provenance import collect_provenance
+
+
+def _pinned_num_cores() -> int:
+    """Pinned ORFS P&R core count (determinism). From platform settings."""
+    try:
+        from src.platform_engines.settings import get_settings
+
+        return max(1, int(get_settings().num_cores))
+    except Exception:
+        return 4
+
+
+def _run_orfs_via_runner(
+    run_dir: str,
+    command: str,
+    volumes: List[str],
+    timeout: int,
+) -> Dict[str, Any]:
+    """Execute one ORFS invocation through the swappable OrfsRunner seam.
+
+    Returns the same dict shape the synthesis manager has always consumed
+    (``success``/``stdout``/``stderr``/``command``) so run management is
+    unchanged regardless of whether the local Docker or cloud Job backend runs.
+    """
+    result = get_orfs_runner().run(
+        OrfsRequest(run_dir=run_dir, command=command, volumes=list(volumes), timeout=timeout)
+    )
+    return {
+        "success": result.success,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "command": result.command,
+        "backend": result.backend,
+    }
 
 RUNS_DIRNAME = "synth_runs"
 INDEX_FILENAME = "index.json"
@@ -41,7 +77,89 @@ PD_PREREQ_FILES = {
 
 _JOB_LOCK = threading.Lock()
 _INDEX_LOCK = threading.Lock()
+# Default single-tenant executor (local / self-host). In hosted mode this is
+# replaced via set_job_executor() with a per-user queue so one tenant's backlog
+# cannot starve others and per-user synth concurrency is enforced. Any object
+# with a ``.submit(fn, *args)`` returning a concurrent.futures.Future works.
 _EXECUTOR = ThreadPoolExecutor(max_workers=2)
+_ACTIVE_EXECUTOR: Any = None
+
+
+def set_job_executor(executor: Any) -> None:
+    """Override the synth job executor (hosted per-user queue). None resets to default."""
+    global _ACTIVE_EXECUTOR
+    _ACTIVE_EXECUTOR = executor
+
+
+def _job_executor() -> Any:
+    return _ACTIVE_EXECUTOR if _ACTIVE_EXECUTOR is not None else _EXECUTOR
+
+
+# Quota enforcement around synthesis. None (default) = self-host, no enforcement.
+# In hosted mode settings.apply_platform_wiring installs a shared QuotaManager so
+# per-user concurrency / daily-run / monthly-compute caps are enforced fleet-wide.
+_QUOTA_MANAGER: Any = None
+
+
+def set_quota_manager(manager: Any) -> None:
+    """Install the quota manager enforced around synth submissions (None disables)."""
+    global _QUOTA_MANAGER
+    _QUOTA_MANAGER = manager
+
+
+def _quota_identity() -> tuple:
+    """(user_id, tier) for the current request, from the session context."""
+    try:
+        from src.utils.session_context import get_current_session
+
+        ctx = get_current_session()
+        if ctx:
+            return (ctx.user_id or ctx.session_id, ctx.tier or "user")
+    except Exception:
+        pass
+    return ("local", "user")
+
+
+def _reserve_synth_quota():
+    """Reserve a synth slot for the current user, or return an error envelope.
+
+    Returns ``(reservation, None)`` on success, or ``(None, error_dict)`` when a
+    cap is hit. ``reservation`` is None when no quota manager is installed
+    (self-host) — synthesis proceeds unchanged.
+    """
+    if _QUOTA_MANAGER is None:
+        return None, None
+    from src.platform_engines.quotas import QuotaExceeded
+
+    user_id, tier = _quota_identity()
+    try:
+        return _QUOTA_MANAGER.reserve_synth_run(user_id, tier), None
+    except QuotaExceeded as exc:
+        env = exc.to_envelope()
+        return None, {
+            "status": "rejected",
+            "ok": False,
+            "error": env["error"],
+            "check_notes": exc.message,
+            "next_action": "Wait for your in-flight run / quota window, or add capacity.",
+        }
+
+
+def _submit_with_quota_release(reservation, fn, *fn_args):
+    """Submit ``fn`` to the active executor, releasing the reservation when done."""
+    def runner():
+        try:
+            return fn(*fn_args)
+        finally:
+            if reservation is not None and _QUOTA_MANAGER is not None:
+                try:
+                    _QUOTA_MANAGER.release_synth_run(reservation)
+                except Exception:
+                    pass
+
+    return _job_executor().submit(runner)
+
+
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _POLL_CACHE: Dict[str, Dict[str, Any]] = {}
 _POLL_BACKOFF_STATE: Dict[str, Dict[str, Any]] = {}
@@ -701,6 +819,9 @@ def _run_orfs(
         f"export CORE_UTILIZATION = {utilization}\n"
         f"export CORE_ASPECT_RATIO = {aspect_ratio}\n"
         f"export CORE_MARGIN = {core_margin}\n"
+        # Determinism: pin NUM_CORES so P&R parallelism (the only real source of
+        # run-to-run nondeterminism) is fixed and runs are reproducible.
+        f"export NUM_CORES = {_pinned_num_cores()}\n"
     )
     with open(config_mk, "w", encoding="utf-8") as f:
         f.write(config)
@@ -711,9 +832,9 @@ def _run_orfs(
         f"{reports_dir}:/OpenROAD-flow-scripts/flow/reports",
     ]
 
-    return run_docker_command(
+    return _run_orfs_via_runner(
+        run_dir=run_dir,
         command="make -B DESIGN_CONFIG=/workspace/config.mk",
-        workspace_path=run_dir,
         volumes=volumes,
         timeout=timeout,
     )
@@ -739,6 +860,9 @@ def _write_orfs_config(
         f"export CORE_UTILIZATION = {utilization}",
         f"export CORE_ASPECT_RATIO = {aspect_ratio}",
         f"export CORE_MARGIN = {core_margin}",
+        # Determinism: pin NUM_CORES (see _run_orfs). Overrides below may still
+        # set a different value explicitly if a retry intentionally varies it.
+        f"export NUM_CORES = {_pinned_num_cores()}",
     ]
     for key, value in (orfs_overrides or {}).items():
         lines.append(f"export {key} = {value}")
@@ -780,9 +904,9 @@ def _run_orfs_targets(
         f"{reports_dir}:/OpenROAD-flow-scripts/flow/reports",
     ]
     target_cmds = [f"make DESIGN_CONFIG=/workspace/config.mk {target}" for target in targets]
-    return run_docker_command(
+    return _run_orfs_via_runner(
+        run_dir=run_dir,
         command="set -e; " + "; ".join(target_cmds),
-        workspace_path=run_dir,
         volumes=volumes,
         timeout=timeout,
     )
@@ -975,6 +1099,9 @@ def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, 
         "check_notes": f"Retrying from stage '{args['start_stage']}' through '{args['max_stage']}'.",
         "stages": stages,
         "retry_prerequisites": copied_prereqs,
+        "provenance": collect_provenance(
+            pdk=args["platform"], num_cores=_pinned_num_cores()
+        ).as_dict(),
     }
     run_meta["stages"][args["start_stage"]]["status"] = "running"
     _persist_run_meta(run_dir, run_meta)
@@ -1122,6 +1249,11 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "auto_checks": asdict(auto_checks),
         "check_notes": constraints["note"],
         "stages": _init_stage_metadata(),
+        # Reproducibility stamp: repo commit, pinned ORFS image digest, PDK,
+        # iverilog version, and the pinned NUM_CORES used for this run.
+        "provenance": collect_provenance(
+            pdk=platform, num_cores=_pinned_num_cores()
+        ).as_dict(),
     }
     run_meta["stages"]["constraints"]["status"] = "running"
     _persist_run_meta(run_dir, run_meta)
@@ -1231,6 +1363,12 @@ def start_synthesis_job(
     run_equiv: bool = False,
     constraints_mode: str = "auto",
 ) -> Dict[str, Any]:
+    # Quota gate (hosted): reject before doing any work if the user is over a cap
+    # (concurrency / runs-per-day / monthly-compute). No-op in self-host.
+    reservation, quota_error = _reserve_synth_quota()
+    if quota_error is not None:
+        return quota_error
+
     _ensure_dir(workspace)
     run_id, run_dir = _allocate_run_dir(workspace)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
@@ -1253,7 +1391,7 @@ def start_synthesis_job(
     }
 
     with _JOB_LOCK:
-        future = _EXECUTOR.submit(_job_worker, job_id, workspace, run_dir, args)
+        future = _submit_with_quota_release(reservation, _job_worker, job_id, workspace, run_dir, args)
         _JOBS[job_id] = {
             "future": future,
             "workspace": workspace,
@@ -1324,6 +1462,11 @@ def retry_pd_job(
     except FileNotFoundError as exc:
         return {"status": "error", "message": str(exc)}
 
+    # A PD retry is a synth run too — same quota gate.
+    reservation, quota_error = _reserve_synth_quota()
+    if quota_error is not None:
+        return quota_error
+
     pd_parameters = _pd_parameters_from_run(parent_run_dir, parent_meta)
     run_id, run_dir = _allocate_run_dir(workspace)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
@@ -1343,7 +1486,7 @@ def retry_pd_job(
     }
 
     with _JOB_LOCK:
-        future = _EXECUTOR.submit(_retry_pd_worker, job_id, workspace, run_dir, args)
+        future = _submit_with_quota_release(reservation, _retry_pd_worker, job_id, workspace, run_dir, args)
         _JOBS[job_id] = {
             "future": future,
             "workspace": workspace,

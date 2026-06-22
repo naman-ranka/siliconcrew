@@ -13,6 +13,11 @@ Per ``api-contract.md``:
   * Sim is sync (returns a run record); synth is async (job + poll) (rule #4).
   * Every endpoint uses the uniform error envelope (rule #5).
 
+Auth/tenancy (Phase 2 integration): the auth dependencies and the tenant
+ownership check are *injected* by ``api.py`` so this module stays free of the
+agent/web wiring. When omitted (self-host / tests) they default to a trusted
+local identity with no scoping — behaviour identical to before.
+
 Field names follow ``data-model.md`` (camelCase) so JSON crosses to the
 TypeScript types unchanged.
 """
@@ -24,10 +29,11 @@ import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from src.utils.session_context import SessionContext, session_scope
+from src.platform_engines import auth as _auth_engine
 from src.tools import manifest as manifest_mod
 from src.tools import file_ops
 from src.tools.run_linter import run_linter
@@ -190,13 +196,39 @@ def _parse_lint_output(stderr: str):
     return warnings, errors, by_file
 
 
-def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
+def build_actions_router(
+    resolve_workspace: WorkspaceResolver,
+    *,
+    get_identity: Optional[Callable[..., Any]] = None,
+    require_signed_in: Optional[Callable[..., Any]] = None,
+    require_owned: Optional[Callable[[str, Any], Optional[str]]] = None,
+    sync_workspace: Optional[Callable[[str], None]] = None,
+) -> APIRouter:
     """Build the action router.
 
     ``resolve_workspace(session_id) -> path`` maps a session to its workspace
     directory. Phase 1 passes ``session_manager.get_workspace_path``; Phase 2
     swaps in a cloud-backed resolver — no handler changes required.
+
+    Auth/tenancy is injected so this module stays free of the web wiring:
+      * ``get_identity`` / ``require_signed_in`` — FastAPI deps returning the
+        caller's ``Identity`` (anonymous trial allowed for lint/sim; sign-in
+        required for save/synth).
+      * ``require_owned(session_id, identity) -> user_id`` — 404s if the caller
+        does not own the session; returns the tenant id (``None`` in self-host).
+      * ``sync_workspace(session_id)`` — optional cloud write-back after a run.
+    When omitted (self-host / tests) everything defaults to a trusted local
+    identity with no scoping, i.e. behaviour identical to before.
     """
+    if get_identity is None:
+        def get_identity():
+            return _auth_engine.LOCAL_IDENTITY
+    if require_signed_in is None:
+        require_signed_in = get_identity
+    if require_owned is None:
+        def require_owned(session_id: str, identity: Any) -> Optional[str]:
+            return _auth_engine.scoped_user_id(identity)
+
     router = APIRouter(prefix="/api/workspace/{session_id:path}", tags=["actions"])
 
     def require_workspace(session_id: str) -> str:
@@ -205,38 +237,54 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
             raise HTTPException(status_code=404, detail="Session not found")
         return workspace
 
-    async def run_scoped(session_id: str, workspace: str, fn, *args, **kwargs):
+    async def run_scoped(session_id: str, workspace: str, fn, *args, _uid=None, _id=None, **kwargs):
         """Run a sync tool call bound to this request's SessionContext, off-thread.
 
-        ``asyncio.to_thread`` copies the contextvar into the worker thread, so
-        any tool reading ``get_workspace_path()`` sees this session and the
-        blocking EDA work never stalls the event loop.
+        Binds the tenant (``_uid``) and tier into the task-local SessionContext so
+        tenancy + synth quota enforcement see them, copies the contextvar into the
+        worker thread (so tools reading ``get_workspace_path()`` resolve this
+        session), and persists the workspace back (cloud) on exit.
         """
-        ctx = SessionContext(session_id=session_id, workspace=workspace)
+        ctx = SessionContext(
+            session_id=session_id,
+            workspace=workspace,
+            user_id=_uid,
+            tier=getattr(_id, "tier", "user"),
+        )
 
         def runner():
             with session_scope(ctx):
                 return fn(*args, **kwargs)
 
-        return await asyncio.to_thread(runner)
+        try:
+            return await asyncio.to_thread(runner)
+        finally:
+            if sync_workspace is not None:
+                try:
+                    sync_workspace(session_id)
+                except Exception:
+                    pass
 
     # ---- Design manifest ----------------------------------------------------
 
     @router.get("/manifest")
-    async def get_manifest(session_id: str):
+    async def get_manifest(session_id: str, identity=Depends(get_identity)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
-        manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id)
+        manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id, _uid=uid, _id=identity)
         return _ok({"manifest": manifest.model_dump()})
 
     @router.put("/manifest")
-    async def put_manifest(session_id: str, body: ManifestUpdate):
+    async def put_manifest(session_id: str, body: ManifestUpdate, identity=Depends(require_signed_in)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
-        manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id)
+        manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id, _uid=uid, _id=identity)
         return _ok({"manifest": manifest.model_dump()})
 
     @router.post("/files")
-    async def upload_files(session_id: str, files: List[UploadFile] = File(...)):
+    async def upload_files(session_id: str, files: List[UploadFile] = File(...), identity=Depends(require_signed_in)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
         os.makedirs(workspace, exist_ok=True)
         real_ws = os.path.realpath(workspace)
@@ -254,14 +302,15 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
                 f.write(content)
             saved.append(name)
 
-        manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id)
+        manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id, _uid=uid, _id=identity)
         return _ok({"uploaded": saved, "manifest": manifest.model_dump()})
 
     @router.put("/code/{filename:path}")
-    async def save_code(session_id: str, filename: str, body: CodeSave):
+    async def save_code(session_id: str, filename: str, body: CodeSave, identity=Depends(require_signed_in)):
         """Write an edited/new source file (the in-app fix loop), then return the
         refreshed manifest. Routes through ``file_ops.write_file`` — the SAME
         function the agent's write_file tool uses (one write path)."""
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
 
         def work():
@@ -271,7 +320,7 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
                 return {"error": str(exc)}
             return {"manifest": manifest_mod.read_manifest(workspace, session_id)}
 
-        out = await run_scoped(session_id, workspace, work)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
         if out.get("error"):
             _err("invalid_path", out["error"], status=400)
         return _ok({"saved": os.path.basename(filename), "manifest": out["manifest"].model_dump()})
@@ -279,7 +328,8 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
     # ---- Lint ---------------------------------------------------------------
 
     @router.post("/lint")
-    async def lint_action(session_id: str):
+    async def lint_action(session_id: str, identity=Depends(get_identity)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
 
         def work():
@@ -290,7 +340,7 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
             abs_files = [os.path.join(workspace, f) for f in rel_files]
             return {"empty": False, "result": run_linter(abs_files, cwd=workspace), "files": rel_files}
 
-        out = await run_scoped(session_id, workspace, work)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
         if out.get("empty"):
             _err("no_rtl", "No RTL files in the manifest to lint.", status=400)
 
@@ -308,7 +358,8 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
     # ---- Simulate (sync, isolated run) -------------------------------------
 
     @router.post("/simulate")
-    async def simulate_action(session_id: str, body: SimulateRequest):
+    async def simulate_action(session_id: str, body: SimulateRequest, identity=Depends(get_identity)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
 
         def work():
@@ -329,7 +380,7 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
             )
             return {"simRun": sim_run}
 
-        out = await run_scoped(session_id, workspace, work)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
         if out.get("error") == "no_sim_top":
             _err("no_sim_top", "No simTop in the manifest and none provided.", status=400)
         if out.get("error") == "no_files":
@@ -339,7 +390,8 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
     # ---- Synthesize (async job + poll) -------------------------------------
 
     @router.post("/synthesize")
-    async def synthesize_action(session_id: str, body: SynthesizeRequest):
+    async def synthesize_action(session_id: str, body: SynthesizeRequest, identity=Depends(require_signed_in)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
 
         def work():
@@ -366,18 +418,24 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
             )
             return {"result": result}
 
-        out = await run_scoped(session_id, workspace, work)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
         if out.get("error") == "no_synth_top":
             _err("no_synth_top", "No synthTop in the manifest and none provided.", status=400)
         if out.get("error") == "no_files":
             _err("no_files", "Manifest has no rtl files to synthesize.", status=400)
         result = out["result"]
+        # Quota is enforced inside start_synthesis_job; surface a cap hit as 429.
+        if isinstance(result, dict) and result.get("status") == "rejected":
+            _err((result.get("error") or {}).get("code", "quota_exceeded"),
+                 (result.get("error") or {}).get("message", "Quota exceeded."),
+                 details=result.get("error"), status=429)
         return _ok({"jobId": result.get("job_id"), "runId": result.get("run_id"), "raw": result})
 
     # ---- Unified runs -------------------------------------------------------
 
     @router.get("/runs")
-    async def list_runs(session_id: str, kind: str = Query(default="all")):
+    async def list_runs(session_id: str, kind: str = Query(default="all"), identity=Depends(get_identity)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
 
         def work():
@@ -389,11 +447,12 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
             runs.sort(key=lambda r: r.get("createdAt") or "", reverse=True)
             return runs
 
-        runs = await run_scoped(session_id, workspace, work)
+        runs = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
         return _ok({"runs": runs})
 
     @router.get("/runs/compare")
-    async def compare_runs(session_id: str, a: str = Query(...), b: str = Query(...)):
+    async def compare_runs(session_id: str, a: str = Query(...), b: str = Query(...), identity=Depends(get_identity)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
 
         def work():
@@ -402,7 +461,7 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
                 get_synthesis_metrics(workspace=workspace, run_id=b),
             )
 
-        ma, mb = await run_scoped(session_id, workspace, work)
+        ma, mb = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
         metric_keys = [
             ("area_um2", "Area (µm²)"),
             ("cell_count", "Cells"),
@@ -424,7 +483,8 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
         return _ok({"diff": {"a": a, "b": b, "rows": rows}})
 
     @router.get("/runs/{run_id}")
-    async def get_run(session_id: str, run_id: str):
+    async def get_run(session_id: str, run_id: str, identity=Depends(get_identity)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
 
         def work():
@@ -436,7 +496,7 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
                 "metrics": get_synthesis_metrics(workspace=workspace, run_id=run_id),
             }
 
-        out = await run_scoped(session_id, workspace, work)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
         if out["kind"] == "sim":
             if not out["run"]:
                 _err("not_found", f"Sim run {run_id} not found.", status=404)
@@ -465,13 +525,15 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
         }})
 
     @router.get("/jobs/{job_id}")
-    async def get_job(session_id: str, job_id: str):
+    async def get_job(session_id: str, job_id: str, identity=Depends(get_identity)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
-        status = await run_scoped(session_id, workspace, get_synthesis_job_status, job_id, workspace)
+        status = await run_scoped(session_id, workspace, get_synthesis_job_status, job_id, workspace, _uid=uid, _id=identity)
         return _ok({"job": status})
 
     @router.post("/runs/{run_id}/retry")
-    async def retry_run(session_id: str, run_id: str, body: RetryRequest):
+    async def retry_run(session_id: str, run_id: str, body: RetryRequest, identity=Depends(require_signed_in)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
         overrides_json = json.dumps(body.overrides) if body.overrides else ""
 
@@ -484,11 +546,16 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
                 orfs_overrides_json=overrides_json,
             )
 
-        result = await run_scoped(session_id, workspace, work)
+        result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        if isinstance(result, dict) and result.get("status") == "rejected":
+            _err((result.get("error") or {}).get("code", "quota_exceeded"),
+                 (result.get("error") or {}).get("message", "Quota exceeded."),
+                 details=result.get("error"), status=429)
         return _ok({"jobId": result.get("job_id"), "runId": result.get("run_id"), "raw": result})
 
     @router.post("/runs/{run_id}/pin")
-    async def pin_run(session_id: str, run_id: str, body: PinRequest):
+    async def pin_run(session_id: str, run_id: str, body: PinRequest, identity=Depends(require_signed_in)):
+        uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
 
         def work():
@@ -510,7 +577,7 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
                 json.dump(meta, f, indent=2)
             return {"run_id": run_id, "pinned": body.pinned}
 
-        result = await run_scoped(session_id, workspace, work)
+        result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
         if not result:
             _err("not_found", f"Run {run_id} not found.", status=404)
         return _ok({"runId": run_id, "pinned": body.pinned})
