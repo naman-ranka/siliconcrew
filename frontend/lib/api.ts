@@ -181,6 +181,12 @@ export const workbenchApi = {
     return body as { ok: true; uploaded: string[]; manifest: DesignManifest };
   },
 
+  saveCode: (sessionId: string, filename: string, content: string) =>
+    actionFetch<{ ok: true; saved: string; manifest: DesignManifest }>(
+      `${ws(sessionId)}/code/${encodeFilePath(filename)}`,
+      { method: "PUT", body: JSON.stringify({ content }) }
+    ),
+
   lint: (sessionId: string) =>
     actionFetch<LintResult & { ok: true }>(`${ws(sessionId)}/lint`, { method: "POST" }),
 

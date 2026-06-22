@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from src.utils.session_context import SessionContext, session_scope
 from src.tools import manifest as manifest_mod
+from src.tools import file_ops
 from src.tools.run_linter import run_linter
 from src.tools.sim_manager import (
     run_sim_isolated,
@@ -84,6 +85,10 @@ class RetryRequest(BaseModel):
 
 class PinRequest(BaseModel):
     pinned: bool = True
+
+
+class CodeSave(BaseModel):
+    content: str
 
 
 # --- Shared helpers ---------------------------------------------------------
@@ -251,6 +256,25 @@ def build_actions_router(resolve_workspace: WorkspaceResolver) -> APIRouter:
 
         manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id)
         return _ok({"uploaded": saved, "manifest": manifest.model_dump()})
+
+    @router.put("/code/{filename:path}")
+    async def save_code(session_id: str, filename: str, body: CodeSave):
+        """Write an edited/new source file (the in-app fix loop), then return the
+        refreshed manifest. Routes through ``file_ops.write_file`` — the SAME
+        function the agent's write_file tool uses (one write path)."""
+        workspace = require_workspace(session_id)
+
+        def work():
+            try:
+                file_ops.write_file(workspace, filename, body.content)
+            except ValueError as exc:
+                return {"error": str(exc)}
+            return {"manifest": manifest_mod.read_manifest(workspace, session_id)}
+
+        out = await run_scoped(session_id, workspace, work)
+        if out.get("error"):
+            _err("invalid_path", out["error"], status=400)
+        return _ok({"saved": os.path.basename(filename), "manifest": out["manifest"].model_dump()})
 
     # ---- Lint ---------------------------------------------------------------
 

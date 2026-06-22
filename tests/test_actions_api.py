@@ -92,6 +92,31 @@ def test_simulate_requires_sim_top(client):
     assert r.json()["detail"]["error"]["code"] in {"no_sim_top", "no_files"}
 
 
+def test_save_code_writes_file_and_returns_manifest(client):
+    c, ws = client
+    # create via the in-app editor path
+    r = c.put(f"/api/workspace/{SID}/code/counter.v", json={"content": DUT})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["saved"] == "counter.v"
+    assert os.path.exists(os.path.join(ws, "counter.v"))
+    assert any(f["name"] == "counter.v" and f["role"] == "rtl" for f in body["manifest"]["files"])
+
+    # edit the same file — content is overwritten
+    r2 = c.put(f"/api/workspace/{SID}/code/counter.v", json={"content": "// edited\n" + DUT})
+    assert r2.status_code == 200
+    with open(os.path.join(ws, "counter.v")) as f:
+        assert f.read().startswith("// edited")
+
+
+def test_save_code_rejects_path_traversal(client):
+    c, ws = client
+    r = c.put(f"/api/workspace/{SID}/code/..%2f..%2fevil.v", json={"content": "x"})
+    # the shared file_ops.write_file guard rejects an escape (400), never writes outside
+    assert r.status_code == 400
+    assert not os.path.exists(os.path.join(os.path.dirname(ws), "evil.v"))
+
+
 def test_runs_empty_ok(client):
     c, ws = client
     r = c.get(f"/api/workspace/{SID}/runs")

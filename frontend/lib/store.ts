@@ -87,6 +87,7 @@ interface AppState {
   loadSpec: () => Promise<void>;
   loadCodeFiles: () => Promise<void>;
   selectCodeFile: (filename: string) => void;
+  saveCodeFile: (filename: string, content: string) => Promise<void>;
   loadWaveforms: () => Promise<void>;
   selectWaveform: (filename: string) => Promise<void>;
   loadSynthesisRuns: () => Promise<void>;
@@ -673,6 +674,19 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   selectCodeFile: (filename: string) => {
+    set({ selectedCodeFile: filename });
+  },
+
+  saveCodeFile: async (filename: string, content: string) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const res = await workbenchApi.saveCode(currentSession.id, filename, content);
+    set({ manifest: res.manifest });
+    // Reflect the edit in the open viewer + refresh roles/files.
+    set((state) => ({
+      codeFiles: state.codeFiles.map((f) => (f.filename === filename ? { ...f, content } : f)),
+    }));
+    await get().loadCodeFiles();
     set({ selectedCodeFile: filename });
   },
 

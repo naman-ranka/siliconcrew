@@ -111,13 +111,14 @@ def write_file(filename: str, content: str | None = None) -> str:
             "Retry the tool call with both 'filename' and the complete file text in 'content'."
         )
 
+    # Route through the single shared write path so the agent and the human
+    # editor's Save are one tracked mutation (and the manifest stays in sync).
+    from src.tools.file_ops import write_file as _write_file
     workspace = get_workspace_path()
-    if not os.path.exists(workspace):
-        os.makedirs(workspace)
-    
-    filepath = os.path.join(workspace, filename)
-    with open(filepath, "w", encoding="utf-8", newline="\n") as f:
-        f.write(content)
+    try:
+        _write_file(workspace, filename, content)
+    except ValueError as exc:
+        return f"Error: {exc}"
     return f"Successfully wrote to {filename}"
 
 @tool
