@@ -16,44 +16,17 @@ base64 gzip tarball of the run-dir-relative output subdirs.
 """
 from __future__ import annotations
 
-import base64
-import io
 import os
-import tarfile
+import shutil
 import threading
+import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
-from src.platform_engines.orfs_runner import OrfsRequest, OrfsResult
-
-
-# ---------------------------------------------------------------------------
-# tar helpers (path-traversal-safe extraction)
-# ---------------------------------------------------------------------------
-
-
-def tar_dir_b64(local_dir: str, subdirs: Optional[List[str]] = None) -> str:
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        names = subdirs if subdirs else (sorted(os.listdir(local_dir)) if os.path.isdir(local_dir) else [])
-        for name in names:
-            path = os.path.join(local_dir, name)
-            if os.path.exists(path):
-                tar.add(path, arcname=name)
-    return base64.b64encode(buf.getvalue()).decode("ascii")
-
-
-def untar_b64_into(data_b64: str, local_dir: str) -> None:
-    os.makedirs(local_dir, exist_ok=True)
-    raw = base64.b64decode(data_b64)
-    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
-        dest_real = os.path.realpath(local_dir)
-        for m in tar.getmembers():
-            target = os.path.realpath(os.path.join(local_dir, m.name))
-            if not (target == dest_real or target.startswith(dest_real + os.sep)):
-                raise ValueError(f"Refusing path-traversal tar member: {m.name}")
-        tar.extractall(local_dir)
+# Contract + tar helpers come from the shareable stdlib-only client package and
+# are re-exported here so existing imports (orfs_service.tar_dir_b64, ...) work.
+from src.orfs_client import OrfsRequest, OrfsResult, tar_dir_b64, untar_b64_into  # noqa: F401
 
 
 class ServiceError(Exception):
@@ -71,18 +44,25 @@ class ServiceError(Exception):
 class OrfsService:
     """Manage submit -> run (via an OrfsRunner) -> poll -> artifacts."""
 
-    def __init__(self, runner, scratch_dir: str, object_store=None, executor=None):
+    def __init__(self, runner, scratch_dir: str, object_store=None, executor=None,
+                 job_ttl_seconds: float = 3600.0, clock=time.time):
         self._runner = runner
         self._scratch = scratch_dir
         self._store = object_store  # optional ObjectStore for object_ref inputs
         self._executor = executor or ThreadPoolExecutor(max_workers=4)
         self._lock = threading.Lock()
         self._jobs: Dict[str, Dict[str, Any]] = {}
+        # Bound the in-memory job map: finished jobs older than the TTL are
+        # evicted (and their scratch dirs removed) on the next operation, so a
+        # long-running service doesn't leak memory/disk. ttl<=0 disables GC.
+        self._job_ttl = job_ttl_seconds
+        self._clock = clock
         os.makedirs(self._scratch, exist_ok=True)
 
     # -- wire operations (plain dicts in/out) --------------------------------
 
     def submit(self, payload: dict) -> dict:
+        self._gc()
         command = payload.get("command")
         if not command:
             raise ServiceError(400, "Missing 'command'.")
@@ -116,7 +96,10 @@ class OrfsService:
         req = OrfsRequest(run_dir=run_dir, command=command, volumes=abs_volumes, timeout=timeout)
         future = self._executor.submit(self._runner.run, req)
         with self._lock:
-            self._jobs[job_id] = {"future": future, "run_dir": run_dir, "subdirs": result_subdirs}
+            self._jobs[job_id] = {
+                "future": future, "run_dir": run_dir, "subdirs": result_subdirs,
+                "created_at": self._clock(), "finished_at": None,
+            }
         return {"job_id": job_id, "status": "queued"}
 
     def status(self, job_id: str) -> dict:
@@ -125,6 +108,10 @@ class OrfsService:
         if not future.done():
             state = "running" if future.running() else "queued"
             return {"job_id": job_id, "status": state, "exit_code": None, "stdout": "", "stderr": ""}
+        # Stamp the terminal time once, so TTL eviction can age the job out.
+        if job.get("finished_at") is None:
+            with self._lock:
+                job["finished_at"] = self._clock()
         try:
             result: OrfsResult = future.result()
         except Exception as exc:  # noqa: BLE001
@@ -152,6 +139,31 @@ class OrfsService:
         if job is None:
             raise ServiceError(404, f"Unknown job '{job_id}'.")
         return job
+
+    def _gc(self) -> None:
+        """Evict finished jobs older than the TTL and remove their scratch dirs."""
+        if self._job_ttl is None or self._job_ttl <= 0:
+            return
+        now = self._clock()
+        evict = []
+        with self._lock:
+            for jid, job in list(self._jobs.items()):
+                fut: Future = job["future"]
+                finished = job.get("finished_at")
+                # Opportunistically stamp jobs that finished but were never polled.
+                if finished is None and fut.done():
+                    job["finished_at"] = finished = now
+                if finished is not None and (now - finished) > self._job_ttl:
+                    evict.append((jid, job["run_dir"]))
+                    del self._jobs[jid]
+        for _jid, run_dir in evict:
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+    def gc_now(self) -> int:
+        """Force a GC pass (test/ops hook). Returns the post-GC job count."""
+        self._gc()
+        with self._lock:
+            return len(self._jobs)
 
 
 # ---------------------------------------------------------------------------

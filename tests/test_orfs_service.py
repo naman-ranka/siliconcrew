@@ -148,6 +148,40 @@ def test_service_rejects_missing_inputs(tmp_path):
     assert ei.value.status == 400
 
 
+def test_finished_jobs_are_evicted_after_ttl(tmp_path):
+    """The in-memory job map is bounded: finished jobs age out + scratch is removed."""
+    from src.platform_engines.orfs_service import tar_dir_b64
+
+    clock = {"t": 1000.0}
+    service = OrfsService(MockRunner(succeed=True), scratch_dir=str(tmp_path / "svc"),
+                          job_ttl_seconds=60.0, clock=lambda: clock["t"])
+    src = tmp_path / "src"
+    (src / "inputs").mkdir(parents=True)
+    (src / "config.mk").write_text("x\n")
+
+    out = service.submit({"command": "make", "volumes": [], "timeout": 30,
+                          "inputs_tar_b64": tar_dir_b64(str(src))})
+    job_id = out["job_id"]
+    # Drive to terminal (stamps finished_at).
+    import time
+    for _ in range(200):
+        if service.status(job_id)["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.01)
+    run_dir = service._jobs[job_id]["run_dir"]
+    assert os.path.isdir(run_dir)
+
+    # Before TTL: still present. After TTL: evicted + scratch removed.
+    clock["t"] += 30
+    assert service.gc_now() == 1
+    clock["t"] += 61
+    assert service.gc_now() == 0
+    assert not os.path.exists(run_dir)
+    with pytest.raises(ServiceError) as ei:
+        service.status(job_id)
+    assert ei.value.status == 404
+
+
 def test_remote_engine_selected_by_settings(monkeypatch):
     """ORFS_ENGINE=remote wires RemoteOrfsRunner via the single factory."""
     import src.platform_engines.orfs_runner as orf
