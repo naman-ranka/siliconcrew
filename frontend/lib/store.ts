@@ -3,6 +3,7 @@ import type {
   Project,
   Session,
   ChatThread,
+  ModelInfo,
   Message,
   ToolCall,
   ToolResult,
@@ -22,7 +23,7 @@ import type {
   ConsoleEntry,
   Toast,
 } from "@/types";
-import { projectsApi, sessionsApi, threadsApi, chatApi, workspaceApi, workbenchApi } from "./api";
+import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi } from "./api";
 import { generateId } from "./utils";
 
 interface AppState {
@@ -50,6 +51,10 @@ interface AppState {
   threads: ChatThread[];
   activeThreadId: string | null;
   threadsLoading: boolean;
+
+  // Model registry (the picker). The active thread's model is what the WS uses.
+  models: ModelInfo[];
+  modelsLoaded: boolean;
 
   // WebSocket
   ws: WebSocket | null;
@@ -94,6 +99,10 @@ interface AppState {
   selectThread: (threadId: string) => Promise<void>;
   deleteThread: (threadId: string) => Promise<void>;
   renameThread: (threadId: string, title: string) => Promise<void>;
+
+  // Model actions
+  loadModels: () => Promise<void>;
+  setActiveThreadModel: (modelId: string) => Promise<void>;
 
   toggleSidebar: () => void;
   toggleArtifacts: () => void;
@@ -183,6 +192,9 @@ export const useStore = create<AppState>((set, get) => ({
   threads: [],
   activeThreadId: null,
   threadsLoading: false,
+
+  models: [],
+  modelsLoaded: false,
 
   ws: null,
   wsSessionId: null,
@@ -646,6 +658,32 @@ export const useStore = create<AppState>((set, get) => ({
     await threadsApi.patch(currentSession.id, threadId, { title });
     set((state) => ({
       threads: state.threads.map((t) => (t.id === threadId ? { ...t, title } : t)),
+    }));
+  },
+
+  // Model actions — the chosen model lives on the active thread; the WS reads it.
+  loadModels: async () => {
+    if (get().modelsLoaded) return;
+    try {
+      const data = await modelsApi.list();
+      // Be defensive about the response shape so the picker never crashes.
+      set({ models: Array.isArray(data?.models) ? data.models : [], modelsLoaded: true });
+    } catch {
+      set({ models: [], modelsLoaded: true });
+    }
+  },
+
+  setActiveThreadModel: async (modelId: string) => {
+    const { currentSession, activeThreadId } = get();
+    if (!currentSession) return;
+    const tid = activeThreadId || currentSession.id;
+    // Persist on the thread; the next message uses it (WS reads the thread model).
+    await threadsApi.patch(currentSession.id, tid, { model: modelId });
+    set((state) => ({
+      activeThreadId: tid,
+      threads: state.threads.some((t) => t.id === tid)
+        ? state.threads.map((t) => (t.id === tid ? { ...t, model: modelId } : t))
+        : state.threads,
     }));
   },
 

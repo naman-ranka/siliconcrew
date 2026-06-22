@@ -2,6 +2,7 @@ import type {
   Project,
   Session,
   ChatThread,
+  ModelInfo,
   Message,
   FileInfo,
   SpecData,
@@ -78,6 +79,11 @@ export const sessionsApi = {
     apiFetch<{ status: string }>(`/api/sessions/${encodeSessionId(sessionId)}`, {
       method: "DELETE",
     }),
+};
+
+// Models API — the registry for the picker (availability per request).
+export const modelsApi = {
+  list: () => apiFetch<{ models: ModelInfo[]; default: string }>("/api/models"),
 };
 
 // Chat thread API — many conversations per workspace (session).

@@ -17,6 +17,18 @@ export interface Session {
   total_cost: number;
 }
 
+// Model registry (the picker). `available` is per-request: false when the
+// provider has no usable key (env in self-host, BYOK/hosted otherwise).
+export interface ModelInfo {
+  id: string;
+  label: string;
+  provider: "anthropic" | "openai" | "gemini";
+  tier: "fast" | "balanced" | "capable";
+  hint?: string;
+  pricing?: { input: number; output: number };
+  available: boolean;
+}
+
 // Chat thread types — a chat = a LangGraph thread_id; many per workspace.
 // Threads share the LIVE workspace (files/runs); only the conversation differs.
 export interface ChatThread {
