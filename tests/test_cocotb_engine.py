@@ -79,6 +79,8 @@ def test_missing_source(tmp_path):
 # --- native end-to-end smoke (CI-friendly, gated like the ORFS real run) -----
 
 def _cocotb_native_available() -> bool:
+    if os.name == "nt":
+        return False
     if not shutil.which("iverilog"):
         return False
     try:

@@ -184,9 +184,13 @@ class CloudJobOrfsRunner:
         """Yield (rundir-relative dest, ORFS container source) for each volume."""
         pairs = []
         for vol in request.volumes:
-            parts = vol.split(":")
-            host = parts[0]
-            container = parts[1] if len(parts) > 1 else ""
+            if ":" in vol:
+                parts = vol.rsplit(":", 1)
+                host = parts[0]
+                container = parts[1]
+            else:
+                host = vol
+                container = ""
             try:
                 rel = os.path.relpath(host, request.run_dir)
             except ValueError:

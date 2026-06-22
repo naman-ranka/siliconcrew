@@ -24,7 +24,7 @@ class MockRunner:
         self.seen.append(req)
         if self.succeed:
             for vol in req.volumes:
-                host = vol.split(":")[0]
+                host = vol.rsplit(":", 1)[0] if ":" in vol else vol
                 os.makedirs(host, exist_ok=True)
                 with open(os.path.join(host, "metrics.txt"), "w") as f:
                     f.write("area_um2=42\n")

@@ -176,9 +176,13 @@ class RemoteOrfsRunner:
         # Volumes as run-dir-relative specs the service rebuilds against its host.
         volumes = []
         for vol in request.volumes:
-            parts = vol.split(":")
-            host = parts[0]
-            container = parts[1] if len(parts) > 1 else ""
+            if ":" in vol:
+                parts = vol.rsplit(":", 1)
+                host = parts[0]
+                container = parts[1]
+            else:
+                host = vol
+                container = ""
             rel = os.path.relpath(host, request.run_dir)
             if not rel.startswith(".."):
                 volumes.append(f"{rel}:{container}" if container else rel)
