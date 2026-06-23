@@ -87,14 +87,20 @@ HOSTED_GEMINI_KEY, GOOGLE_OAUTH_CLIENT_ID). Attach the Cloud SQL connection
 
 ### Frontend Google sign-in (pair the client ID)
 
-The frontend must be built/served with `NEXT_PUBLIC_GOOGLE_CLIENT_ID` set to the
-**same** OAuth client ID as the backend's `GOOGLE_OAUTH_CLIENT_ID`. It's a public
-build-time value (baked into the client bundle), so pass it at image build, e.g.
-`--build-arg NEXT_PUBLIC_GOOGLE_CLIENT_ID=<oauth-client-id>` (not a Secret).
+Set the Terraform variable `google_oauth_client_id` to your Google OAuth Web
+Client ID. It's wired to **both** services from this one value (public, so it's a
+plain env var — not a Secret, not a build arg):
+- backend → `GOOGLE_OAUTH_CLIENT_ID` (verifies tokens)
+- frontend → `GOOGLE_CLIENT_ID`, injected at runtime by the server layout, so the
+  prebuilt image stays environment-agnostic (no rebuild per client ID)
+
+Behavior:
 - **Set** → users sign in with Google; the ID token is sent as
   `Authorization: Bearer` (REST) and `?token=` (WS); synth/save require sign-in.
-- **Unset** → no sign-in UI, no token sent (self-host / anonymous trial). If you
-  run hosted with it unset, every request lands anonymous and synth/save 403.
+- **Empty (default)** → no sign-in UI, no token sent (self-host / anonymous
+  trial). If you run hosted with it empty, every request lands anonymous and
+  synth/save 403.
+
 Also add the deployed frontend origin to the OAuth client's **Authorized
 JavaScript origins** in the Google Cloud console, or GIS will refuse to load.
 

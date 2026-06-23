@@ -255,6 +255,13 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "FORCE_REDEPLOY"
         value = "1"
       }
+      # OAuth audience for verifying Google ID tokens. Empty disables token
+      # verification (self-host / anonymous-trial). Public value; same ID the
+      # frontend uses. See src/platform_engines/auth.py.
+      env {
+        name  = "GOOGLE_OAUTH_CLIENT_ID"
+        value = var.google_oauth_client_id
+      }
       env {
         name  = "WORKSPACE_BUCKET"
         value = google_storage_bucket.workspaces.name

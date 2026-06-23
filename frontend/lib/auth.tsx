@@ -26,6 +26,7 @@ import {
   setAuthTokenGetter,
   setOnAuthExpired,
 } from "./authToken";
+import { getGoogleClientId } from "./runtime-config";
 import { useStore } from "./store";
 
 const GIS_SRC = "https://accounts.google.com/gsi/client";
@@ -47,9 +48,12 @@ export type AuthState = {
 // Pure helpers (exported for unit tests)
 // ---------------------------------------------------------------------------
 
-/** The configured OAuth client id, read at call time so tests can stub env. */
+/** The configured OAuth client id, injected at runtime via window.__SC_ENV__
+ *  (see lib/runtime-config.ts). Public value; kept runtime so one image serves
+ *  every environment. AuthProvider prefers an explicit prop (so the value is
+ *  identical on the SSR and client renders, avoiding a hydration mismatch). */
 export function authClientId(): string {
-  return (process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "").trim();
+  return getGoogleClientId().trim();
 }
 
 /** OAuth is configured iff a client id is present. */
@@ -145,8 +149,17 @@ export function useAuth(): AuthState {
   return ctx;
 }
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const enabled = authEnabled();
+export function AuthProvider({
+  children,
+  clientId,
+}: {
+  children: React.ReactNode;
+  clientId?: string;
+}) {
+  // Prefer the explicit prop (passed by the server layout from the runtime env)
+  // so SSR and the first client render agree; fall back to the runtime helper.
+  const resolvedClientId = (clientId ?? authClientId()).trim();
+  const enabled = resolvedClientId.length > 0;
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [status, setStatus] = useState<AuthStatus>(enabled ? "loading" : "anonymous");
@@ -234,7 +247,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       gisReady.current = true;
       try {
         window.google.accounts.id.initialize({
-          client_id: authClientId(),
+          client_id: resolvedClientId,
           callback: handleCredential,
           auto_select: false,
         });
@@ -252,7 +265,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     s.defer = true;
     s.addEventListener("load", init, { once: true });
     document.head.appendChild(s);
-  }, [enabled, handleCredential]);
+  }, [enabled, handleCredential, resolvedClientId]);
 
   const value: AuthState = { enabled, status, user, token, signIn, signOut };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

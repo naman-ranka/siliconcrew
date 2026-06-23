@@ -37,6 +37,14 @@ resource "google_cloud_run_v2_service" "frontend" {
         name  = "WS_URL"
         value = replace(google_cloud_run_v2_service.backend.uri, "https://", "wss://")
       }
+
+      # Google sign-in client ID, injected at runtime (public value). Empty = no
+      # sign-in UI (self-host / anonymous). Must equal the backend's
+      # GOOGLE_OAUTH_CLIENT_ID. See lib/runtime-config.ts + lib/auth.tsx.
+      env {
+        name  = "GOOGLE_CLIENT_ID"
+        value = var.google_oauth_client_id
+      }
     }
   }
 }

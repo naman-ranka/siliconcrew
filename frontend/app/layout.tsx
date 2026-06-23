@@ -39,7 +39,7 @@ export default function RootLayout({
         />
       </head>
       <body className="font-sans antialiased bg-background text-foreground">
-        <AuthProvider>
+        <AuthProvider clientId={env.googleClientId}>
           <TooltipProvider delayDuration={300}>{children}</TooltipProvider>
         </AuthProvider>
       </body>

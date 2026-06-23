@@ -7,7 +7,7 @@
 // plain (non-public) env vars *per request* and injects them into
 // `window.__SC_ENV__`; the browser reads that for both REST and WebSocket URLs.
 
-export type RuntimeEnv = { apiUrl: string; wsUrl: string };
+export type RuntimeEnv = { apiUrl: string; wsUrl: string; googleClientId: string };
 
 declare global {
   interface Window {
@@ -18,11 +18,13 @@ declare global {
 // Global name shared between the server injector and the client reader.
 export const SC_ENV_GLOBAL = "__SC_ENV__";
 
-// Local-dev defaults: a backend on :8000, same host. Production never relies on
-// these — Terraform sets API_URL/WS_URL and the layout injects them.
+// Local-dev defaults: a backend on :8000, same host, and no OAuth (self-host /
+// zero-config). Production never relies on these — Terraform sets the env and
+// the layout injects them.
 const DEV_DEFAULT: RuntimeEnv = {
   apiUrl: "http://localhost:8000",
   wsUrl: "ws://localhost:8000",
+  googleClientId: "",
 };
 
 // Derive the ws(s):// origin from an http(s):// origin when WS_URL is unset.
@@ -32,10 +34,14 @@ function deriveWsUrl(apiUrl: string): string {
 
 // Server-side: read runtime env (NOT NEXT_PUBLIC_, so it is read at request
 // time, not inlined at build). Called by the root layout to inject __SC_ENV__.
+// GOOGLE_CLIENT_ID is public but kept runtime so a single image serves every
+// environment (self-host with no auth, hosted with auth) without rebuilding.
 export function readServerEnv(): RuntimeEnv {
   const apiUrl = process.env.API_URL || DEV_DEFAULT.apiUrl;
   const wsUrl = process.env.WS_URL || deriveWsUrl(apiUrl);
-  return { apiUrl, wsUrl };
+  const googleClientId =
+    process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+  return { apiUrl, wsUrl, googleClientId };
 }
 
 // Client-side: read the env injected by the layout. Falls back to the dev
@@ -49,3 +55,4 @@ export function getRuntimeEnv(): RuntimeEnv {
 
 export const getApiBase = (): string => getRuntimeEnv().apiUrl;
 export const getWsBase = (): string => getRuntimeEnv().wsUrl;
+export const getGoogleClientId = (): string => getRuntimeEnv().googleClientId;

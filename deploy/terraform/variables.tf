@@ -39,6 +39,19 @@ variable "orfs_image" {
   description = "ORFS image, digest-pinned (…/siliconcrew/orfs@sha256:…) for reproducibility."
 }
 
+# --- Auth (Google OAuth) ---
+variable "google_oauth_client_id" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    Google OAuth Web Client ID. Wired to the backend (GOOGLE_OAUTH_CLIENT_ID, for
+    token verification) and the frontend (GOOGLE_CLIENT_ID, injected at runtime for
+    the sign-in button). Public value, so plain (not a Secret). Empty = no auth:
+    self-host / anonymous-trial behavior. Add the frontend URL to the OAuth
+    client's Authorized JavaScript origins or GIS will refuse to load.
+  EOT
+}
+
 # --- Cloud SQL ---
 variable "db_tier" {
   type    = string

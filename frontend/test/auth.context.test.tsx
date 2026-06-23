@@ -63,9 +63,8 @@ describe("jwt helpers (display only)", () => {
 
 describe("config gating", () => {
   it("UNSET client id → disabled: no token, no GIS script, anonymous", async () => {
-    vi.stubEnv("NEXT_PUBLIC_GOOGLE_CLIENT_ID", "");
     render(
-      <AuthProvider>
+      <AuthProvider clientId="">
         <Probe />
       </AuthProvider>
     );
@@ -77,24 +76,36 @@ describe("config gating", () => {
   });
 
   it("SET client id → enabled: loads GIS script and restores a valid stored token", async () => {
-    vi.stubEnv("NEXT_PUBLIC_GOOGLE_CLIENT_ID", "test-client.apps.googleusercontent.com");
     sessionStorage.setItem(STORAGE_KEY, makeJwt({ email: "u@x.com", name: "U", exp: future() }));
     render(
-      <AuthProvider>
+      <AuthProvider clientId="test-client.apps.googleusercontent.com">
         <Probe />
       </AuthProvider>
     );
-    expect(authEnabled()).toBe(true);
     await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("signed_in"));
     expect(screen.getByTestId("email").textContent).toBe("u@x.com");
     expect(document.querySelector('script[src*="gsi/client"]')).not.toBeNull();
   });
 
+  it("client id via injected window.__SC_ENV__ (no prop) also enables", async () => {
+    (window as any).__SC_ENV__ = { apiUrl: "", wsUrl: "", googleClientId: "runtime-client" };
+    try {
+      expect(authEnabled()).toBe(true);
+      render(
+        <AuthProvider>
+          <Probe />
+        </AuthProvider>
+      );
+      expect(screen.getByTestId("enabled").textContent).toBe("true");
+    } finally {
+      delete (window as any).__SC_ENV__;
+    }
+  });
+
   it("expired stored token → anonymous and cleared from storage", async () => {
-    vi.stubEnv("NEXT_PUBLIC_GOOGLE_CLIENT_ID", "test-client");
     sessionStorage.setItem(STORAGE_KEY, makeJwt({ email: "u@x.com", exp: 1 }));
     render(
-      <AuthProvider>
+      <AuthProvider clientId="test-client">
         <Probe />
       </AuthProvider>
     );
@@ -103,10 +114,9 @@ describe("config gating", () => {
   });
 
   it("a 401 (notifyAuthExpired) clears the token → anonymous", async () => {
-    vi.stubEnv("NEXT_PUBLIC_GOOGLE_CLIENT_ID", "test-client");
     sessionStorage.setItem(STORAGE_KEY, makeJwt({ email: "u@x.com", exp: future() }));
     render(
-      <AuthProvider>
+      <AuthProvider clientId="test-client">
         <Probe />
       </AuthProvider>
     );

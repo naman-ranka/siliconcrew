@@ -6,7 +6,7 @@ import { test, expect, Route, Page } from "@playwright/test";
  *
  *   • UNSET  (default dev server) — no sign-in UI renders and NO request carries
  *     an Authorization header (the zero-config / self-host guarantee).
- *   • SET    — run with `NEXT_PUBLIC_GOOGLE_CLIENT_ID=<id> npm run e2e`. GIS is
+ *   • SET    — run with `GOOGLE_CLIENT_ID=<id> npm run e2e`. GIS is
  *     mocked via addInitScript; clicking sign-in flips the UI to the account chip
  *     and a subsequent gated request carries `Authorization: Bearer <token>`.
  *
@@ -14,7 +14,8 @@ import { test, expect, Route, Page } from "@playwright/test";
  * inspecting browser_network_requests).
  */
 
-const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+const CLIENT_ID =
+  process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 
 const SESSIONS = [
   { id: "demo", name: "demo", model_name: "claude-sonnet-4-6", project_id: null, created_at: null, updated_at: null, total_tokens: 0, total_cost: 0 },
