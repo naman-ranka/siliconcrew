@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Layout as LayoutIcon, Loader2, CheckCircle2, Download, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { workspaceApi } from "@/lib/api";
+import { getApiBase } from "@/lib/runtime-config";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/workbench/EmptyState";
 import { cn } from "@/lib/utils";
@@ -14,8 +15,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 /** A render result that isn't an SVG — the GDS exists but can't be drawn here. */
 interface FallbackState {
@@ -109,7 +108,7 @@ export function LayoutViewer() {
       URL.revokeObjectURL(url);
     } catch {
       // Best-effort: open the raw endpoint in a new tab as a fallback.
-      window.open(`${API_BASE}/api/workspace/${encodeURIComponent(currentSession.id)}/file/${encodeURIComponent(path)}`, "_blank");
+      window.open(`${getApiBase()}/api/workspace/${encodeURIComponent(currentSession.id)}/file/${encodeURIComponent(path)}`, "_blank");
     }
   };
 

@@ -318,10 +318,18 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS for Next.js frontend
+# CORS for the Next.js frontend. The browser now talks to the backend directly
+# (cross-origin), so the deployed frontend origin must be allowed. Local dev is
+# always permitted; extra origins come from CORS_ALLOW_ORIGINS (comma-separated)
+# and/or CORS_ALLOW_ORIGIN_REGEX. The regex lets Terraform allow the frontend
+# Cloud Run service by name without referencing its URL (avoids a dependency
+# cycle, since the URL isn't known until the service is created).
+_cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+_cors_origins += [o.strip() for o in os.environ.get("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_cors_origins,
+    allow_origin_regex=os.environ.get("CORS_ALLOW_ORIGIN_REGEX") or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

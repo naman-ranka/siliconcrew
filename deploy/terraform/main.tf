@@ -242,6 +242,15 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "SILICONCREW_HOSTED"
         value = "1"
       }
+      # Allow the frontend Cloud Run service (cross-origin) by name. Using a regex
+      # avoids referencing frontend.uri here, which would create a dependency
+      # cycle (frontend already depends on the backend). Matches both the legacy
+      # (...-<hash>-<region>.a.run.app) and current (...-<num>.<region>.run.app)
+      # Cloud Run URL shapes.
+      env {
+        name  = "CORS_ALLOW_ORIGIN_REGEX"
+        value = "https://siliconcrew-frontend-[a-z0-9-]+\\.(a\\.)?run\\.app"
+      }
       env {
         name  = "FORCE_REDEPLOY"
         value = "1"

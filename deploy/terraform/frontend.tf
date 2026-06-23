@@ -25,14 +25,16 @@ resource "google_cloud_run_v2_service" "frontend" {
         }
       }
 
-      # Wire Next.js to point to our backend Cloud Run service dynamically
+      # Backend URLs are read at RUNTIME (non-NEXT_PUBLIC_, so not inlined at
+      # build) and injected into the page by the server layout. This is what
+      # makes the prebuilt image environment-agnostic. See lib/runtime-config.ts.
       env {
-        name  = "NEXT_PUBLIC_API_URL"
+        name  = "API_URL"
         value = google_cloud_run_v2_service.backend.uri
       }
 
       env {
-        name  = "NEXT_PUBLIC_WS_URL"
+        name  = "WS_URL"
         value = replace(google_cloud_run_v2_service.backend.uri, "https://", "wss://")
       }
     }

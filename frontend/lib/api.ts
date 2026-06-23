@@ -16,7 +16,8 @@ import type {
   PpaDiff,
 } from "@/types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+import { getApiBase, getWsBase } from "@/lib/runtime-config";
+
 const encodeSessionId = (sessionId: string): string => encodeURIComponent(sessionId);
 const encodeFilePath = (filename: string): string => encodeURIComponent(filename);
 
@@ -25,7 +26,7 @@ async function apiFetch<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
-  const response = await fetch(`${API_BASE}${endpoint}`, {
+  const response = await fetch(`${getApiBase()}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -129,10 +130,8 @@ export const chatApi = {
   // param so the server keys the LangGraph checkpoint by thread while the
   // workspace stays bound from session_id.
   createConnection: (sessionId: string, threadId?: string | null): WebSocket => {
-    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsHost = process.env.NEXT_PUBLIC_WS_URL || `${wsProtocol}//${window.location.hostname}:8000`;
     const q = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : "";
-    return new WebSocket(`${wsHost}/api/chat/${encodeSessionId(sessionId)}${q}`);
+    return new WebSocket(`${getWsBase()}/api/chat/${encodeSessionId(sessionId)}${q}`);
   },
 };
 
@@ -190,7 +189,7 @@ export const workspaceApi = {
 // Workbench action layer — manifest, IDE-first buttons, unified runs.
 // Every endpoint returns the uniform { ok, ... } envelope (api-contract.md).
 async function actionFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${endpoint}`, {
+  const response = await fetch(`${getApiBase()}${endpoint}`, {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
   });
@@ -217,7 +216,7 @@ export const workbenchApi = {
   uploadFiles: async (sessionId: string, files: File[]) => {
     const form = new FormData();
     for (const f of files) form.append("files", f, f.name);
-    const response = await fetch(`${API_BASE}${ws(sessionId)}/files`, { method: "POST", body: form });
+    const response = await fetch(`${getApiBase()}${ws(sessionId)}/files`, { method: "POST", body: form });
     const body = await response.json().catch(() => null);
     if (!response.ok || (body && body.ok === false)) {
       throw new Error(body?.detail?.error?.message || "Upload failed");

@@ -117,12 +117,30 @@ API calls are proxied through Next.js rewrites in `next.config.mjs`.
 
 ## Environment Variables
 
-Create a `.env.local` file for custom configuration:
+Backend URLs are read at **runtime**, not build time, so a single image runs in
+any environment (local, staging, prod) without rebuilding. The server layout
+(`app/layout.tsx`) reads these and injects them into the page; the browser reads
+them via `lib/runtime-config.ts` and talks to the backend directly.
+
+| Var | Purpose | Default |
+|-----|---------|---------|
+| `API_URL` | Backend origin for REST (e.g. `https://siliconcrew-backend-….run.app`) | `http://localhost:8000` |
+| `WS_URL`  | Backend origin for WebSocket | derived from `API_URL` (`http`→`ws`) |
+
+> These are **not** `NEXT_PUBLIC_*` on purpose — `NEXT_PUBLIC_*` is inlined at
+> build time, which is exactly what caused the prod `localhost:8000` /
+> ECONNREFUSED bug. Keep them plain so they're read per request.
+
+For local dev, create `.env.local` (or just rely on the localhost defaults):
 
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_WS_URL=ws://localhost:8000
+API_URL=http://localhost:8000
+WS_URL=ws://localhost:8000
 ```
+
+The backend must allow the frontend origin via CORS — set `CORS_ALLOW_ORIGINS`
+(comma-separated) or `CORS_ALLOW_ORIGIN_REGEX` on the backend. Local dev origins
+(`http://localhost:3000`, `http://127.0.0.1:3000`) are always allowed.
 
 ## Development
 
@@ -155,4 +173,5 @@ npm run build
 # Deploy the .next folder to Vercel
 ```
 
-Ensure `NEXT_PUBLIC_API_URL` points to your deployed backend.
+Set `API_URL` (and optionally `WS_URL`) on the deployment to point at your
+deployed backend — these are read at runtime, so no rebuild is needed per env.
