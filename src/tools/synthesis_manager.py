@@ -1129,7 +1129,8 @@ def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, 
     auto_checks.signoff = signoff["status"]
     run_meta["auto_checks"] = asdict(auto_checks)
     run_meta["netlist_path"] = _find_netlist(run_dir, args["top_module"])
-    run_meta["summary_metrics"] = _extract_summary_metrics(run_dir)
+    # Same shared finalization parser as the full-flow worker (see _job_worker).
+    run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
     run_meta["status"] = "completed" if auto_checks.signoff == "pass" else "failed"
     retry_completed_note = (
         signoff["note"]
@@ -1311,22 +1312,13 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
     run_meta["stdcell_manifest_version"] = manifest.get("updated_at") if manifest else None
     run_meta["stdcell_files_used"] = manifest.get("files", []) if manifest else []
 
-    # Use the same targeted parsers as get_synthesis_metrics so that WNS/TNS/power
-    # are always correctly stored. _extract_summary_metrics uses a broad regex scan
-    # that misses the "wns max <value>" format in 6_finish.rpt (the word "max" sits
-    # between "wns" and the number), leaving wns_ns=null. Agents rely on this field.
-    finish_path = _find_report_file(run_dir, "6_finish.rpt")
-    stat_path = _find_report_file(run_dir, "synth_stat.txt")
-    finish_data = _parse_finish_report(finish_path) if finish_path else {}
-    stat_data = _parse_synth_stat(stat_path) if stat_path else {}
-    summary_metrics = {
-        "area_um2": stat_data.get("area_um2"),
-        "cell_count": stat_data.get("cell_count"),
-        "wns_ns": finish_data.get("wns_ns"),
-        "tns_ns": finish_data.get("tns_ns"),
-        "power_uw": finish_data.get("power_uw"),
-    }
-    run_meta["summary_metrics"] = summary_metrics
+    # Finalize PPA via the single shared parser so EVERY backend (local docker,
+    # cloud job, remote VM) persists identical summary_metrics: area/cells from
+    # synth_stat.txt, WNS/TNS/power from 6_finish.rpt (the targeted parsers handle
+    # the "wns max <value>" finish-report format and the 4-column yosys cell row),
+    # plus derived fmax_mhz and power_mw. _extract_summary_metrics' broad regex
+    # scan missed both cell_count and the "wns max" format, leaving them null.
+    run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
 
     final_ok = auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
     run_meta["status"] = "completed" if final_ok else "failed"
@@ -1704,6 +1696,20 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
             continue
 
         meta = _read_run_meta(run_dir)
+        # Self-heal: re-finalize PPA for completed runs whose stored
+        # summary_metrics predate the shared finalizer (missing cell_count or the
+        # derived fmax_mhz). This repairs historical runs on read without a
+        # migration, so the runs list shows correct PPA for old + new runs alike.
+        if meta.get("status") == "completed":
+            sm = meta.get("summary_metrics") or {}
+            if sm.get("cell_count") is None or sm.get("fmax_mhz") is None:
+                recomputed = _compute_summary_metrics(run_dir, meta)
+                if recomputed.get("cell_count") is not None or recomputed.get("fmax_mhz") is not None:
+                    meta["summary_metrics"] = recomputed
+                    try:
+                        _persist_run_meta(run_dir, meta)
+                    except Exception:
+                        pass
         report_path = os.path.join(run_dir, "design_report.md")
         items.append(
             {
@@ -2434,14 +2440,75 @@ def _parse_synth_stat(path: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Yosys stat summary row usually looks like: "814 7.33E+03 cells"
-    cells_m = re.search(r"^\s*([0-9]+)\s+[0-9.eE+-]+\s+cells\b", text, re.IGNORECASE | re.MULTILINE)
+    # The yosys/ORFS stat summary row that reports the total cell count comes in
+    # two shapes depending on the flow version:
+    #   * old/abbreviated:  "814 7.33E+03 cells"   (count, area, "cells")
+    #   * real ORFS output: "37  339.075  37  339.075 cells"
+    #                       (count, area, local-count, local-area, "cells")
+    # The total cell count is always the FIRST integer on the line that ends in
+    # the bare word "cells" (the per-cell breakdown lines below it end in a cell
+    # name, not "cells", so they are not matched).
+    cells_m = re.search(r"^\s*([0-9]+)\b.*\bcells\s*$", text, re.IGNORECASE | re.MULTILINE)
     if cells_m:
         try:
             out["cell_count"] = int(cells_m.group(1))
         except Exception:
             pass
     return out
+
+
+def _derive_fmax_mhz(clock_period_ns: Optional[float], wns_ns: Optional[float]) -> Optional[float]:
+    """Achievable Fmax = 1000 / (clock_period_ns - wns_ns).
+
+    WNS is the worst negative slack: positive slack means timing met with margin
+    (the clock could be tightened by WNS), negative means the period must grow by
+    |WNS|. Either way the achieved period is ``clock_period_ns - wns_ns``.
+    """
+    try:
+        if clock_period_ns is None or wns_ns is None:
+            return None
+        achieved_period = float(clock_period_ns) - float(wns_ns)
+        if achieved_period <= 0:
+            return None
+        return round(1000.0 / achieved_period, 2)
+    except Exception:
+        return None
+
+
+def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse PPA from on-disk ORFS reports into the canonical summary_metrics shape.
+
+    This is the SINGLE finalization parser shared by every backend (local docker,
+    cloud job, remote VM) and by the PD-retry path, so a successful run is
+    finalized identically regardless of where ORFS actually executed. It reuses
+    the targeted ``_parse_synth_stat`` / ``_parse_finish_report`` parsers (which
+    handle the "wns max <value>" finish-report format and the 4-column yosys cell
+    row), derives Fmax from the effective clock period and WNS, and exposes power
+    in both micro- and milliwatts.
+    """
+    finish_path = _find_report_file(run_dir, "6_finish.rpt")
+    stat_path = _find_report_file(run_dir, "synth_stat.txt")
+    finish_data = _parse_finish_report(finish_path) if finish_path else {}
+    stat_data = _parse_synth_stat(stat_path) if stat_path else {}
+
+    wns_ns = finish_data.get("wns_ns")
+    clock_period_ns = (
+        run_meta.get("effective_clock_period_ns")
+        or run_meta.get("clock_period_ns")
+        or run_meta.get("requested_clock_period_ns")
+    )
+    power_uw = finish_data.get("power_uw")
+    power_mw = round(power_uw / 1000.0, 6) if power_uw is not None else None
+
+    return {
+        "area_um2": stat_data.get("area_um2"),
+        "cell_count": stat_data.get("cell_count"),
+        "wns_ns": wns_ns,
+        "tns_ns": finish_data.get("tns_ns"),
+        "power_uw": power_uw,
+        "power_mw": power_mw,
+        "fmax_mhz": _derive_fmax_mhz(clock_period_ns, wns_ns),
+    }
 
 
 def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
@@ -2459,12 +2526,22 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
     finish_data = _parse_finish_report(finish) if finish else {}
     stat_data = _parse_synth_stat(stat) if stat else {}
 
+    run_meta = _read_run_meta(run_dir)
+    clock_period_ns = (
+        run_meta.get("effective_clock_period_ns")
+        or run_meta.get("clock_period_ns")
+        or run_meta.get("requested_clock_period_ns")
+    )
+    power_uw = finish_data.get("power_uw")
+    wns_ns = finish_data.get("wns_ns")
     metrics = {
         "area_um2": stat_data.get("area_um2"),
         "cell_count": stat_data.get("cell_count"),
-        "wns_ns": finish_data.get("wns_ns"),
+        "wns_ns": wns_ns,
         "tns_ns": finish_data.get("tns_ns"),
-        "power_uw": finish_data.get("power_uw"),
+        "power_uw": power_uw,
+        "power_mw": round(power_uw / 1000.0, 6) if power_uw is not None else None,
+        "fmax_mhz": _derive_fmax_mhz(clock_period_ns, wns_ns),
     }
     sources = {
         "area_um2": stat,
@@ -2472,15 +2549,19 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
         "wns_ns": finish,
         "tns_ns": finish,
         "power_uw": finish,
+        "power_mw": finish,
+        "fmax_mhz": finish,
     }
-    missing = [k for k, v in metrics.items() if v is None]
+    # Completeness is judged on the core PPA fields; fmax/power_mw are derived
+    # and may legitimately be absent without the run being "incomplete".
+    core = ("area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw")
+    missing = [k for k in core if metrics.get(k) is None]
     notes = []
     if not finish:
         notes.append("6_finish.rpt not found")
     if not stat:
         notes.append("synth_stat.txt not found")
 
-    run_meta = _read_run_meta(run_dir)
     return {
         "status": "ok",
         "run_id": run_meta.get("run_id") or os.path.basename(run_dir),

@@ -21,7 +21,7 @@ backend (full)**.
 ## Stages (sequential; each: implement → verify → commit+push → tick)
 | # | Area | Scope | Status |
 |---|---|---|---|
-| 1 | **Finalizer + PPA** — remote ORFS job completion writes `status=completed` + parsed `summary_metrics` (area/cells from synth_stat; WNS/TNS/Fmax/power from finish/sta reports). Fixes stuck-"running" + null PPA. | backend | ⬜ |
+| 1 | **Finalizer + PPA** — remote ORFS job completion writes `status=completed` + parsed `summary_metrics` (area/cells from synth_stat; WNS/TNS/Fmax/power from finish/sta reports). Fixes stuck-"running" + null PPA. | backend | ✅ |
 | 2 | **Render the GDS** — enable `gdstk`; layout endpoint returns a real SVG/PNG of `6_final.gds`. | backend | ⬜ |
 | 3 | **Remote-synth progress** — expose ORFS per-stage status + elapsed to the job-status payload; label "running on remote VM". | backend (+fe in 5) | ⬜ |
 | 4 | **Fresh-session history** — `/chat/{id}/history` returns empty (not 500) when no LLM key / no history. | backend | ⬜ |

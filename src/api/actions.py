@@ -140,13 +140,22 @@ def _synth_to_run(workspace: str, item: Dict[str, Any]) -> Dict[str, Any]:
     metrics = item.get("summary_metrics") or {}
     ppa = None
     if metrics:
+        # Use an explicit None check, not ``or`` — WNS/TNS are legitimately 0.0
+        # (timing met exactly), and ``0.0 or alt`` would drop a real value.
+        def _pick(*keys):
+            for k in keys:
+                v = metrics.get(k)
+                if v is not None:
+                    return v
+            return None
+
         ppa = {
-            "areaUm2": metrics.get("area_um2") or metrics.get("areaUm2"),
-            "cells": metrics.get("cell_count") or metrics.get("cells"),
-            "wnsNs": metrics.get("wns_ns") or metrics.get("wnsNs"),
-            "tnsNs": metrics.get("tns_ns") or metrics.get("tnsNs"),
-            "fmaxMhz": metrics.get("fmax_mhz") or metrics.get("fmaxMhz"),
-            "powerMw": metrics.get("power_mw") or metrics.get("powerMw"),
+            "areaUm2": _pick("area_um2", "areaUm2"),
+            "cells": _pick("cell_count", "cells"),
+            "wnsNs": _pick("wns_ns", "wnsNs"),
+            "tnsNs": _pick("tns_ns", "tnsNs"),
+            "fmaxMhz": _pick("fmax_mhz", "fmaxMhz"),
+            "powerMw": _pick("power_mw", "powerMw"),
         }
 
     return {
@@ -503,9 +512,16 @@ def build_actions_router(
             return _ok({"run": out["run"]})
 
         status = out["status"] or {}
-        metrics = out["metrics"] or {}
-        if status.get("error") and not metrics:
+        metrics_resp = out["metrics"] or {}
+        # get_stage_status returns {"status": "error", ...} when the run is missing
+        # (its "status" key is the CALL status, not the run status — the run's
+        # actual lifecycle state lives in "run_status").
+        if status.get("status") == "error" and not metrics_resp:
             _err("not_found", f"Run {run_id} not found.", status=404)
+        # get_synthesis_metrics returns the PPA fields NESTED under "metrics"
+        # (the top-level dict is the wrapper: status/run_id/metrics/...). Read the
+        # inner dict so areaUm2/cells/etc are actually populated.
+        metrics = metrics_resp.get("metrics") or {}
         ppa = {
             "areaUm2": metrics.get("area_um2"),
             "cells": metrics.get("cell_count"),
@@ -517,7 +533,9 @@ def build_actions_router(
         return _ok({"run": {
             "id": run_id,
             "kind": "synth",
-            "status": _SYNTH_STATUS_MAP.get(status.get("status", ""), "running"),
+            # Map from run_status (the run's lifecycle), not "status" (the call
+            # status, which is always "ok" on success → would mis-map to running).
+            "status": _SYNTH_STATUS_MAP.get(status.get("run_status") or "", "running"),
             "top": status.get("top_module"),
             "stages": status.get("stages"),
             "currentStage": status.get("current_stage"),
