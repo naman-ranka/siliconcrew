@@ -1311,19 +1311,26 @@ async def get_layout_svg(session_id: str, filename: str):
     except Exception:
         return {"error": "unsupported", "message": "Layout rendering needs gdstk (Phase 2). No pre-rendered SVG found.", "cell_name": ""}
 
+    import tempfile
+
     try:
         lib = gdstk.read_gds(gds_path)
         top = lib.top_level()
         if not top:
             return {"error": "render_failed", "message": "No top cell in GDS.", "cell_name": ""}
-        cell = top[0]
-        polygon_count = sum(len(p.points) for p in cell.get_polygons()[:20000])
+        # Render the largest top cell (the real design, not an empty wrapper).
+        cell = max(top, key=lambda c: len(c.get_polygons()))
+        polygon_count = len(cell.get_polygons())
         if polygon_count > 2_000_000:
             return {"error": "too_large", "message": "Layout too large to render inline.", "cell_name": cell.name}
-        svg = cell.svg(scaling=1.0)
-        if isinstance(svg, bytes):
-            svg = svg.decode("utf-8", "ignore")
-        return {"svg": svg, "cell_name": cell.name}
+        # gdstk's Cell only exposes write_svg(outfile, ...) (no in-memory svg()).
+        # Render to a temp file, read it back, and return the markup inline.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "layout.svg")
+            cell.write_svg(out, scaling=10.0, background="#0b0e14")
+            with open(out, "r", encoding="utf-8", errors="ignore") as f:
+                svg = f.read()
+        return {"svg": svg, "cell_name": cell.name, "polygon_count": polygon_count}
     except Exception as e:
         return {"error": "render_failed", "message": str(e), "cell_name": ""}
 
