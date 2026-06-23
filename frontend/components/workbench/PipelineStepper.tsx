@@ -37,7 +37,6 @@ export function PipelineStepper() {
     report,
     actionPending,
     currentSession,
-    activeArtifactTab,
     setArtifactTab,
     runLint,
     runSim,
@@ -137,18 +136,21 @@ export function PipelineStepper() {
     ? "lint"
     : null;
 
-  const tabStage: StageId =
-    activeArtifactTab === "spec"
-      ? "spec"
-      : activeArtifactTab === "code"
-      ? "rtl"
-      : activeArtifactTab === "waveform"
-      ? "sim"
-      : activeArtifactTab === "report" || activeArtifactTab === "layout"
-      ? "synth"
-      : "lint";
+  // Idle fallback: reflect actual PIPELINE PROGRESS — the furthest stage the
+  // pipeline has reached — NOT the artifact tab being viewed. (Viewing Wave must
+  // not light up "Simulate" if the pipeline has since synthesized.) Synth is a
+  // running action, not a passive "reached" milestone, so once it has *passed*
+  // we point at Signoff; otherwise we land on the furthest reached stage.
+  const progressStage: StageId = (() => {
+    if (latestSynth?.status === "passed" || report) return "signoff";
+    // Walk the stages newest→oldest and pick the last one marked reached.
+    for (let i = stages.length - 1; i >= 0; i--) {
+      if (stages[i].reached) return stages[i].id;
+    }
+    return "spec";
+  })();
 
-  const activeId: StageId = pendingStage ?? tabStage;
+  const activeId: StageId = pendingStage ?? progressStage;
 
   return (
     <div className="flex items-stretch gap-0.5 px-3 py-1.5 border-b border-border bg-surface-1 overflow-x-auto">

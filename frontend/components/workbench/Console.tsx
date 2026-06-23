@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { statusDotClass } from "./runStatus";
 import { Button } from "@/components/ui/button";
 import { ChevronUp, ChevronDown, Terminal, Pencil, Play, Copy, Check } from "lucide-react";
+import { SynthStageProgress } from "./SynthStageProgress";
 import type { ConsoleChannel, ConsoleEntry } from "@/types";
 
 const TABS: { id: ConsoleChannel; label: string }[] = [
@@ -28,6 +29,7 @@ export function Console() {
     activeConsole,
     setActiveConsole,
     consoleAttention,
+    synthJob,
     runLint,
     runSim,
     runSynth,
@@ -144,6 +146,11 @@ export function Console() {
           </Button>
         </div>
       </div>
+
+      {/* Live ORFS stage breakdown — shown on the synth channel while a synth
+          job is in flight, so remote synth reads as real progress (stages +
+          elapsed + "running on remote VM"), not a featureless spinner. */}
+      {activeConsole === "synth" && synthJob && <SynthStageProgress />}
 
       {/* Peek line (collapsed) — latest status one-liner + deep-link.
           aria-live=polite so a fresh sim/lint/synth result is announced. */}
