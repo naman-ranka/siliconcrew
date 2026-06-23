@@ -71,6 +71,11 @@ interface AppState {
 
   // Workspace data
   files: FileInfo[];
+  // Set when the session's workspace failed to load (e.g. a transient backend
+  // error / a cold hosted instance that hasn't rehydrated). Distinguishes
+  // "couldn't load" from a genuinely empty new session so the UI surfaces it
+  // instead of silently showing the empty onboarding.
+  workspaceError: string | null;
   spec: SpecData | null;
   codeFiles: CodeFile[];
   selectedCodeFile: string | null;
@@ -211,6 +216,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeArtifactTab: "spec",
 
   files: [],
+  workspaceError: null,
   spec: null,
   codeFiles: [],
   selectedCodeFile: null,
@@ -767,13 +773,27 @@ export const useStore = create<AppState>((set, get) => ({
     const prevReport = get().report;
 
     try {
+      // listFiles is the canonical "did the workspace load" probe — track its
+      // failure explicitly so a transient/unavailable workspace surfaces a
+      // banner instead of masquerading as an empty new session. The secondary
+      // lists stay best-effort.
+      let workspaceLoadFailed = false;
       const [files, waveformFiles, layoutFiles, schematicFiles, synthesisRuns] = await Promise.all([
-        workspaceApi.listFiles(currentSession.id).catch(() => []),
+        workspaceApi.listFiles(currentSession.id).catch(() => {
+          workspaceLoadFailed = true;
+          return [];
+        }),
         workspaceApi.listWaveforms(currentSession.id).catch(() => []),
         workspaceApi.listLayouts(currentSession.id).catch(() => []),
         workspaceApi.listSchematics(currentSession.id).catch(() => []),
         workspaceApi.listSynthesisRuns(currentSession.id).catch(() => []),
       ]);
+
+      set({
+        workspaceError: workspaceLoadFailed
+          ? "Couldn't load this session's workspace. It may be temporarily unavailable — retry."
+          : null,
+      });
 
       const currentRunId = get().selectedSynthesisRunId;
       const nextRunId =

@@ -158,6 +158,26 @@ describe("workbench store: setFileRole", () => {
   });
 });
 
+describe("workbench store: refreshWorkspace surfaces load failures", () => {
+  it("sets workspaceError when listFiles fails (not a silent empty workspace)", async () => {
+    (workspaceApi.listFiles as any).mockRejectedValueOnce(new Error("Session not found"));
+    useStore.setState({ workspaceError: null });
+
+    await useStore.getState().refreshWorkspace();
+
+    expect(useStore.getState().workspaceError).toMatch(/couldn't load/i);
+  });
+
+  it("clears workspaceError on a successful load", async () => {
+    (workspaceApi.listFiles as any).mockResolvedValue([]);
+    useStore.setState({ workspaceError: "stale error" });
+
+    await useStore.getState().refreshWorkspace();
+
+    expect(useStore.getState().workspaceError).toBeNull();
+  });
+});
+
 describe("workbench store: pinRun", () => {
   it("optimistically updates the pinned flag", async () => {
     useStore.setState({

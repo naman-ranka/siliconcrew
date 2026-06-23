@@ -30,7 +30,7 @@ import { CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRigh
  *   right  — the agent rail (same tools, same workspace, same runs)
  */
 export function Workbench() {
-  const { currentSession, loadSessions, selectSession, loadWorkbench, artifactsVisible, manifest, runs, activeArtifactTab } = useStore();
+  const { currentSession, loadSessions, selectSession, loadWorkbench, artifactsVisible, manifest, runs, activeArtifactTab, workspaceError } = useStore();
   // The agent rail is collapsible so the waveform/report get full width when the
   // user is driving the pipeline themselves (re-review feedback).
   const [chatOpen, setChatOpen] = useState(true);
@@ -95,6 +95,25 @@ export function Workbench() {
 
       {/* Pipeline spine = orientation + run actions */}
       <PipelineStepper />
+
+      {/* Workspace-load failure — surfaced so a transient/unavailable workspace
+          never silently reads as an empty new session. */}
+      {workspaceError && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-status-fail/30 bg-status-fail/10 text-status-fail"
+        >
+          <span className="flex-1 truncate">{workspaceError}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs text-status-fail hover:bg-status-fail/15"
+            onClick={() => void loadWorkbench()}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
 
       {/* Body */}
       <PanelGroup direction="horizontal" className="flex-1 min-h-0">
