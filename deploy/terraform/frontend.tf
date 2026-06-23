@@ -47,6 +47,12 @@ resource "google_cloud_run_v2_service" "frontend" {
       }
     }
   }
+
+  # Image rolled out by the CD pipeline (gcloud run deploy, SHA-tagged); keep
+  # Terraform from reverting it. See deploy/CICD.md.
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
 }
 
 # Allow public unauthenticated access to the frontend UI

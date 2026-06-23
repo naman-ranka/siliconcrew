@@ -316,6 +316,13 @@ resource "google_cloud_run_v2_service" "backend" {
       }
     }
   }
+
+  # The image is rolled out by the CD pipeline (gcloud run deploy, SHA-tagged),
+  # so Terraform must not revert it on the next apply. Infra (env, scaling,
+  # secrets) stays Terraform-owned. See deploy/CICD.md.
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
 }
 
 # Public access to the backend (auth handled in-app via Google OAuth).

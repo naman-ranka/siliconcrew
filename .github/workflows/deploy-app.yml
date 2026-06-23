@@ -1,0 +1,72 @@
+name: Deploy App
+
+# Model A: build + push SHA-tagged images and roll them out with
+# `gcloud run deploy`. Infra (env, scaling, secrets) stays Terraform-owned; the
+# two services have lifecycle.ignore_changes on their image so Terraform won't
+# revert these rollouts. See deploy/CICD.md.
+#
+# Runs ONLY after the CI workflow succeeds on `main` (so untested code is never
+# deployed). The ORFS image is NOT built here — it's the 6.5 GB heavyweight and
+# rarely changes; rebuild it via Terraform / a dedicated manual step.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write   # required for keyless Workload Identity Federation
+
+jobs:
+  deploy:
+    # Only when CI passed on main.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      AR_REPO: siliconcrew
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Checkout the tested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Authenticate to Google Cloud (keyless / WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+      - name: Build & push images (tagged with the commit SHA)
+        run: |
+          set -euo pipefail
+          IMG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
+          docker build -t "$IMG/backend:${SHA}"  -f Dockerfile .
+          docker build -t "$IMG/frontend:${SHA}" -f frontend/Dockerfile frontend
+          docker push "$IMG/backend:${SHA}"
+          docker push "$IMG/frontend:${SHA}"
+
+      - name: Deploy to Cloud Run (image-only update; preserves env/secrets)
+        run: |
+          set -euo pipefail
+          IMG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
+          gcloud run deploy siliconcrew-backend \
+            --image "$IMG/backend:${SHA}" --region "${REGION}" --quiet
+          gcloud run deploy siliconcrew-frontend \
+            --image "$IMG/frontend:${SHA}" --region "${REGION}" --quiet
+
+      - name: Summary
+        run: |
+          echo "Deployed backend + frontend @ ${SHA}" >> "$GITHUB_STEP_SUMMARY"
+          gcloud run services describe siliconcrew-frontend --region "${REGION}" \
+            --format='value(status.url)' >> "$GITHUB_STEP_SUMMARY"
