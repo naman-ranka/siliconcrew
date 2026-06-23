@@ -614,6 +614,10 @@ def _usable_providers(identity: Identity) -> set:
                     usable.add(p)
             except Exception:
                 pass
+    # Also mark a provider as usable if a fallback container environment key is present
+    for p, env in _PROVIDER_ENV.items():
+        if os.environ.get(env):
+            usable.add(p)
     if settings.hosted_gemini_key:
         usable.add("gemini")  # hosted free tier (capped)
     return usable
