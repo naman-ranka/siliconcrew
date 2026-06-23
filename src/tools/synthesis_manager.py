@@ -27,6 +27,18 @@ def _pinned_num_cores() -> int:
         return 4
 
 
+def _configured_orfs_backend() -> str:
+    """The execution backend the ORFS runner is configured for, without running.
+
+    Used to label a job as remote/local in its status payload while it is still
+    in flight. Falls back to "local_docker" if the runner cannot be resolved.
+    """
+    try:
+        return getattr(get_orfs_runner(), "backend", "local_docker") or "local_docker"
+    except Exception:
+        return "local_docker"
+
+
 def _run_orfs_via_runner(
     run_dir: str,
     command: str,
@@ -1228,6 +1240,10 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "run_id": run_id,
         "job_id": job_id,
         "created_at": _now_iso(),
+        # Record the configured execution backend up-front so the job-status
+        # payload can communicate where this run is executing (e.g. the "remote"
+        # VM) while it is still running, not only after artifacts return.
+        "backend": _configured_orfs_backend(),
         "status": "running",
         "current_stage": "constraints",
         "platform": platform,
@@ -1522,6 +1538,28 @@ def _recommended_poll_after_sec(job_id: str, status: str, stage: str, last_log_l
     return min(POLL_BACKOFF_MAX_SEC, max(POLL_BACKOFF_START_SEC, poll_after))
 
 
+def _elapsed_seconds(meta: Dict[str, Any], status: str) -> Optional[float]:
+    """Wall-clock elapsed for a job.
+
+    Once the run is finalized the persisted ``elapsed_sec`` is authoritative; while
+    it is still running we compute live elapsed from ``created_at`` so the UI has a
+    ticking timer instead of ``null``.
+    """
+    persisted = meta.get("elapsed_sec")
+    if persisted is not None and status in {"completed", "failed"}:
+        return persisted
+    created = meta.get("created_at")
+    if created:
+        try:
+            started = datetime.fromisoformat(created)
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            return round((datetime.now(timezone.utc) - started).total_seconds(), 2)
+        except Exception:
+            pass
+    return persisted
+
+
 def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, meta: Dict[str, Any], recovered: bool = False) -> Dict[str, Any]:
     last_log_lines = _collect_log_tail(run_dir)
     stage = _infer_stage(last_log_lines)
@@ -1542,7 +1580,9 @@ def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, 
         "stage": "final" if status in {"completed", "failed"} else stage,
         "current_stage": meta.get("current_stage", stage),
         "stages": meta.get("stages"),
-        "elapsed_sec": meta.get("elapsed_sec"),
+        # Live elapsed while running (computed from created_at), final elapsed
+        # once persisted at finalization. So the UI always has a running timer.
+        "elapsed_sec": _elapsed_seconds(meta, status),
         "last_log_lines": last_log_lines,
         "artifacts_found": _collect_artifacts(run_dir),
         "summary_metrics": meta.get("summary_metrics"),
@@ -1555,6 +1595,13 @@ def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, 
             f"double each subsequent poll, cap {POLL_BACKOFF_MAX_SEC}s."
         ),
     }
+    # Communicate where this run is executing so the UI can say e.g. "running on
+    # remote VM" instead of implying it is local. Additive — existing fields are
+    # untouched.
+    backend = meta.get("backend") or _configured_orfs_backend()
+    resp["backend"] = backend
+    resp["remote"] = backend not in ("local_docker", "", None)
+    resp["execution_label"] = "remote VM" if resp["remote"] else "local Docker"
     if recovered:
         resp["recovered_from_index"] = True
         if status not in {"completed", "failed"}:
