@@ -12,12 +12,14 @@ const PROVIDER_LABEL: Record<ModelInfo["provider"], string> = {
   openai: "OpenAI",
   gemini: "Google",
 };
-// Provider dots use neutral hues — kept distinct from the orange brand + the
-// green/red status colors (ui-design-language).
+// Provider dots are kept clearly distinct from the orange brand (--primary ≈
+// hsl(14 …), i.e. ~14° hue) and the green/red status colors. Anthropic must NOT
+// use amber — it lands in the brand-orange band and collides with the selected
+// row's orange check. Violet / teal / blue sit well outside both bands.
 const PROVIDER_DOT: Record<ModelInfo["provider"], string> = {
-  anthropic: "bg-amber-600",
-  openai: "bg-teal-600",
-  gemini: "bg-sky-600",
+  anthropic: "bg-violet-500",
+  openai: "bg-teal-500",
+  gemini: "bg-blue-500",
 };
 
 const DEFAULT_MODEL = "gemini-3-flash-preview";
@@ -107,7 +109,7 @@ export function ModelPicker() {
         <div
           role="menu"
           aria-label="Select model"
-          className="absolute bottom-full mb-1 left-0 z-50 w-80 max-h-[26rem] overflow-y-auto rounded-md border border-border bg-popover shadow-lg p-1"
+          className="absolute bottom-full mb-1 left-0 z-50 w-80 max-h-[26rem] overflow-y-auto rounded-md border border-border bg-popover shadow-e2 p-1 animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 motion-reduce:animate-none"
         >
           {models.length === 0 && (
             <div className="px-3 py-3 text-xs text-muted-foreground">No models available.</div>
@@ -126,13 +128,16 @@ export function ModelPicker() {
                     type="button"
                     role="menuitemradio"
                     aria-checked={isCurrent}
-                    aria-disabled={!m.available}
-                    disabled={!m.available}
+                    // The active model is never greyed/disabled, even with no key
+                    // — it's the one in use, so it must read as selected, not
+                    // unavailable.
+                    aria-disabled={!m.available && !isCurrent}
+                    disabled={!m.available && !isCurrent}
                     onClick={() => void pick(m)}
                     className={cn(
                       "w-full text-left rounded px-2 py-1.5 flex items-start gap-2 outline-none",
                       "focus-visible:ring-2 focus-visible:ring-primary/60",
-                      m.available ? "hover:bg-surface-2 cursor-pointer" : "opacity-50 cursor-not-allowed",
+                      m.available || isCurrent ? "hover:bg-surface-2 cursor-pointer" : "opacity-50 cursor-not-allowed",
                       isCurrent && "bg-surface-2"
                     )}
                   >
@@ -143,8 +148,8 @@ export function ModelPicker() {
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
                         <span className="text-xs font-medium text-foreground truncate">{m.label}</span>
-                        {!m.available && (
-                          <span className="text-[10px] rounded bg-surface-3 px-1 py-0.5 text-muted-foreground shrink-0">
+                        {!m.available && !isCurrent && (
+                          <span className="text-[10px] rounded border border-border px-1 py-0.5 text-muted-foreground shrink-0">
                             needs key
                           </span>
                         )}

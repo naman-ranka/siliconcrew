@@ -87,7 +87,7 @@ export function ThreadSwitcher() {
         <div
           role="menu"
           aria-label="Chats in this workspace"
-          className="absolute z-50 mt-1 w-72 max-h-96 overflow-y-auto rounded-md border border-border bg-popover shadow-lg p-1"
+          className="absolute z-50 mt-1 w-72 max-h-96 overflow-y-auto rounded-md border border-border bg-popover shadow-e2 p-1 animate-in fade-in-0 zoom-in-95 slide-in-from-top-1 motion-reduce:animate-none"
         >
           <button
             type="button"
@@ -166,7 +166,8 @@ export function ThreadSwitcher() {
         </div>
       )}
 
-      {/* Quick "New chat" affordance next to the switcher. */}
+      {/* Live count for screen readers (the visible "New chat" action lives
+          inside the open menu). */}
       <span className="sr-only">{threads.length} chats in this workspace</span>
     </div>
   );

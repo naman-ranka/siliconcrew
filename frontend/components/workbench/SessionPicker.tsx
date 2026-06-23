@@ -56,7 +56,7 @@ export function SessionPicker() {
         <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 w-64 max-h-80 overflow-y-auto rounded-md border border-border bg-popover shadow-lg p-1">
+        <div className="absolute z-50 mt-1 w-64 max-h-80 overflow-y-auto rounded-md border border-border bg-popover shadow-e2 p-1 animate-in fade-in-0 zoom-in-95 slide-in-from-top-1 motion-reduce:animate-none">
           <button
             type="button"
             onClick={create}
