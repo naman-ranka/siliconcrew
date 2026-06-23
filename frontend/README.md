@@ -136,11 +136,32 @@ For local dev, create `.env.local` (or just rely on the localhost defaults):
 ```env
 API_URL=http://localhost:8000
 WS_URL=ws://localhost:8000
+
+# Google sign-in (hosted mode). Public client ID, so it IS a NEXT_PUBLIC_ build
+# value (unlike API_URL/WS_URL above). Leave UNSET for self-host / local dev: no
+# sign-in UI renders, no token is sent, full access (anonymous) — zero config.
+# When set, a "Sign in with Google" button appears and the Google ID token is
+# attached as `Authorization: Bearer <token>` on every API call (REST + WS).
+# Must equal the backend's GOOGLE_OAUTH_CLIENT_ID (same OAuth client).
+NEXT_PUBLIC_GOOGLE_CLIENT_ID=
 ```
 
 The backend must allow the frontend origin via CORS — set `CORS_ALLOW_ORIGINS`
 (comma-separated) or `CORS_ALLOW_ORIGIN_REGEX` on the backend. Local dev origins
 (`http://localhost:3000`, `http://127.0.0.1:3000`) are always allowed.
+
+### Hosted auth (Google sign-in)
+
+The backend already verifies Google ID tokens (`GOOGLE_OAUTH_CLIENT_ID`); the
+frontend only needs `NEXT_PUBLIC_GOOGLE_CLIENT_ID` set to the **same** client ID.
+
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Behavior |
+|--------------------------------|----------|
+| **unset** | Self-host / dev default. No auth UI, no GIS script, no token sent. Anonymous trial = full local access. |
+| **set**   | "Sign in with Google" via Google Identity Services. After sign-in the ID token rides `Authorization: Bearer` on REST and `?token=` on the chat WebSocket. Synth/save prompt sign-in when signed-out; lint/sim stay available. On a 401 the token is cleared → re-sign-in prompt. |
+
+No `next-auth` / server callback — GIS hands us the ID token and the backend
+re-verifies it. The decoded JWT is used for display only.
 
 ## Development
 

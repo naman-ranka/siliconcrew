@@ -85,6 +85,19 @@ wire them as env `value_source` references on the Cloud Run service (DATABASE_UR
 HOSTED_GEMINI_KEY, GOOGLE_OAUTH_CLIENT_ID). Attach the Cloud SQL connection
 (`--add-cloudsql-instances <conn-name>`).
 
+### Frontend Google sign-in (pair the client ID)
+
+The frontend must be built/served with `NEXT_PUBLIC_GOOGLE_CLIENT_ID` set to the
+**same** OAuth client ID as the backend's `GOOGLE_OAUTH_CLIENT_ID`. It's a public
+build-time value (baked into the client bundle), so pass it at image build, e.g.
+`--build-arg NEXT_PUBLIC_GOOGLE_CLIENT_ID=<oauth-client-id>` (not a Secret).
+- **Set** → users sign in with Google; the ID token is sent as
+  `Authorization: Bearer` (REST) and `?token=` (WS); synth/save require sign-in.
+- **Unset** → no sign-in UI, no token sent (self-host / anonymous trial). If you
+  run hosted with it unset, every request lands anonymous and synth/save 403.
+Also add the deployed frontend origin to the OAuth client's **Authorized
+JavaScript origins** in the Google Cloud console, or GIS will refuse to load.
+
 ## 4. Initialize the database
 
 The backend calls `MetadataStore.init_schema()` on boot (idempotent). Verify:

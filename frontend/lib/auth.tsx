@@ -63,7 +63,9 @@ export function decodeJwt(token: string): Record<string, unknown> | null {
   try {
     const part = token.split(".")[1];
     if (!part) return null;
-    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    let b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    // Google ID tokens are unpadded base64url — restore padding for atob/Buffer.
+    b64 += "=".repeat((4 - (b64.length % 4)) % 4);
     const json =
       typeof atob === "function"
         ? decodeURIComponent(
