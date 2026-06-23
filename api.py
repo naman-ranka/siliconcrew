@@ -679,6 +679,27 @@ def _session_model(session_id: str, uid: Optional[str]) -> str:
     return normalize_model_name(meta.get("model_name", DEFAULT_MODEL) if meta else DEFAULT_MODEL)
 
 
+def _is_missing_llm_error(exc: Exception) -> bool:
+    """True when reading history failed only because no LLM is configured.
+
+    A brand-new session legitimately has no history, and reading conversation
+    state should not need a live model — but the agent graph is built with one,
+    so the absence of an API key / provider package surfaces here. Treat that as
+    "no history" (empty), never as a server error. Any other failure is real and
+    must still propagate.
+    """
+    msg = str(exc).lower()
+    signatures = (
+        "missing api key",
+        "no module named 'langchain_google_genai'",
+        "no module named 'langchain_anthropic'",
+        "no module named 'langchain_openai'",
+        "api key",
+        "api_key",
+    )
+    return any(s in msg for s in signatures)
+
+
 @app.get("/api/chat/{session_id:path}/history")
 async def get_chat_history(session_id: str, identity: Identity = Depends(get_identity)) -> List[Dict[str, Any]]:
     """Get chat history for a session's default thread (Chat 1; owner only)."""
@@ -690,6 +711,10 @@ async def get_chat_history(session_id: str, identity: Identity = Depends(get_ide
         # Back-compat: the default thread id == session_id.
         return await _read_thread_history(session_id, _session_model(session_id, uid))
     except Exception as e:
+        # A fresh session with no LLM key has no history — return empty, not 500.
+        if _is_missing_llm_error(e):
+            print(f"[INFO] No history (no LLM configured) for {session_id}: {e}")
+            return []
         print(f"[ERROR] Loading history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

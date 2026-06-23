@@ -24,7 +24,7 @@ backend (full)**.
 | 1 | **Finalizer + PPA** — remote ORFS job completion writes `status=completed` + parsed `summary_metrics` (area/cells from synth_stat; WNS/TNS/Fmax/power from finish/sta reports). Fixes stuck-"running" + null PPA. | backend | ✅ |
 | 2 | **Render the GDS** — enable `gdstk`; layout endpoint returns a real SVG/PNG of `6_final.gds`. | backend | ✅ |
 | 3 | **Remote-synth progress** — expose ORFS per-stage status + elapsed to the job-status payload; label "running on remote VM". | backend (+fe in 5) | ✅ |
-| 4 | **Fresh-session history** — `/chat/{id}/history` returns empty (not 500) when no LLM key / no history. | backend | ⬜ |
+| 4 | **Fresh-session history** — `/chat/{id}/history` returns empty (not 500) when no LLM key / no history. | backend | ✅ |
 | 5 | **Frontend batch** — PPA hero never-green-for-unknown WNS + graceful null metrics; refresh layout/schem/report on synth completion; Layout "GDS ready — download" card + render when available; auto-generate report + fix empty-state copy; fresh-session red banner → calm; stepper idle-highlight follows pipeline; new-session naming; ORFS stage stepper UI. | frontend | ⬜ |
 | 6 | **E2E verify** — full UI flow again (dark+light), confirm success looks successful. | review | ⬜ |
 
