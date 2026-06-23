@@ -46,6 +46,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatTokens, formatRelativeTime } from "@/lib/utils";
 import { AccountChip } from "@/components/auth/AccountChip";
+import { useAuth } from "@/lib/auth";
 import type { Project, Session } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -514,10 +515,15 @@ export function Sidebar() {
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
+  const { status: authStatus } = useAuth();
+
+  // Load sessions on mount AND whenever the user finishes signing in.
+  // Without the authStatus dependency, loadSessions() fires before the Google
+  // token is restored from sessionStorage, returning an empty list.
   useEffect(() => {
     loadSessions();
     loadProjects();
-  }, [loadSessions, loadProjects]);
+  }, [loadSessions, loadProjects, authStatus]);
 
   // Group sessions: real projects first (sorted by name), then "No Project"
   const sessionGroups = useMemo(() => {
