@@ -204,3 +204,16 @@ frontend/.playwright-mcp/
 !/frontend/next.config.mjs
 !/frontend/postcss.config.mjs
 /frontend/_*.js
+
+# Terraform local files
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+deploy/terraform/terraform.tfvars
+deploy/terraform/terraform.exe
+deploy/terraform/LICENSE.txt
+
+# GCP service account keys
+gcp-key.json
+

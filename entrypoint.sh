@@ -22,10 +22,13 @@ if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
     fi
 fi
 
-echo "Starting SiliconCrew..."
-
-# Start backend, frontend, and MCP server (Streamable HTTP)
-uvicorn api:app --host 0.0.0.0 --port 8000 &
-cd /app/frontend && npm run dev -- -p 3000 &
-cd /app && python mcp_server.py --transport http --host 0.0.0.0 --port 8080 --codex-tools &
-wait
+if [ "$SILICONCREW_HOSTED" = "1" ]; then
+    echo "Running in hosted mode: starting FastAPI backend only on port ${PORT:-8080}"
+    exec uvicorn api:app --host 0.0.0.0 --port "${PORT:-8080}"
+else
+    # Start backend, frontend, and MCP server (Streamable HTTP)
+    uvicorn api:app --host 0.0.0.0 --port 8000 &
+    cd /app/frontend && npm run dev -- -p 3000 &
+    cd /app && python mcp_server.py --transport http --host 0.0.0.0 --port 8080 --codex-tools &
+    wait
+fi

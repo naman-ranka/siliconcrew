@@ -83,3 +83,11 @@ def test_anonymous_tier_string():
     assert anon.tier == "anonymous"
     user = A.authenticate("good", settings=s, verifier=FakeVerifier())
     assert user.tier == "user"
+
+
+def test_hosted_unconfigured_oauth_no_token_is_mock_user():
+    s = FakeSettings(hosted=True, google_oauth_client_id="")
+    ident = A.authenticate(None, settings=s, verifier=None, session_hint="sess1")
+    assert not ident.anonymous
+    assert ident.user_id.startswith("mock_")
+

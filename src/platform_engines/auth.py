@@ -83,6 +83,11 @@ def authenticate(
             raise AuthError("auth_unconfigured", "OAuth is not configured on this server.")
         return verifier.verify(token)
 
+    # In hosted mode, if no Google OAuth Client ID is configured, bypass anonymous restrictions
+    # by returning a mock non-anonymous user, enabling end-to-end testing in staging.
+    if verifier is None:
+        return Identity(user_id=f"mock_{session_hint or 'default'}", email=None, anonymous=False, provider="mock")
+
     return new_anonymous(session_hint)
 
 

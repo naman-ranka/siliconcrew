@@ -117,7 +117,7 @@ resource "google_sql_database_instance" "metadata" {
       point_in_time_recovery_enabled = true
     }
     ip_configuration {
-      ipv4_enabled = false
+      ipv4_enabled    = var.vpc_self_link == null ? true : false
       private_network = var.vpc_self_link
     }
   }
@@ -234,8 +234,16 @@ resource "google_cloud_run_v2_service" "backend" {
         limits     = { cpu = "2", memory = "2Gi" }
         startup_cpu_boost = true
       }
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
+      }
       env {
         name  = "SILICONCREW_HOSTED"
+        value = "1"
+      }
+      env {
+        name  = "FORCE_REDEPLOY"
         value = "1"
       }
       env {
@@ -266,8 +274,30 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "ORFS_NUM_CORES"
         value = tostring(var.orfs_num_cores)
       }
-      # DATABASE_URL, HOSTED_GEMINI_KEY, GOOGLE_OAUTH_CLIENT_ID come from Secret
-      # Manager — see RUNBOOK.md (wired via dynamic env { value_source }).
+      env {
+        name = "DATABASE_URL"
+        value_source {
+          secret_key_ref {
+            secret  = "database-url"
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "HOSTED_GEMINI_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = "hosted-gemini-key"
+            version = "latest"
+          }
+        }
+      }
+    }
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.metadata.connection_name]
+      }
     }
   }
 }
@@ -301,3 +331,22 @@ resource "google_billing_budget" "monthly" {
   threshold_rules { threshold_percent = 0.9 }
   threshold_rules { threshold_percent = 1.0 }
 }
+
+# ---------------------------------------------------------------------------
+# IAM bindings for Secret Manager
+# ---------------------------------------------------------------------------
+
+resource "google_secret_manager_secret_iam_member" "backend_db_url" {
+  secret_id  = "database-url"
+  role       = "roles/secretmanager.secretAccessor"
+  member     = "serviceAccount:${google_service_account.backend.email}"
+  depends_on = [google_project_service.services]
+}
+
+resource "google_secret_manager_secret_iam_member" "backend_gemini_key" {
+  secret_id  = "hosted-gemini-key"
+  role       = "roles/secretmanager.secretAccessor"
+  member     = "serviceAccount:${google_service_account.backend.email}"
+  depends_on = [google_project_service.services]
+}
+

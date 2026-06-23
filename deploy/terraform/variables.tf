@@ -29,6 +29,11 @@ variable "backend_image" {
   description = "Backend container image (…/siliconcrew/backend@sha256:…)."
 }
 
+variable "frontend_image" {
+  type        = string
+  description = "Frontend Next.js container image (…/siliconcrew/frontend@sha256:…)."
+}
+
 variable "orfs_image" {
   type        = string
   description = "ORFS image, digest-pinned (…/siliconcrew/orfs@sha256:…) for reproducibility."
