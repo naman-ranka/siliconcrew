@@ -235,6 +235,30 @@ export interface ConsoleEntry {
   ts: string;
 }
 
+// Live synthesis (ORFS) job status — drives the stage-progress UI while a
+// remote synth runs. Mirrors the backend job-status payload (snake_case).
+export type SynthStageId =
+  | "constraints"
+  | "synth"
+  | "floorplan"
+  | "place"
+  | "cts"
+  | "grt"
+  | "route"
+  | "finish";
+export type SynthStageStatus = "pending" | "running" | "completed" | "failed" | "skipped";
+export interface SynthJobStatus {
+  jobId: string;
+  runId: string;
+  status: string; // queued | running | completed | failed
+  currentStage?: SynthStageId | string | null;
+  stages?: Partial<Record<SynthStageId, { status: SynthStageStatus; artifacts?: Record<string, unknown> }>>;
+  elapsedSec?: number | null;
+  backend?: string | null;
+  remote?: boolean | null;
+  executionLabel?: string | null;
+}
+
 // WebSocket message types
 export type WSMessageType =
   | { type: "start" }

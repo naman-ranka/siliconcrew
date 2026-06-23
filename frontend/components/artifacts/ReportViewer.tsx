@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { FileText, RefreshCw, Download, FileOutput } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -37,12 +37,30 @@ export function ReportViewer() {
   // PPA hero sources the unified run record (has ppa); prefer the report's run.
   const ppaRunId = report?.run_id ?? selectedRunId ?? selectedSynthesisRunId;
 
+  // The run we'd target for (auto-)generation: the selected synth run, else the
+  // newest passed synth run.
+  const passedSynth = runs.find((r) => r.kind === "synth" && r.status === "passed");
+  const targetGenRunId = selectedSynthesisRunId ?? passedSynth?.id ?? null;
+
   useEffect(() => {
     if (currentSession) {
       loadSynthesisRuns();
       loadReport();
     }
   }, [currentSession, loadReport, loadSynthesisRuns]);
+
+  // Auto-generate the report once when a synth has passed but no markdown report
+  // exists yet — a successful tape-out should show its summary without a click.
+  const autoGenTriedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentSession || report || reportLoading) return;
+    if (!passedSynth || !targetGenRunId) return;
+    if (autoGenTriedRef.current === targetGenRunId) return;
+    autoGenTriedRef.current = targetGenRunId;
+    void generateReport(targetGenRunId).catch(() => {
+      /* keep the empty state with its manual Generate button as a fallback */
+    });
+  }, [currentSession, report, reportLoading, passedSynth, targetGenRunId, generateReport]);
 
   const handleDownload = () => {
     if (report) {
@@ -81,17 +99,25 @@ export function ReportViewer() {
 
   if (!report) {
     const hasPpa = runs.some((r) => r.kind === "synth" && r.ppa);
+    // If a synth has passed, the report can be generated *now* — say so, and
+    // name the run we'd generate it for (the old copy wrongly told the user to
+    // "run synthesis" even after it had succeeded).
+    const genRunId = targetGenRunId ?? synthesisRuns[0]?.run_id;
     return (
       <EmptyState
         // Even without a generated markdown report, surface PPA if a synth run exists.
         header={hasPpa ? <PpaHero runs={runs} runId={ppaRunId} /> : undefined}
         icon={<FileText />}
-        headline="No report yet"
+        headline={passedSynth ? "Generating report…" : "No report yet"}
         assistantHint={
-          <>
-            Synthesis runs the OpenROAD flow in Docker; if Docker/ORFS isn&apos;t
-            available the synth step reports that in the console.
-          </>
+          passedSynth ? (
+            <>The timing/PPA summary above is live; the full markdown report is being generated.</>
+          ) : (
+            <>
+              Synthesis runs the OpenROAD flow; if ORFS isn&apos;t available the
+              synth step reports that in the console.
+            </>
+          )
         }
         cta={
           <>
@@ -113,13 +139,14 @@ export function ReportViewer() {
             )}
             <Button onClick={handleGenerate} size="sm" className="gap-2">
               <FileOutput className="h-4 w-4" />
-              Generate Report
+              {genRunId ? `Generate the report for ${genRunId}` : "Generate Report"}
             </Button>
           </>
         }
       >
-        Run synthesis, then generate a report to get the timing/PPA summary and
-        spec-vs-result analysis.
+        {passedSynth
+          ? `Synthesis passed${targetGenRunId ? ` (${targetGenRunId})` : ""} — building the timing/PPA summary and spec-vs-result analysis.`
+          : "Run synthesis, then generate a report to get the timing/PPA summary and spec-vs-result analysis."}
       </EmptyState>
     );
   }

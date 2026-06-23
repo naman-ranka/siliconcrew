@@ -21,6 +21,7 @@ import type {
   FileRole,
   ConsoleChannel,
   ConsoleEntry,
+  SynthJobStatus,
   Toast,
 } from "@/types";
 import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi } from "./api";
@@ -133,6 +134,9 @@ interface AppState {
   // (auto-expand + pulse) — e.g. a lint result that would otherwise be a quiet
   // one-liner while the center stays on Code. Carries which channel to focus.
   consoleAttention: { tick: number; channel: ConsoleChannel } | null;
+  // Live ORFS synth job status (stages, elapsed, remote label) while a synth
+  // runs; null when no synth is in flight. Drives the stage-progress UI.
+  synthJob: SynthJobStatus | null;
   actionPending: { lint: boolean; sim: boolean; synth: boolean };
   // Section-load flags drive skeleton loaders so a section shows shimmer rows
   // instead of flashing an empty/"No …" state before content lands.
@@ -157,6 +161,7 @@ interface AppState {
   runLint: () => Promise<void>;
   runSim: (opts?: { mode?: string; runId?: string }) => Promise<void>;
   runSynth: () => Promise<void>;
+  refreshSynthArtifacts: (runId?: string | null) => Promise<void>;
 }
 
 function buildBlocks(
@@ -228,6 +233,7 @@ export const useStore = create<AppState>((set, get) => ({
   consoleEntries: [],
   activeConsole: "sim",
   consoleAttention: null,
+  synthJob: null,
   actionPending: { lint: false, sim: false, synth: false },
   runsLoading: false,
   manifestLoading: false,
@@ -407,7 +413,16 @@ export const useStore = create<AppState>((set, get) => ({
       }));
       set({ messages, chatError: null });
     } catch (error) {
-      set({ chatError: error instanceof Error ? error.message : "Failed to load history" });
+      // A fresh session with no history is NOT an error — the backend now
+      // returns 200 [] for it. Treat "session not found"/empty-history failures
+      // as a calm empty state (no messages, no red banner) rather than alarming
+      // the user before they've even started.
+      const msg = error instanceof Error ? error.message : "Failed to load history";
+      if (/session not found|not found|no history/i.test(msg)) {
+        set({ messages: [], chatError: null });
+      } else {
+        set({ chatError: msg });
+      }
     }
   },
 
@@ -1171,6 +1186,9 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const { jobId, runId } = await workbenchApi.synthesize(currentSession.id);
       pushConsole(set, get, { channel: "synth", status: "running", runId, summary: `${runId} queued (job ${jobId})` });
+      // Seed the live job status so the stage-progress UI appears immediately
+      // (before the first poll lands).
+      set({ synthJob: { jobId, runId, status: "queued", currentStage: "constraints" } });
       await get().loadRuns();
 
       // Poll the job until terminal (bounded), surfacing stage progress.
@@ -1180,7 +1198,10 @@ export const useStore = create<AppState>((set, get) => ({
       // eslint-disable-next-line no-constant-condition
       while (Date.now() < deadline) {
         await sleep(interval);
-        if (get().currentSession?.id !== sid) return; // session switched away
+        if (get().currentSession?.id !== sid) {
+          set({ synthJob: null });
+          return; // session switched away
+        }
         let job: Record<string, unknown>;
         try {
           job = await workbenchApi.getJob(sid, jobId);
@@ -1189,6 +1210,8 @@ export const useStore = create<AppState>((set, get) => ({
         }
         const state = String(job.status ?? "");
         const stage = String(job.current_stage ?? job.stage ?? "");
+        // Publish the structured job status for the stage-progress UI.
+        set({ synthJob: toSynthJobStatus(jobId, runId, job) });
         pushConsole(set, get, { channel: "synth", status: "running", runId, summary: `${runId} ${state}${stage ? ` · ${stage}` : ""}` });
         if (state === "completed" || state === "failed") {
           await get().loadRuns();
@@ -1209,15 +1232,55 @@ export const useStore = create<AppState>((set, get) => ({
             summary: `${runId} ${state}`,
             detail,
           });
-          if (state === "completed") await get().selectRun(runId);
+          if (state === "completed") {
+            // A successful tape-out must immediately LOOK successful without a
+            // hard reload: refresh the layout/schematic file lists, auto-generate
+            // the report, then select the run (lands on Report with PPA + GDS).
+            await get().refreshSynthArtifacts(runId);
+            await get().selectRun(runId);
+          }
+          set({ synthJob: null });
           break;
         }
         interval = Math.min(interval * 1.5, 30000);
       }
     } catch (e) {
       pushConsole(set, get, { channel: "synth", status: "failed", summary: friendlyError(e) });
+      set({ synthJob: null });
     } finally {
       set((s) => ({ actionPending: { ...s.actionPending, synth: false } }));
+    }
+  },
+
+  // After a synth reaches a passed state, re-pull the artifact file lists and
+  // ensure a report exists — so Layout/Schematic/Report update live (the review
+  // found they said "No layout yet" until a hard reload).
+  refreshSynthArtifacts: async (runId?: string | null) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    const targetRunId = runId ?? get().selectedSynthesisRunId ?? null;
+    try {
+      const [layoutFiles, schematicFiles] = await Promise.all([
+        workspaceApi.listLayouts(sid).catch(() => get().layoutFiles),
+        workspaceApi.listSchematics(sid).catch(() => get().schematicFiles),
+      ]);
+      set({ layoutFiles, schematicFiles });
+      if (layoutFiles.length > 0 && !get().selectedLayout) {
+        set({ selectedLayout: layoutFiles[0] });
+      }
+      await get().loadSynthesisRuns();
+      // Auto-generate the report once (idempotent on the backend) so a passed
+      // synth shows its timing/PPA summary without a manual click.
+      try {
+        await get().generateReport(targetRunId);
+      } catch {
+        // Generation may legitimately not apply (e.g. failed run) — fall back to
+        // loading whatever report exists.
+        await get().loadReport(targetRunId);
+      }
+    } catch {
+      /* best-effort refresh */
     }
   },
 }));
@@ -1246,6 +1309,23 @@ function friendlyError(e: unknown): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Normalize the backend job-status payload into the typed SynthJobStatus the
+// stage-progress UI consumes.
+function toSynthJobStatus(jobId: string, runId: string, job: Record<string, unknown>): SynthJobStatus {
+  const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
+  return {
+    jobId,
+    runId,
+    status: String(job.status ?? ""),
+    currentStage: (job.current_stage as string | null) ?? null,
+    stages: (job.stages as SynthJobStatus["stages"]) ?? undefined,
+    elapsedSec: num(job.elapsed_sec),
+    backend: typeof job.backend === "string" ? job.backend : null,
+    remote: typeof job.remote === "boolean" ? job.remote : null,
+    executionLabel: typeof job.execution_label === "string" ? job.execution_label : null,
+  };
 }
 
 // Token so a newer upload notice isn't cleared early by an older timeout.
