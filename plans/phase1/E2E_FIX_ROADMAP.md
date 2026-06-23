@@ -26,7 +26,19 @@ backend (full)**.
 | 3 | **Remote-synth progress** — expose ORFS per-stage status + elapsed to the job-status payload; label "running on remote VM". | backend (+fe in 5) | ✅ |
 | 4 | **Fresh-session history** — `/chat/{id}/history` returns empty (not 500) when no LLM key / no history. | backend | ✅ |
 | 5 | **Frontend batch** — PPA hero never-green-for-unknown WNS + graceful null metrics; refresh layout/schem/report on synth completion; Layout "GDS ready — download" card + render when available; auto-generate report + fix empty-state copy; fresh-session red banner → calm; stepper idle-highlight follows pipeline; new-session naming; ORFS stage stepper UI. | frontend | ✅ |
-| 6 | **E2E verify** — full UI flow again (dark+light), confirm success looks successful. | review | ⬜ |
+| 6 | **E2E verify** — full UI flow again (dark+light), confirm success looks successful. | review | ✅ |
+| 7 | **Threads route-order regression** — `GET …/threads` (and `/threads/{tid}/history`) were shadowed by the greedy catch-all `GET /api/sessions/{session_id:path}`, 404ing every session → red "Session not found" in the AI rail. Moved the catch-all below the /threads GET routes. | backend | ✅ |
+
+## E2E verification result (stage 6)
+Full flow re-driven (create named session → upload → lint → sim → **remote synth** →
+all artifacts), dark + light. 9/10 PASS on first pass; the one failure (red
+"Session not found" on new sessions) was a **separate** route-ordering bug (not the
+stage-4 `/chat/history` fix) → fixed in stage 7. Now: session naming works; fresh
+session shows a calm welcome (no red error); synth shows live ORFS stage progress +
+elapsed + "remote VM"; PPA hero populated with correctly-colored timing; GDS renders;
+report auto-generates; stepper tracks pipeline progress; runs timeline shows `passed`.
+Remaining low-pri nits (not blocking): report's verification table shows sim "Not Run"
+despite a passing sim run; Monaco editor CDN blocked in the offline sandbox (env only).
 
 ## Guardrails
 - Keep frontend green: `cd frontend && npx tsc --noEmit && npm run test && npm run build`.

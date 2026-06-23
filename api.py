@@ -461,24 +461,12 @@ async def create_trial_session(data: SessionCreate, identity: Identity = Depends
         raise HTTPException(status_code=409, detail=str(e))
 
 
-@app.get("/api/sessions/{session_id:path}", response_model=SessionResponse)
-async def get_session(session_id: str, identity: Identity = Depends(get_identity)):
-    """Get session details (only if the caller owns it)."""
-    uid = _uid(identity)
-    meta = session_manager.get_session_metadata(session_id, user_id=uid)
-    if not meta:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    return SessionResponse(
-        id=session_id,
-        name=meta.get("session_name"),
-        model_name=meta.get("model_name"),
-        project_id=meta.get("project_id"),
-        created_at=str(meta.get("created_at")),
-        updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
-        total_tokens=meta.get("total_tokens", 0),
-        total_cost=meta.get("total_cost", 0.0)
-    )
+# NOTE: the catch-all ``GET /api/sessions/{session_id:path}`` is defined LOWER in
+# this file (after the /threads sub-routes). ``session_id`` uses the greedy
+# ``:path`` converter (session ids can contain a slash for project-scoped
+# sessions), so if this GET were registered before ``GET …/threads`` it would
+# shadow it — ``/api/sessions/<sid>/threads`` would bind session_id="<sid>/threads"
+# and 404. Keep specific GET sub-routes ABOVE the catch-all. See get_session below.
 
 
 @app.delete("/api/sessions/{session_id:path}")
@@ -750,6 +738,30 @@ async def get_thread_history(session_id: str, tid: str, identity: Identity = Dep
     except Exception as e:
         print(f"[ERROR] Loading thread history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Catch-all single-session GET. MUST stay below the specific /threads GET routes
+# above: ``session_id`` is greedy (``:path``), so this would otherwise shadow
+# ``GET …/threads`` and ``GET …/threads/{tid}/history`` (binding session_id to
+# "<sid>/threads…" → 404). Route match order in FastAPI is definition order.
+@app.get("/api/sessions/{session_id:path}", response_model=SessionResponse)
+async def get_session(session_id: str, identity: Identity = Depends(get_identity)):
+    """Get session details (only if the caller owns it)."""
+    uid = _uid(identity)
+    meta = session_manager.get_session_metadata(session_id, user_id=uid)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return SessionResponse(
+        id=session_id,
+        name=meta.get("session_name"),
+        model_name=meta.get("model_name"),
+        project_id=meta.get("project_id"),
+        created_at=str(meta.get("created_at")),
+        updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
+        total_tokens=meta.get("total_tokens", 0),
+        total_cost=meta.get("total_cost", 0.0)
+    )
 
 
 @app.patch("/api/sessions/{session_id:path}/threads/{tid}", response_model=ThreadResponse)
