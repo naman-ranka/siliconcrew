@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/workspace/*)"
+    ]
+  }
+}
