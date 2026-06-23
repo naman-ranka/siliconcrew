@@ -308,6 +308,33 @@ resource "google_cloud_run_v2_service" "backend" {
           }
         }
       }
+      env {
+        name = "GOOGLE_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = "hosted-gemini-key"
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "OPENAI_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = "openai-api-key"
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "ANTHROPIC_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = "anthropic-api-key"
+            version = "latest"
+          }
+        }
+      }
     }
     volumes {
       name = "cloudsql"
@@ -372,4 +399,19 @@ resource "google_secret_manager_secret_iam_member" "backend_gemini_key" {
   member     = "serviceAccount:${google_service_account.backend.email}"
   depends_on = [google_project_service.services]
 }
+
+resource "google_secret_manager_secret_iam_member" "backend_openai_key" {
+  secret_id  = "openai-api-key"
+  role       = "roles/secretmanager.secretAccessor"
+  member     = "serviceAccount:${google_service_account.backend.email}"
+  depends_on = [google_project_service.services]
+}
+
+resource "google_secret_manager_secret_iam_member" "backend_anthropic_key" {
+  secret_id  = "anthropic-api-key"
+  role       = "roles/secretmanager.secretAccessor"
+  member     = "serviceAccount:${google_service_account.backend.email}"
+  depends_on = [google_project_service.services]
+}
+
 

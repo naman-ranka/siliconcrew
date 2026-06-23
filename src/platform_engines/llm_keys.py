@@ -368,7 +368,13 @@ class ByokHostedLlmKeyProvider:
             if byok:
                 return LlmKey(provider=provider, api_key=byok, source="byok")
 
-        # No BYOK key — only the hosted Gemini tier is available, under caps.
+        # Fall back to container environment variables if present (useful for single-user staging/prod)
+        env_vars = {"gemini": "GOOGLE_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+        env_key = os.environ.get(env_vars[provider])
+        if env_key:
+            return LlmKey(provider=provider, api_key=env_key, source="env")
+
+        # No BYOK key or env key — only the hosted Gemini tier is available, under caps.
         if provider == "gemini" and self._hosted_gemini_key:
             self._limiter.check(user_id or "anonymous")
             return LlmKey(
