@@ -68,6 +68,12 @@ class PlatformSettings:
     # enabled by mere misconfiguration. (Must be last: it carries a default.)
     dev_insecure_auth: bool = False
 
+    # Static service/test bearer token (staging only). When set, a request whose
+    # Bearer equals this secret authenticates as a fixed test identity — so
+    # automated agents/CI can drive signed-in flows without a real Google login.
+    # Empty (default) = feature off. NEVER set in production.
+    test_bearer_token: str = ""
+
     @property
     def is_cloud_orfs(self) -> bool:
         return self.orfs_engine == "cloud_job"
@@ -112,6 +118,7 @@ def get_settings() -> PlatformSettings:
         hosted_gemini_key=_env("HOSTED_GEMINI_KEY"),
         num_cores=int(_env("ORFS_NUM_CORES", "4")),
         dev_insecure_auth=_flag("SILICONCREW_DEV_INSECURE_AUTH", default=False),
+        test_bearer_token=_env("SILICONCREW_TEST_BEARER_TOKEN"),
     )
 
 

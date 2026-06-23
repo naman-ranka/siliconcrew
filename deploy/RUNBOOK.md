@@ -104,6 +104,29 @@ Behavior:
 Also add the deployed frontend origin to the OAuth client's **Authorized
 JavaScript origins** in the Google Cloud console, or GIS will refuse to load.
 
+### Static test bearer for automated agents / CI (staging only)
+
+To let an automated agent (or CI) drive signed-in flows without a real Google
+login, set a secret on the **backend** only:
+
+```bash
+printf '%s' "$(openssl rand -hex 32)" | gcloud secrets create siliconcrew-test-bearer --data-file=-
+# wire it as env SILICONCREW_TEST_BEARER_TOKEN on the backend service (value_source)
+```
+
+A request whose `Authorization: Bearer <secret>` matches (constant-time) then
+authenticates as the fixed **`test-bot`** identity — its own tenant, full
+capabilities, via the same Bearer/WS path real users use. The agent provides the
+secret the same way a real token is provided: `Authorization: Bearer <secret>` on
+REST and `?token=<secret>` on the chat WebSocket (e.g. inject it into the
+frontend's auth seam / `sessionStorage["sc-auth-token"]`).
+
+- **Off by default** — empty secret disables it entirely; genuine Google tokens
+  still verify normally when it's set (exact-match only).
+- **STAGING ONLY. Never set `SILICONCREW_TEST_BEARER_TOKEN` in production.** It is
+  a standing full-access credential; keep it in Secret Manager and rotate it.
+- Backend logs a one-time warning at first use so it's never silently on.
+
 ## 4. Initialize the database
 
 The backend calls `MetadataStore.init_schema()` on boot (idempotent). Verify:

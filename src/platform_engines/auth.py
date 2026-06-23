@@ -17,6 +17,7 @@ require a signed-in identity, lint/sim allow the anonymous trial.
 """
 from __future__ import annotations
 
+import hmac
 import logging
 from typing import Optional
 
@@ -38,7 +39,15 @@ LOCAL_IDENTITY = Identity(user_id="local", email=None, anonymous=False, provider
 # Fixed identity used ONLY when the dev insecure-auth escape hatch is on.
 DEV_IDENTITY = Identity(user_id="dev", email=None, anonymous=False, provider="dev")
 
+# Fixed identity returned for the static service/test bearer token (staging only).
+# Its own tenant ("test-bot") so automated-agent data never mingles with real
+# users'. Non-anonymous → full capabilities (synth/save), via the real Bearer path.
+TEST_IDENTITY = Identity(
+    user_id="test-bot", email="test-bot@siliconcrew.local", anonymous=False, provider="test"
+)
+
 _warned_insecure_auth = False
+_warned_test_bearer = False
 
 
 def _warn_insecure_auth_once() -> None:
@@ -51,6 +60,18 @@ def _warn_insecure_auth_once() -> None:
             "NEVER enable this in a multi-tenant or production deployment."
         )
         _warned_insecure_auth = True
+
+
+def _warn_test_bearer_once() -> None:
+    """Loudly warn (once) that the static test-bearer token is accepted."""
+    global _warned_test_bearer
+    if not _warned_test_bearer:
+        logger.warning(
+            "SILICONCREW_TEST_BEARER_TOKEN is set: requests bearing that secret "
+            "authenticate as the fixed 'test-bot' identity with full capabilities. "
+            "Staging only — NEVER set this in production."
+        )
+        _warned_test_bearer = True
 
 
 def parse_bearer(authorization: Optional[str]) -> Optional[str]:
@@ -99,6 +120,13 @@ def authenticate(
         verifier = build_verifier(settings)
 
     if token:
+        # Static service/test bearer (staging only): a constant-time match against
+        # the configured secret authenticates as the fixed 'test-bot' identity.
+        # The secret being set is the on-switch; empty (default) disables it.
+        test_secret = getattr(settings, "test_bearer_token", "") or ""
+        if test_secret and hmac.compare_digest(token, test_secret):
+            _warn_test_bearer_once()
+            return TEST_IDENTITY
         if verifier is None:
             raise AuthError("auth_unconfigured", "OAuth is not configured on this server.")
         return verifier.verify(token)

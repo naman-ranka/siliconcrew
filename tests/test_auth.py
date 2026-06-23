@@ -12,6 +12,7 @@ class FakeSettings:
     hosted: bool = True
     google_oauth_client_id: str = "cid"
     dev_insecure_auth: bool = False
+    test_bearer_token: str = ""
 
 
 class FakeVerifier:
@@ -96,6 +97,38 @@ def test_hosted_no_oauth_no_token_is_anonymous_failclosed():
     assert ident.user_id.startswith("anon_")
     with pytest.raises(AuthError):
         A.ensure_signed_in(ident)
+
+
+def test_static_test_bearer_grants_fixed_test_identity():
+    # The configured secret authenticates as the FIXED 'test-bot' tenant with
+    # full capabilities (synth/save), via the real Bearer path — so automated
+    # agents/CI can drive signed-in flows without a real Google login.
+    s = FakeSettings(hosted=True, test_bearer_token="s3cret-staging-token")
+    ident = A.authenticate("s3cret-staging-token", settings=s, verifier=FakeVerifier())
+    assert ident is A.TEST_IDENTITY
+    assert ident.user_id == "test-bot" and not ident.anonymous
+    assert A.scoped_user_id(ident, settings=s) == "test-bot"
+    A.ensure_signed_in(ident)  # no raise
+    for action in Action:
+        A.require_action(ident, action)
+
+
+def test_static_test_bearer_requires_exact_match():
+    # A non-matching token is NOT the test identity — it falls through to the real
+    # verifier (so genuine Google tokens still work alongside the test bearer).
+    s = FakeSettings(hosted=True, test_bearer_token="s3cret-staging-token")
+    real = A.authenticate("good", settings=s, verifier=FakeVerifier())
+    assert real.user_id == "google_42"
+    with pytest.raises(AuthError):
+        A.authenticate("wrong-secret", settings=s, verifier=FakeVerifier())
+
+
+def test_static_test_bearer_off_by_default():
+    # Empty secret (default) = feature disabled: the would-be secret is just an
+    # ordinary (invalid) token handed to the verifier.
+    s = FakeSettings(hosted=True, test_bearer_token="")
+    with pytest.raises(AuthError):
+        A.authenticate("any-token", settings=s, verifier=FakeVerifier())
 
 
 def test_dev_insecure_auth_flag_grants_fixed_dev_identity():
