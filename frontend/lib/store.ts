@@ -691,7 +691,14 @@ export const useStore = create<AppState>((set, get) => ({
   setActiveThreadModel: async (modelId: string) => {
     const { currentSession, activeThreadId } = get();
     if (!currentSession) return;
-    const tid = activeThreadId || currentSession.id;
+    // If no thread is active yet, load threads to get the real default thread UUID
+    // (never use the session ID as a thread ID — threads have auto-generated UUIDs).
+    let tid = activeThreadId;
+    if (!tid) {
+      await get().loadThreads();
+      tid = get().activeThreadId;
+    }
+    if (!tid) return; // no thread exists at all; bail silently
     // Persist on the thread; the next message uses it (WS reads the thread model).
     await threadsApi.patch(currentSession.id, tid, { model: modelId });
     set((state) => ({
