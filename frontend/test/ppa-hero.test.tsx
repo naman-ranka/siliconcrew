@@ -49,4 +49,28 @@ describe("PpaHero", () => {
     const { container } = render(<PpaHero runs={[synth("synth_0001", null)]} runId="synth_0001" />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("shows a NEUTRAL (never green) state for a null/unknown WNS", () => {
+    // ppa object exists (so the hero renders) but WNS is null — must NOT claim
+    // "Timing met" (green) and must read as not-computed.
+    render(<PpaHero runs={[synth("synth_0001", { wnsNs: null, areaUm2: 142 })]} runId="synth_0001" />);
+    expect(screen.queryByText("Timing met")).not.toBeInTheDocument();
+    expect(screen.queryByText("Timing violated")).not.toBeInTheDocument();
+    // The status pill reads "Not computed" and there is no status-pass coloring.
+    const pills = screen.getAllByText("Not computed");
+    expect(pills.length).toBeGreaterThan(0);
+    expect(document.querySelector(".text-status-pass")).toBeNull();
+  });
+
+  it("renders null metrics (cells/Fmax/power) as a neutral 'Not computed' state", () => {
+    render(
+      <PpaHero
+        runs={[synth("synth_0001", { wnsNs: 0.5, areaUm2: 142, cells: null, fmaxMhz: null, powerMw: null })]}
+        runId="synth_0001"
+      />
+    );
+    // WNS is met → green is OK here; but the three null metrics each show neutral.
+    expect(screen.getByText("Timing met")).toBeInTheDocument();
+    expect(screen.getAllByText("Not computed").length).toBeGreaterThanOrEqual(3);
+  });
 });
