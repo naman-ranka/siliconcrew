@@ -1422,8 +1422,16 @@ async def get_file_content(session_id: str, filename: str, _acl: Optional[str] =
 #   agent (the @tool wrappers) drive the identical tool functions underneath.
 # =============================================================================
 
+# Resolve workspaces through the active WorkspaceProvider — NOT
+# session_manager.get_workspace_path. In hosted mode the provider materializes
+# the session's object-storage tarball into local scratch and returns THAT path,
+# which is exactly the directory `sync_workspace` persists back; using the local
+# base_dir here instead would write to one directory and upload another, silently
+# dropping every save/upload/sim/synth output. Locally the provider returns the
+# same workspace/<sid> directory, so self-host behaviour is unchanged. This
+# mirrors the WebSocket agent path (see `_ws_provider.workspace_for` above).
 app.include_router(build_actions_router(
-    session_manager.get_workspace_path,
+    lambda sid: get_workspace_provider().workspace_for(sid),
     get_identity=get_identity,
     require_signed_in=require_signed_in,
     require_owned=_require_owned,

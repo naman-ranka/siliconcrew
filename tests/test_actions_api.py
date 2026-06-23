@@ -165,6 +165,46 @@ def test_concurrent_sessions_are_workspace_isolated(tmp_path):
     assert names_b == {"bob_top.v"}  # no cross-tenant bleed
 
 
+def test_action_writes_persist_through_workspace_provider(tmp_path):
+    """Regression (hosted data loss): the directory the action router writes to
+    MUST be the directory ``sync`` persists back to object storage.
+
+    The bug wired ``resolve_workspace`` to the local ``base_dir`` while
+    ``sync_workspace`` uploaded the provider's scratch dir — so in hosted mode
+    every save/upload/sim/synth output was written to one directory and a
+    *different*, empty directory was uploaded, silently dropping user work.
+    Both must flow through the same WorkspaceProvider.
+    """
+    from src.platform_engines.workspace_provider import (
+        CloudWorkspaceProvider,
+        InMemoryObjectStore,
+    )
+
+    store = InMemoryObjectStore()
+    provider = CloudWorkspaceProvider(store, str(tmp_path / "scratch"))
+
+    app = FastAPI()
+    app.include_router(build_actions_router(
+        provider.workspace_for,
+        sync_workspace=provider.sync,
+    ))
+    c = TestClient(app)
+
+    r = c.put(f"/api/workspace/{SID}/code/counter.v", json={"content": DUT})
+    assert r.status_code == 200, r.text
+
+    # The write landed in exactly the dir the provider syncs (its scratch path),
+    # not a divergent local base_dir.
+    assert os.path.exists(os.path.join(provider._scratch(SID), "counter.v"))
+
+    # ...and sync actually persisted it: a fresh materialize (new scratch, same
+    # object store) recovers the write — the round-trip the bug silently broke.
+    fresh = CloudWorkspaceProvider(store, str(tmp_path / "scratch2"))
+    recovered = fresh.workspace_for(SID)
+    with open(os.path.join(recovered, "counter.v")) as f:
+        assert f.read() == DUT
+
+
 @pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed")
 def test_lint_and_simulate_end_to_end(client):
     c, ws = client
