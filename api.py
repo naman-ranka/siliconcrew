@@ -384,6 +384,24 @@ def verify_session_access(session_id: str, identity: Identity = Depends(get_iden
     return _require_owned(session_id, identity)
 
 
+def _resolve_workspace(session_id: str) -> str:
+    """Resolve a session's workspace path through the active WorkspaceProvider.
+
+    In hosted mode the provider materializes the session's object-storage tarball
+    into local scratch and returns THAT path, so READS see files written on any
+    instance — Cloud Run's local disk is ephemeral and per-instance, so a plain
+    ``session_manager.get_workspace_path`` 404s on a cold/other instance even
+    though the data is safe in object storage. Self-host returns the same
+    ``workspace/<sid>`` dir, so behavior is unchanged. Mirrors the action router
+    (``build_actions_router``) and the WebSocket agent path
+    (``_ws_provider.workspace_for``). Resolved per-call so a
+    ``set_workspace_provider()`` override (tests) is honored. Ownership is
+    enforced separately by ``verify_session_access`` / ``_require_owned`` (the
+    metadata store), so disk presence is no longer the access gate.
+    """
+    return get_workspace_provider().workspace_for(session_id)
+
+
 # =============================================================================
 # SESSION ENDPOINTS
 # =============================================================================
@@ -704,9 +722,8 @@ def _is_missing_llm_error(exc: Exception) -> bool:
 async def get_chat_history(session_id: str, identity: Identity = Depends(get_identity)) -> List[Dict[str, Any]]:
     """Get chat history for a session's default thread (Chat 1; owner only)."""
     uid = _require_owned(session_id, identity)
-    workspace = session_manager.get_workspace_path(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
+    # History is checkpoint-DB-backed, not in the workspace dir — ownership above
+    # (metadata store) is the gate; do NOT 404 on ephemeral local-disk absence.
     try:
         # Back-compat: the default thread id == session_id.
         return await _read_thread_history(session_id, _session_model(session_id, uid))
@@ -1026,7 +1043,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 @app.get("/api/workspace/{session_id:path}/files")
 async def list_workspace_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[FileInfo]:
     """List all files in the workspace."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1075,7 +1092,7 @@ async def list_workspace_files(session_id: str, _acl: Optional[str] = Depends(ve
 @app.get("/api/workspace/{session_id:path}/spec")
 async def get_spec(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> SpecResponse:
     """Get the latest spec file."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1109,7 +1126,7 @@ async def get_spec(session_id: str, _acl: Optional[str] = Depends(verify_session
 @app.get("/api/workspace/{session_id:path}/code")
 async def get_code_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[CodeFile]:
     """Get all Verilog/SystemVerilog files."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1132,7 +1149,7 @@ async def get_code_files(session_id: str, _acl: Optional[str] = Depends(verify_s
 @app.get("/api/workspace/{session_id:path}/code/{filename:path}")
 async def get_code_file(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)) -> CodeFile:
     """Get a specific code file."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     file_path = os.path.join(workspace, filename)
 
     if not os.path.exists(file_path):
@@ -1153,7 +1170,7 @@ async def get_code_file(session_id: str, filename: str, _acl: Optional[str] = De
 @app.get("/api/workspace/{session_id:path}/waveforms")
 async def list_waveform_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
     """List VCD files in the workspace."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1163,7 +1180,7 @@ async def list_waveform_files(session_id: str, _acl: Optional[str] = Depends(ver
 @app.get("/api/workspace/{session_id:path}/waveform/{filename:path}")
 async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)):
     """Get parsed VCD waveform data."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     vcd_path = os.path.join(workspace, filename)
 
     if not os.path.exists(vcd_path):
@@ -1268,7 +1285,7 @@ async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] 
 @app.get("/api/workspace/{session_id:path}/synthesis-runs", response_model=List[SynthesisRunResponse])
 async def get_synthesis_runs(session_id: str, _acl: Optional[str] = Depends(verify_session_access)):
     """List synthesis runs for a workspace."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1278,7 +1295,7 @@ async def get_synthesis_runs(session_id: str, _acl: Optional[str] = Depends(veri
 @app.get("/api/workspace/{session_id:path}/report", response_model=ReportResponse)
 async def get_report(session_id: str, run_id: Optional[str] = Query(default=None), _acl: Optional[str] = Depends(verify_session_access)) -> ReportResponse:
     """Get the latest available report or a report for a specific synthesis run."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1295,7 +1312,7 @@ async def get_report(session_id: str, run_id: Optional[str] = Query(default=None
 @app.post("/api/workspace/{session_id:path}/report/generate", response_model=ReportResponse)
 async def generate_report(session_id: str, run_id: Optional[str] = Query(default=None), _acl: Optional[str] = Depends(verify_session_access)) -> ReportResponse:
     """Generate a design report for the selected synthesis run or latest available run."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1303,6 +1320,12 @@ async def generate_report(session_id: str, run_id: Optional[str] = Query(default
         report_path = save_design_report(workspace, run_id=run_id)
         with open(report_path, "r", encoding="utf-8") as f:
             content = f.read()
+
+        # Persist the freshly-written report back to object storage so a later
+        # read on a different/cold instance can see it (hosted only; self-host
+        # writes are already in-place). Mirrors the action router's sync.
+        if get_settings().hosted:
+            get_workspace_provider().sync(session_id)
 
         resolved_run_id = None
         report_dir = os.path.dirname(report_path)
@@ -1317,7 +1340,7 @@ async def generate_report(session_id: str, run_id: Optional[str] = Query(default
 @app.get("/api/workspace/{session_id:path}/layouts")
 async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
     """List GDS files in the workspace."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1340,7 +1363,7 @@ async def get_layout_svg(session_id: str, filename: str):
     large designs is a Phase-2 concern, so this degrades to a structured error
     the viewer shows gracefully rather than failing the request.
     """
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     gds_path = os.path.join(workspace, filename)
     real_ws = os.path.realpath(workspace)
     if not os.path.realpath(gds_path).startswith(real_ws):
@@ -1387,7 +1410,7 @@ async def get_layout_svg(session_id: str, filename: str):
 @app.get("/api/workspace/{session_id:path}/schematics")
 async def list_schematic_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
     """List SVG schematic files in the workspace."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     if not os.path.exists(workspace):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1397,7 +1420,7 @@ async def list_schematic_files(session_id: str, _acl: Optional[str] = Depends(ve
 @app.get("/api/workspace/{session_id:path}/file/{filename:path}")
 async def get_file_content(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)):
     """Get raw file content."""
-    workspace = session_manager.get_workspace_path(session_id)
+    workspace = _resolve_workspace(session_id)
     file_path = os.path.join(workspace, filename)
 
     if not os.path.exists(file_path):
