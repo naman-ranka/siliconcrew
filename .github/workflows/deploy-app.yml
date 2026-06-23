@@ -10,6 +10,7 @@ name: Deploy App
 # rarely changes; rebuild it via Terraform / a dedicated manual step.
 
 on:
+  workflow_dispatch:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
