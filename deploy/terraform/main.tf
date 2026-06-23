@@ -186,8 +186,8 @@ resource "google_storage_bucket_iam_member" "orfs_workspaces" {
 # ---------------------------------------------------------------------------
 
 resource "google_cloud_run_v2_job" "orfs" {
-  name     = "siliconcrew-orfs"
-  location = var.region
+  name       = "siliconcrew-orfs"
+  location   = var.region
   depends_on = [google_project_service.services]
 
   template {
@@ -217,9 +217,9 @@ resource "google_cloud_run_v2_job" "orfs" {
 # ---------------------------------------------------------------------------
 
 resource "google_cloud_run_v2_service" "backend" {
-  name     = "siliconcrew-backend"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_ALL"
+  name       = "siliconcrew-backend"
+  location   = var.region
+  ingress    = "INGRESS_TRAFFIC_ALL"
   depends_on = [google_project_service.services]
 
   template {
@@ -231,7 +231,7 @@ resource "google_cloud_run_v2_service" "backend" {
     containers {
       image = var.backend_image
       resources {
-        limits     = { cpu = "2", memory = "2Gi" }
+        limits            = { cpu = "2", memory = "2Gi" }
         startup_cpu_boost = true
       }
       volume_mounts {
