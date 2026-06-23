@@ -17,6 +17,7 @@ require a signed-in identity, lint/sim allow the anonymous trial.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from src.platform_engines.identity import (
@@ -29,8 +30,27 @@ from src.platform_engines.identity import (
     new_anonymous,
 )
 
+logger = logging.getLogger(__name__)
+
 # The trusted single user for self-host. Non-anonymous → full capabilities.
 LOCAL_IDENTITY = Identity(user_id="local", email=None, anonymous=False, provider="local")
+
+# Fixed identity used ONLY when the dev insecure-auth escape hatch is on.
+DEV_IDENTITY = Identity(user_id="dev", email=None, anonymous=False, provider="dev")
+
+_warned_insecure_auth = False
+
+
+def _warn_insecure_auth_once() -> None:
+    """Loudly warn (once) that the insecure dev-auth escape hatch is active."""
+    global _warned_insecure_auth
+    if not _warned_insecure_auth:
+        logger.warning(
+            "SILICONCREW_DEV_INSECURE_AUTH is ON: every unauthenticated request "
+            "is granted the fixed 'dev' identity with full capabilities. "
+            "NEVER enable this in a multi-tenant or production deployment."
+        )
+        _warned_insecure_auth = True
 
 
 def parse_bearer(authorization: Optional[str]) -> Optional[str]:
@@ -83,10 +103,13 @@ def authenticate(
             raise AuthError("auth_unconfigured", "OAuth is not configured on this server.")
         return verifier.verify(token)
 
-    # In hosted mode, if no Google OAuth Client ID is configured, bypass anonymous restrictions
-    # by returning a mock non-anonymous user, enabling end-to-end testing in staging.
-    if verifier is None:
-        return Identity(user_id=f"mock_{session_hint or 'default'}", email=None, anonymous=False, provider="mock")
+    # No token. The ONLY way to get a non-anonymous identity without a token is
+    # the explicit, opt-in dev escape hatch — never granted by mere
+    # misconfiguration. This keeps auth fail-closed: an unconfigured OAuth setup
+    # yields an anonymous trial (lint/sim only), not silent full access.
+    if getattr(settings, "dev_insecure_auth", False):
+        _warn_insecure_auth_once()
+        return DEV_IDENTITY
 
     return new_anonymous(session_hint)
 

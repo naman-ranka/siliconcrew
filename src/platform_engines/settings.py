@@ -64,6 +64,10 @@ class PlatformSettings:
     # Determinism
     num_cores: int            # pinned NUM_CORES for ORFS P&R
 
+    # Dev-only auth escape hatch — OFF by default; explicit opt-in only, never
+    # enabled by mere misconfiguration. (Must be last: it carries a default.)
+    dev_insecure_auth: bool = False
+
     @property
     def is_cloud_orfs(self) -> bool:
         return self.orfs_engine == "cloud_job"
@@ -107,6 +111,7 @@ def get_settings() -> PlatformSettings:
         hosted_gemini_model=_env("HOSTED_GEMINI_MODEL", "gemini-3-flash-preview"),
         hosted_gemini_key=_env("HOSTED_GEMINI_KEY"),
         num_cores=int(_env("ORFS_NUM_CORES", "4")),
+        dev_insecure_auth=_flag("SILICONCREW_DEV_INSECURE_AUTH", default=False),
     )
 
 

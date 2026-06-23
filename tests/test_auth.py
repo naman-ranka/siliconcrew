@@ -11,6 +11,7 @@ from src.platform_engines.identity import Action, AuthError, Identity
 class FakeSettings:
     hosted: bool = True
     google_oauth_client_id: str = "cid"
+    dev_insecure_auth: bool = False
 
 
 class FakeVerifier:
@@ -85,9 +86,26 @@ def test_anonymous_tier_string():
     assert user.tier == "user"
 
 
-def test_hosted_unconfigured_oauth_no_token_is_mock_user():
-    s = FakeSettings(hosted=True, google_oauth_client_id="")
+def test_hosted_no_oauth_no_token_is_anonymous_failclosed():
+    # Unconfigured OAuth + no token must FAIL CLOSED: an anonymous trial
+    # (lint/sim only), never silent non-anonymous full access. This is the
+    # regression guard for the old fail-open "mock_" identity.
+    s = FakeSettings(hosted=True, google_oauth_client_id="", dev_insecure_auth=False)
     ident = A.authenticate(None, settings=s, verifier=None, session_hint="sess1")
-    assert not ident.anonymous
-    assert ident.user_id.startswith("mock_")
+    assert ident.anonymous
+    assert ident.user_id.startswith("anon_")
+    with pytest.raises(AuthError):
+        A.ensure_signed_in(ident)
+
+
+def test_dev_insecure_auth_flag_grants_fixed_dev_identity():
+    # The ONLY way to get a non-anonymous identity without a token: the explicit
+    # opt-in escape hatch. The identity is a FIXED 'dev' user — not derived from
+    # the attacker-controllable session_hint — so it cannot impersonate tenants.
+    s = FakeSettings(hosted=True, google_oauth_client_id="", dev_insecure_auth=True)
+    ident_a = A.authenticate(None, settings=s, verifier=None, session_hint="attacker")
+    ident_b = A.authenticate(None, settings=s, verifier=None, session_hint="victim")
+    assert ident_a.user_id == "dev" and not ident_a.anonymous
+    assert ident_a.user_id == ident_b.user_id  # independent of session_hint
+    A.ensure_signed_in(ident_a)  # no raise — full capabilities
 
