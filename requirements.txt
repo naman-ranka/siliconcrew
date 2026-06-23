@@ -25,3 +25,7 @@ cocotb
 cocotb-test
 pytest
 psycopg[binary]>=3.1.8
+google-cloud-storage
+google-cloud-kms
+google-cloud-run
+google-cloud-logging
