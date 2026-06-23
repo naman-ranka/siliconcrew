@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { readServerEnv, SC_ENV_GLOBAL } from "@/lib/runtime-config";
+import { AuthProvider } from "@/lib/auth";
 import "./globals.css";
 
 // Read backend URLs at request time (not build time) so one image runs in any
@@ -38,7 +39,9 @@ export default function RootLayout({
         />
       </head>
       <body className="font-sans antialiased bg-background text-foreground">
-        <TooltipProvider delayDuration={300}>{children}</TooltipProvider>
+        <AuthProvider>
+          <TooltipProvider delayDuration={300}>{children}</TooltipProvider>
+        </AuthProvider>
       </body>
     </html>
   );

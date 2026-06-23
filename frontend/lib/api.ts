@@ -15,6 +15,7 @@ import type {
   LintResult,
   PpaDiff,
 } from "@/types";
+import { authHeader, getAuthToken, notifyAuthExpired } from "./authToken";
 
 import { getApiBase, getWsBase } from "@/lib/runtime-config";
 
@@ -30,11 +31,14 @@ async function apiFetch<T>(
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...authHeader(),
       ...options?.headers,
     },
   });
 
   if (!response.ok) {
+    // Expired/invalid token → let the auth layer drop to anonymous + re-prompt.
+    if (response.status === 401) notifyAuthExpired();
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     throw new Error(error.detail || "API request failed");
   }
@@ -130,8 +134,15 @@ export const chatApi = {
   // param so the server keys the LangGraph checkpoint by thread while the
   // workspace stays bound from session_id.
   createConnection: (sessionId: string, threadId?: string | null): WebSocket => {
-    const q = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : "";
-    return new WebSocket(`${getWsBase()}/api/chat/${encodeSessionId(sessionId)}${q}`);
+    // Browsers can't set headers on `new WebSocket`, so the Google ID token
+    // rides a query param. The backend (chat_websocket) already reads
+    // `?token=` → authenticate(). Only appended when signed in.
+    const params = new URLSearchParams();
+    if (threadId) params.set("thread_id", threadId);
+    const token = getAuthToken();
+    if (token) params.set("token", token);
+    const qs = params.toString();
+    return new WebSocket(`${getWsBase()}/api/chat/${encodeSessionId(sessionId)}${qs ? `?${qs}` : ""}`);
   },
 };
 
@@ -191,8 +202,9 @@ export const workspaceApi = {
 async function actionFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${getApiBase()}${endpoint}`, {
     ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
+    headers: { "Content-Type": "application/json", ...authHeader(), ...options?.headers },
   });
+  if (response.status === 401) notifyAuthExpired();
   const body = await response.json().catch(() => null);
   if (!response.ok || (body && body.ok === false)) {
     const err = body?.detail?.error || body?.error || { message: response.statusText };
@@ -216,7 +228,14 @@ export const workbenchApi = {
   uploadFiles: async (sessionId: string, files: File[]) => {
     const form = new FormData();
     for (const f of files) form.append("files", f, f.name);
-    const response = await fetch(`${getApiBase()}${ws(sessionId)}/files`, { method: "POST", body: form });
+    // FormData sets its own multipart Content-Type (with boundary) — only add
+    // Authorization here, never Content-Type.
+    const response = await fetch(`${getApiBase()}${ws(sessionId)}/files`, {
+      method: "POST",
+      body: form,
+      headers: { ...authHeader() },
+    });
+    if (response.status === 401) notifyAuthExpired();
     const body = await response.json().catch(() => null);
     if (!response.ok || (body && body.ok === false)) {
       throw new Error(body?.detail?.error?.message || "Upload failed");
