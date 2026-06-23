@@ -26,6 +26,7 @@ import {
   setAuthTokenGetter,
   setOnAuthExpired,
 } from "./authToken";
+import { useStore } from "./store";
 
 const GIS_SRC = "https://accounts.google.com/gsi/client";
 const STORAGE_KEY = "sc-auth-token";
@@ -191,12 +192,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!enabled) return;
     setAuthTokenGetter(() => tokenRef.current);
     setOnAuthExpired(() => {
-      // Expired/invalid token → drop to anonymous and prompt re-sign-in.
+      // Expired/invalid token → drop to anonymous and prompt re-sign-in (a toast,
+      // never a raw error). The sign-in button reappears via the account chip.
       if (tokenRef.current) {
         applyToken(null);
         try {
-          window.dispatchEvent(new CustomEvent("sc-auth-expired"));
-        } catch { /* ignore */ }
+          useStore.getState().pushToast({
+            kind: "info",
+            title: "Session expired — sign in again",
+            detail: "Your Google session timed out. Sign in to keep synthesizing & saving.",
+          });
+        } catch { /* store not ready — silent drop to anonymous is still fine */ }
       }
     });
     return () => {

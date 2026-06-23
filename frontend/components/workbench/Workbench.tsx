@@ -15,6 +15,7 @@ import { ViewingBanner } from "./ViewingBanner";
 import { Onboarding } from "./Onboarding";
 import { SessionPicker } from "./SessionPicker";
 import { ThemeToggle } from "./ThemeToggle";
+import { AccountChip } from "@/components/auth/AccountChip";
 import { Toaster } from "./Toaster";
 import { Button } from "@/components/ui/button";
 import { CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRightOpen } from "lucide-react";
@@ -88,6 +89,7 @@ export function Workbench() {
               <MessagesSquare className="h-3.5 w-3.5" /> Chat view
             </Button>
           </Link>
+          <AccountChip />
         </div>
       </header>
 

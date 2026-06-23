@@ -6,6 +6,7 @@ import Editor, { loader } from "@monaco-editor/react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
+import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { IconTooltip } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -30,6 +31,10 @@ export function CodeViewer() {
     currentSession,
     codeLoading,
   } = useStore();
+  const { enabled: authEnabled, status: authStatus, signIn } = useAuth();
+  // Saving routes through require_signed_in on the backend — when OAuth is
+  // configured but signed-out, prompt sign-in instead of letting it 403.
+  const saveLocked = authEnabled && authStatus !== "signed_in";
   const [copied, setCopied] = useState(false);
   // Monaco loads its worker bundle from a CDN; on restricted networks that is
   // blocked and the editor hangs forever on "Loading…". Fall back to a
@@ -158,6 +163,11 @@ export function CodeViewer() {
   }, [selectedCodeFile]);
 
   const handleSave = async () => {
+    if (saveLocked) {
+      setSaveError("Sign in to save changes — saving needs a signed-in account.");
+      signIn();
+      return;
+    }
     const name = creating ? newName.trim() : selectedCodeFile;
     if (!name) {
       setSaveError("Enter a filename (e.g. alu.v)");

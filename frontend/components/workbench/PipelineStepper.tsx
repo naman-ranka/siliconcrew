@@ -1,11 +1,12 @@
 "use client";
 
 import { useStore } from "@/lib/store";
+import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { statusDotClass, latestOfKind } from "./runStatus";
 import type { RunStatus } from "@/types";
 import { IconTooltip } from "@/components/ui/tooltip";
-import { FileText, Code2, CheckCircle2, Waves, Cpu, BadgeCheck, Loader2, Play } from "lucide-react";
+import { FileText, Code2, CheckCircle2, Waves, Cpu, BadgeCheck, Loader2, Play, Lock } from "lucide-react";
 
 type StageId = "spec" | "rtl" | "lint" | "sim" | "synth" | "signoff";
 
@@ -41,12 +42,31 @@ export function PipelineStepper() {
     runLint,
     runSim,
     runSynth,
+    pushToast,
   } = useStore();
+  const { enabled: authEnabled, status: authStatus, signIn } = useAuth();
 
   const hasRtl = !!manifest?.files.some((f) => f.role === "rtl");
   const latestSim = latestOfKind(runs, "sim");
   const latestSynth = latestOfKind(runs, "synth");
   const disabled = !currentSession;
+
+  // Synth is a gated action: when OAuth is configured but the user is signed out,
+  // prompt sign-in instead of firing a request that the backend will 403. Lint &
+  // sim stay available (anonymous trial). When unconfigured, no gating at all.
+  const synthLocked = authEnabled && authStatus !== "signed_in";
+  const onSynth = () => {
+    if (synthLocked) {
+      pushToast({
+        kind: "info",
+        title: "Sign in to synthesize",
+        detail: "Synthesis needs a signed-in account. Lint & simulate stay available.",
+      });
+      signIn();
+      return;
+    }
+    void runSynth();
+  };
 
   const stages: Stage[] = [
     {
@@ -103,14 +123,16 @@ export function PipelineStepper() {
     {
       id: "synth",
       name: "Synthesize",
-      icon: <Cpu className="h-4 w-4" />,
+      icon: synthLocked ? <Lock className="h-4 w-4" /> : <Cpu className="h-4 w-4" />,
       status: latestSynth?.status,
-      statusText: latestSynth ? latestSynth.status : "run synth",
-      desc: "Map RTL to real gates + place & route (OpenROAD).",
+      statusText: synthLocked ? "sign in" : latestSynth ? latestSynth.status : "run synth",
+      desc: synthLocked
+        ? "Sign in to synthesize — synthesis needs a signed-in account (lint & sim stay available)."
+        : "Map RTL to real gates + place & route (OpenROAD).",
       pending: actionPending.synth,
       isAction: true,
       reached: !!latestSynth,
-      onClick: () => void runSynth(),
+      onClick: onSynth,
     },
     {
       id: "signoff",

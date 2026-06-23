@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatTokens, formatRelativeTime } from "@/lib/utils";
+import { AccountChip } from "@/components/auth/AccountChip";
 import type { Project, Session } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -753,6 +754,10 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="border-t border-border p-2">
+        {/* Account (renders only when OAuth is configured) */}
+        <div className="mb-1 flex">
+          <AccountChip />
+        </div>
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="sm" className="flex-1 justify-start text-muted-foreground hover:text-foreground hover:bg-surface-2 h-9">
             <Settings className="h-4 w-4 mr-2" />
