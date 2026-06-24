@@ -6,13 +6,17 @@ import { ChatInput } from "./ChatInput";
 import { ThreadSwitcher } from "./ThreadSwitcher";
 import { useStore } from "@/lib/store";
 import { formatTokens, formatCost } from "@/lib/utils";
-import { Cpu, Zap, Coins, Hash, AlertCircle, X } from "lucide-react";
+import { Cpu, Zap, Coins, Hash, AlertCircle, X, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const API_KEY_NOTICE_DISMISSED = "sc-apikey-notice-dismissed";
 
+// WS error codes (from the Slice-1 resolver) that mean "this model needs a key
+// you can add" — we turn these into an actionable CTA, not a dead error.
+const KEY_ERROR_CODES = new Set(["no_key", "hosted_tier_exhausted"]);
+
 export function ChatArea() {
-  const { currentSession, chatError } = useStore();
+  const { currentSession, chatError, chatErrorCode } = useStore();
   // The API-key note competes with toasts as a second notification channel, so
   // make its dismissal sticky (localStorage) — once waved off it stays gone.
   const [apiNoticeDismissed, setApiNoticeDismissed] = useState(false);
@@ -74,7 +78,44 @@ export function ChatArea() {
       {/* Error banner. A missing-API-key is a config note, not a failure — the
           lint/sim/synth tools work without the LLM — so render it calmly rather
           than as an alarming red banner. */}
-      {chatError && (() => {
+      {/* The model needs a key the user can add → actionable CTA that opens the
+          API Keys settings, instead of a dead red error. */}
+      {chatError && chatErrorCode && KEY_ERROR_CODES.has(chatErrorCode) && (
+        <div
+          className="flex items-center justify-between gap-3 bg-info/10 border-b border-info/20 px-4 py-2.5"
+          role="alert"
+          data-testid="chat-no-key-cta"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <KeyRound className="h-4 w-4 text-info shrink-0" />
+            <p className="text-xs text-info truncate">{chatError}</p>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              data-testid="chat-add-key"
+              onClick={() => {
+                useStore.setState({ chatError: null, chatErrorCode: null });
+                useStore.getState().setSettingsOpen(true);
+              }}
+            >
+              <KeyRound className="h-3.5 w-3.5" /> Add an API key
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 hover:bg-info/20"
+              aria-label="Dismiss notice"
+              onClick={() => useStore.setState({ chatError: null, chatErrorCode: null })}
+            >
+              <X className="h-3.5 w-3.5 text-info" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {chatError && !(chatErrorCode && KEY_ERROR_CODES.has(chatErrorCode)) && (() => {
         const isConfig = /api key|api_key/i.test(chatError);
         // Stay dismissed across the session once the user has waved off the note.
         if (isConfig && apiNoticeDismissed) return null;

@@ -46,6 +46,9 @@ interface AppState {
   isStreaming: boolean;
   streamingMessage: Message | null;
   chatError: string | null;
+  // Machine-readable code from a WS error frame (e.g. "no_key",
+  // "hosted_tier_exhausted") so the chat can render an actionable CTA.
+  chatErrorCode: string | null;
 
   // Chat threads (many conversations per workspace). The active thread keys the
   // LangGraph checkpoint; all threads share the live workspace.
@@ -203,6 +206,7 @@ export const useStore = create<AppState>((set, get) => ({
   isStreaming: false,
   streamingMessage: null,
   chatError: null,
+  chatErrorCode: null,
 
   threads: [],
   activeThreadId: null,
@@ -490,7 +494,7 @@ export const useStore = create<AppState>((set, get) => ({
       timestamp: new Date().toISOString(),
     };
 
-    set({ isStreaming: true, streamingMessage, chatError: null });
+    set({ isStreaming: true, streamingMessage, chatError: null, chatErrorCode: null });
 
     const socket = ws;
     socket.onmessage = (event) => {
@@ -570,6 +574,7 @@ export const useStore = create<AppState>((set, get) => ({
         case "error":
           set({
             chatError: data.error,
+            chatErrorCode: data.code ?? null,
             isStreaming: false,
             streamingMessage: null,
           });
