@@ -26,6 +26,7 @@ from src.agents.architect import create_architect_agent, load_system_prompt
 from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name, model_catalog_entries
 from src.utils.session_manager import SessionManager
 from src.utils.session_context import SessionContext, set_current_session, session_scope
+from src.utils.paths import is_within
 from src.platform_engines.workspace_provider import get_workspace_provider
 from src.platform_engines.identity import Action, AuthError, Identity
 from src.platform_engines import auth as auth_engine
@@ -1155,9 +1156,7 @@ async def get_code_file(session_id: str, filename: str, _acl: Optional[str] = De
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
-    real_workspace = os.path.realpath(workspace)
-    real_file = os.path.realpath(file_path)
-    if not real_file.startswith(real_workspace):
+    if not is_within(workspace, file_path):
         raise HTTPException(status_code=403, detail="Access denied")
 
     with open(file_path, "r", errors='ignore') as f:
@@ -1186,9 +1185,7 @@ async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] 
     if not os.path.exists(vcd_path):
         raise HTTPException(status_code=404, detail="File not found")
 
-    real_workspace = os.path.realpath(workspace)
-    real_vcd = os.path.realpath(vcd_path)
-    if not real_vcd.startswith(real_workspace):
+    if not is_within(workspace, vcd_path):
         raise HTTPException(status_code=403, detail="Access denied")
 
     try:
@@ -1355,7 +1352,7 @@ async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verif
 
 
 @app.get("/api/workspace/{session_id:path}/layout/{filename:path}")
-async def get_layout_svg(session_id: str, filename: str):
+async def get_layout_svg(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)):
     """Best-effort GDS→SVG for the layout viewer.
 
     Prefers a pre-rendered ``<file>.svg`` next to the GDS; otherwise renders the
@@ -1365,8 +1362,7 @@ async def get_layout_svg(session_id: str, filename: str):
     """
     workspace = _resolve_workspace(session_id)
     gds_path = os.path.join(workspace, filename)
-    real_ws = os.path.realpath(workspace)
-    if not os.path.realpath(gds_path).startswith(real_ws):
+    if not is_within(workspace, gds_path):
         raise HTTPException(status_code=403, detail="Access denied")
     if not os.path.exists(gds_path):
         raise HTTPException(status_code=404, detail="Layout not found")
@@ -1427,9 +1423,7 @@ async def get_file_content(session_id: str, filename: str, _acl: Optional[str] =
         raise HTTPException(status_code=404, detail="File not found")
 
     # Security check - ensure file is within workspace
-    real_workspace = os.path.realpath(workspace)
-    real_file = os.path.realpath(file_path)
-    if not real_file.startswith(real_workspace):
+    if not is_within(workspace, file_path):
         raise HTTPException(status_code=403, detail="Access denied")
 
     with open(file_path, "r", errors='ignore') as f:

@@ -33,6 +33,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from src.utils.session_context import SessionContext, session_scope
+from src.utils.paths import is_within
 from src.platform_engines import auth as _auth_engine
 from src.tools import manifest as manifest_mod
 from src.tools import file_ops
@@ -296,7 +297,6 @@ def build_actions_router(
         uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
         os.makedirs(workspace, exist_ok=True)
-        real_ws = os.path.realpath(workspace)
 
         saved: List[str] = []
         for upload in files:
@@ -304,7 +304,7 @@ def build_actions_router(
             if not name:
                 continue
             dest = os.path.join(workspace, name)
-            if not os.path.realpath(dest).startswith(real_ws):
+            if not is_within(workspace, dest):
                 _err("invalid_path", f"Refusing to write outside the workspace: {name}", status=400)
             content = await upload.read()
             with open(dest, "wb") as f:

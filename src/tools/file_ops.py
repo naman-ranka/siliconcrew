@@ -11,14 +11,15 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
+from src.utils.paths import is_within
+
 
 def _safe_join(workspace: str, path: str) -> str:
     """Join + guard against path traversal escaping the workspace."""
     # Normalize and forbid absolute paths / parent escapes.
     rel = path.replace("\\", "/").lstrip("/")
     abspath = os.path.normpath(os.path.join(workspace, rel))
-    real_ws = os.path.realpath(workspace)
-    if not os.path.realpath(abspath).startswith(real_ws):
+    if not is_within(workspace, abspath):
         raise ValueError(f"Refusing to write outside the workspace: {path}")
     return abspath
 
