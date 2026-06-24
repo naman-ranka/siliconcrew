@@ -189,8 +189,9 @@ are subprocesses (<~1s overhead), keeping the interactive edit-run loop fast.
 The hosted image (`Dockerfile`, `INSTALL_NATIVE_TOOLCHAINS=1`) ships the
 binaries: `iverilog`/`yosys` (base) + cocotb (pip) + `build-essential` + `z3` +
 `sby` + Google XLS on PATH. **Verify the XLS release tarball** lands its binaries
-on PATH (`XLS_RELEASE_URL`); a failed download leaves native XLS reporting
-`interpreter_main: not found` (clean error, not a hang).
+on PATH (`XLS_VERSION`, optionally `XLS_SHA256`); a failed download now fails the
+backend image build instead of shipping an image where native XLS reports
+`interpreter_main: not found`.
 
 ### Isolation — honest scope (NOT container-grade)
 

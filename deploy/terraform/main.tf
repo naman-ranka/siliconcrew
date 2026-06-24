@@ -335,6 +335,15 @@ resource "google_cloud_run_v2_service" "backend" {
           }
         }
       }
+      env {
+        name = "SILICONCREW_TEST_BEARER_TOKEN"
+        value_source {
+          secret_key_ref {
+            secret  = "siliconcrew-test-bearer"
+            version = "latest"
+          }
+        }
+      }
     }
     volumes {
       name = "cloudsql"
@@ -414,4 +423,9 @@ resource "google_secret_manager_secret_iam_member" "backend_anthropic_key" {
   depends_on = [google_project_service.services]
 }
 
-
+resource "google_secret_manager_secret_iam_member" "backend_test_bearer" {
+  secret_id  = "siliconcrew-test-bearer"
+  role       = "roles/secretmanager.secretAccessor"
+  member     = "serviceAccount:${google_service_account.backend.email}"
+  depends_on = [google_project_service.services]
+}
