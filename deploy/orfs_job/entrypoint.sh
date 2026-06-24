@@ -25,6 +25,28 @@ echo "[orfs-job] downloading staged run dir: $ORFS_RUN_HANDLE"
 gcloud storage cp "gs://${WORKSPACE_BUCKET}/orfs-runs/${ORFS_RUN_HANDLE}.tar.gz" /tmp/run.tar.gz
 tar -xzf /tmp/run.tar.gz -C "$RUN_DIR"
 
+# Stage IN: populate the ORFS container dirs from the staged run tree BEFORE the
+# run — the mirror of the stage-out below, using the same ORFS_VOLUME_MAP. Locally
+# the Docker volume bind makes run_dir/orfs_results and the container's
+# flow/results the same directory, so checkpoints (e.g. retry_pd's 3_place.odb)
+# are already visible. In the cloud job there is no bind, so without this a
+# checkpoint-based retry starts with an empty ./results and OpenROAD aborts
+# (ORD-0007 "...3_place.odb does not exist"). The `-d` guard means fresh full
+# runs (nothing staged in) are untouched.
+if [ -n "${ORFS_VOLUME_MAP:-}" ]; then
+  IFS=';' read -ra entries <<< "$ORFS_VOLUME_MAP"
+  for entry in "${entries[@]}"; do
+    [ -n "$entry" ] || continue
+    rel="${entry%%::*}"
+    container="${entry##*::}"
+    if [ -n "$container" ] && [ -d "$RUN_DIR/$rel" ]; then
+      echo "[orfs-job] staging input: $RUN_DIR/$rel -> $container"
+      mkdir -p "$container"
+      cp -r "$RUN_DIR/$rel/." "$container/" 2>/dev/null || true
+    fi
+  done
+fi
+
 # Run ORFS. config.mk references /workspace/... exactly as in local mode.
 echo "[orfs-job] running ORFS"
 cd "$FLOW_DIR"
