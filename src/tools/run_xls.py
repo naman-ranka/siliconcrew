@@ -168,7 +168,9 @@ def run_dslx_interpreter(filename: str, cwd: str) -> Dict[str, Any]:
     if not _artifact_exists(workspace, safe_file):
         return _failure("interpreter", f"DSLX file not found: {safe_file}")
 
-    result = _xls_run(f"interpreter_main {safe_file}", workspace)
+    engine = get_tool_engine()
+    dslx_path = "/xls" if getattr(engine, "mode", "docker") == "docker" else "/opt/xls"
+    result = _xls_run(f"interpreter_main --dslx_path={dslx_path} {safe_file}", workspace)
     result["dslx_file"] = safe_file
     return _with_stage(result, "interpreter")
 
@@ -186,7 +188,9 @@ def compile_dslx_to_ir(filename: str, top_module: str, cwd: str) -> Dict[str, An
         return _failure("ir_conversion", f"DSLX file not found: {safe_file}")
 
     out_ir = f"{safe_top}.ir"
-    result = _xls_run(f"ir_converter_main --top={safe_top} {safe_file} > {out_ir}", workspace)
+    engine = get_tool_engine()
+    dslx_path = "/xls" if getattr(engine, "mode", "docker") == "docker" else "/opt/xls"
+    result = _xls_run(f"ir_converter_main --dslx_path={dslx_path} --top={safe_top} {safe_file} > {out_ir}", workspace)
     result["dslx_file"] = safe_file
     result["top_module"] = safe_top
     result["ir_filename"] = out_ir if result.get("success") else None
