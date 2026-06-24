@@ -83,7 +83,8 @@ export function ChatArea() {
       {chatError && chatErrorCode && KEY_ERROR_CODES.has(chatErrorCode) && (
         <div
           className="flex items-center justify-between gap-3 bg-info/10 border-b border-info/20 px-4 py-2.5"
-          role="alert"
+          role="region"
+          aria-label="Missing API key"
           data-testid="chat-no-key-cta"
         >
           <div className="flex items-center gap-2 min-w-0">

@@ -26,7 +26,7 @@ beforeEach(() => {
 
 describe("chat 'Add an API key' CTA (Slice 3)", () => {
   it("a no_key WS error renders the CTA; clicking it opens Settings and clears the error", () => {
-    useStore.setState({ chatError: "No key available for provider 'anthropic'.", chatErrorCode: "no_key" } as any);
+    useStore.setState({ chatError: "No key available for Anthropic. Add your own Anthropic API key, or use the hosted Gemini tier.", chatErrorCode: "no_key" } as any);
     render(<ChatArea />);
 
     expect(screen.getByTestId("chat-no-key-cta")).toBeInTheDocument();

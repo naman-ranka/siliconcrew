@@ -37,6 +37,15 @@ class LlmKey:
     model: Optional[str] = None  # hosted tier may pin a model
 
 
+# Human-facing provider names for error copy surfaced to the user (the raw ids
+# are lowercase/unbranded, e.g. "anthropic"; the UI shows these instead).
+_PROVIDER_DISPLAY = {
+    "gemini": "Gemini",
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+}
+
+
 # ---------------------------------------------------------------------------
 # Envelope encryption primitives (injected).
 # ---------------------------------------------------------------------------
@@ -384,8 +393,9 @@ class ByokHostedLlmKeyProvider:
                 model=self._hosted_model,
             )
 
+        display = _PROVIDER_DISPLAY.get(provider, provider.title())
         raise ValueError(
-            f"No key available for provider '{provider}'. Add your own {provider} API key, "
+            f"No key available for {display}. Add your own {display} API key, "
             "or use the hosted Gemini tier."
         )
 

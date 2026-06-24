@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Key,
   ExternalLink,
@@ -281,8 +281,15 @@ function ProviderRow({
   const [removing, setRemoving] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const cancelRemoveRef = useRef<HTMLButtonElement>(null);
 
   const busy = saving || removing;
+
+  // Move focus into the inline confirm so keyboard/SR users land on Cancel (the
+  // safe default) instead of being stranded on the now-hidden trash button.
+  useEffect(() => {
+    if (confirmRemove) cancelRemoveRef.current?.focus();
+  }, [confirmRemove]);
 
   const save = async () => {
     const key = value.trim();
@@ -398,15 +405,30 @@ function ProviderRow({
       </p>
 
       {confirmRemove && (
-        <div className="flex items-center justify-between rounded bg-status-fail/10 px-2 py-1.5 text-xs" role="alertdialog" aria-label={`Confirm remove ${provider.label} key`}>
-          <span className="text-foreground">Remove the stored {provider.label} key?</span>
+        <div
+          className="flex items-center justify-between rounded bg-status-fail/10 px-2 py-1.5 text-xs"
+          role="alertdialog"
+          aria-label={`Confirm remove ${provider.label} key`}
+          aria-describedby={`${inputId}-confirm-msg`}
+        >
+          <span id={`${inputId}-confirm-msg`} className="text-foreground">
+            Remove the stored {provider.label} key?
+          </span>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setConfirmRemove(false)} disabled={removing}>
+            <Button
+              ref={cancelRemoveRef}
+              variant="ghost"
+              size="sm"
+              className="h-6 text-xs"
+              onClick={() => setConfirmRemove(false)}
+              disabled={removing}
+            >
               Cancel
             </Button>
             <Button
+              variant="destructive"
               size="sm"
-              className="h-6 text-xs bg-status-fail hover:bg-status-fail/90 text-white"
+              className="h-6 text-xs"
               onClick={() => void remove()}
               disabled={removing}
               data-testid={`byok-remove-confirm-${provider.id}`}
