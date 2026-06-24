@@ -1030,7 +1030,8 @@ def codegen_xls(
     pipeline_stages: int = 0,
     clock_period_ps: int = 0,
     delay_model: str = "sky130",
-    module_name: str = None
+    module_name: str = None,
+    use_system_verilog: bool = False,
 ) -> str:
     """
     Schedules optimized XLS IR and generates synthesizable Verilog.
@@ -1041,6 +1042,7 @@ def codegen_xls(
         clock_period_ps: Target clock period in picoseconds.
         delay_model: Delay model (e.g., 'sky130', 'asap7').
         module_name: Optional custom name for the generated Verilog module.
+        use_system_verilog: If True, emit SystemVerilog (default is False to ensure Yosys synthesis compatibility).
     """
     from src.tools.run_xls import codegen_xls as run_codegen
     workspace = get_workspace_path()
@@ -1051,6 +1053,7 @@ def codegen_xls(
         clock_period_ps=clock_period_ps,
         delay_model=delay_model,
         module_name=module_name,
+        use_system_verilog=use_system_verilog,
         cwd=workspace
     )
     return json.dumps(result, indent=2)
@@ -1079,6 +1082,7 @@ def run_xls_flow(
     module_name: str = None,
     keep_intermediates: bool = True,
     run_lint: bool = True,
+    use_system_verilog: bool = False,
 ) -> str:
     """
     Executes the entire high-level XLS synthesis flow:
@@ -1094,6 +1098,7 @@ def run_xls_flow(
         module_name: Optional custom name for the generated Verilog module.
         keep_intermediates: Preserve .ir and .opt.ir artifacts for debugging/provenance.
         run_lint: Run Icarus Verilog syntax lint on generated Verilog before returning success.
+        use_system_verilog: If True, emit SystemVerilog (default is False to ensure Yosys synthesis compatibility).
     """
     from src.tools.run_xls import run_xls_flow as run_flow
     workspace = get_workspace_path()
@@ -1107,6 +1112,7 @@ def run_xls_flow(
         module_name=module_name,
         keep_intermediates=keep_intermediates,
         run_lint=run_lint,
+        use_system_verilog=use_system_verilog,
         cwd=workspace
     )
     return json.dumps(result, indent=2)

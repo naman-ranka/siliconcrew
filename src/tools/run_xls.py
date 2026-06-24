@@ -257,6 +257,7 @@ def codegen_xls(
     clock_period_ps: int = 0,
     delay_model: str = "sky130",
     module_name: Optional[str] = None,
+    use_system_verilog: bool = False,
     cwd: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate Verilog/SystemVerilog from optimized XLS IR."""
@@ -278,6 +279,8 @@ def codegen_xls(
     out_v = f"{base_name}.v"
 
     args = [f"--generator={safe_generator}"]
+    if not use_system_verilog:
+        args.append("--use_system_verilog=false")
     if safe_generator == "pipeline":
         if safe_pipeline_stages > 0:
             args.append(f"--pipeline_stages={safe_pipeline_stages}")
@@ -348,6 +351,7 @@ def run_xls_flow(
     cwd: Optional[str] = None,
     keep_intermediates: bool = True,
     run_lint: bool = True,
+    use_system_verilog: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute the preferred SiliconCrew XLS frontend path.
@@ -410,6 +414,7 @@ def run_xls_flow(
         clock_period_ps=clock_period_ps,
         delay_model=delay_model,
         module_name=module_name,
+        use_system_verilog=use_system_verilog,
         cwd=workspace,
     )
     artifacts["verilog_file"] = codegen.get("verilog_filename")
