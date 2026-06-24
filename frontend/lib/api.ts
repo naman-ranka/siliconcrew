@@ -40,7 +40,11 @@ async function apiFetch<T>(
     // Expired/invalid token → let the auth layer drop to anonymous + re-prompt.
     if (response.status === 401) notifyAuthExpired();
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || "API request failed");
+    // Attach the HTTP status so callers can branch on graceful states (e.g. BYOK:
+    // 400 self-host, 503 vault-off) without parsing the message string.
+    const err = new Error(error.detail || "API request failed") as Error & { status?: number };
+    err.status = response.status;
+    throw err;
   }
 
   return response.json();
@@ -89,6 +93,26 @@ export const sessionsApi = {
 // Models API — the registry for the picker (availability per request).
 export const modelsApi = {
   list: () => apiFetch<{ models: ModelInfo[]; default: string }>("/api/models"),
+};
+
+// BYOK API keys (hosted, signed-in). The server NEVER returns a stored key —
+// only which providers have one. In self-host `list` 400s ("BYOK is only
+// available in hosted mode."); when the vault is unconfigured it 503s. Callers
+// branch on `err.status` (see apiFetch) for those graceful states.
+export const keysApi = {
+  list: () => apiFetch<{ providers: string[] }>("/api/keys"),
+
+  save: (provider: string, api_key: string) =>
+    apiFetch<{ ok: true; provider: string; stored: boolean }>(
+      `/api/keys/${encodeURIComponent(provider)}`,
+      { method: "PUT", body: JSON.stringify({ api_key }) }
+    ),
+
+  remove: (provider: string) =>
+    apiFetch<{ ok: true; provider: string; deleted: boolean }>(
+      `/api/keys/${encodeURIComponent(provider)}`,
+      { method: "DELETE" }
+    ),
 };
 
 // Chat thread API — many conversations per workspace (session).

@@ -16,6 +16,7 @@ import { Onboarding } from "./Onboarding";
 import { SessionPicker } from "./SessionPicker";
 import { ThemeToggle } from "./ThemeToggle";
 import { AccountChip } from "@/components/auth/AccountChip";
+import { SettingsModal } from "@/components/settings/SettingsModal";
 import { Toaster } from "./Toaster";
 import { Button } from "@/components/ui/button";
 import { CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRightOpen } from "lucide-react";
@@ -192,6 +193,7 @@ export function Workbench() {
       )}
 
       <Toaster />
+      <SettingsModal />
     </main>
   );
 }

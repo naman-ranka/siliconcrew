@@ -651,7 +651,13 @@ export function Sidebar() {
         <div className="flex flex-col items-center py-4 gap-2 border-t border-border">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="hover:bg-surface-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="hover:bg-surface-2"
+                aria-label="Settings"
+                onClick={() => useStore.getState().setSettingsOpen(true)}
+              >
                 <Settings className="h-5 w-5" />
               </Button>
             </TooltipTrigger>
@@ -766,7 +772,13 @@ export function Sidebar() {
           <AccountChip />
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" className="flex-1 justify-start text-muted-foreground hover:text-foreground hover:bg-surface-2 h-9">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="flex-1 justify-start text-muted-foreground hover:text-foreground hover:bg-surface-2 h-9"
+            onClick={() => useStore.getState().setSettingsOpen(true)}
+            data-testid="open-settings"
+          >
             <Settings className="h-4 w-4 mr-2" />
             Settings
           </Button>

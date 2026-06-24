@@ -69,6 +69,11 @@ interface AppState {
   artifactsVisible: boolean;
   activeArtifactTab: ArtifactTab;
 
+  // Settings modal (BYOK API Keys). Opened from the sidebar Settings button and
+  // from the chat "Add an API key" CTA — shared state so either surface can open it.
+  settingsOpen: boolean;
+  setSettingsOpen: (open: boolean) => void;
+
   // Workspace data
   files: FileInfo[];
   // Set when the session's workspace failed to load (e.g. a transient backend
@@ -214,6 +219,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   artifactsVisible: false,
   activeArtifactTab: "spec",
+  settingsOpen: false,
 
   files: [],
   workspaceError: null,
@@ -726,6 +732,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   setArtifactTab: (tab: ArtifactTab) => {
     set({ activeArtifactTab: tab, artifactsVisible: true });
+  },
+
+  setSettingsOpen: (open: boolean) => {
+    set({ settingsOpen: open });
   },
 
   // Workspace actions
