@@ -896,7 +896,7 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
 
     r = run_cocotb(abs_files, top_module, python_module, cwd=workspace)
     status = r.get("status")
-    tail = ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()[-1200:]
+    tail = ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()[-16000:]
 
     if status == "PASS":
         return f"Cocotb Test PASSED ✅  ({r['passed']} testcase(s)) — verified in the reference container."

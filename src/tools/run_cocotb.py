@@ -77,15 +77,25 @@ except BaseException as e:
 
 results = sorted(glob.glob(os.path.join(build_dir, "**", "results.xml"), recursive=True))
 npass = nfail = 0
+failures = []
 for path in results[:1]:
     try:
         for tc in ET.parse(path).iter("testcase"):
-            if tc.find("failure") is not None or tc.find("error") is not None:
+            fail_node = tc.find("failure")
+            err_node = tc.find("error")
+            if fail_node is not None or err_node is not None:
                 nfail += 1
+                node = fail_node if fail_node is not None else err_node
+                failures.append("Testcase %s FAILED: %s\n%s" % (tc.get("name"), node.get("message") or "", node.text or ""))
             else:
                 npass += 1
     except Exception as e:
         print("SC_COCOTB_PARSE_EXC:", repr(e))
+if failures:
+    print("\n--- COCOTB FAILURE DETAILS ---")
+    for f in failures:
+        print(f)
+        print("------------------------------")
 print("SC_COCOTB_RESULT pass=%d fail=%d xml=%s" % (npass, nfail, "yes" if results else "no"))
 sys.exit(0 if (npass > 0 and nfail == 0) else 1)
 """
