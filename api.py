@@ -30,7 +30,12 @@ from src.utils.paths import is_within
 from src.platform_engines.workspace_provider import get_workspace_provider
 from src.platform_engines.identity import Action, AuthError, Identity
 from src.platform_engines import auth as auth_engine
-from src.platform_engines.llm_keys import build_key_vault, VALID_PROVIDERS
+from src.platform_engines.llm_keys import (
+    build_key_vault,
+    build_llm_key_provider,
+    HostedTierExhausted,
+    VALID_PROVIDERS,
+)
 from src.platform_engines.settings import get_settings
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.tools.design_report import save_design_report
@@ -57,6 +62,12 @@ session_manager = SessionManager(base_dir=WORKSPACE_DIR, db_path=DB_PATH)
 # BYOK vault (envelope-encrypted user API keys). None when BYOK isn't configured
 # (no KMS / master key) — the /api/keys endpoints then return 503.
 _KEY_VAULT = build_key_vault(get_settings(), db_path=os.path.join(_DATA_DIR, "byok.db"))
+
+# The single LLM-key resolution point: env keys (self-host) or BYOK + capped
+# hosted Gemini (hosted). The chat path asks this for a request-scoped key per
+# turn so the agent uses the RIGHT key (the user's, the container env, or the
+# capped hosted tier) instead of always reading process env.
+_LLM_KEY_PROVIDER = build_llm_key_provider(get_settings(), _KEY_VAULT)
 
 
 # =============================================================================
@@ -657,15 +668,25 @@ async def list_models(identity: Identity = Depends(get_identity)):
 # CHAT ENDPOINTS
 # =============================================================================
 
-async def _read_thread_history(thread_id: str, model_name: str) -> List[Dict[str, Any]]:
+async def _read_thread_history(thread_id: str, model_name: str, uid: Optional[str] = None) -> List[Dict[str, Any]]:
     """Read one LangGraph thread's messages as API history (keyed by thread_id).
 
     Shared by the legacy /api/chat/{session_id}/history (thread_id == session_id =
     Chat 1) and the per-thread history endpoint. Workspace is irrelevant here —
-    this only reads conversation state.
+    this only reads conversation state (no LLM call is made).
+
+    Building the agent constructs an LLM client, which needs a key — but a user
+    may have none yet. Resolve best-effort and tolerate failure (api_key=None);
+    if construction still fails for lack of a key the callers treat it as "no
+    history" so viewing never 500s.
     """
+    api_key: Optional[str] = None
+    try:
+        api_key = _LLM_KEY_PROVIDER.resolve(uid, model_name).api_key
+    except Exception:
+        api_key = None  # no key yet — read-only path tolerates it
     async with open_checkpointer(DB_PATH) as memory:
-        agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+        agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name, api_key=api_key)
         config = {"configurable": {"thread_id": thread_id}}
         current_state = await agent_graph.aget_state(config)
 
@@ -727,7 +748,7 @@ async def get_chat_history(session_id: str, identity: Identity = Depends(get_ide
     # (metadata store) is the gate; do NOT 404 on ephemeral local-disk absence.
     try:
         # Back-compat: the default thread id == session_id.
-        return await _read_thread_history(session_id, _session_model(session_id, uid))
+        return await _read_thread_history(session_id, _session_model(session_id, uid), uid=uid)
     except Exception as e:
         # A fresh session with no LLM key has no history — return empty, not 500.
         if _is_missing_llm_error(e):
@@ -764,8 +785,12 @@ async def get_thread_history(session_id: str, tid: str, identity: Identity = Dep
     if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
         raise HTTPException(status_code=404, detail="Thread not found")
     try:
-        return await _read_thread_history(tid, _session_model(session_id, uid))
+        return await _read_thread_history(tid, _session_model(session_id, uid), uid=uid)
     except Exception as e:
+        # A thread with no LLM key configured has no readable history — empty, not 500.
+        if _is_missing_llm_error(e):
+            print(f"[INFO] No thread history (no LLM configured) for {tid}: {e}")
+            return []
         print(f"[ERROR] Loading thread history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -895,7 +920,27 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     thread_model or (meta.get("model_name") if meta else None) or DEFAULT_MODEL
                 )
 
-                agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name)
+                # Resolve the request-scoped LLM key (BYOK → container env →
+                # capped hosted Gemini). A "no usable key" / "tier exhausted"
+                # outcome is a clean, actionable error the UI turns into an
+                # "Add an API key" CTA — never a 500.
+                try:
+                    llm_key = _LLM_KEY_PROVIDER.resolve(uid, model_name)
+                except HostedTierExhausted as e:
+                    await websocket.send_json({"type": "error", "code": e.code, "error": e.message})
+                    continue
+                except ValueError as e:
+                    await websocket.send_json({"type": "error", "code": "no_key", "error": str(e)})
+                    continue
+
+                # The hosted free tier may pin a specific model — honor it so the
+                # key and the model agree, and downstream cost accounting matches.
+                if llm_key.model:
+                    model_name = normalize_model_name(llm_key.model)
+
+                agent_graph = create_architect_agent(
+                    checkpointer=memory, model_name=model_name, api_key=llm_key.api_key
+                )
                 config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
 
                 # Check for corrupted state
@@ -1005,6 +1050,15 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             cached = current_meta.get("cached_tokens", 0)
                             new_cost = calculate_cost(new_input, new_output, model_name)
                             session_manager.update_session_stats(session_id, new_input, new_output, cached, new_cost, user_id=uid)
+
+                    # Cap the shared hosted tier: charge THIS turn's tokens/cost to
+                    # the limiter so the per-user daily + global ceilings actually
+                    # bite (otherwise a free-tier user is effectively uncapped).
+                    if llm_key.source == "hosted":
+                        limiter = getattr(_LLM_KEY_PROVIDER, "limiter", None)
+                        if limiter is not None:
+                            turn_cost = calculate_cost(total_input_tokens, total_output_tokens, model_name)
+                            limiter.record(uid or "anonymous", total_input_tokens + total_output_tokens, turn_cost)
 
                     # Persist any workspace changes back to durable storage in
                     # hosted mode (cloud provider). No-op for the local provider.
