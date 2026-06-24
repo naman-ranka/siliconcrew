@@ -33,6 +33,7 @@ DEFAULT_POLICIES: Dict[str, QuotaPolicy] = {
     "anonymous": QuotaPolicy(synth_runs_per_day=0, compute_minutes_per_month=0, max_concurrent_synth=0),
     "user": QuotaPolicy(synth_runs_per_day=20, compute_minutes_per_month=600, max_concurrent_synth=1),
 }
+DEFAULT_STALE_CONCURRENCY_SEC = 30 * 60
 
 
 class QuotaExceeded(Exception):
@@ -114,9 +115,17 @@ class PostgresQuotaStore:
     for tests.
     """
 
-    def __init__(self, dsn: str, connect=None):
+    def __init__(
+        self,
+        dsn: str,
+        connect=None,
+        stale_concurrency_sec: int = DEFAULT_STALE_CONCURRENCY_SEC,
+        clock=time.time,
+    ):
         self._dsn = dsn
         self._connect_fn = connect
+        self._stale_concurrency_sec = stale_concurrency_sec
+        self._clock = clock
 
     def _connect(self):
         if self._connect_fn is not None:
@@ -130,6 +139,14 @@ class PostgresQuotaStore:
             cur.execute(
                 "CREATE TABLE IF NOT EXISTS quota_concurrency ("
                 "user_id TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0)"
+            )
+            cur.execute(
+                "ALTER TABLE quota_concurrency "
+                "ADD COLUMN IF NOT EXISTS updated_at DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+            cur.execute(
+                "UPDATE quota_concurrency SET updated_at = EXTRACT(EPOCH FROM NOW()) "
+                "WHERE updated_at = 0"
             )
             cur.execute(
                 "CREATE TABLE IF NOT EXISTS quota_daily ("
@@ -146,35 +163,54 @@ class PostgresQuotaStore:
     def try_acquire_concurrency(self, user_id, limit):
         # One transaction: ensure the row exists, lock it FOR UPDATE, then test +
         # increment. The row lock is what makes this atomic across replicas.
+        now = self._clock()
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO quota_concurrency (user_id, count) VALUES (%s, 0) "
+                "INSERT INTO quota_concurrency (user_id, count, updated_at) VALUES (%s, 0, %s) "
                 "ON CONFLICT (user_id) DO NOTHING",
-                (user_id,),
+                (user_id, now),
             )
-            cur.execute("SELECT count FROM quota_concurrency WHERE user_id = %s FOR UPDATE", (user_id,))
+            cur.execute("SELECT count, updated_at FROM quota_concurrency WHERE user_id = %s FOR UPDATE", (user_id,))
             row = cur.fetchone()
             current = row[0] if row else 0
+            updated_at = float(row[1] or 0) if row and len(row) > 1 else 0.0
             if current >= limit:
-                conn.commit()
-                return False
-            cur.execute("UPDATE quota_concurrency SET count = count + 1 WHERE user_id = %s", (user_id,))
+                if updated_at and now - updated_at > self._stale_concurrency_sec:
+                    cur.execute(
+                        "UPDATE quota_concurrency SET count = 0, updated_at = %s WHERE user_id = %s",
+                        (now, user_id),
+                    )
+                    current = 0
+                else:
+                    conn.commit()
+                    return False
+            cur.execute(
+                "UPDATE quota_concurrency SET count = count + 1, updated_at = %s WHERE user_id = %s",
+                (now, user_id),
+            )
             conn.commit()
             return True
 
     def release_concurrency(self, user_id):
+        now = self._clock()
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "UPDATE quota_concurrency SET count = GREATEST(count - 1, 0) WHERE user_id = %s",
-                (user_id,),
+                "UPDATE quota_concurrency SET count = GREATEST(count - 1, 0), updated_at = %s WHERE user_id = %s",
+                (now, user_id),
             )
             conn.commit()
 
     def get_concurrency(self, user_id):
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute("SELECT count FROM quota_concurrency WHERE user_id = %s", (user_id,))
+            cur.execute("SELECT count, updated_at FROM quota_concurrency WHERE user_id = %s", (user_id,))
             row = cur.fetchone()
-            return row[0] if row else 0
+            if not row:
+                return 0
+            current = row[0]
+            updated_at = float(row[1] or 0) if len(row) > 1 else 0.0
+            if current > 0 and updated_at and self._clock() - updated_at > self._stale_concurrency_sec:
+                return 0
+            return current
 
     def get_day_count(self, user_id, day_key):
         with self._connect() as conn, conn.cursor() as cur:

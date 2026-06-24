@@ -123,14 +123,32 @@ def test_cloud_runner_stages_in_executes_and_stages_out_on_success():
     assert vmap["orfs_logs"] == "/OpenROAD-flow-scripts/flow/logs"
 
 
-def test_cloud_runner_skips_stage_out_on_failure():
+def test_cloud_runner_stages_out_on_failure():
     runner, _client, staged = _staged_runner(
         JobExecution(succeeded=False, exit_code=2, stdout="", stderr="route failed")
     )
     result = runner.run(OrfsRequest(run_dir="/runs/synth_0008", command="make", volumes=[]))
     assert not result.success and result.exit_code == 2
     assert staged["in"] == ["/runs/synth_0008"]
-    assert staged["out"] == []  # no artifacts pulled back on failure
+    assert staged["out"] == [("/runs/synth_0008", "handle::synth_0008")]
+
+
+def test_cloud_runner_reports_stage_out_error():
+    def stage_out(_run_dir, _handle):
+        raise RuntimeError("missing out.tar.gz")
+
+    client = FakeJobClient(JobExecution(succeeded=False, exit_code=2, stdout="", stderr="pdn failed"))
+    runner = CloudJobOrfsRunner(
+        job_client=client,
+        stage_in=lambda run_dir: f"handle::{os.path.basename(run_dir)}",
+        stage_out=stage_out,
+    )
+
+    result = runner.run(OrfsRequest(run_dir="/runs/synth_0010", command="make", volumes=[]))
+
+    assert not result.success and result.exit_code == 2
+    assert "pdn failed" in result.stderr
+    assert "stage-out failed" in result.stderr
 
 
 def test_cloud_runner_surfaces_submission_error_in_envelope():

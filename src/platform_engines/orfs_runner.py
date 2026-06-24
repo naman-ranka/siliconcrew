@@ -155,10 +155,19 @@ class CloudJobOrfsRunner:
                 backend=self.backend,
             )
 
-        if execution.succeeded:
-            # Only pull artifacts back on success; on failure the local run dir
-            # keeps the config/inputs and the captured logs below for diagnosis.
+        try:
             self._stage_out(request.run_dir, handle)
+        except Exception as exc:
+            stderr = execution.stderr or ""
+            stage_out_note = f"Cloud Run Job artifact stage-out failed: {exc}"
+            return OrfsResult(
+                success=False,
+                stdout=execution.stdout,
+                stderr=f"{stderr}\n{stage_out_note}" if stderr else stage_out_note,
+                command=request.command,
+                exit_code=execution.exit_code,
+                backend=self.backend,
+            )
 
         return OrfsResult(
             success=execution.succeeded,

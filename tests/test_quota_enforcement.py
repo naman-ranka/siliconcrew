@@ -78,6 +78,32 @@ def test_concurrency_cap_blocks_second_run_and_release_frees(governed):
         assert "job_id" in third and third.get("status") == "queued"
 
 
+def test_completed_background_job_syncs_workspace_provider(governed):
+    execu, _qm, ws = governed
+    from src.platform_engines.workspace_provider import set_workspace_provider
+
+    class SyncProvider:
+        def __init__(self):
+            self.synced = []
+
+        def sync(self, session_id):
+            self.synced.append(session_id)
+
+    provider = SyncProvider()
+    set_workspace_provider(provider)
+    try:
+        with session_scope(SessionContext("s1", ws, user_id="alice", tier="user")):
+            first = _start(ws)
+            assert "job_id" in first and first.get("status") == "queued"
+            assert provider.synced == []
+
+            execu.run_all()
+
+            assert provider.synced == ["s1"]
+    finally:
+        set_workspace_provider(None)
+
+
 def test_anonymous_tier_cannot_synth(governed):
     _execu, _qm, ws = governed
     with session_scope(SessionContext("s2", ws, user_id="anon_x", tier="anonymous")):
@@ -130,6 +156,7 @@ class _FakePg:
 
     def __init__(self):
         self.counts = {}
+        self.updated_at = {}
         self.sql = []
 
     def connect(self, _dsn):
@@ -163,12 +190,19 @@ class _FakePgCursor:
         c = self.db.counts
         if "INSERT INTO quota_concurrency" in sql:
             c.setdefault(params[0], 0)
-        elif "SELECT count FROM quota_concurrency" in sql:
-            self._last = (c.get(params[0], 0),)
+            if len(params) > 1:
+                self.db.updated_at.setdefault(params[0], params[1])
+        elif "SELECT count" in sql and "FROM quota_concurrency" in sql:
+            self._last = (c.get(params[0], 0), self.db.updated_at.get(params[0], 0))
         elif "count = count + 1" in sql:
-            c[params[0]] = c.get(params[0], 0) + 1
+            self.db.updated_at[params[1]] = params[0]
+            c[params[1]] = c.get(params[1], 0) + 1
+        elif "SET count = 0" in sql:
+            self.db.updated_at[params[1]] = params[0]
+            c[params[1]] = 0
         elif "GREATEST(count - 1" in sql:
-            c[params[0]] = max(0, c.get(params[0], 0) - 1)
+            self.db.updated_at[params[1]] = params[0]
+            c[params[1]] = max(0, c.get(params[1], 0) - 1)
 
     def fetchone(self):
         return self._last
@@ -189,3 +223,22 @@ def test_postgres_store_atomic_acquire_uses_for_update():
     assert store.try_acquire_concurrency("u", 1) is True     # slot freed
     # The acquire must lock the row to be atomic across replicas.
     assert any("FOR UPDATE" in s for s in db.sql)
+
+
+def test_postgres_store_reclaims_stale_concurrency_slot():
+    db = _FakePg()
+    now = {"t": 100.0}
+    store = PostgresQuotaStore(
+        "dsn",
+        connect=db.connect,
+        stale_concurrency_sec=30,
+        clock=lambda: now["t"],
+    )
+
+    assert store.try_acquire_concurrency("u", 1) is True
+    assert store.try_acquire_concurrency("u", 1) is False
+
+    now["t"] = 131.0
+
+    assert store.try_acquire_concurrency("u", 1) is True
+    assert db.counts["u"] == 1

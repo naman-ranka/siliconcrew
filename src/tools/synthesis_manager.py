@@ -157,12 +157,37 @@ def _reserve_synth_quota():
         }
 
 
+def _sync_current_session_workspace(ctx, provider) -> None:
+    if ctx is None or provider is None:
+        return
+    sync = getattr(provider, "sync", None)
+    if callable(sync):
+        sync(ctx.session_id)
+
+
 def _submit_with_quota_release(reservation, fn, *fn_args):
     """Submit ``fn`` to the active executor, releasing the reservation when done."""
+    try:
+        from src.utils.session_context import get_current_session
+
+        ctx = get_current_session()
+    except Exception:
+        ctx = None
+    try:
+        from src.platform_engines.workspace_provider import get_workspace_provider
+
+        provider = get_workspace_provider()
+    except Exception:
+        provider = None
+
     def runner():
         try:
             return fn(*fn_args)
         finally:
+            try:
+                _sync_current_session_workspace(ctx, provider)
+            except Exception:
+                pass
             if reservation is not None and _QUOTA_MANAGER is not None:
                 try:
                     _QUOTA_MANAGER.release_synth_run(reservation)
