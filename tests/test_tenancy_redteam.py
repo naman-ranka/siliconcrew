@@ -8,10 +8,12 @@ fails, multi-tenant isolation is broken and the build should fail.
 No LangChain / heavy deps — pure store + session-manager + filesystem.
 """
 import datetime
+import shutil
 
 import pytest
 
 from src.platform_engines.metadata_store import SqliteMetadataStore
+from src.platform_engines.settings import reset_settings_cache
 from src.utils.session_manager import SessionManager
 
 
@@ -122,3 +124,22 @@ def test_self_host_unscoped_still_works(manager):
     assert manager.get_session_metadata("local_design") is not None
     assert manager.get_all_sessions() == ["local_design"]
     assert manager.owns_session("local_design", None) is True
+
+
+def test_hosted_session_list_uses_metadata_when_workspace_dir_is_ephemeral(tmp_path, monkeypatch):
+    """Hosted session lists must survive Cloud Run local-disk loss.
+
+    In hosted mode the metadata store is durable and workspaces are rehydrated
+    through WorkspaceProvider. The local scratch directory is not a reliable
+    source of truth for whether a session exists.
+    """
+    monkeypatch.setenv("SILICONCREW_HOSTED", "1")
+    reset_settings_cache()
+    try:
+        manager = SessionManager(base_dir=str(tmp_path / "ws"), db_path=str(tmp_path / "state.db"))
+        manager.create_session("cloud_design", user_id="alice")
+        shutil.rmtree(manager.get_workspace_path("cloud_design"))
+
+        assert manager.get_all_sessions(user_id="alice") == ["cloud_design"]
+    finally:
+        reset_settings_cache()

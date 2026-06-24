@@ -87,12 +87,35 @@ class SessionManager:
 
         When ``user_id`` is given, only that tenant's sessions are returned.
         """
-        if not os.path.exists(self.base_dir):
-            return []
         rows = self._store.get_all_session_rows(user_id=user_id)
-        result = [r for r in rows if os.path.isdir(os.path.join(self.base_dir, r["session_id"]))]
+        if self._uses_ephemeral_workspace_listing():
+            result = rows
+        else:
+            if not os.path.exists(self.base_dir):
+                return []
+            result = [r for r in rows if os.path.isdir(os.path.join(self.base_dir, r["session_id"]))]
         result.sort(key=lambda x: str(x.get("updated_at") or x.get("created_at") or ""), reverse=True)
         return [r["session_id"] for r in result]
+
+    def _uses_ephemeral_workspace_listing(self) -> bool:
+        """True when metadata, not local workspace dirs, is the durable list.
+
+        Hosted Cloud Run uses Postgres plus object-storage-backed scratch paths.
+        Local directories are per-instance and may disappear on cold starts, so
+        filtering metadata rows through ``os.path.isdir`` makes valid hosted
+        sessions vanish from the sidebar after refresh.
+        """
+        try:
+            from src.platform_engines.settings import get_settings
+
+            settings = get_settings()
+            return (
+                settings.hosted
+                or settings.persistence_engine == "postgres"
+                or settings.workspace_engine == "cloud"
+            )
+        except Exception:
+            return not isinstance(self._store, SqliteMetadataStore)
 
     def create_session(self, tag, model_name="gemini-3-flash-preview", project_id=None, user_id=None):
         """Creates a new session directory owned by ``user_id`` (the tenant).

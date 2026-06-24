@@ -19,6 +19,7 @@ import { AccountChip } from "@/components/auth/AccountChip";
 import { Toaster } from "./Toaster";
 import { Button } from "@/components/ui/button";
 import { CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { useAuth } from "@/lib/auth";
 
 /**
  * SiliconCrew Workbench — hardware-design-first, artifact-first.
@@ -31,6 +32,7 @@ import { CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRigh
  */
 export function Workbench() {
   const { currentSession, loadSessions, selectSession, loadWorkbench, artifactsVisible, manifest, runs, activeArtifactTab, workspaceError } = useStore();
+  const { status: authStatus } = useAuth();
   // The agent rail is collapsible so the waveform/report get full width when the
   // user is driving the pipeline themselves (re-review feedback).
   const [chatOpen, setChatOpen] = useState(true);
@@ -47,6 +49,8 @@ export function Workbench() {
   // deterministic effect (reading fresh state via getState) avoids the races a
   // multi-effect/closure approach has during first mount.
   useEffect(() => {
+    if (authStatus === "loading") return;
+
     void (async () => {
       useStore.setState({ artifactsVisible: true });
       let list = useStore.getState().sessions;
@@ -62,7 +66,7 @@ export function Workbench() {
       if (cur) await loadWorkbench();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authStatus]);
 
   return (
     <main className="h-screen w-screen overflow-hidden flex flex-col bg-background">

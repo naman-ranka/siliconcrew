@@ -521,6 +521,7 @@ export function Sidebar() {
   // Without the authStatus dependency, loadSessions() fires before the Google
   // token is restored from sessionStorage, returning an empty list.
   useEffect(() => {
+    if (authStatus === "loading") return;
     loadSessions();
     loadProjects();
   }, [loadSessions, loadProjects, authStatus]);
