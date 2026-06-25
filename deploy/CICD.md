@@ -91,6 +91,7 @@ gcloud storage buckets update "gs://${PROJECT_ID}-siliconcrew-tfstate" --version
 | `GCP_WIF_PROVIDER` | the `projects/…/providers/github-provider` string printed above |
 | `GCP_DEPLOY_SA` | `siliconcrew-deployer@<PROJECT_ID>.iam.gserviceaccount.com` |
 | `GOOGLE_OAUTH_CLIENT_ID` | your OAuth Web client id (or leave empty for no auth) |
+| `WORKOS_ISSUER` / `WORKOS_JWKS_URL` / `WORKOS_AUDIENCE` / `WORKOS_CLIENT_ID` / `MCP_RESOURCE_URL` | remote-MCP auth + web/MCP unification (hosted only; leave empty to keep Google sign-in). See `deploy/MCP_REMOTE_AUTH.md` |
 | `BACKEND_IMAGE` | bootstrap with `us-docker.pkg.dev/cloudrun/container/hello` |
 | `FRONTEND_IMAGE` | bootstrap with `us-docker.pkg.dev/cloudrun/container/hello` |
 | `ORFS_IMAGE` | the real ORFS image once pushed (see bootstrap) |
