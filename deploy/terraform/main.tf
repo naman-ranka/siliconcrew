@@ -263,6 +263,18 @@ resource "google_cloud_run_v2_service" "backend" {
         value = var.google_oauth_client_id
       }
       env {
+        name  = "WORKOS_CLIENT_ID"
+        value = var.workos_client_id
+      }
+      env {
+        name  = "WORKOS_AUDIENCE"
+        value = var.workos_audience
+      }
+      env {
+        name  = "MCP_RESOURCE_URL"
+        value = var.mcp_resource_url
+      }
+      env {
         name  = "WORKSPACE_BUCKET"
         value = google_storage_bucket.workspaces.name
       }

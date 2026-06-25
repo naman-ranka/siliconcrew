@@ -52,6 +52,32 @@ variable "google_oauth_client_id" {
   EOT
 }
 
+# --- Auth (WorkOS AuthKit remote auth + identity unification) ---
+variable "workos_client_id" {
+  type        = string
+  default     = ""
+  description = "WorkOS Client ID. Enables unified AuthKit authentication across web and remote MCP."
+}
+
+variable "workos_audience" {
+  type        = string
+  default     = ""
+  description = "MCP service audience (the registered resource indicator, e.g. https://api.siliconcrew.app/mcp). Leave empty on web-only."
+}
+
+variable "mcp_resource_url" {
+  type        = string
+  default     = ""
+  description = "Public MCP resource URL named in RFC 9728 metadata."
+}
+
+variable "workos_redirect_uri" {
+  type        = string
+  default     = ""
+  description = "Custom redirect URI callback registered in WorkOS (defaults to browser origin if empty)."
+}
+
+
 # --- Cloud SQL ---
 variable "db_tier" {
   type    = string
