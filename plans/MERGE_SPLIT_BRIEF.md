@@ -35,6 +35,33 @@ up identical to the proven branch; only the history becomes clean.
   build + `terraform fmt -check`. The binding CI run happens when the owner merges
   the staging branch to `main`; you make it pass by verifying each layer locally.
 
+## History context — WHY we curate onto main (read this)
+`origin/main` and `origin/claude/integration-p1p2` have **NO common ancestor.** At
+some point the integration branch's history was **rewritten to scrub a file**, which
+changed every commit SHA — so the branch no longer shares any commits with `main`.
+That is exactly why PR #13 (a direct integration→main merge) shows **243 commits
+going back to 2025-11-26** instead of just the new work: with no merge base, GitHub
+shows the entire history.
+
+The real work on this branch starts **2026-06-21** (the `Phase 0…` commits and
+everything after — ~145 commits). Everything *before* June 21 is the original
+project, which **already exists in `main`** (up to `0c3eb3c`, 2026-06-13) under its
+correct SHAs.
+
+**This is precisely why we curate instead of merging PR #13.** Because you build
+`release/clean-main` **on top of `origin/main`** and lay down fresh clean commits for
+**only the June-21-onward work**, the old pre-June-21 commits never reappear — they
+remain `main`'s existing history. You reproduce the *content delta* (main → the
+integration tip), not the history. Do NOT base off the integration branch, do NOT
+try to merge-base or replay its commits, and do NOT re-create any pre-June-21 commit.
+
+On the scrubbed file: there is currently **no file that exists in `main` but is
+missing from the integration tip** (verified), so the rewrite does not affect the
+final content — the tip trees match. The content losslessness check (below) is
+therefore unaffected. (If the owner wants to drop additional files later, that's a
+separate exclude, decided then.)
+
+
 ## Rules of engagement (non-negotiable)
 1. **Reproduce, don't improve.** Pull exact content from the branch. Do NOT refactor,
    rename, or "fix" anything. If a layer seems to need a code change to go green that
