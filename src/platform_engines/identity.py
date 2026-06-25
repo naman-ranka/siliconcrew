@@ -108,20 +108,27 @@ class GoogleOAuthVerifier:
 
 
 class WorkOSVerifier:
-    """Verify a WorkOS-issued access token (hosted remote-MCP auth only).
+    """Verify a WorkOS-issued access token (hosted remote-MCP + web auth).
 
     WorkOS runs the login/consent screens and issues the token; we are only the
     token-checker. This validates the RS256 signature against WorkOS's published
-    JWKS, checks issuer/audience/expiry (standard ``PyJWT`` — no hand-rolled
-    crypto), then maps the verified claims to an :class:`Identity`.
+    JWKS, checks issuer/expiry, and (when configured) audience — standard
+    ``PyJWT``, no hand-rolled crypto. The verified subject becomes
+    ``workos_<sub>`` — the same scheme web and MCP share so one user_id spans both.
 
-    The verified subject becomes ``workos_<sub>`` — the same scheme the deployed
-    web sign-in uses once unified (Slice 3), so web and MCP share one ``user_id``.
+    Audience is OPTIONAL by design, because the two token profiles differ:
+
+      * **MCP** (resource server): WorkOS issues an audience-bound token whose
+        ``aud`` is our registered resource indicator (the ``/mcp`` URL). Set
+        ``audience`` so we require + match it (the resource-binding the MCP spec
+        wants; an unbound token is rejected).
+      * **Web** (AuthKit SPA): the access token carries *no* ``aud`` claim. Leave
+        ``audience`` empty so we validate issuer + signature + expiry only.
     """
 
     def __init__(self, issuer: str, audience: str, jwks_url: str, _verify_fn=None):
-        self._issuer = issuer
-        self._audience = audience
+        self._issuer = issuer or None
+        self._audience = audience or None
         self._jwks_url = jwks_url
         self._verify_fn = _verify_fn  # injectable for tests (no network / JWKS)
         self._jwk_client = None
@@ -153,8 +160,14 @@ class WorkOSVerifier:
                 token,
                 signing_key.key,
                 algorithms=["RS256"],
-                audience=self._audience,
                 issuer=self._issuer,
+                audience=self._audience,
+                options={
+                    "verify_iss": self._issuer is not None,
+                    # AuthKit web tokens carry no `aud`; only enforce it when an
+                    # audience (the MCP resource indicator) is configured.
+                    "verify_aud": self._audience is not None,
+                },
             )
         except jwt.PyJWTError as exc:  # signature/issuer/audience/expiry failures
             raise AuthError("invalid_token", f"Token validation failed: {exc}") from exc

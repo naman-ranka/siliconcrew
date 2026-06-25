@@ -87,13 +87,14 @@ class PlatformSettings:
 
     @property
     def workos_configured(self) -> bool:
-        """True when WorkOS token validation can run (hosted MCP auth).
+        """True when WorkOS token validation can run (hosted web + MCP auth).
 
-        Requires the issuer, the JWKS endpoint, and the expected audience; the
-        absence of any one disables remote-MCP auth (and is a misconfiguration
-        in hosted mode, surfaced as a 401 rather than silent anonymous access).
+        Requires the issuer and the JWKS endpoint (both derivable from the client
+        id — see :func:`get_settings`). Audience is OPTIONAL: it is required only
+        on the MCP resource server (where the token is audience-bound to the
+        registered resource indicator); AuthKit web tokens carry no ``aud``.
         """
-        return bool(self.workos_issuer and self.workos_jwks_url and self.workos_audience)
+        return bool(self.workos_issuer and self.workos_jwks_url)
 
     @property
     def is_cloud_orfs(self) -> bool:
@@ -111,6 +112,16 @@ def get_settings() -> PlatformSettings:
 
     # Each engine defaults to its local impl, flipping to cloud under HOSTED,
     # but every choice is independently overridable for staged rollout.
+    # WorkOS (hosted auth). The issuer and JWKS endpoint are derivable from the
+    # client id (api.workos.com defaults), so an operator usually sets only
+    # WORKOS_CLIENT_ID (+ WORKOS_AUDIENCE on the MCP resource server). A custom
+    # auth domain overrides the issuer/JWKS explicitly.
+    workos_client_id = _env("WORKOS_CLIENT_ID")
+    workos_issuer = _env("WORKOS_ISSUER") or ("https://api.workos.com/" if workos_client_id else "")
+    workos_jwks_url = _env("WORKOS_JWKS_URL") or (
+        f"https://api.workos.com/sso/jwks/{workos_client_id}" if workos_client_id else ""
+    )
+
     orfs_engine = _env("ORFS_ENGINE", "cloud_job" if hosted else "local_docker")
     sim_engine = _env("SIM_ENGINE", "native" if hosted else "docker")
     workspace_engine = _env("WORKSPACE_ENGINE", "cloud" if hosted else "local")
@@ -128,10 +139,10 @@ def get_settings() -> PlatformSettings:
         orfs_service_token=_env("ORFS_SERVICE_TOKEN"),
         sim_engine=sim_engine,
         google_oauth_client_id=_env("GOOGLE_OAUTH_CLIENT_ID"),
-        workos_issuer=_env("WORKOS_ISSUER"),
-        workos_jwks_url=_env("WORKOS_JWKS_URL"),
+        workos_issuer=workos_issuer,
+        workos_jwks_url=workos_jwks_url,
         workos_audience=_env("WORKOS_AUDIENCE"),
-        workos_client_id=_env("WORKOS_CLIENT_ID"),
+        workos_client_id=workos_client_id,
         mcp_resource_url=_env("MCP_RESOURCE_URL"),
         workspace_engine=workspace_engine,
         workspace_bucket=_env("WORKSPACE_BUCKET"),

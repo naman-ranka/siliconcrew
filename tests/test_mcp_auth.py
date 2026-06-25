@@ -39,7 +39,7 @@ class FakeSettings:
 
     @property
     def workos_configured(self) -> bool:
-        return bool(self.workos_issuer and self.workos_jwks_url and self.workos_audience)
+        return bool(self.workos_issuer and self.workos_jwks_url)
 
 
 def _claims_for(token: str) -> dict:
@@ -70,6 +70,61 @@ def test_workos_verifier_rejects_missing_subject():
     with pytest.raises(AuthError) as ei:
         v.verify("tok")
     assert ei.value.code == "invalid_token"
+
+
+# --- WorkOSVerifier real-crypto: audience optional (web) vs required (MCP) ---
+# AuthKit web tokens carry NO `aud`; MCP tokens are audience-bound to the
+# registered resource. The verifier must accept the former (audience unset) and
+# require a match on the latter (audience set). Round-trips real RS256 tokens,
+# bypassing only the network JWKS fetch.
+
+ISS = "https://api.workos.com/"
+
+
+def _rsa_signed(payload: dict):
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import jwt
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    token = jwt.encode(payload, key, algorithm="RS256")
+    return token, key.public_key()
+
+
+def _verifier_with_key(public_key, *, audience=""):
+    from types import SimpleNamespace
+
+    v = WorkOSVerifier(issuer=ISS, audience=audience, jwks_url="unused")
+    v._jwk_client = SimpleNamespace(
+        get_signing_key_from_jwt=lambda _t: SimpleNamespace(key=public_key)
+    )
+    return v
+
+
+def test_verifier_accepts_web_token_without_aud_when_audience_unset():
+    token, pub = _rsa_signed({"sub": "user_01", "email": "u@x.io", "iss": ISS})
+    ident = _verifier_with_key(pub, audience="").verify(token)  # web: no audience
+    assert ident.user_id == "workos_user_01" and ident.email == "u@x.io"
+
+
+def test_verifier_requires_aud_on_mcp_when_audience_set():
+    res = "https://mcp.siliconcrew.app/mcp"
+    # MCP audience configured but the token has no aud -> rejected.
+    token, pub = _rsa_signed({"sub": "user_01", "iss": ISS})
+    with pytest.raises(AuthError):
+        _verifier_with_key(pub, audience=res).verify(token)
+    # Audience-bound token matching the resource -> accepted.
+    token2, pub2 = _rsa_signed({"sub": "user_01", "iss": ISS, "aud": res})
+    assert _verifier_with_key(pub2, audience=res).verify(token2).user_id == "workos_user_01"
+    # Wrong audience -> rejected.
+    token3, pub3 = _rsa_signed({"sub": "user_01", "iss": ISS, "aud": "https://other/mcp"})
+    with pytest.raises(AuthError):
+        _verifier_with_key(pub3, audience=res).verify(token3)
+
+
+def test_verifier_rejects_wrong_issuer():
+    token, pub = _rsa_signed({"sub": "user_01", "iss": "https://evil.example/"})
+    with pytest.raises(AuthError):
+        _verifier_with_key(pub, audience="").verify(token)
 
 
 # --- resolve_bearer_identity: strict, no anonymous-degrade ------------------
