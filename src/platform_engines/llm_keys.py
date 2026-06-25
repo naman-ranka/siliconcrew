@@ -124,6 +124,10 @@ class WrappedKeyStore(Protocol):
     def put(self, user_id: str, provider: str, blob: str) -> None: ...
     def get(self, user_id: str, provider: str) -> Optional[str]: ...
     def delete(self, user_id: str, provider: str) -> None: ...
+    # identity migration (Slice 3): move a user's stored keys to a new id. The
+    # wrapped blob is independent of user_id (random DEK wrapped by the global
+    # KEK), so re-keying the owner keeps the keys decryptable — no rewrap.
+    def reassign_user(self, old_user_id: str, new_user_id: str) -> int: ...
 
 
 class InMemoryWrappedKeyStore:
@@ -138,6 +142,17 @@ class InMemoryWrappedKeyStore:
 
     def delete(self, user_id, provider):
         self._d.pop((user_id, provider), None)
+
+    def reassign_user(self, old_user_id, new_user_id) -> int:
+        if not old_user_id or not new_user_id or old_user_id == new_user_id:
+            return 0
+        moved = 0
+        for (uid, provider), blob in list(self._d.items()):
+            if uid == old_user_id:
+                self._d[(new_user_id, provider)] = blob
+                del self._d[(uid, provider)]
+                moved += 1
+        return moved
 
 
 class SqliteWrappedKeyStore:
@@ -185,6 +200,17 @@ class SqliteWrappedKeyStore:
             conn.execute("DELETE FROM byok_keys WHERE user_id = ? AND provider = ?", (user_id, provider))
             conn.commit()
 
+    def reassign_user(self, old_user_id, new_user_id) -> int:
+        if not old_user_id or not new_user_id or old_user_id == new_user_id:
+            return 0
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE byok_keys SET user_id = ? WHERE user_id = ?",
+                (new_user_id, old_user_id),
+            )
+            conn.commit()
+            return cur.rowcount
+
 
 class PostgresWrappedKeyStore:
     """Persist wrapped BYOK blobs in Cloud SQL (shared across replicas)."""
@@ -229,6 +255,17 @@ class PostgresWrappedKeyStore:
             cur.execute("DELETE FROM byok_keys WHERE user_id = %s AND provider = %s", (user_id, provider))
             conn.commit()
 
+    def reassign_user(self, old_user_id, new_user_id) -> int:
+        if not old_user_id or not new_user_id or old_user_id == new_user_id:
+            return 0
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE byok_keys SET user_id = %s WHERE user_id = %s",
+                (new_user_id, old_user_id),
+            )
+            conn.commit()
+            return cur.rowcount
+
 
 class EnvelopeKeyVault:
     """Store/retrieve BYOK keys with envelope encryption.
@@ -271,6 +308,14 @@ class EnvelopeKeyVault:
 
     def delete_key(self, user_id: str, provider: str) -> None:
         self._store.delete(user_id, provider)
+
+    def reassign_user(self, old_user_id: str, new_user_id: str) -> int:
+        """Move all of a user's BYOK keys to a new id (Slice-3 unification).
+
+        No decrypt/rewrap: the wrapped DEK is independent of the owner id, so the
+        keys keep working under the new id.
+        """
+        return self._store.reassign_user(old_user_id, new_user_id)
 
 
 # ---------------------------------------------------------------------------

@@ -85,11 +85,26 @@ def parse_bearer(authorization: Optional[str]) -> Optional[str]:
 
 
 def build_verifier(settings=None) -> Optional[IdentityVerifier]:
-    """Construct the OAuth verifier from settings, or None if unconfigured."""
+    """Construct the token verifier from settings, or None if unconfigured.
+
+    Prefers **WorkOS** when configured (Slice 3 identity unification): the
+    deployed web sign-in then validates the same WorkOS token the MCP path does,
+    so web and MCP resolve to one ``workos_<sub>`` user_id and a user's sessions
+    show up in both places. Falls back to Google OAuth (today's direct sign-in)
+    when WorkOS is not configured — so nothing changes until WORKOS_* is set.
+    """
     if settings is None:
         from src.platform_engines.settings import get_settings
 
         settings = get_settings()
+    if getattr(settings, "workos_configured", False):
+        from src.platform_engines.identity import WorkOSVerifier
+
+        return WorkOSVerifier(
+            issuer=settings.workos_issuer,
+            audience=settings.workos_audience,
+            jwks_url=settings.workos_jwks_url,
+        )
     if settings.google_oauth_client_id:
         return GoogleOAuthVerifier(settings.google_oauth_client_id)
     return None

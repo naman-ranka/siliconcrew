@@ -60,6 +60,10 @@ class MetadataStore(Protocol):
                       title: Optional[str] = None, model: Optional[str] = None,
                       last_active: Any = None) -> None: ...
     def delete_thread(self, thread_id: str, user_id: Optional[str] = None) -> None: ...
+    # identity migration (operator tool, Slice 3): re-key every row owned by
+    # old_user_id to new_user_id. Used to unify google_<sub> -> workos_<sub>
+    # when the deployed web sign-in moves to WorkOS. Returns rows moved.
+    def reassign_user(self, old_user_id: str, new_user_id: str) -> int: ...
 
 
 class DuplicateProject(Exception):
@@ -381,6 +385,31 @@ class SqliteMetadataStore:
             except PermissionError:
                 print("Could not delete database file. It might be in use.")
 
+    def reassign_user(self, old_user_id: str, new_user_id: str) -> int:
+        """Re-key every row owned by ``old_user_id`` to ``new_user_id`` (Slice 3).
+
+        The identity-unification migration primitive: when the deployed web
+        sign-in moves to WorkOS, a user's id changes from ``google_<sub>`` to
+        ``workos_<sub>`` (linked by verified email). This moves their projects,
+        sessions, and chat threads to the new id so their data keeps showing up.
+        Operator-invoked and idempotent (re-running moves nothing). Returns the
+        number of rows moved.
+        """
+        if not old_user_id or not new_user_id:
+            raise ValueError("reassign_user requires both old and new user_id")
+        if old_user_id == new_user_id:
+            return 0
+        with self._connect() as conn:
+            total = 0
+            for table in ("projects", "session_metadata", "chat_threads"):
+                cur = conn.execute(
+                    f"UPDATE {table} SET user_id = ? WHERE user_id = ?",
+                    (new_user_id, old_user_id),
+                )
+                total += cur.rowcount
+            conn.commit()
+        return total
+
     @staticmethod
     def _owner_clause(user_id):
         return (" AND user_id = ?", (user_id,)) if user_id is not None else ("", ())
@@ -611,6 +640,26 @@ class PostgresMetadataStore:
             conn.commit()
         # Checkpoints live in the LangGraph store (sqlite state.db in self-host);
         # Postgres deployments prune via the checkpointer's own retention.
+
+    def reassign_user(self, old_user_id: str, new_user_id: str) -> int:
+        """Postgres parity for the Slice-3 identity-unification re-key.
+
+        See :meth:`SqliteMetadataStore.reassign_user`.
+        """
+        if not old_user_id or not new_user_id:
+            raise ValueError("reassign_user requires both old and new user_id")
+        if old_user_id == new_user_id:
+            return 0
+        total = 0
+        with self._connect() as conn, conn.cursor() as cur:
+            for table in ("projects", "session_metadata", "chat_threads"):
+                cur.execute(
+                    f"UPDATE {table} SET user_id = %s WHERE user_id = %s",
+                    (new_user_id, old_user_id),
+                )
+                total += cur.rowcount
+            conn.commit()
+        return total
 
     # -- helpers --
     @staticmethod
