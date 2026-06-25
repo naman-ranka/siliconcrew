@@ -642,3 +642,5 @@ information needed to pass was frequently PRESENT (explicit spec + a failing sim
 
 Formal verdict: **adoption solved (un-gating works), value FIXABLE-not-fundamental** — needs #1+#2+#3
 together; it is NOT a free lever as-is.
+
+- rc5_0001 (claude): FAIL 0/1, leak-CLEAN -> the codex rc5 PASS (dataset-read leak) was a false pass; honest verdict FAIL. Contaminated-confirmed.

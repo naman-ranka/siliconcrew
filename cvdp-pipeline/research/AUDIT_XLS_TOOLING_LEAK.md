@@ -139,3 +139,40 @@ never once been tried** on CVDP. Estimated upside: a handful of the ~12 control/
 4. **XLS: stop investing** — non-lever, confirmed across auto/forced/manual eras; the one "win" was a leak.
 5. **cocotb only matters wired to an independent oracle** — folds into the independent-oracle mechanism
    already identified as lever #1.
+
+---
+
+## 6. Formal-tools experiment — CONCLUSION (15/15 graded, all leak-scanned)
+
+Un-gated sby_tool + cocotb_tool docstrings (neutral/generic), benchmark-prompt nudge to use them.
+Re-ran the 10 leak-"unconfirmed" problems (codex-5 + claude-10).
+
+**(a) Formal verdict — adoption SOLVED, value FIXABLE-not-fundamental.**
+- Adoption flipped 0→high instantly (codex & claude both use sby heavily; event_storing sby=8, custom_fifo
+  codex=10/claude=14). The docstring gate WAS the blocker.
+- But value is **confirmatory-on-correct / ineffective-on-wrong**: on already-correct designs formal just
+  confirms (incidental); on the one wrong-design control case with heavy formal use (traffic_light, 10
+  sby calls) it FAILED to catch a one-char spec-inversion bug. Three causes: (i) the agent writes
+  **shallow self-derived properties** (timer trivia, never the FSM transition that was wrong) — formal
+  inherits its spec misreading; (ii) **broken formal infra** — every sby call errored ("no SMT solver
+  available", clock-constraint, path), 0 proofs actually completed; (iii) on failure the agent
+  **weakens the property** instead of fixing RTL (oracle-drift in formal clothing).
+- ⇒ Not a free lever. Needs: solver install (the user has since fixed sby) + spec-derived DEEP properties
+  (the agent won't write them unprompted) + the same anti-drift discipline. Worth re-testing now that the
+  solver is fixed.
+
+**(b) Integrity — `leak_detector.py` permanent gate.** Honest **51/92** (was 63); 12 problems passed
+ONLY via leaked runs. The 10 unconfirmed resolved: **genuine clean = event_storing, custom_fifo (×2
+agents)**; **contaminated (clean re-run FAILS) = ph_0013, traffic_light (×2), spi_complex_mult, lfsr, rc5,
+dyn_eq_0001, ttc_lite, sigma_delta** (~2 genuine / 8 false-passes of 10) — consistent with the 63→51 drop.
+
+**(c) Implementation/debug-limited.** poly_decimator had the EXACT expected vectors and its self-test
+passed, yet container failed — root cause implementation + debug-convergence, not comprehension. Plus a
+concrete tooling bug: host iverilog can't propagate element-wise unpacked-array port drives → spurious X
+→ the agent chases a phantom bug.
+
+**(d) Next lever (in flight): the Python golden-model verification FLOW** (b32, claude) — prompt now
+orders: write a Python reference from the spec FIRST → generate expected vectors → derive the testbench
+from them → fix RTL not test on disagreement. Tests whether an independent (spec-derived, RTL-blind)
+oracle converts the implementation-limited fails. User rejected the testbench-edit "anti-drift guard" as
+benchmark-overfit custom logic; the golden-FLOW is the general, standard-practice version.
