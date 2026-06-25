@@ -103,3 +103,29 @@ def test_hosted_mounts_auth_middleware_and_metadata_route(server, monkeypatch):
     routes = server._well_known_routes()
     assert len(routes) == 1 and routes[0].path == PROTECTED_RESOURCE_PATH
     assert "WorkOS" in server._auth_banner()
+
+
+# --- Slice 4: existing guards (quota + capability) flow off per-request id ---
+
+
+def test_synth_capability_gating_consults_per_request_identity(server):
+    """call_tool's capability gate (authorize) reads the in-flight identity, not a
+    process-wide one — defense-in-depth over MCP. An anonymous in-flight identity
+    is refused a synth tool before any compute runs; the quota half (user_id/tier
+    -> run_in_session -> SessionContext) is covered by test_mcp_isolation."""
+    import asyncio
+
+    from src.platform_engines.identity import new_anonymous
+
+    server._hosted = True
+    sid = server.session_manager.create_session("gate", user_id="workos_alice")
+    server.current_session = sid
+
+    token = _bind_request(new_anonymous("mcp"))
+    try:
+        out = asyncio.run(server.call_tool("start_synthesis", {}))
+    finally:
+        request_ctx.reset(token)
+
+    # Refused by capability gating (anonymous can't synth) — synth never ran.
+    assert "❌" in out[0].text
