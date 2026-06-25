@@ -207,3 +207,27 @@ bench-orchestrator/configs/cvdp_rerun*.yaml
 bench-orchestrator/configs/cvdp_six_*.yaml
 bench-orchestrator/configs/cvdp_agy_test.yaml
 bench-orchestrator/configs/cvdp_xls_*.yaml
+
+# Local dev / review scratch
+/.playwright-mcp/
+frontend/.playwright-mcp/
+/real-*.png
+
+# Persona/review scratch scripts (Playwright node)
+/frontend/*.mjs
+!/frontend/next.config.mjs
+!/frontend/postcss.config.mjs
+/frontend/_*.js
+
+# Terraform local files
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+deploy/terraform/terraform.tfvars
+deploy/terraform/terraform.exe
+deploy/terraform/LICENSE.txt
+
+# GCP service account keys
+gcp-key.json
+
