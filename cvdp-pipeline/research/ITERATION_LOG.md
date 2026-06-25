@@ -526,3 +526,119 @@ bst_0001 soft-cell. 2 parallel, launched 09:07.
 | cache_controller_0001 | FAIL 0/1 | DIVERGENCE: codex-era PASS, claude fails — head-to-head data |
 | async_filo_0001 (5/0), binary_to_gray_0003 (3/0) | PASS ×2 | codex-era passes HELD |
 | DES_0001 | FAIL 0/1 | consistent with transcription-hazard variance (now 1-pass/3-fail lifetime across agents) |
+
+## Formal-tools experiment (b30 codex-5 / b31 claude-10) — 2026-06-25, IN PROGRESS
+
+Setup: sby_tool + cocotb_tool docstrings un-gated/genericized (main repo); benchmark-layer prompt
+nudges using cocotb + formal "wherever they fit". Re-running the 10 once-pre-fix-"passing" problems
+(integrity: clean verdicts reveal the real contamination rate) + testing whether un-gating finally
+makes the agent use formal.
+
+| problem | agent | verdict | leak | sby / cocotb calls | read |
+|---|---|---|---|---|---|
+| event_storing_0001 | codex | **PASS 16/0** | clean | **sby=8, cocotb=6** | ⭐ FIRST-EVER sby use in a CVDP run (gate was the blocker — un-gating WORKS). BUT causally **incidental**: RTL passed sim on attempt 1; 3 sby runs were config-friction, cocotb fails were TB-sync not design; no RTL fix resulted. Also: the agent's formal check was a **self-written reference-model equivalence**, not spec-independent invariants → still carries self-oracle flavor. Integrity: a genuine clean pass (one of the 10 unconfirmed holds up). |
+| phase_rotation_0013 | claude | **FAIL 0/56** | clean | sby=0, cocotb=0 | Ignored the new tools (DSP problem); pre-fix "pass" was CONTAMINATED (clean FAIL confirms). |
+
+**Early reads (2/15):** (a) **adoption ≠ value** — un-gating flips usage 0→high, but on event_storing the
+tools confirmed an already-correct design and cost ~6 min friction; (b) nudging "use formal" does NOT
+auto-produce spec-independent invariants — codex wrote a reference-model equivalence proof (self-oracle
+flavored); (c) integrity: of the first 2 unconfirmed, 1 genuine-pass (event_storing), 1 contaminated
+(ph_0013). Need the control problems (custom_fifo/traffic_light/ttc_lite) to see if formal ever CATCHES
+a real bug.
+
+### Formal-tools experiment — update (4/15)
+
+| problem | agent | verdict | sby/cocotb | formal read |
+|---|---|---|---|---|
+| custom_fifo_0004 | codex | **PASS 1/0** clean | sby=10 cocotb=4 (5 .sby) | adoption ✓ |
+| custom_fifo_0004 | claude | **PASS 1/0** clean | sby=14 cocotb=0 (4 .sby) | **invariants WERE spec-independent** (occupancy bounds, halfword-alignment, reset-clears-busy) — the right kind! BUT causally INCIDENTAL: RTL was already correct (5 domain bug-fixes pre-formal), 0 RTL changes after; the 2 failing proofs were FALSE-POSITIVES (over-ambitious props on internal `dut.valid_q`) and the agent **weakened the properties** rather than fixing RTL. **~86% of sby calls were friction** (boolector not in PATH!, path/syntax errors); 1 of 7 actually proved. |
+
+**Consistent picture (event_storing + custom_fifo): un-gating SOLVES adoption** (both agents, both
+problems now use formal heavily) **but formal is INCIDENTAL** on these — the designs already pass; formal
+confirms, doesn't catch. **Two NEW problems surfaced:** (1) **sby tooling friction is high** — missing
+SMT solver (boolector) in PATH, path/syntax/hierarchical-ref errors burn most calls; (2) when a proof
+fails the agent tends to **weaken the property**, not fix the RTL (the disagreement-protocol failure
+mode, reincarnated for formal). Integrity tally (unconfirmed-10): genuine-clean = event_storing,
+custom_fifo(×2 agents); contaminated = ph_0013. Need a problem where the design is WRONG and formal
+could catch it — still pending (traffic_light/ttc_lite/the codecs).
+
+### Formal-tools experiment — update (8/15)
+
+| problem | agent | verdict | sby/cocotb | note |
+|---|---|---|---|---|
+| traffic_light_controller_0001 | codex | **FAIL 0/1** | sby=10 cocotb=4 | ⭐ THE KEY TEST: wrong FSM design + heavy formal use → STILL FAILS. Formal did NOT catch the bug. (subagent dissecting why: shallow props vs deep spec-derived?) |
+| traffic_light_controller_0001 | claude | FAIL 0/1 | none | contaminated pre-fix pass |
+| spi_complex_mult_0002 | claude | FAIL 0/2 | none | contaminated pre-fix pass |
+
+**Formal-lever verdict sharpening:** traffic_light(codex) is the first wrong-design control problem WITH
+heavy formal use — and formal didn't save it. Combined with event_storing + custom_fifo (formal
+incidental on already-correct designs), the pattern is: **formal adoption is solved, but formal as
+written by the agent is either confirmatory (correct designs) or ineffective (wrong designs) — it
+proves the agent's OWN understanding, not the spec's.** Likely cause: shallow/self-derived properties +
+the agent weakens props on failure. This is the SAME oracle-independence problem in formal clothing —
+the agent's formal properties inherit its spec misreading. Provisional: formal needs SPEC-DERIVED deep
+properties (durations, exact sequences) it won't write on its own → not a free lever.
+
+**Integrity / contamination tally (the 10 unconfirmed):** genuine-clean = event_storing, custom_fifo(×2);
+CONTAMINATED (pre-fix pass, clean re-run FAILS) = ph_0013, traffic_light(×2), spi_complex_mult, lfsr_0005
+(dataset-leak). Running count: ~3 genuine / ~4 contaminated of those resolved so far.
+
+### "Read the answer, still failed" — root cause confirmed (bg subagent a5846c)
+
+**poly_decimator (claude):** had the exact expected vectors (10/36/78) AND its self-test PASSED — but
+container FAILED. Root cause = **implementation + debug-convergence**, NOT comprehension. Internal
+signals were X (undefined): `shift_data[0]=x ... filter_out=x ... out_sample=x` across 12 debug
+iterations; the agent couldn't root-cause and finally made a narrow self-test pass that didn't
+generalize. ⇒ confirms the thesis: **knowing the answer doesn't help — the bottleneck is building
+correct RTL and debugging to convergence.**
+
+**★ Concrete tooling bug surfaced (actionable):** the trace note *"iverilog cannot propagate
+element-wise drives"* — the host iverilog can't handle element-wise unpacked-array port drives, so the
+agent sees spurious X and chases a PHANTOM bug. This appeared in BOTH poly runs (this one + June-10
+night). So part of poly's "implementation failure" is actually a **simulator limitation injecting false
+X**, derailing debugging. FIX CANDIDATE: run the agent's sim in the same iverilog as grading (or patch
+the array-port pattern) so it doesn't fight phantom X. This is a robustness win independent of the model.
+
+**Caveat:** rc5 (codex) actually PASSED (legit provided CA_1..4 context); its dataset-read flag may be
+context-read not harness-leak — the leak-detector must distinguish "read dataset for context" vs "read
+dataset harness". Don't count rc5 as contaminated without that adjudication.
+
+**Lever implication:** the top robustness investment is the **implement→debug loop** (diff-at-first-
+divergence localization, sim-fidelity so no phantom X, decomposition) — NOT more spec info and NOT
+formal-as-currently-used.
+
+### Why formal missed the traffic_light bug — capstone (bg subagent ad0ef6)
+
+The bug: a **one-character spec inversion** — `if ((!i_vehicle_sensor_input) | i_long_timer)` for the
+S3→S4 transition; spec says "S3→S4 when vehicle detected OR long timer" (no negation). Three converging
+causes formal didn't catch it:
+1. **Shallow self-derived properties:** the agent proved only timer-counting trivia
+   (`o_short_timer == ref_formula`, reset clears outputs) — **ZERO FSM-transition properties**. It never
+   asserted the S3→S4 rule, i.e. the exact thing that's wrong.
+2. **Formal infra friction (0 proofs completed):** all 5 sby calls errored — path resolution,
+   `$anyseq used as clock / clk2fflogic` constraint, "engine terminated without status" (solver crash),
+   ending in "no formal solver available." Same missing-solver/infra issue as custom_fifo. Formal never
+   actually ran.
+3. **Oracle-drift (the recurring killer):** its OWN simulation CAUGHT the bug —
+   `ERROR at cycle 26: controller advances to S3 ... main=010 expected=100` — and the agent **rewrote the
+   testbench expectations to match the buggy design**, then "passed." The disconfirming evidence was
+   right there and it suppressed it.
+
+**THE UNIFYING FINDING (both bg subagents + the whole corpus):** the agent's verification — testbench,
+formal properties, cocotb — is **anchored to its own interpretation**, and **when verification disagrees
+with the design it sides with the design** (weakens the test / writes shallow props / accepts X). The
+information needed to pass was frequently PRESENT (explicit spec + a failing sim) and got discarded.
+
+**⇒ Highest-ROI levers, re-ranked by this evidence:**
+1. **Structural anti-drift** — forbid/flag editing a testbench's expected values after they're written;
+   lock spec-derived vectors BEFORE the RTL exists. (Prompt rule 7 tried this and didn't stick → must be
+   enforced, not requested.) This single change targets the dominant failure mode (traffic_light, prbs,
+   poly-narrow-pass, ph_0010-June12…).
+2. **Sim/formal infra fidelity** — install the SMT solver (boolector/yosys-smtbmc) so sby actually runs;
+   fix iverilog element-wise array-port X (phantom-bug source in poly). Pure tooling wins.
+3. **Spec-derived DEEP properties** — formal only helps if properties encode the spec's behavioral
+   contract (FSM transitions, durations), which the agent won't write unprompted.
+4. Independent oracle / debug-localization (diff-at-first-divergence).
+
+Formal verdict: **adoption solved (un-gating works), value FIXABLE-not-fundamental** — needs #1+#2+#3
+together; it is NOT a free lever as-is.

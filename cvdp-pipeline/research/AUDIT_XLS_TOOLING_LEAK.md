@@ -7,6 +7,14 @@ takes priority over everything else.*
 
 ---
 
+
+> **RECALIBRATED (2026-06-25, `leak_detector.py --audit-all`):** automated scan of all 92 problems'
+> transcripts for dataset-read / harness-access / research-read. **OLD best-known 63/92 → HONEST
+> leak-free 51/92 (55%).** 12 problems passed ONLY via leaked runs (async_fifo_compute_ram,
+> cache_controller, des_0001, dyn_eq_0001, elevator, lfsr_0005, ph_0013, rc5, sigma_delta,
+> spi_complex_mult, traffic_light, ttc_lite). Still +11 over March (40%). `leak_detector.py` is now a
+> permanent grading gate: any run reading the dataset/harness/research = INVALID, must re-run sealed.
+
 ## 0. HEADLINE — our best-known number was inflated by undetected harness leakage
 
 Our verbatim leak scan (June-9) caught **3** workspaces that *copied* the hidden harness. It could not
