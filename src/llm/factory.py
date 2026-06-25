@@ -60,20 +60,29 @@ def _openai_temperature_supported(model_name: str) -> bool:
     return not _prefer_openai_responses_api(model_name)
 
 
-def create_llm(model_name: str, temperature: float = 0.0):
+def create_llm(model_name: str, temperature: float = 0.0, api_key: str | None = None):
     """
     Create a LangChain chat model for the inferred provider.
     Uses lazy imports so optional provider deps do not affect others.
+
+    Args:
+        api_key: Optional explicit, request-scoped API key (BYOK / hosted tier
+            resolved via LlmKeyProvider). When None, the provider key is read
+            from the environment — today's self-host behavior. Passing it here
+            keeps the key out of the process environment entirely.
     """
     model_name = normalize_model_name(model_name)
     provider = infer_provider_from_model(model_name)
+
+    def _key(env_var: str) -> str:
+        return api_key or _require_env(env_var, provider)
 
     if provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
 
         llm_kwargs = {
             "model": model_name,
-            "google_api_key": _require_env("GOOGLE_API_KEY", provider),
+            "google_api_key": _key("GOOGLE_API_KEY"),
             "temperature": temperature,
         }
 
@@ -88,7 +97,7 @@ def create_llm(model_name: str, temperature: float = 0.0):
         return ChatGoogleGenerativeAI(**llm_kwargs)
 
     if provider == "openai":
-        api_key = _require_env("OPENAI_API_KEY", provider)
+        openai_api_key = _key("OPENAI_API_KEY")
         try:
             from langchain_openai import ChatOpenAI
         except ImportError as exc:
@@ -108,7 +117,7 @@ def create_llm(model_name: str, temperature: float = 0.0):
 
         openai_kwargs = {
             "model": openai_model,
-            "api_key": api_key,
+            "api_key": openai_api_key,
         }
 
         if _prefer_openai_responses_api(openai_model):
@@ -126,7 +135,7 @@ def create_llm(model_name: str, temperature: float = 0.0):
         return ChatOpenAI(**openai_kwargs)
 
     # provider == "anthropic"
-    api_key = _require_env("ANTHROPIC_API_KEY", provider)
+    anthropic_api_key = _key("ANTHROPIC_API_KEY")
     try:
         from langchain_anthropic import ChatAnthropic
     except ImportError as exc:
@@ -136,6 +145,6 @@ def create_llm(model_name: str, temperature: float = 0.0):
 
     return ChatAnthropic(
         model=model_name,
-        anthropic_api_key=api_key,
+        anthropic_api_key=anthropic_api_key,
         temperature=temperature,
     )
