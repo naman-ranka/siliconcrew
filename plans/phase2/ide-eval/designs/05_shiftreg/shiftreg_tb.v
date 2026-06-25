@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 module shiftreg_tb;
+    initial begin $dumpfile("shiftreg_tb.vcd"); $dumpvars(0, shiftreg_tb); end
+
     reg clk,rst_n,load,sin; reg [7:0] din; wire [7:0] q; wire sout; integer errors=0;
     shiftreg dut(.clk(clk),.rst_n(rst_n),.load(load),.din(din),.sin(sin),.q(q),.sout(sout));
     always #5 clk=~clk;

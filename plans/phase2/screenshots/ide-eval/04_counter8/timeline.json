@@ -1,5 +1,5 @@
 {
-  "sessionName": "eval-04_counter8",
+  "sessionName": "evr2-04_counter8",
   "designDir": "plans/phase2/ide-eval/designs/04_counter8/",
   "designFiles": [
     "plans/phase2/ide-eval/designs/04_counter8/counter8.v",
@@ -22,11 +22,11 @@
   "netErrors": [
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-04_counter8/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-04_counter8/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-04_counter8/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-04_counter8/spec"
     },
     {
       "status": "failed",
@@ -35,178 +35,185 @@
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-04_counter8/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-04_counter8/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-04_counter8/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-04_counter8/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-04_counter8/report"
+      "url": "http://localhost:8001/api/workspace/evr2-04_counter8/report"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-04_counter8/report"
+      "url": "http://localhost:8001/api/workspace/evr2-04_counter8/report"
     }
   ],
   "timeline": [
     {
-      "ms": 4058,
+      "ms": 4136,
       "action": "create_session",
       "ok": true,
-      "ms_step": 3711
+      "ms_step": 3834
     },
     {
-      "ms": 6443,
+      "ms": 6497,
       "action": "open_workbench",
       "ok": true,
-      "ms_step": 2384
+      "ms_step": 2360
     },
     {
-      "ms": 6571,
+      "ms": 6525,
+      "action": "verify_session",
+      "ok": true,
+      "ms_step": 28,
+      "active": "evr2-04_counter8"
+    },
+    {
+      "ms": 6645,
       "action": "screenshot",
       "name": "01-workbench-empty"
     },
     {
-      "ms": 9168,
+      "ms": 9225,
       "action": "upload_files",
       "ok": true,
-      "ms_step": 2597,
+      "ms_step": 2580,
       "files": [
         "counter8.v",
         "counter8_tb.v"
       ]
     },
     {
-      "ms": 9286,
+      "ms": 9342,
       "action": "screenshot",
       "name": "02-files-uploaded"
     },
     {
-      "ms": 9338,
+      "ms": 9391,
       "action": "files_panel",
       "text": null,
       "filesArea": "synthTop"
     },
     {
-      "ms": 13946,
+      "ms": 14011,
       "action": "run_lint",
       "ok": true,
-      "ms_step": 4608
+      "ms_step": 4620
     },
     {
-      "ms": 14447,
+      "ms": 14515,
       "action": "show_lint_console",
       "ok": true,
-      "ms_step": 501
+      "ms_step": 504
     },
     {
-      "ms": 14457,
+      "ms": 14527,
       "action": "lint_result",
-      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/eval-04_counter8/counter8.v\nedit & re-run command"
+      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/evr2-04_counter8/counter8.v\nedit & re-run command"
     },
     {
-      "ms": 14568,
+      "ms": 14640,
       "action": "screenshot",
       "name": "03-lint"
     },
     {
-      "ms": 20744,
+      "ms": 20817,
       "action": "run_sim",
       "ok": true,
-      "ms_step": 6176
+      "ms_step": 6177
     },
     {
-      "ms": 21242,
+      "ms": 21311,
       "action": "show_sim_console",
       "ok": true,
-      "ms_step": 498
+      "ms_step": 494
     },
     {
-      "ms": 21253,
+      "ms": 21322,
       "action": "sim_result",
-      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (counter8_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/eval-04_counter8 -o /home/user/siliconcrew/workspace/eval-04_counter8/sim_runs/sim_0001/counter8_tb.out -f /home/user/siliconcrew/workspace/eval-04_counter8/sim_runs/sim_0001/iverilog_arzv8pbz.f\n$ vvp /home/user/siliconcrew/workspace/eval-04_counter8/sim_runs/sim_0001/counter8_tb.out\nTEST PASSED\n/home/user/siliconcrew/workspace/eval-04_counter8/counter8_tb.v:16: $finish called at 96000 (1ps)\nedit & re-run command"
+      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (counter8_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/evr2-04_counter8 -o /home/user/siliconcrew/workspace/evr2-04_counter8/sim_runs/sim_0001/counter8_tb.out -f /home/user/siliconcrew/workspace/evr2-04_counter8/sim_runs/sim_0001/iverilog__454j05m.f\n$ vvp /home/user/siliconcrew/workspace/evr2-04_counter8/sim_runs/sim_0001/counter8_tb.out\nVCD info: dumpfile counter8_tb.vcd opened for output.\nTEST PASSED\n/home/user/siliconcrew/workspace/evr2-04_counter8/counter8_tb.v:18: $finish called at 96000 (1ps)\nedit & re-run command"
     },
     {
-      "ms": 21362,
+      "ms": 21434,
       "action": "screenshot",
       "name": "04-sim"
     },
     {
-      "ms": 22688,
+      "ms": 22807,
       "action": "view_wave",
       "ok": true,
-      "ms_step": 1326
+      "ms_step": 1373
     },
     {
-      "ms": 22799,
+      "ms": 22931,
       "action": "screenshot",
       "name": "05-wave"
     },
     {
-      "ms": 37889,
+      "ms": 38057,
       "action": "run_synth",
       "ok": true,
-      "ms_step": 15090
+      "ms_step": 15126
     },
     {
-      "ms": 38355,
+      "ms": 38546,
       "action": "show_synth_console",
       "ok": true,
-      "ms_step": 466
+      "ms_step": 488
     },
     {
-      "ms": 38365,
+      "ms": 38557,
       "action": "synth_result",
       "console": "Lint\nSim\nsim_0001\nSynth\nsynth_0001\nSynthesizing synth_0001\nRunning on remote VM\n15s\nSynth\n2\nFloorplan\n3\nPlace\n4\nCTS\n5\nRoute\n6\nFinish\nsynth_0001 running · synth\nCopy\nNo further output.\nedit & re-run command"
     },
     {
-      "ms": 38466,
+      "ms": 38663,
       "action": "screenshot",
       "name": "06-synth"
     },
     {
-      "ms": 39820,
+      "ms": 39826,
       "action": "nav_View RTL",
       "ok": true,
-      "ms_step": 1354
+      "ms_step": 1163
     },
     {
-      "ms": 39942,
+      "ms": 39954,
       "action": "screenshot",
       "name": "07-view-rtl"
     },
     {
-      "ms": 40988,
+      "ms": 41013,
       "action": "nav_View Spec",
       "ok": true,
-      "ms_step": 1046
+      "ms_step": 1059
     },
     {
-      "ms": 41096,
+      "ms": 41140,
       "action": "screenshot",
       "name": "08-view-spec"
     },
     {
-      "ms": 42153,
+      "ms": 42225,
       "action": "nav_View Signoff",
       "ok": true,
-      "ms_step": 1057
+      "ms_step": 1085
     },
     {
-      "ms": 42271,
+      "ms": 42344,
       "action": "screenshot",
       "name": "09-view-signoff"
     },
     {
-      "ms": 44619,
+      "ms": 44700,
       "action": "open_chat_route",
       "ok": true,
-      "ms_step": 2348
+      "ms_step": 2356
     },
     {
-      "ms": 44716,
+      "ms": 44801,
       "action": "screenshot",
       "name": "10-chat-route"
     }

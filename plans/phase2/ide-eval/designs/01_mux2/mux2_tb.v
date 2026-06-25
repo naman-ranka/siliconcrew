@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 module mux2_tb;
+    initial begin $dumpfile("mux2_tb.vcd"); $dumpvars(0, mux2_tb); end
+
     reg a, b, sel; wire y;
     integer errors = 0;
     mux2 dut(.a(a), .b(b), .sel(sel), .y(y));

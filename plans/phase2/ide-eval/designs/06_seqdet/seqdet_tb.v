@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 module seqdet_tb;
+    initial begin $dumpfile("seqdet_tb.vcd"); $dumpvars(0, seqdet_tb); end
+
     reg clk,rst_n,din; wire found; integer errors=0, i;
     // stimulus 1 0 1 1 0 1 1  -> 'found' should pulse after the 4th and 7th bits
     reg [0:6] stim = 7'b1011011;

@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 module counter8_tb;
+    initial begin $dumpfile("counter8_tb.vcd"); $dumpvars(0, counter8_tb); end
+
     reg clk, rst_n, en, clr; wire [7:0] count; integer errors=0;
     counter8 dut(.clk(clk), .rst_n(rst_n), .en(en), .clr(clr), .count(count));
     always #5 clk = ~clk;

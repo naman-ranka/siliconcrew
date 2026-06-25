@@ -1,5 +1,5 @@
 {
-  "sessionName": "eval-05_shiftreg",
+  "sessionName": "evr2-05_shiftreg",
   "designDir": "plans/phase2/ide-eval/designs/05_shiftreg/",
   "designFiles": [
     "plans/phase2/ide-eval/designs/05_shiftreg/shiftreg.v",
@@ -22,11 +22,11 @@
   "netErrors": [
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-05_shiftreg/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-05_shiftreg/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-05_shiftreg/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-05_shiftreg/spec"
     },
     {
       "status": "failed",
@@ -35,178 +35,185 @@
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-05_shiftreg/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-05_shiftreg/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-05_shiftreg/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-05_shiftreg/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-05_shiftreg/report"
+      "url": "http://localhost:8001/api/workspace/evr2-05_shiftreg/report"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-05_shiftreg/report"
+      "url": "http://localhost:8001/api/workspace/evr2-05_shiftreg/report"
     }
   ],
   "timeline": [
     {
-      "ms": 4093,
+      "ms": 4198,
       "action": "create_session",
       "ok": true,
-      "ms_step": 3774
+      "ms_step": 3891
     },
     {
-      "ms": 6548,
+      "ms": 6569,
       "action": "open_workbench",
       "ok": true,
-      "ms_step": 2455
+      "ms_step": 2370
     },
     {
-      "ms": 6651,
+      "ms": 6600,
+      "action": "verify_session",
+      "ok": true,
+      "ms_step": 31,
+      "active": "evr2-05_shiftreg"
+    },
+    {
+      "ms": 6712,
       "action": "screenshot",
       "name": "01-workbench-empty"
     },
     {
-      "ms": 9224,
+      "ms": 9272,
       "action": "upload_files",
       "ok": true,
-      "ms_step": 2573,
+      "ms_step": 2560,
       "files": [
         "shiftreg.v",
         "shiftreg_tb.v"
       ]
     },
     {
-      "ms": 9340,
+      "ms": 9368,
       "action": "screenshot",
       "name": "02-files-uploaded"
     },
     {
-      "ms": 9396,
+      "ms": 9410,
       "action": "files_panel",
       "text": null,
       "filesArea": "synthTop"
     },
     {
-      "ms": 14008,
+      "ms": 14026,
       "action": "run_lint",
       "ok": true,
-      "ms_step": 4611
+      "ms_step": 4616
     },
     {
-      "ms": 14517,
+      "ms": 14538,
       "action": "show_lint_console",
       "ok": true,
-      "ms_step": 509
+      "ms_step": 512
     },
     {
-      "ms": 14528,
+      "ms": 14551,
       "action": "lint_result",
-      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/eval-05_shiftreg/shiftreg.v\nedit & re-run command"
+      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/evr2-05_shiftreg/shiftreg.v\nedit & re-run command"
     },
     {
-      "ms": 14640,
+      "ms": 14662,
       "action": "screenshot",
       "name": "03-lint"
     },
     {
-      "ms": 20842,
+      "ms": 20850,
       "action": "run_sim",
       "ok": true,
-      "ms_step": 6201
+      "ms_step": 6188
     },
     {
-      "ms": 21353,
+      "ms": 21356,
       "action": "show_sim_console",
       "ok": true,
-      "ms_step": 511
+      "ms_step": 506
     },
     {
-      "ms": 21365,
+      "ms": 21369,
       "action": "sim_result",
-      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (shiftreg_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/eval-05_shiftreg -o /home/user/siliconcrew/workspace/eval-05_shiftreg/sim_runs/sim_0001/shiftreg_tb.out -f /home/user/siliconcrew/workspace/eval-05_shiftreg/sim_runs/sim_0001/iverilog_xzrj7ys1.f\n$ vvp /home/user/siliconcrew/workspace/eval-05_shiftreg/sim_runs/sim_0001/shiftreg_tb.out\nTEST PASSED\n/home/user/siliconcrew/workspace/eval-05_shiftreg/shiftreg_tb.v:15: $finish called at 26000 (1ps)\nedit & re-run command"
+      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (shiftreg_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/evr2-05_shiftreg -o /home/user/siliconcrew/workspace/evr2-05_shiftreg/sim_runs/sim_0001/shiftreg_tb.out -f /home/user/siliconcrew/workspace/evr2-05_shiftreg/sim_runs/sim_0001/iverilog_ho5j4tq2.f\n$ vvp /home/user/siliconcrew/workspace/evr2-05_shiftreg/sim_runs/sim_0001/shiftreg_tb.out\nVCD info: dumpfile shiftreg_tb.vcd opened for output.\nTEST PASSED\n/home/user/siliconcrew/workspace/evr2-05_shiftreg/shiftreg_tb.v:17: $finish called at 26000 (1ps)\nedit & re-run command"
     },
     {
-      "ms": 21481,
+      "ms": 21488,
       "action": "screenshot",
       "name": "04-sim"
     },
     {
-      "ms": 22870,
+      "ms": 22871,
       "action": "view_wave",
       "ok": true,
-      "ms_step": 1389
+      "ms_step": 1383
     },
     {
-      "ms": 23025,
+      "ms": 22986,
       "action": "screenshot",
       "name": "05-wave"
     },
     {
-      "ms": 38128,
+      "ms": 38100,
       "action": "run_synth",
       "ok": true,
-      "ms_step": 15103
+      "ms_step": 15114
     },
     {
-      "ms": 38596,
+      "ms": 38576,
       "action": "show_synth_console",
       "ok": true,
-      "ms_step": 468
+      "ms_step": 476
     },
     {
-      "ms": 38608,
+      "ms": 38587,
       "action": "synth_result",
       "console": "Lint\nSim\nsim_0001\nSynth\nsynth_0001\nSynthesizing synth_0001\nRunning on remote VM\n15s\nSynth\n2\nFloorplan\n3\nPlace\n4\nCTS\n5\nRoute\n6\nFinish\nsynth_0001 running · synth\nCopy\nNo further output.\nedit & re-run command"
     },
     {
-      "ms": 38720,
+      "ms": 38702,
       "action": "screenshot",
       "name": "06-synth"
     },
     {
-      "ms": 39961,
+      "ms": 39963,
       "action": "nav_View RTL",
       "ok": true,
-      "ms_step": 1241
+      "ms_step": 1260
     },
     {
-      "ms": 40076,
+      "ms": 40094,
       "action": "screenshot",
       "name": "07-view-rtl"
     },
     {
-      "ms": 41130,
+      "ms": 41163,
       "action": "nav_View Spec",
       "ok": true,
-      "ms_step": 1054
+      "ms_step": 1068
     },
     {
-      "ms": 41241,
+      "ms": 41285,
       "action": "screenshot",
       "name": "08-view-spec"
     },
     {
-      "ms": 42303,
+      "ms": 42344,
       "action": "nav_View Signoff",
       "ok": true,
-      "ms_step": 1062
+      "ms_step": 1059
     },
     {
-      "ms": 42404,
+      "ms": 42467,
       "action": "screenshot",
       "name": "09-view-signoff"
     },
     {
-      "ms": 44823,
+      "ms": 44850,
       "action": "open_chat_route",
       "ok": true,
-      "ms_step": 2419
+      "ms_step": 2383
     },
     {
-      "ms": 44933,
+      "ms": 44950,
       "action": "screenshot",
       "name": "10-chat-route"
     }

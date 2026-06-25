@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 module fifo_tb;
+    initial begin $dumpfile("fifo_tb.vcd"); $dumpvars(0, fifo_tb); end
+
     reg clk,rst_n,wr,rd; reg [7:0] din; wire [7:0] dout; wire full, empty;
     integer errors=0;
     fifo dut(.clk(clk),.rst_n(rst_n),.wr(wr),.rd(rd),.din(din),.dout(dout),.full(full),.empty(empty));

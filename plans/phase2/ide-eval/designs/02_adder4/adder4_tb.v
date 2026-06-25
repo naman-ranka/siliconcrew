@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 module adder4_tb;
+    initial begin $dumpfile("adder4_tb.vcd"); $dumpvars(0, adder4_tb); end
+
     reg [3:0] a,b; reg cin; wire [3:0] sum; wire cout;
     integer i, errors = 0; reg [4:0] exp;
     adder4 dut(.a(a), .b(b), .cin(cin), .sum(sum), .cout(cout));

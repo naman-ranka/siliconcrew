@@ -1,5 +1,5 @@
 {
-  "sessionName": "eval-08_fifo",
+  "sessionName": "evr2-08_fifo",
   "designDir": "plans/phase2/ide-eval/designs/08_fifo/",
   "designFiles": [
     "plans/phase2/ide-eval/designs/08_fifo/fifo.v",
@@ -22,11 +22,11 @@
   "netErrors": [
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-08_fifo/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-08_fifo/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-08_fifo/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-08_fifo/spec"
     },
     {
       "status": "failed",
@@ -35,178 +35,185 @@
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-08_fifo/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-08_fifo/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-08_fifo/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-08_fifo/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-08_fifo/report"
+      "url": "http://localhost:8001/api/workspace/evr2-08_fifo/report"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-08_fifo/report"
+      "url": "http://localhost:8001/api/workspace/evr2-08_fifo/report"
     }
   ],
   "timeline": [
     {
-      "ms": 3972,
+      "ms": 4179,
       "action": "create_session",
       "ok": true,
-      "ms_step": 3664
+      "ms_step": 3882
     },
     {
-      "ms": 6283,
+      "ms": 6538,
       "action": "open_workbench",
       "ok": true,
-      "ms_step": 2311
+      "ms_step": 2359
     },
     {
-      "ms": 6398,
+      "ms": 6564,
+      "action": "verify_session",
+      "ok": true,
+      "ms_step": 26,
+      "active": "evr2-08_fifo"
+    },
+    {
+      "ms": 6679,
       "action": "screenshot",
       "name": "01-workbench-empty"
     },
     {
-      "ms": 8995,
+      "ms": 9241,
       "action": "upload_files",
       "ok": true,
-      "ms_step": 2596,
+      "ms_step": 2562,
       "files": [
         "fifo.v",
         "fifo_tb.v"
       ]
     },
     {
-      "ms": 9091,
+      "ms": 9336,
       "action": "screenshot",
       "name": "02-files-uploaded"
     },
     {
-      "ms": 9133,
+      "ms": 9378,
       "action": "files_panel",
       "text": null,
       "filesArea": "synthTop"
     },
     {
-      "ms": 13747,
+      "ms": 13980,
       "action": "run_lint",
       "ok": true,
-      "ms_step": 4614
+      "ms_step": 4602
     },
     {
-      "ms": 14345,
+      "ms": 14551,
       "action": "show_lint_console",
       "ok": true,
-      "ms_step": 598
+      "ms_step": 571
     },
     {
-      "ms": 14357,
+      "ms": 14562,
       "action": "lint_result",
-      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/eval-08_fifo/fifo.v\nedit & re-run command"
+      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/evr2-08_fifo/fifo.v\nedit & re-run command"
     },
     {
-      "ms": 14485,
+      "ms": 14670,
       "action": "screenshot",
       "name": "03-lint"
     },
     {
-      "ms": 20821,
+      "ms": 21001,
       "action": "run_sim",
       "ok": true,
-      "ms_step": 6336
+      "ms_step": 6331
     },
     {
-      "ms": 21398,
+      "ms": 21572,
       "action": "show_sim_console",
       "ok": true,
-      "ms_step": 577
+      "ms_step": 570
     },
     {
-      "ms": 21411,
+      "ms": 21585,
       "action": "sim_result",
-      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (fifo_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/eval-08_fifo -o /home/user/siliconcrew/workspace/eval-08_fifo/sim_runs/sim_0001/fifo_tb.out -f /home/user/siliconcrew/workspace/eval-08_fifo/sim_runs/sim_0001/iverilog_1aap0xk4.f\n$ vvp /home/user/siliconcrew/workspace/eval-08_fifo/sim_runs/sim_0001/fifo_tb.out\nTEST PASSED\n/home/user/siliconcrew/workspace/eval-08_fifo/fifo_tb.v:20: $finish called at 86000 (1ps)\nedit & re-run command"
+      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (fifo_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/evr2-08_fifo -o /home/user/siliconcrew/workspace/evr2-08_fifo/sim_runs/sim_0001/fifo_tb.out -f /home/user/siliconcrew/workspace/evr2-08_fifo/sim_runs/sim_0001/iverilog_7eocsn20.f\n$ vvp /home/user/siliconcrew/workspace/evr2-08_fifo/sim_runs/sim_0001/fifo_tb.out\nVCD info: dumpfile fifo_tb.vcd opened for output.\nTEST PASSED\n/home/user/siliconcrew/workspace/evr2-08_fifo/fifo_tb.v:22: $finish called at 86000 (1ps)\nedit & re-run command"
     },
     {
-      "ms": 21533,
+      "ms": 21708,
       "action": "screenshot",
       "name": "04-sim"
     },
     {
-      "ms": 22950,
+      "ms": 23167,
       "action": "view_wave",
       "ok": true,
-      "ms_step": 1417
+      "ms_step": 1458
     },
     {
-      "ms": 23066,
+      "ms": 23283,
       "action": "screenshot",
       "name": "05-wave"
     },
     {
-      "ms": 38161,
+      "ms": 38386,
       "action": "run_synth",
       "ok": true,
-      "ms_step": 15095
+      "ms_step": 15103
     },
     {
-      "ms": 38619,
+      "ms": 38863,
       "action": "show_synth_console",
       "ok": true,
-      "ms_step": 458
+      "ms_step": 477
     },
     {
-      "ms": 38632,
+      "ms": 38875,
       "action": "synth_result",
       "console": "Lint\nSim\nsim_0001\nSynth\nsynth_0001\nSynthesizing synth_0001\nRunning on remote VM\n15s\nSynth\n2\nFloorplan\n3\nPlace\n4\nCTS\n5\nRoute\n6\nFinish\nsynth_0001 running · synth\nCopy\nNo further output.\nedit & re-run command"
     },
     {
-      "ms": 38731,
+      "ms": 38987,
       "action": "screenshot",
       "name": "06-synth"
     },
     {
-      "ms": 40255,
+      "ms": 40476,
       "action": "nav_View RTL",
       "ok": true,
-      "ms_step": 1524
+      "ms_step": 1489
     },
     {
-      "ms": 40412,
+      "ms": 40595,
       "action": "screenshot",
       "name": "07-view-rtl"
     },
     {
-      "ms": 41564,
+      "ms": 41745,
       "action": "nav_View Spec",
       "ok": true,
-      "ms_step": 1152
+      "ms_step": 1150
     },
     {
-      "ms": 41672,
+      "ms": 41844,
       "action": "screenshot",
       "name": "08-view-spec"
     },
     {
-      "ms": 42743,
+      "ms": 42870,
       "action": "nav_View Signoff",
       "ok": true,
-      "ms_step": 1070
+      "ms_step": 1026
     },
     {
-      "ms": 42847,
+      "ms": 42983,
       "action": "screenshot",
       "name": "09-view-signoff"
     },
     {
-      "ms": 45175,
+      "ms": 45305,
       "action": "open_chat_route",
       "ok": true,
-      "ms_step": 2327
+      "ms_step": 2322
     },
     {
-      "ms": 45275,
+      "ms": 45401,
       "action": "screenshot",
       "name": "10-chat-route"
     }

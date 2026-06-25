@@ -74,6 +74,24 @@ try {
     await page.goto(BASE + "/workbench", { waitUntil: "networkidle", timeout: 30000 });
     await page.waitForTimeout(1200);
   });
+  // GUARD: the workbench auto-loads the *latest* session, which may not be the
+  // one we just created. Verify; if wrong, switch to ours via the picker. This
+  // prevents uploading into a stale workspace (the duplicate-name failure mode).
+  await step("verify_session", async () => {
+    const switcher = page.getByRole("button", { name: /Switch session/ });
+    const shown = (await switcher.textContent().catch(() => "")) || "";
+    if (!shown.includes(sessionName)) {
+      await switcher.click();
+      await page.waitForTimeout(500);
+      await page.getByRole("menuitem", { name: new RegExp(sessionName) }).first().click().catch(async () => {
+        await page.getByText(sessionName, { exact: false }).first().click();
+      });
+      await page.waitForTimeout(1000);
+      const now = (await switcher.textContent().catch(() => "")) || "";
+      if (!now.includes(sessionName)) throw new Error(`session mismatch: wanted ${sessionName}, shows "${now.trim()}"`);
+    }
+    return { active: sessionName };
+  });
   await shot("01-workbench-empty");
 
   // 3) Upload RTL + testbench via the Files-panel Upload button (file chooser).

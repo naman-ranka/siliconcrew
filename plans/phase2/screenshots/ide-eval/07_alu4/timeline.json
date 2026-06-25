@@ -1,5 +1,5 @@
 {
-  "sessionName": "eval-07_alu4",
+  "sessionName": "evr2-07_alu4",
   "designDir": "plans/phase2/ide-eval/designs/07_alu4/",
   "designFiles": [
     "plans/phase2/ide-eval/designs/07_alu4/alu4.v",
@@ -22,11 +22,11 @@
   "netErrors": [
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-07_alu4/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-07_alu4/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-07_alu4/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-07_alu4/spec"
     },
     {
       "status": "failed",
@@ -35,178 +35,185 @@
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-07_alu4/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-07_alu4/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-07_alu4/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-07_alu4/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-07_alu4/report"
+      "url": "http://localhost:8001/api/workspace/evr2-07_alu4/report"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-07_alu4/report"
+      "url": "http://localhost:8001/api/workspace/evr2-07_alu4/report"
     }
   ],
   "timeline": [
     {
-      "ms": 3971,
+      "ms": 4326,
       "action": "create_session",
       "ok": true,
-      "ms_step": 3694
+      "ms_step": 4024
     },
     {
-      "ms": 6382,
+      "ms": 6688,
       "action": "open_workbench",
       "ok": true,
-      "ms_step": 2411
+      "ms_step": 2361
     },
     {
-      "ms": 6492,
+      "ms": 6716,
+      "action": "verify_session",
+      "ok": true,
+      "ms_step": 28,
+      "active": "evr2-07_alu4"
+    },
+    {
+      "ms": 6833,
       "action": "screenshot",
       "name": "01-workbench-empty"
     },
     {
-      "ms": 9091,
+      "ms": 9407,
       "action": "upload_files",
       "ok": true,
-      "ms_step": 2599,
+      "ms_step": 2574,
       "files": [
         "alu4.v",
         "alu4_tb.v"
       ]
     },
     {
-      "ms": 9187,
+      "ms": 9510,
       "action": "screenshot",
       "name": "02-files-uploaded"
     },
     {
-      "ms": 9230,
+      "ms": 9567,
       "action": "files_panel",
       "text": null,
       "filesArea": "synthTop"
     },
     {
-      "ms": 13840,
+      "ms": 14184,
       "action": "run_lint",
       "ok": true,
-      "ms_step": 4610
+      "ms_step": 4617
     },
     {
-      "ms": 14384,
+      "ms": 14735,
       "action": "show_lint_console",
       "ok": true,
-      "ms_step": 544
+      "ms_step": 551
     },
     {
-      "ms": 14395,
+      "ms": 14748,
       "action": "lint_result",
-      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/eval-07_alu4/alu4.v\nedit & re-run command"
+      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/evr2-07_alu4/alu4.v\nedit & re-run command"
     },
     {
-      "ms": 14511,
+      "ms": 14860,
       "action": "screenshot",
       "name": "03-lint"
     },
     {
-      "ms": 20774,
+      "ms": 21159,
       "action": "run_sim",
       "ok": true,
-      "ms_step": 6263
+      "ms_step": 6299
     },
     {
-      "ms": 21324,
+      "ms": 21702,
       "action": "show_sim_console",
       "ok": true,
-      "ms_step": 550
+      "ms_step": 543
     },
     {
-      "ms": 21334,
+      "ms": 21713,
       "action": "sim_result",
-      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (alu4_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/eval-07_alu4 -o /home/user/siliconcrew/workspace/eval-07_alu4/sim_runs/sim_0001/alu4_tb.out -f /home/user/siliconcrew/workspace/eval-07_alu4/sim_runs/sim_0001/iverilog_85_gw75x.f\n$ vvp /home/user/siliconcrew/workspace/eval-07_alu4/sim_runs/sim_0001/alu4_tb.out\nTEST PASSED\n/home/user/siliconcrew/workspace/eval-07_alu4/alu4_tb.v:20: $finish called at 8000 (1ps)\nedit & re-run command"
+      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (alu4_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/evr2-07_alu4 -o /home/user/siliconcrew/workspace/evr2-07_alu4/sim_runs/sim_0001/alu4_tb.out -f /home/user/siliconcrew/workspace/evr2-07_alu4/sim_runs/sim_0001/iverilog__qz53t9r.f\n$ vvp /home/user/siliconcrew/workspace/evr2-07_alu4/sim_runs/sim_0001/alu4_tb.out\nVCD info: dumpfile alu4_tb.vcd opened for output.\nTEST PASSED\n/home/user/siliconcrew/workspace/evr2-07_alu4/alu4_tb.v:22: $finish called at 8000 (1ps)\nedit & re-run command"
     },
     {
-      "ms": 21454,
+      "ms": 21830,
       "action": "screenshot",
       "name": "04-sim"
     },
     {
-      "ms": 22848,
+      "ms": 23258,
       "action": "view_wave",
       "ok": true,
-      "ms_step": 1394
+      "ms_step": 1428
     },
     {
-      "ms": 22953,
+      "ms": 23371,
       "action": "screenshot",
       "name": "05-wave"
     },
     {
-      "ms": 38042,
+      "ms": 38493,
       "action": "run_synth",
       "ok": true,
-      "ms_step": 15089
+      "ms_step": 15122
     },
     {
-      "ms": 38515,
+      "ms": 38966,
       "action": "show_synth_console",
       "ok": true,
-      "ms_step": 472
+      "ms_step": 473
     },
     {
-      "ms": 38528,
+      "ms": 38977,
       "action": "synth_result",
       "console": "Lint\nSim\nsim_0001\nSynth\nsynth_0001\nSynthesizing synth_0001\nRunning on remote VM\n15s\nSynth\n2\nFloorplan\n3\nPlace\n4\nCTS\n5\nRoute\n6\nFinish\nsynth_0001 running · synth\nCopy\nNo further output.\nedit & re-run command"
     },
     {
-      "ms": 38637,
+      "ms": 39094,
       "action": "screenshot",
       "name": "06-synth"
     },
     {
-      "ms": 40039,
+      "ms": 40510,
       "action": "nav_View RTL",
       "ok": true,
-      "ms_step": 1402
+      "ms_step": 1416
     },
     {
-      "ms": 40152,
+      "ms": 40634,
       "action": "screenshot",
       "name": "07-view-rtl"
     },
     {
-      "ms": 41246,
+      "ms": 41729,
       "action": "nav_View Spec",
       "ok": true,
-      "ms_step": 1094
+      "ms_step": 1095
     },
     {
-      "ms": 41355,
+      "ms": 41840,
       "action": "screenshot",
       "name": "08-view-spec"
     },
     {
-      "ms": 42409,
+      "ms": 42887,
       "action": "nav_View Signoff",
       "ok": true,
-      "ms_step": 1054
+      "ms_step": 1047
     },
     {
-      "ms": 42521,
+      "ms": 43001,
       "action": "screenshot",
       "name": "09-view-signoff"
     },
     {
-      "ms": 44856,
+      "ms": 45331,
       "action": "open_chat_route",
       "ok": true,
-      "ms_step": 2335
+      "ms_step": 2330
     },
     {
-      "ms": 44950,
+      "ms": 45440,
       "action": "screenshot",
       "name": "10-chat-route"
     }

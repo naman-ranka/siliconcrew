@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 module alu4_tb;
+    initial begin $dumpfile("alu4_tb.vcd"); $dumpvars(0, alu4_tb); end
+
     reg [3:0] a,b; reg [2:0] op; wire [3:0] y; wire zero; wire carry;
     integer errors=0; reg [3:0] ey; reg ec;
     alu4 dut(.a(a),.b(b),.op(op),.y(y),.zero(zero),.carry(carry));

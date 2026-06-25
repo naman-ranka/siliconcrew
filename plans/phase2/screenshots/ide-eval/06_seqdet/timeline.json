@@ -1,5 +1,5 @@
 {
-  "sessionName": "eval-06_seqdet",
+  "sessionName": "evr2-06_seqdet",
   "designDir": "plans/phase2/ide-eval/designs/06_seqdet/",
   "designFiles": [
     "plans/phase2/ide-eval/designs/06_seqdet/seqdet.v",
@@ -22,11 +22,11 @@
   "netErrors": [
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-06_seqdet/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-06_seqdet/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-06_seqdet/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-06_seqdet/spec"
     },
     {
       "status": "failed",
@@ -35,178 +35,185 @@
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-06_seqdet/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-06_seqdet/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-06_seqdet/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-06_seqdet/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-06_seqdet/report"
+      "url": "http://localhost:8001/api/workspace/evr2-06_seqdet/report"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-06_seqdet/report"
+      "url": "http://localhost:8001/api/workspace/evr2-06_seqdet/report"
     }
   ],
   "timeline": [
     {
-      "ms": 3950,
+      "ms": 4233,
       "action": "create_session",
       "ok": true,
-      "ms_step": 3665
+      "ms_step": 3932
     },
     {
-      "ms": 6298,
+      "ms": 6607,
       "action": "open_workbench",
       "ok": true,
-      "ms_step": 2347
+      "ms_step": 2374
     },
     {
-      "ms": 6410,
+      "ms": 6633,
+      "action": "verify_session",
+      "ok": true,
+      "ms_step": 25,
+      "active": "evr2-06_seqdet"
+    },
+    {
+      "ms": 6757,
       "action": "screenshot",
       "name": "01-workbench-empty"
     },
     {
-      "ms": 8974,
+      "ms": 9329,
       "action": "upload_files",
       "ok": true,
-      "ms_step": 2564,
+      "ms_step": 2572,
       "files": [
         "seqdet.v",
         "seqdet_tb.v"
       ]
     },
     {
-      "ms": 9066,
+      "ms": 9439,
       "action": "screenshot",
       "name": "02-files-uploaded"
     },
     {
-      "ms": 9109,
+      "ms": 9482,
       "action": "files_panel",
       "text": null,
       "filesArea": "synthTop"
     },
     {
-      "ms": 13708,
+      "ms": 14092,
       "action": "run_lint",
       "ok": true,
-      "ms_step": 4599
+      "ms_step": 4610
     },
     {
-      "ms": 14235,
+      "ms": 14635,
       "action": "show_lint_console",
       "ok": true,
-      "ms_step": 526
+      "ms_step": 543
     },
     {
-      "ms": 14246,
+      "ms": 14646,
       "action": "lint_result",
-      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/eval-06_seqdet/seqdet.v\nedit & re-run command"
+      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/evr2-06_seqdet/seqdet.v\nedit & re-run command"
     },
     {
-      "ms": 14349,
+      "ms": 14766,
       "action": "screenshot",
       "name": "03-lint"
     },
     {
-      "ms": 20576,
+      "ms": 21046,
       "action": "run_sim",
       "ok": true,
-      "ms_step": 6227
+      "ms_step": 6279
     },
     {
-      "ms": 21110,
+      "ms": 21587,
       "action": "show_sim_console",
       "ok": true,
-      "ms_step": 534
+      "ms_step": 540
     },
     {
-      "ms": 21122,
+      "ms": 21600,
       "action": "sim_result",
-      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (seqdet_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/eval-06_seqdet -o /home/user/siliconcrew/workspace/eval-06_seqdet/sim_runs/sim_0001/seqdet_tb.out -f /home/user/siliconcrew/workspace/eval-06_seqdet/sim_runs/sim_0001/iverilog_ubfyuc2x.f\n$ vvp /home/user/siliconcrew/workspace/eval-06_seqdet/sim_runs/sim_0001/seqdet_tb.out\nTEST PASSED\n/home/user/siliconcrew/workspace/eval-06_seqdet/seqdet_tb.v:17: $finish called at 76000 (1ps)\nedit & re-run command"
+      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (seqdet_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/evr2-06_seqdet -o /home/user/siliconcrew/workspace/evr2-06_seqdet/sim_runs/sim_0001/seqdet_tb.out -f /home/user/siliconcrew/workspace/evr2-06_seqdet/sim_runs/sim_0001/iverilog_xd7kpmqt.f\n$ vvp /home/user/siliconcrew/workspace/evr2-06_seqdet/sim_runs/sim_0001/seqdet_tb.out\nVCD info: dumpfile seqdet_tb.vcd opened for output.\nTEST PASSED\n/home/user/siliconcrew/workspace/evr2-06_seqdet/seqdet_tb.v:19: $finish called at 76000 (1ps)\nedit & re-run command"
     },
     {
-      "ms": 21242,
+      "ms": 21728,
       "action": "screenshot",
       "name": "04-sim"
     },
     {
-      "ms": 22605,
+      "ms": 23145,
       "action": "view_wave",
       "ok": true,
-      "ms_step": 1363
+      "ms_step": 1417
     },
     {
-      "ms": 22712,
+      "ms": 23263,
       "action": "screenshot",
       "name": "05-wave"
     },
     {
-      "ms": 37799,
+      "ms": 38364,
       "action": "run_synth",
       "ok": true,
-      "ms_step": 15087
+      "ms_step": 15101
     },
     {
-      "ms": 38271,
+      "ms": 38837,
       "action": "show_synth_console",
       "ok": true,
-      "ms_step": 472
+      "ms_step": 473
     },
     {
-      "ms": 38280,
+      "ms": 38847,
       "action": "synth_result",
       "console": "Lint\nSim\nsim_0001\nSynth\nsynth_0001\nSynthesizing synth_0001\nRunning on remote VM\n15s\nSynth\n2\nFloorplan\n3\nPlace\n4\nCTS\n5\nRoute\n6\nFinish\nsynth_0001 running · synth\nCopy\nNo further output.\nedit & re-run command"
     },
     {
-      "ms": 38378,
+      "ms": 38960,
       "action": "screenshot",
       "name": "06-synth"
     },
     {
-      "ms": 39668,
+      "ms": 40097,
       "action": "nav_View RTL",
       "ok": true,
-      "ms_step": 1290
+      "ms_step": 1136
     },
     {
-      "ms": 39786,
+      "ms": 40228,
       "action": "screenshot",
       "name": "07-view-rtl"
     },
     {
-      "ms": 40853,
+      "ms": 41308,
       "action": "nav_View Spec",
       "ok": true,
-      "ms_step": 1067
+      "ms_step": 1080
     },
     {
-      "ms": 40964,
+      "ms": 41431,
       "action": "screenshot",
       "name": "08-view-spec"
     },
     {
-      "ms": 42001,
+      "ms": 42428,
       "action": "nav_View Signoff",
       "ok": true,
-      "ms_step": 1037
+      "ms_step": 996
     },
     {
-      "ms": 42109,
+      "ms": 42543,
       "action": "screenshot",
       "name": "09-view-signoff"
     },
     {
-      "ms": 44368,
+      "ms": 44852,
       "action": "open_chat_route",
       "ok": true,
-      "ms_step": 2259
+      "ms_step": 2309
     },
     {
-      "ms": 44462,
+      "ms": 44958,
       "action": "screenshot",
       "name": "10-chat-route"
     }

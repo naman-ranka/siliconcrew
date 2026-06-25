@@ -1,5 +1,7 @@
 `timescale 1ns/1ps
 module dff_tb;
+    initial begin $dumpfile("dff_tb.vcd"); $dumpvars(0, dff_tb); end
+
     reg clk, rst_n, d; wire q; integer errors=0;
     dff dut(.clk(clk), .rst_n(rst_n), .d(d), .q(q));
     always #5 clk = ~clk;

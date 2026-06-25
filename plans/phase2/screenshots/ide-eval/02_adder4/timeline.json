@@ -1,5 +1,5 @@
 {
-  "sessionName": "eval-02_adder4",
+  "sessionName": "evr2-02_adder4",
   "designDir": "plans/phase2/ide-eval/designs/02_adder4/",
   "designFiles": [
     "plans/phase2/ide-eval/designs/02_adder4/adder4.v",
@@ -22,11 +22,11 @@
   "netErrors": [
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-02_adder4/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-02_adder4/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-02_adder4/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-02_adder4/spec"
     },
     {
       "status": "failed",
@@ -35,178 +35,185 @@
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-02_adder4/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-02_adder4/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-02_adder4/spec"
+      "url": "http://localhost:8001/api/workspace/evr2-02_adder4/spec"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-02_adder4/report"
+      "url": "http://localhost:8001/api/workspace/evr2-02_adder4/report"
     },
     {
       "status": 404,
-      "url": "http://localhost:8001/api/workspace/eval-02_adder4/report"
+      "url": "http://localhost:8001/api/workspace/evr2-02_adder4/report"
     }
   ],
   "timeline": [
     {
-      "ms": 3835,
+      "ms": 4131,
       "action": "create_session",
       "ok": true,
-      "ms_step": 3547
+      "ms_step": 3816
     },
     {
-      "ms": 6189,
+      "ms": 6544,
       "action": "open_workbench",
       "ok": true,
-      "ms_step": 2354
+      "ms_step": 2412
     },
     {
-      "ms": 6306,
+      "ms": 6569,
+      "action": "verify_session",
+      "ok": true,
+      "ms_step": 25,
+      "active": "evr2-02_adder4"
+    },
+    {
+      "ms": 6677,
       "action": "screenshot",
       "name": "01-workbench-empty"
     },
     {
-      "ms": 8906,
+      "ms": 9254,
       "action": "upload_files",
       "ok": true,
-      "ms_step": 2600,
+      "ms_step": 2577,
       "files": [
         "adder4.v",
         "adder4_tb.v"
       ]
     },
     {
-      "ms": 9015,
+      "ms": 9349,
       "action": "screenshot",
       "name": "02-files-uploaded"
     },
     {
-      "ms": 9057,
+      "ms": 9394,
       "action": "files_panel",
       "text": null,
       "filesArea": "synthTop"
     },
     {
-      "ms": 13682,
+      "ms": 14022,
       "action": "run_lint",
       "ok": true,
-      "ms_step": 4625
+      "ms_step": 4628
     },
     {
-      "ms": 14165,
+      "ms": 14524,
       "action": "show_lint_console",
       "ok": true,
-      "ms_step": 483
+      "ms_step": 501
     },
     {
-      "ms": 14182,
+      "ms": 14538,
       "action": "lint_result",
-      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/eval-02_adder4/adder4.v\nedit & re-run command"
+      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/evr2-02_adder4/adder4.v\nedit & re-run command"
     },
     {
-      "ms": 14308,
+      "ms": 14645,
       "action": "screenshot",
       "name": "03-lint"
     },
     {
-      "ms": 20473,
+      "ms": 20822,
       "action": "run_sim",
       "ok": true,
-      "ms_step": 6165
+      "ms_step": 6177
     },
     {
-      "ms": 20961,
+      "ms": 21349,
       "action": "show_sim_console",
       "ok": true,
-      "ms_step": 487
+      "ms_step": 527
     },
     {
-      "ms": 20971,
+      "ms": 21360,
       "action": "sim_result",
-      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (adder4_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/eval-02_adder4 -o /home/user/siliconcrew/workspace/eval-02_adder4/sim_runs/sim_0001/adder4_tb.out -f /home/user/siliconcrew/workspace/eval-02_adder4/sim_runs/sim_0001/iverilog_mokv2i5h.f\n$ vvp /home/user/siliconcrew/workspace/eval-02_adder4/sim_runs/sim_0001/adder4_tb.out\nTEST PASSED\n/home/user/siliconcrew/workspace/eval-02_adder4/adder4_tb.v:14: $finish called at 200000 (1ps)\nedit & re-run command"
+      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (adder4_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/evr2-02_adder4 -o /home/user/siliconcrew/workspace/evr2-02_adder4/sim_runs/sim_0001/adder4_tb.out -f /home/user/siliconcrew/workspace/evr2-02_adder4/sim_runs/sim_0001/iverilog_cpw31vfd.f\n$ vvp /home/user/siliconcrew/workspace/evr2-02_adder4/sim_runs/sim_0001/adder4_tb.out\nVCD info: dumpfile adder4_tb.vcd opened for output.\nTEST PASSED\n/home/user/siliconcrew/workspace/evr2-02_adder4/adder4_tb.v:16: $finish called at 200000 (1ps)\nedit & re-run command"
     },
     {
-      "ms": 21077,
+      "ms": 21486,
       "action": "screenshot",
       "name": "04-sim"
     },
     {
-      "ms": 22406,
+      "ms": 22986,
       "action": "view_wave",
       "ok": true,
-      "ms_step": 1329
+      "ms_step": 1499
     },
     {
-      "ms": 22523,
+      "ms": 23101,
       "action": "screenshot",
       "name": "05-wave"
     },
     {
-      "ms": 37611,
+      "ms": 38251,
       "action": "run_synth",
       "ok": true,
-      "ms_step": 15088
+      "ms_step": 15150
     },
     {
-      "ms": 38082,
+      "ms": 38770,
       "action": "show_synth_console",
       "ok": true,
-      "ms_step": 471
+      "ms_step": 519
     },
     {
-      "ms": 38092,
+      "ms": 38789,
       "action": "synth_result",
       "console": "Lint\nSim\nsim_0001\nSynth\nsynth_0001\nSynthesizing synth_0001\nRunning on remote VM\n15s\nSynth\n2\nFloorplan\n3\nPlace\n4\nCTS\n5\nRoute\n6\nFinish\nsynth_0001 running · synth\nCopy\nNo further output.\nedit & re-run command"
     },
     {
-      "ms": 38214,
+      "ms": 38911,
       "action": "screenshot",
       "name": "06-synth"
     },
     {
-      "ms": 39425,
+      "ms": 40104,
       "action": "nav_View RTL",
       "ok": true,
-      "ms_step": 1211
+      "ms_step": 1193
     },
     {
-      "ms": 39543,
+      "ms": 40215,
       "action": "screenshot",
       "name": "07-view-rtl"
     },
     {
-      "ms": 40586,
+      "ms": 41253,
       "action": "nav_View Spec",
       "ok": true,
-      "ms_step": 1043
+      "ms_step": 1037
     },
     {
-      "ms": 40688,
+      "ms": 41357,
       "action": "screenshot",
       "name": "08-view-spec"
     },
     {
-      "ms": 41750,
+      "ms": 42448,
       "action": "nav_View Signoff",
       "ok": true,
-      "ms_step": 1062
+      "ms_step": 1091
     },
     {
-      "ms": 41853,
+      "ms": 42564,
       "action": "screenshot",
       "name": "09-view-signoff"
     },
     {
-      "ms": 44136,
+      "ms": 44872,
       "action": "open_chat_route",
       "ok": true,
-      "ms_step": 2283
+      "ms_step": 2308
     },
     {
-      "ms": 44237,
+      "ms": 45003,
       "action": "screenshot",
       "name": "10-chat-route"
     }
