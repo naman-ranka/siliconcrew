@@ -1,6 +1,8 @@
 import type {
   Project,
   Session,
+  ChatThread,
+  ModelInfo,
   Message,
   FileInfo,
   SpecData,
@@ -8,9 +10,15 @@ import type {
   WaveformData,
   ReportData,
   SynthesisRun,
+  DesignManifest,
+  RunSummary,
+  LintResult,
+  PpaDiff,
 } from "@/types";
+import { authHeader, getAuthToken, notifyAuthExpired } from "./authToken";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+import { getApiBase, getWsBase } from "@/lib/runtime-config";
+
 const encodeSessionId = (sessionId: string): string => encodeURIComponent(sessionId);
 const encodeFilePath = (filename: string): string => encodeURIComponent(filename);
 
@@ -19,17 +27,24 @@ async function apiFetch<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
-  const response = await fetch(`${API_BASE}${endpoint}`, {
+  const response = await fetch(`${getApiBase()}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...authHeader(),
       ...options?.headers,
     },
   });
 
   if (!response.ok) {
+    // Expired/invalid token → let the auth layer drop to anonymous + re-prompt.
+    if (response.status === 401) notifyAuthExpired();
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || "API request failed");
+    // Attach the HTTP status so callers can branch on graceful states (e.g. BYOK:
+    // 400 self-host, 503 vault-off) without parsing the message string.
+    const err = new Error(error.detail || "API request failed") as Error & { status?: number };
+    err.status = response.status;
+    throw err;
   }
 
   return response.json();
@@ -75,16 +90,83 @@ export const sessionsApi = {
     }),
 };
 
+// Models API — the registry for the picker (availability per request).
+export const modelsApi = {
+  list: () => apiFetch<{ models: ModelInfo[]; default: string }>("/api/models"),
+};
+
+// BYOK API keys (hosted, signed-in). The server NEVER returns a stored key —
+// only which providers have one. In self-host `list` 400s ("BYOK is only
+// available in hosted mode."); when the vault is unconfigured it 503s. Callers
+// branch on `err.status` (see apiFetch) for those graceful states.
+export const keysApi = {
+  list: () => apiFetch<{ providers: string[] }>("/api/keys"),
+
+  save: (provider: string, api_key: string) =>
+    apiFetch<{ ok: true; provider: string; stored: boolean }>(
+      `/api/keys/${encodeURIComponent(provider)}`,
+      { method: "PUT", body: JSON.stringify({ api_key }) }
+    ),
+
+  remove: (provider: string) =>
+    apiFetch<{ ok: true; provider: string; deleted: boolean }>(
+      `/api/keys/${encodeURIComponent(provider)}`,
+      { method: "DELETE" }
+    ),
+};
+
+// Chat thread API — many conversations per workspace (session).
+export const threadsApi = {
+  list: (sessionId: string) =>
+    apiFetch<ChatThread[]>(`/api/sessions/${encodeSessionId(sessionId)}/threads`),
+
+  create: (sessionId: string, title?: string, model?: string) =>
+    apiFetch<ChatThread>(`/api/sessions/${encodeSessionId(sessionId)}/threads`, {
+      method: "POST",
+      body: JSON.stringify({ title: title ?? null, model: model ?? null }),
+    }),
+
+  getHistory: (sessionId: string, threadId: string) =>
+    apiFetch<Message[]>(
+      `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}/history`
+    ),
+
+  patch: (sessionId: string, threadId: string, body: { title?: string; model?: string }) =>
+    apiFetch<ChatThread>(
+      `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}`,
+      { method: "PATCH", body: JSON.stringify(body) }
+    ),
+
+  delete: (sessionId: string, threadId: string) =>
+    apiFetch<{ status: string }>(
+      `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}`,
+      { method: "DELETE" }
+    ),
+};
+
 // Chat API
 export const chatApi = {
+  // Legacy session-level history (defaults to the session's "Chat 1").
   getHistory: (sessionId: string) =>
     apiFetch<Message[]>(`/api/chat/${encodeSessionId(sessionId)}/history`),
 
-  // WebSocket connection for streaming
-  createConnection: (sessionId: string): WebSocket => {
-    const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsHost = process.env.NEXT_PUBLIC_WS_URL || `${wsProtocol}//${window.location.hostname}:8000`;
-    return new WebSocket(`${wsHost}/api/chat/${encodeSessionId(sessionId)}`);
+  // Per-thread history (the general form).
+  getThreadHistory: (sessionId: string, threadId: string) =>
+    threadsApi.getHistory(sessionId, threadId),
+
+  // WebSocket connection for streaming. The active chat thread rides as a query
+  // param so the server keys the LangGraph checkpoint by thread while the
+  // workspace stays bound from session_id.
+  createConnection: (sessionId: string, threadId?: string | null): WebSocket => {
+    // Browsers can't set headers on `new WebSocket`, so the Google ID token
+    // rides a query param. The backend (chat_websocket) already reads
+    // `?token=` → authenticate(). Only appended when signed in.
+    const params = new URLSearchParams();
+    if (threadId) params.set("thread_id", threadId);
+    const token = getAuthToken();
+    if (token) params.set("token", token);
+    const qs = params.toString();
+    return new WebSocket(`${getWsBase()}/api/chat/${encodeSessionId(sessionId)}${qs ? `?${qs}` : ""}`);
   },
 };
 
@@ -125,6 +207,11 @@ export const workspaceApi = {
   listLayouts: (sessionId: string) =>
     apiFetch<string[]>(`/api/workspace/${encodeSessionId(sessionId)}/layouts`),
 
+  getLayout: (sessionId: string, filename: string) =>
+    apiFetch<{ svg: string; cell_name: string; cached?: boolean; error?: string; message?: string }>(
+      `/api/workspace/${encodeSessionId(sessionId)}/layout/${encodeFilePath(filename)}`
+    ),
+
   listSchematics: (sessionId: string) =>
     apiFetch<string[]>(`/api/workspace/${encodeSessionId(sessionId)}/schematics`),
 
@@ -132,6 +219,94 @@ export const workspaceApi = {
     apiFetch<{ filename: string; content: string }>(
       `/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(filename)}`
     ),
+};
+
+// Workbench action layer — manifest, IDE-first buttons, unified runs.
+// Every endpoint returns the uniform { ok, ... } envelope (api-contract.md).
+async function actionFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(`${getApiBase()}${endpoint}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...authHeader(), ...options?.headers },
+  });
+  if (response.status === 401) notifyAuthExpired();
+  const body = await response.json().catch(() => null);
+  if (!response.ok || (body && body.ok === false)) {
+    const err = body?.detail?.error || body?.error || { message: response.statusText };
+    throw new Error(err.message || "Action failed");
+  }
+  return body as T;
+}
+
+const ws = (sessionId: string) => `/api/workspace/${encodeSessionId(sessionId)}`;
+
+export const workbenchApi = {
+  getManifest: (sessionId: string) =>
+    actionFetch<{ ok: true; manifest: DesignManifest }>(`${ws(sessionId)}/manifest`).then((r) => r.manifest),
+
+  updateManifest: (sessionId: string, updates: Partial<DesignManifest> | { files: { name: string; role: string }[] }) =>
+    actionFetch<{ ok: true; manifest: DesignManifest }>(`${ws(sessionId)}/manifest`, {
+      method: "PUT",
+      body: JSON.stringify(updates),
+    }).then((r) => r.manifest),
+
+  uploadFiles: async (sessionId: string, files: File[]) => {
+    const form = new FormData();
+    for (const f of files) form.append("files", f, f.name);
+    // FormData sets its own multipart Content-Type (with boundary) — only add
+    // Authorization here, never Content-Type.
+    const response = await fetch(`${getApiBase()}${ws(sessionId)}/files`, {
+      method: "POST",
+      body: form,
+      headers: { ...authHeader() },
+    });
+    if (response.status === 401) notifyAuthExpired();
+    const body = await response.json().catch(() => null);
+    if (!response.ok || (body && body.ok === false)) {
+      throw new Error(body?.detail?.error?.message || "Upload failed");
+    }
+    return body as { ok: true; uploaded: string[]; manifest: DesignManifest };
+  },
+
+  saveCode: (sessionId: string, filename: string, content: string) =>
+    actionFetch<{ ok: true; saved: string; manifest: DesignManifest }>(
+      `${ws(sessionId)}/code/${encodeFilePath(filename)}`,
+      { method: "PUT", body: JSON.stringify({ content }) }
+    ),
+
+  lint: (sessionId: string) =>
+    actionFetch<LintResult & { ok: true }>(`${ws(sessionId)}/lint`, { method: "POST" }),
+
+  simulate: (sessionId: string, body: { simTop?: string; mode?: string; runId?: string } = {}) =>
+    actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/simulate`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }).then((r) => r.run),
+
+  synthesize: (sessionId: string, body: Record<string, unknown> = {}) =>
+    actionFetch<{ ok: true; jobId: string; runId: string }>(`${ws(sessionId)}/synthesize`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  listRuns: (sessionId: string, kind: "all" | "sim" | "synth" = "all") =>
+    actionFetch<{ ok: true; runs: RunSummary[] }>(`${ws(sessionId)}/runs?kind=${kind}`).then((r) => r.runs),
+
+  getRun: (sessionId: string, runId: string) =>
+    actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/runs/${encodeURIComponent(runId)}`).then((r) => r.run),
+
+  getJob: (sessionId: string, jobId: string) =>
+    actionFetch<{ ok: true; job: Record<string, unknown> }>(`${ws(sessionId)}/jobs/${encodeURIComponent(jobId)}`).then((r) => r.job),
+
+  pinRun: (sessionId: string, runId: string, pinned: boolean) =>
+    actionFetch<{ ok: true; runId: string; pinned: boolean }>(`${ws(sessionId)}/runs/${encodeURIComponent(runId)}/pin`, {
+      method: "POST",
+      body: JSON.stringify({ pinned }),
+    }),
+
+  compareRuns: (sessionId: string, a: string, b: string) =>
+    actionFetch<{ ok: true; diff: PpaDiff }>(
+      `${ws(sessionId)}/runs/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`
+    ).then((r) => r.diff),
 };
 
 // Health check

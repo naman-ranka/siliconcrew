@@ -1,0 +1,1 @@
+module counter_stage_status(input clk, output q); endmodule

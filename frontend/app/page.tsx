@@ -7,6 +7,7 @@ import {
 } from "react-resizable-panels";
 import { Sidebar } from "@/components/sidebar/Sidebar";
 import { ChatArea } from "@/components/chat/ChatArea";
+import { SettingsModal } from "@/components/settings/SettingsModal";
 import { ArtifactsPanel } from "@/components/artifacts/ArtifactsPanel";
 import { useStore } from "@/lib/store";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -57,6 +58,9 @@ export default function Home() {
           </Button>
         </div>
       )}
+
+      {/* Settings (BYOK API Keys) — shared store-driven modal. */}
+      <SettingsModal />
     </main>
   );
 }

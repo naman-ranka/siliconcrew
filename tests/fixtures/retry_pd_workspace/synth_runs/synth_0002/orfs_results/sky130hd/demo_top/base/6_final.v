@@ -1,0 +1,1 @@
+module demo_top(input clk, output y); endmodule

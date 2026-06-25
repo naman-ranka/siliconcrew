@@ -13,6 +13,54 @@ from typing import Any, Dict, List, Optional
 
 from src.tools.run_docker import run_docker_command
 from src.tools.spec_manager import load_yaml_file
+from src.platform_engines.orfs_runner import OrfsRequest, get_orfs_runner
+from src.platform_engines.provenance import collect_provenance
+
+
+def _pinned_num_cores() -> int:
+    """Pinned ORFS P&R core count (determinism). From platform settings."""
+    try:
+        from src.platform_engines.settings import get_settings
+
+        return max(1, int(get_settings().num_cores))
+    except Exception:
+        return 4
+
+
+def _configured_orfs_backend() -> str:
+    """The execution backend the ORFS runner is configured for, without running.
+
+    Used to label a job as remote/local in its status payload while it is still
+    in flight. Falls back to "local_docker" if the runner cannot be resolved.
+    """
+    try:
+        return getattr(get_orfs_runner(), "backend", "local_docker") or "local_docker"
+    except Exception:
+        return "local_docker"
+
+
+def _run_orfs_via_runner(
+    run_dir: str,
+    command: str,
+    volumes: List[str],
+    timeout: int,
+) -> Dict[str, Any]:
+    """Execute one ORFS invocation through the swappable OrfsRunner seam.
+
+    Returns the same dict shape the synthesis manager has always consumed
+    (``success``/``stdout``/``stderr``/``command``) so run management is
+    unchanged regardless of whether the local Docker or cloud Job backend runs.
+    """
+    result = get_orfs_runner().run(
+        OrfsRequest(run_dir=run_dir, command=command, volumes=list(volumes), timeout=timeout)
+    )
+    return {
+        "success": result.success,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "command": result.command,
+        "backend": result.backend,
+    }
 
 RUNS_DIRNAME = "synth_runs"
 INDEX_FILENAME = "index.json"
@@ -41,7 +89,114 @@ PD_PREREQ_FILES = {
 
 _JOB_LOCK = threading.Lock()
 _INDEX_LOCK = threading.Lock()
+# Default single-tenant executor (local / self-host). In hosted mode this is
+# replaced via set_job_executor() with a per-user queue so one tenant's backlog
+# cannot starve others and per-user synth concurrency is enforced. Any object
+# with a ``.submit(fn, *args)`` returning a concurrent.futures.Future works.
 _EXECUTOR = ThreadPoolExecutor(max_workers=2)
+_ACTIVE_EXECUTOR: Any = None
+
+
+def set_job_executor(executor: Any) -> None:
+    """Override the synth job executor (hosted per-user queue). None resets to default."""
+    global _ACTIVE_EXECUTOR
+    _ACTIVE_EXECUTOR = executor
+
+
+def _job_executor() -> Any:
+    return _ACTIVE_EXECUTOR if _ACTIVE_EXECUTOR is not None else _EXECUTOR
+
+
+# Quota enforcement around synthesis. None (default) = self-host, no enforcement.
+# In hosted mode settings.apply_platform_wiring installs a shared QuotaManager so
+# per-user concurrency / daily-run / monthly-compute caps are enforced fleet-wide.
+_QUOTA_MANAGER: Any = None
+
+
+def set_quota_manager(manager: Any) -> None:
+    """Install the quota manager enforced around synth submissions (None disables)."""
+    global _QUOTA_MANAGER
+    _QUOTA_MANAGER = manager
+
+
+def _quota_identity() -> tuple:
+    """(user_id, tier) for the current request, from the session context."""
+    try:
+        from src.utils.session_context import get_current_session
+
+        ctx = get_current_session()
+        if ctx:
+            return (ctx.user_id or ctx.session_id, ctx.tier or "user")
+    except Exception:
+        pass
+    return ("local", "user")
+
+
+def _reserve_synth_quota():
+    """Reserve a synth slot for the current user, or return an error envelope.
+
+    Returns ``(reservation, None)`` on success, or ``(None, error_dict)`` when a
+    cap is hit. ``reservation`` is None when no quota manager is installed
+    (self-host) — synthesis proceeds unchanged.
+    """
+    if _QUOTA_MANAGER is None:
+        return None, None
+    from src.platform_engines.quotas import QuotaExceeded
+
+    user_id, tier = _quota_identity()
+    try:
+        return _QUOTA_MANAGER.reserve_synth_run(user_id, tier), None
+    except QuotaExceeded as exc:
+        env = exc.to_envelope()
+        return None, {
+            "status": "rejected",
+            "ok": False,
+            "error": env["error"],
+            "check_notes": exc.message,
+            "next_action": "Wait for your in-flight run / quota window, or add capacity.",
+        }
+
+
+def _sync_current_session_workspace(ctx, provider) -> None:
+    if ctx is None or provider is None:
+        return
+    sync = getattr(provider, "sync", None)
+    if callable(sync):
+        sync(ctx.session_id)
+
+
+def _submit_with_quota_release(reservation, fn, *fn_args):
+    """Submit ``fn`` to the active executor, releasing the reservation when done."""
+    try:
+        from src.utils.session_context import get_current_session
+
+        ctx = get_current_session()
+    except Exception:
+        ctx = None
+    try:
+        from src.platform_engines.workspace_provider import get_workspace_provider
+
+        provider = get_workspace_provider()
+    except Exception:
+        provider = None
+
+    def runner():
+        try:
+            return fn(*fn_args)
+        finally:
+            try:
+                _sync_current_session_workspace(ctx, provider)
+            except Exception:
+                pass
+            if reservation is not None and _QUOTA_MANAGER is not None:
+                try:
+                    _QUOTA_MANAGER.release_synth_run(reservation)
+                except Exception:
+                    pass
+
+    return _job_executor().submit(runner)
+
+
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _POLL_CACHE: Dict[str, Dict[str, Any]] = {}
 _POLL_BACKOFF_STATE: Dict[str, Dict[str, Any]] = {}
@@ -701,6 +856,9 @@ def _run_orfs(
         f"export CORE_UTILIZATION = {utilization}\n"
         f"export CORE_ASPECT_RATIO = {aspect_ratio}\n"
         f"export CORE_MARGIN = {core_margin}\n"
+        # Determinism: pin NUM_CORES so P&R parallelism (the only real source of
+        # run-to-run nondeterminism) is fixed and runs are reproducible.
+        f"export NUM_CORES = {_pinned_num_cores()}\n"
     )
     with open(config_mk, "w", encoding="utf-8") as f:
         f.write(config)
@@ -711,9 +869,9 @@ def _run_orfs(
         f"{reports_dir}:/OpenROAD-flow-scripts/flow/reports",
     ]
 
-    return run_docker_command(
+    return _run_orfs_via_runner(
+        run_dir=run_dir,
         command="make -B DESIGN_CONFIG=/workspace/config.mk",
-        workspace_path=run_dir,
         volumes=volumes,
         timeout=timeout,
     )
@@ -739,6 +897,9 @@ def _write_orfs_config(
         f"export CORE_UTILIZATION = {utilization}",
         f"export CORE_ASPECT_RATIO = {aspect_ratio}",
         f"export CORE_MARGIN = {core_margin}",
+        # Determinism: pin NUM_CORES (see _run_orfs). Overrides below may still
+        # set a different value explicitly if a retry intentionally varies it.
+        f"export NUM_CORES = {_pinned_num_cores()}",
     ]
     for key, value in (orfs_overrides or {}).items():
         lines.append(f"export {key} = {value}")
@@ -780,9 +941,9 @@ def _run_orfs_targets(
         f"{reports_dir}:/OpenROAD-flow-scripts/flow/reports",
     ]
     target_cmds = [f"make DESIGN_CONFIG=/workspace/config.mk {target}" for target in targets]
-    return run_docker_command(
+    return _run_orfs_via_runner(
+        run_dir=run_dir,
         command="set -e; " + "; ".join(target_cmds),
-        workspace_path=run_dir,
         volumes=volumes,
         timeout=timeout,
     )
@@ -975,6 +1136,9 @@ def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, 
         "check_notes": f"Retrying from stage '{args['start_stage']}' through '{args['max_stage']}'.",
         "stages": stages,
         "retry_prerequisites": copied_prereqs,
+        "provenance": collect_provenance(
+            pdk=args["platform"], num_cores=_pinned_num_cores()
+        ).as_dict(),
     }
     run_meta["stages"][args["start_stage"]]["status"] = "running"
     _persist_run_meta(run_dir, run_meta)
@@ -1002,7 +1166,8 @@ def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, 
     auto_checks.signoff = signoff["status"]
     run_meta["auto_checks"] = asdict(auto_checks)
     run_meta["netlist_path"] = _find_netlist(run_dir, args["top_module"])
-    run_meta["summary_metrics"] = _extract_summary_metrics(run_dir)
+    # Same shared finalization parser as the full-flow worker (see _job_worker).
+    run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
     run_meta["status"] = "completed" if auto_checks.signoff == "pass" else "failed"
     retry_completed_note = (
         signoff["note"]
@@ -1100,6 +1265,10 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "run_id": run_id,
         "job_id": job_id,
         "created_at": _now_iso(),
+        # Record the configured execution backend up-front so the job-status
+        # payload can communicate where this run is executing (e.g. the "remote"
+        # VM) while it is still running, not only after artifacts return.
+        "backend": _configured_orfs_backend(),
         "status": "running",
         "current_stage": "constraints",
         "platform": platform,
@@ -1122,6 +1291,11 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "auto_checks": asdict(auto_checks),
         "check_notes": constraints["note"],
         "stages": _init_stage_metadata(),
+        # Reproducibility stamp: repo commit, pinned ORFS image digest, PDK,
+        # iverilog version, and the pinned NUM_CORES used for this run.
+        "provenance": collect_provenance(
+            pdk=platform, num_cores=_pinned_num_cores()
+        ).as_dict(),
     }
     run_meta["stages"]["constraints"]["status"] = "running"
     _persist_run_meta(run_dir, run_meta)
@@ -1179,22 +1353,13 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
     run_meta["stdcell_manifest_version"] = manifest.get("updated_at") if manifest else None
     run_meta["stdcell_files_used"] = manifest.get("files", []) if manifest else []
 
-    # Use the same targeted parsers as get_synthesis_metrics so that WNS/TNS/power
-    # are always correctly stored. _extract_summary_metrics uses a broad regex scan
-    # that misses the "wns max <value>" format in 6_finish.rpt (the word "max" sits
-    # between "wns" and the number), leaving wns_ns=null. Agents rely on this field.
-    finish_path = _find_report_file(run_dir, "6_finish.rpt")
-    stat_path = _find_report_file(run_dir, "synth_stat.txt")
-    finish_data = _parse_finish_report(finish_path) if finish_path else {}
-    stat_data = _parse_synth_stat(stat_path) if stat_path else {}
-    summary_metrics = {
-        "area_um2": stat_data.get("area_um2"),
-        "cell_count": stat_data.get("cell_count"),
-        "wns_ns": finish_data.get("wns_ns"),
-        "tns_ns": finish_data.get("tns_ns"),
-        "power_uw": finish_data.get("power_uw"),
-    }
-    run_meta["summary_metrics"] = summary_metrics
+    # Finalize PPA via the single shared parser so EVERY backend (local docker,
+    # cloud job, remote VM) persists identical summary_metrics: area/cells from
+    # synth_stat.txt, WNS/TNS/power from 6_finish.rpt (the targeted parsers handle
+    # the "wns max <value>" finish-report format and the 4-column yosys cell row),
+    # plus derived fmax_mhz and power_mw. _extract_summary_metrics' broad regex
+    # scan missed both cell_count and the "wns max" format, leaving them null.
+    run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
 
     final_ok = auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
     run_meta["status"] = "completed" if final_ok else "failed"
@@ -1231,6 +1396,12 @@ def start_synthesis_job(
     run_equiv: bool = False,
     constraints_mode: str = "auto",
 ) -> Dict[str, Any]:
+    # Quota gate (hosted): reject before doing any work if the user is over a cap
+    # (concurrency / runs-per-day / monthly-compute). No-op in self-host.
+    reservation, quota_error = _reserve_synth_quota()
+    if quota_error is not None:
+        return quota_error
+
     _ensure_dir(workspace)
     run_id, run_dir = _allocate_run_dir(workspace)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
@@ -1253,7 +1424,7 @@ def start_synthesis_job(
     }
 
     with _JOB_LOCK:
-        future = _EXECUTOR.submit(_job_worker, job_id, workspace, run_dir, args)
+        future = _submit_with_quota_release(reservation, _job_worker, job_id, workspace, run_dir, args)
         _JOBS[job_id] = {
             "future": future,
             "workspace": workspace,
@@ -1324,6 +1495,11 @@ def retry_pd_job(
     except FileNotFoundError as exc:
         return {"status": "error", "message": str(exc)}
 
+    # A PD retry is a synth run too — same quota gate.
+    reservation, quota_error = _reserve_synth_quota()
+    if quota_error is not None:
+        return quota_error
+
     pd_parameters = _pd_parameters_from_run(parent_run_dir, parent_meta)
     run_id, run_dir = _allocate_run_dir(workspace)
     job_id = f"job_{uuid.uuid4().hex[:10]}"
@@ -1343,7 +1519,7 @@ def retry_pd_job(
     }
 
     with _JOB_LOCK:
-        future = _EXECUTOR.submit(_retry_pd_worker, job_id, workspace, run_dir, args)
+        future = _submit_with_quota_release(reservation, _retry_pd_worker, job_id, workspace, run_dir, args)
         _JOBS[job_id] = {
             "future": future,
             "workspace": workspace,
@@ -1387,6 +1563,28 @@ def _recommended_poll_after_sec(job_id: str, status: str, stage: str, last_log_l
     return min(POLL_BACKOFF_MAX_SEC, max(POLL_BACKOFF_START_SEC, poll_after))
 
 
+def _elapsed_seconds(meta: Dict[str, Any], status: str) -> Optional[float]:
+    """Wall-clock elapsed for a job.
+
+    Once the run is finalized the persisted ``elapsed_sec`` is authoritative; while
+    it is still running we compute live elapsed from ``created_at`` so the UI has a
+    ticking timer instead of ``null``.
+    """
+    persisted = meta.get("elapsed_sec")
+    if persisted is not None and status in {"completed", "failed"}:
+        return persisted
+    created = meta.get("created_at")
+    if created:
+        try:
+            started = datetime.fromisoformat(created)
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            return round((datetime.now(timezone.utc) - started).total_seconds(), 2)
+        except Exception:
+            pass
+    return persisted
+
+
 def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, meta: Dict[str, Any], recovered: bool = False) -> Dict[str, Any]:
     last_log_lines = _collect_log_tail(run_dir)
     stage = _infer_stage(last_log_lines)
@@ -1407,7 +1605,9 @@ def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, 
         "stage": "final" if status in {"completed", "failed"} else stage,
         "current_stage": meta.get("current_stage", stage),
         "stages": meta.get("stages"),
-        "elapsed_sec": meta.get("elapsed_sec"),
+        # Live elapsed while running (computed from created_at), final elapsed
+        # once persisted at finalization. So the UI always has a running timer.
+        "elapsed_sec": _elapsed_seconds(meta, status),
         "last_log_lines": last_log_lines,
         "artifacts_found": _collect_artifacts(run_dir),
         "summary_metrics": meta.get("summary_metrics"),
@@ -1420,6 +1620,13 @@ def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, 
             f"double each subsequent poll, cap {POLL_BACKOFF_MAX_SEC}s."
         ),
     }
+    # Communicate where this run is executing so the UI can say e.g. "running on
+    # remote VM" instead of implying it is local. Additive — existing fields are
+    # untouched.
+    backend = meta.get("backend") or _configured_orfs_backend()
+    resp["backend"] = backend
+    resp["remote"] = backend not in ("local_docker", "", None)
+    resp["execution_label"] = "remote VM" if resp["remote"] else "local Docker"
     if recovered:
         resp["recovered_from_index"] = True
         if status not in {"completed", "failed"}:
@@ -1561,6 +1768,20 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
             continue
 
         meta = _read_run_meta(run_dir)
+        # Self-heal: re-finalize PPA for completed runs whose stored
+        # summary_metrics predate the shared finalizer (missing cell_count or the
+        # derived fmax_mhz). This repairs historical runs on read without a
+        # migration, so the runs list shows correct PPA for old + new runs alike.
+        if meta.get("status") == "completed":
+            sm = meta.get("summary_metrics") or {}
+            if sm.get("cell_count") is None or sm.get("fmax_mhz") is None:
+                recomputed = _compute_summary_metrics(run_dir, meta)
+                if recomputed.get("cell_count") is not None or recomputed.get("fmax_mhz") is not None:
+                    meta["summary_metrics"] = recomputed
+                    try:
+                        _persist_run_meta(run_dir, meta)
+                    except Exception:
+                        pass
         report_path = os.path.join(run_dir, "design_report.md")
         items.append(
             {
@@ -2291,14 +2512,75 @@ def _parse_synth_stat(path: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Yosys stat summary row usually looks like: "814 7.33E+03 cells"
-    cells_m = re.search(r"^\s*([0-9]+)\s+[0-9.eE+-]+\s+cells\b", text, re.IGNORECASE | re.MULTILINE)
+    # The yosys/ORFS stat summary row that reports the total cell count comes in
+    # two shapes depending on the flow version:
+    #   * old/abbreviated:  "814 7.33E+03 cells"   (count, area, "cells")
+    #   * real ORFS output: "37  339.075  37  339.075 cells"
+    #                       (count, area, local-count, local-area, "cells")
+    # The total cell count is always the FIRST integer on the line that ends in
+    # the bare word "cells" (the per-cell breakdown lines below it end in a cell
+    # name, not "cells", so they are not matched).
+    cells_m = re.search(r"^\s*([0-9]+)\b.*\bcells\s*$", text, re.IGNORECASE | re.MULTILINE)
     if cells_m:
         try:
             out["cell_count"] = int(cells_m.group(1))
         except Exception:
             pass
     return out
+
+
+def _derive_fmax_mhz(clock_period_ns: Optional[float], wns_ns: Optional[float]) -> Optional[float]:
+    """Achievable Fmax = 1000 / (clock_period_ns - wns_ns).
+
+    WNS is the worst negative slack: positive slack means timing met with margin
+    (the clock could be tightened by WNS), negative means the period must grow by
+    |WNS|. Either way the achieved period is ``clock_period_ns - wns_ns``.
+    """
+    try:
+        if clock_period_ns is None or wns_ns is None:
+            return None
+        achieved_period = float(clock_period_ns) - float(wns_ns)
+        if achieved_period <= 0:
+            return None
+        return round(1000.0 / achieved_period, 2)
+    except Exception:
+        return None
+
+
+def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse PPA from on-disk ORFS reports into the canonical summary_metrics shape.
+
+    This is the SINGLE finalization parser shared by every backend (local docker,
+    cloud job, remote VM) and by the PD-retry path, so a successful run is
+    finalized identically regardless of where ORFS actually executed. It reuses
+    the targeted ``_parse_synth_stat`` / ``_parse_finish_report`` parsers (which
+    handle the "wns max <value>" finish-report format and the 4-column yosys cell
+    row), derives Fmax from the effective clock period and WNS, and exposes power
+    in both micro- and milliwatts.
+    """
+    finish_path = _find_report_file(run_dir, "6_finish.rpt")
+    stat_path = _find_report_file(run_dir, "synth_stat.txt")
+    finish_data = _parse_finish_report(finish_path) if finish_path else {}
+    stat_data = _parse_synth_stat(stat_path) if stat_path else {}
+
+    wns_ns = finish_data.get("wns_ns")
+    clock_period_ns = (
+        run_meta.get("effective_clock_period_ns")
+        or run_meta.get("clock_period_ns")
+        or run_meta.get("requested_clock_period_ns")
+    )
+    power_uw = finish_data.get("power_uw")
+    power_mw = round(power_uw / 1000.0, 6) if power_uw is not None else None
+
+    return {
+        "area_um2": stat_data.get("area_um2"),
+        "cell_count": stat_data.get("cell_count"),
+        "wns_ns": wns_ns,
+        "tns_ns": finish_data.get("tns_ns"),
+        "power_uw": power_uw,
+        "power_mw": power_mw,
+        "fmax_mhz": _derive_fmax_mhz(clock_period_ns, wns_ns),
+    }
 
 
 def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
@@ -2316,12 +2598,22 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
     finish_data = _parse_finish_report(finish) if finish else {}
     stat_data = _parse_synth_stat(stat) if stat else {}
 
+    run_meta = _read_run_meta(run_dir)
+    clock_period_ns = (
+        run_meta.get("effective_clock_period_ns")
+        or run_meta.get("clock_period_ns")
+        or run_meta.get("requested_clock_period_ns")
+    )
+    power_uw = finish_data.get("power_uw")
+    wns_ns = finish_data.get("wns_ns")
     metrics = {
         "area_um2": stat_data.get("area_um2"),
         "cell_count": stat_data.get("cell_count"),
-        "wns_ns": finish_data.get("wns_ns"),
+        "wns_ns": wns_ns,
         "tns_ns": finish_data.get("tns_ns"),
-        "power_uw": finish_data.get("power_uw"),
+        "power_uw": power_uw,
+        "power_mw": round(power_uw / 1000.0, 6) if power_uw is not None else None,
+        "fmax_mhz": _derive_fmax_mhz(clock_period_ns, wns_ns),
     }
     sources = {
         "area_um2": stat,
@@ -2329,15 +2621,19 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
         "wns_ns": finish,
         "tns_ns": finish,
         "power_uw": finish,
+        "power_mw": finish,
+        "fmax_mhz": finish,
     }
-    missing = [k for k, v in metrics.items() if v is None]
+    # Completeness is judged on the core PPA fields; fmax/power_mw are derived
+    # and may legitimately be absent without the run being "incomplete".
+    core = ("area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw")
+    missing = [k for k in core if metrics.get(k) is None]
     notes = []
     if not finish:
         notes.append("6_finish.rpt not found")
     if not stat:
         notes.append("synth_stat.txt not found")
 
-    run_meta = _read_run_meta(run_dir)
     return {
         "status": "ok",
         "run_id": run_meta.get("run_id") or os.path.basename(run_dir),
