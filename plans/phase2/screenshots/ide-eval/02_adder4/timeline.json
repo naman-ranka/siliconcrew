@@ -1,0 +1,214 @@
+{
+  "sessionName": "eval-02_adder4",
+  "designDir": "plans/phase2/ide-eval/designs/02_adder4/",
+  "designFiles": [
+    "plans/phase2/ide-eval/designs/02_adder4/adder4.v",
+    "plans/phase2/ide-eval/designs/02_adder4/adder4_tb.v"
+  ],
+  "jsErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: net::ERR_CONNECTION_CLOSED",
+    "pageerror: Event",
+    "pageerror: Event",
+    "pageerror: Event",
+    "pageerror: Event",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "netErrors": [
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-02_adder4/spec"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-02_adder4/spec"
+    },
+    {
+      "status": "failed",
+      "url": "https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs/loader.js",
+      "err": "net::ERR_CONNECTION_CLOSED"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-02_adder4/spec"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-02_adder4/spec"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-02_adder4/report"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-02_adder4/report"
+    }
+  ],
+  "timeline": [
+    {
+      "ms": 3835,
+      "action": "create_session",
+      "ok": true,
+      "ms_step": 3547
+    },
+    {
+      "ms": 6189,
+      "action": "open_workbench",
+      "ok": true,
+      "ms_step": 2354
+    },
+    {
+      "ms": 6306,
+      "action": "screenshot",
+      "name": "01-workbench-empty"
+    },
+    {
+      "ms": 8906,
+      "action": "upload_files",
+      "ok": true,
+      "ms_step": 2600,
+      "files": [
+        "adder4.v",
+        "adder4_tb.v"
+      ]
+    },
+    {
+      "ms": 9015,
+      "action": "screenshot",
+      "name": "02-files-uploaded"
+    },
+    {
+      "ms": 9057,
+      "action": "files_panel",
+      "text": null,
+      "filesArea": "synthTop"
+    },
+    {
+      "ms": 13682,
+      "action": "run_lint",
+      "ok": true,
+      "ms_step": 4625
+    },
+    {
+      "ms": 14165,
+      "action": "show_lint_console",
+      "ok": true,
+      "ms_step": 483
+    },
+    {
+      "ms": 14182,
+      "action": "lint_result",
+      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/eval-02_adder4/adder4.v\nedit & re-run command"
+    },
+    {
+      "ms": 14308,
+      "action": "screenshot",
+      "name": "03-lint"
+    },
+    {
+      "ms": 20473,
+      "action": "run_sim",
+      "ok": true,
+      "ms_step": 6165
+    },
+    {
+      "ms": 20961,
+      "action": "show_sim_console",
+      "ok": true,
+      "ms_step": 487
+    },
+    {
+      "ms": 20971,
+      "action": "sim_result",
+      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (adder4_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/eval-02_adder4 -o /home/user/siliconcrew/workspace/eval-02_adder4/sim_runs/sim_0001/adder4_tb.out -f /home/user/siliconcrew/workspace/eval-02_adder4/sim_runs/sim_0001/iverilog_mokv2i5h.f\n$ vvp /home/user/siliconcrew/workspace/eval-02_adder4/sim_runs/sim_0001/adder4_tb.out\nTEST PASSED\n/home/user/siliconcrew/workspace/eval-02_adder4/adder4_tb.v:14: $finish called at 200000 (1ps)\nedit & re-run command"
+    },
+    {
+      "ms": 21077,
+      "action": "screenshot",
+      "name": "04-sim"
+    },
+    {
+      "ms": 22406,
+      "action": "view_wave",
+      "ok": true,
+      "ms_step": 1329
+    },
+    {
+      "ms": 22523,
+      "action": "screenshot",
+      "name": "05-wave"
+    },
+    {
+      "ms": 37611,
+      "action": "run_synth",
+      "ok": true,
+      "ms_step": 15088
+    },
+    {
+      "ms": 38082,
+      "action": "show_synth_console",
+      "ok": true,
+      "ms_step": 471
+    },
+    {
+      "ms": 38092,
+      "action": "synth_result",
+      "console": "Lint\nSim\nsim_0001\nSynth\nsynth_0001\nSynthesizing synth_0001\nRunning on remote VM\n15s\nSynth\n2\nFloorplan\n3\nPlace\n4\nCTS\n5\nRoute\n6\nFinish\nsynth_0001 running · synth\nCopy\nNo further output.\nedit & re-run command"
+    },
+    {
+      "ms": 38214,
+      "action": "screenshot",
+      "name": "06-synth"
+    },
+    {
+      "ms": 39425,
+      "action": "nav_View RTL",
+      "ok": true,
+      "ms_step": 1211
+    },
+    {
+      "ms": 39543,
+      "action": "screenshot",
+      "name": "07-view-rtl"
+    },
+    {
+      "ms": 40586,
+      "action": "nav_View Spec",
+      "ok": true,
+      "ms_step": 1043
+    },
+    {
+      "ms": 40688,
+      "action": "screenshot",
+      "name": "08-view-spec"
+    },
+    {
+      "ms": 41750,
+      "action": "nav_View Signoff",
+      "ok": true,
+      "ms_step": 1062
+    },
+    {
+      "ms": 41853,
+      "action": "screenshot",
+      "name": "09-view-signoff"
+    },
+    {
+      "ms": 44136,
+      "action": "open_chat_route",
+      "ok": true,
+      "ms_step": 2283
+    },
+    {
+      "ms": 44237,
+      "action": "screenshot",
+      "name": "10-chat-route"
+    }
+  ]
+}

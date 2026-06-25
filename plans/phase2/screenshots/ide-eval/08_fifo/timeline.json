@@ -1,0 +1,214 @@
+{
+  "sessionName": "eval-08_fifo",
+  "designDir": "plans/phase2/ide-eval/designs/08_fifo/",
+  "designFiles": [
+    "plans/phase2/ide-eval/designs/08_fifo/fifo.v",
+    "plans/phase2/ide-eval/designs/08_fifo/fifo_tb.v"
+  ],
+  "jsErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: net::ERR_CONNECTION_CLOSED",
+    "pageerror: Event",
+    "pageerror: Event",
+    "pageerror: Event",
+    "pageerror: Event",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "netErrors": [
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-08_fifo/spec"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-08_fifo/spec"
+    },
+    {
+      "status": "failed",
+      "url": "https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs/loader.js",
+      "err": "net::ERR_CONNECTION_CLOSED"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-08_fifo/spec"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-08_fifo/spec"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-08_fifo/report"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-08_fifo/report"
+    }
+  ],
+  "timeline": [
+    {
+      "ms": 3972,
+      "action": "create_session",
+      "ok": true,
+      "ms_step": 3664
+    },
+    {
+      "ms": 6283,
+      "action": "open_workbench",
+      "ok": true,
+      "ms_step": 2311
+    },
+    {
+      "ms": 6398,
+      "action": "screenshot",
+      "name": "01-workbench-empty"
+    },
+    {
+      "ms": 8995,
+      "action": "upload_files",
+      "ok": true,
+      "ms_step": 2596,
+      "files": [
+        "fifo.v",
+        "fifo_tb.v"
+      ]
+    },
+    {
+      "ms": 9091,
+      "action": "screenshot",
+      "name": "02-files-uploaded"
+    },
+    {
+      "ms": 9133,
+      "action": "files_panel",
+      "text": null,
+      "filesArea": "synthTop"
+    },
+    {
+      "ms": 13747,
+      "action": "run_lint",
+      "ok": true,
+      "ms_step": 4614
+    },
+    {
+      "ms": 14345,
+      "action": "show_lint_console",
+      "ok": true,
+      "ms_step": 598
+    },
+    {
+      "ms": 14357,
+      "action": "lint_result",
+      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/eval-08_fifo/fifo.v\nedit & re-run command"
+    },
+    {
+      "ms": 14485,
+      "action": "screenshot",
+      "name": "03-lint"
+    },
+    {
+      "ms": 20821,
+      "action": "run_sim",
+      "ok": true,
+      "ms_step": 6336
+    },
+    {
+      "ms": 21398,
+      "action": "show_sim_console",
+      "ok": true,
+      "ms_step": 577
+    },
+    {
+      "ms": 21411,
+      "action": "sim_result",
+      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (fifo_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/eval-08_fifo -o /home/user/siliconcrew/workspace/eval-08_fifo/sim_runs/sim_0001/fifo_tb.out -f /home/user/siliconcrew/workspace/eval-08_fifo/sim_runs/sim_0001/iverilog_1aap0xk4.f\n$ vvp /home/user/siliconcrew/workspace/eval-08_fifo/sim_runs/sim_0001/fifo_tb.out\nTEST PASSED\n/home/user/siliconcrew/workspace/eval-08_fifo/fifo_tb.v:20: $finish called at 86000 (1ps)\nedit & re-run command"
+    },
+    {
+      "ms": 21533,
+      "action": "screenshot",
+      "name": "04-sim"
+    },
+    {
+      "ms": 22950,
+      "action": "view_wave",
+      "ok": true,
+      "ms_step": 1417
+    },
+    {
+      "ms": 23066,
+      "action": "screenshot",
+      "name": "05-wave"
+    },
+    {
+      "ms": 38161,
+      "action": "run_synth",
+      "ok": true,
+      "ms_step": 15095
+    },
+    {
+      "ms": 38619,
+      "action": "show_synth_console",
+      "ok": true,
+      "ms_step": 458
+    },
+    {
+      "ms": 38632,
+      "action": "synth_result",
+      "console": "Lint\nSim\nsim_0001\nSynth\nsynth_0001\nSynthesizing synth_0001\nRunning on remote VM\n15s\nSynth\n2\nFloorplan\n3\nPlace\n4\nCTS\n5\nRoute\n6\nFinish\nsynth_0001 running · synth\nCopy\nNo further output.\nedit & re-run command"
+    },
+    {
+      "ms": 38731,
+      "action": "screenshot",
+      "name": "06-synth"
+    },
+    {
+      "ms": 40255,
+      "action": "nav_View RTL",
+      "ok": true,
+      "ms_step": 1524
+    },
+    {
+      "ms": 40412,
+      "action": "screenshot",
+      "name": "07-view-rtl"
+    },
+    {
+      "ms": 41564,
+      "action": "nav_View Spec",
+      "ok": true,
+      "ms_step": 1152
+    },
+    {
+      "ms": 41672,
+      "action": "screenshot",
+      "name": "08-view-spec"
+    },
+    {
+      "ms": 42743,
+      "action": "nav_View Signoff",
+      "ok": true,
+      "ms_step": 1070
+    },
+    {
+      "ms": 42847,
+      "action": "screenshot",
+      "name": "09-view-signoff"
+    },
+    {
+      "ms": 45175,
+      "action": "open_chat_route",
+      "ok": true,
+      "ms_step": 2327
+    },
+    {
+      "ms": 45275,
+      "action": "screenshot",
+      "name": "10-chat-route"
+    }
+  ]
+}

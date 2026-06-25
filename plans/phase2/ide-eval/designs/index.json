@@ -1,0 +1,66 @@
+[
+  {
+    "dir": "01_mux2",
+    "design": "mux2.v",
+    "tb": "mux2_tb.v",
+    "sim_top": "mux2",
+    "synth_top": "mux2",
+    "note": "Pure combinational, 1 line of logic. Baseline."
+  },
+  {
+    "dir": "02_adder4",
+    "design": "adder4.v",
+    "tb": "adder4_tb.v",
+    "sim_top": "adder4",
+    "synth_top": "adder4",
+    "note": "Multi-bit combinational; introduces buses and random testing."
+  },
+  {
+    "dir": "03_dff",
+    "design": "dff.v",
+    "tb": "dff_tb.v",
+    "sim_top": "dff",
+    "synth_top": "dff",
+    "note": "First clocked element; introduces clock + reset to the flow."
+  },
+  {
+    "dir": "04_counter8",
+    "design": "counter8.v",
+    "tb": "counter8_tb.v",
+    "sim_top": "counter8",
+    "synth_top": "counter8",
+    "note": "Multi-control sequential logic; common 'hello world' for HW."
+  },
+  {
+    "dir": "05_shiftreg",
+    "design": "shiftreg.v",
+    "tb": "shiftreg_tb.v",
+    "sim_top": "shiftreg",
+    "synth_top": "shiftreg",
+    "note": "Concatenation-based shifting; tests bus + serial I/O."
+  },
+  {
+    "dir": "06_seqdet",
+    "design": "seqdet.v",
+    "tb": "seqdet_tb.v",
+    "sim_top": "seqdet",
+    "synth_top": "seqdet",
+    "note": "Classic two-always FSM; tests state-machine authoring + waveform reading."
+  },
+  {
+    "dir": "07_alu4",
+    "design": "alu4.v",
+    "tb": "alu4_tb.v",
+    "sim_top": "alu4",
+    "synth_top": "alu4",
+    "note": "Op-decoded datapath with flags; tests a wider, more realistic block."
+  },
+  {
+    "dir": "08_fifo",
+    "design": "fifo.v",
+    "tb": "fifo_tb.v",
+    "sim_top": "fifo",
+    "synth_top": "fifo",
+    "note": "Memory + pointers + flags; the most realistic / hardest block."
+  }
+]

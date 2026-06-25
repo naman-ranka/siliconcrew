@@ -1,0 +1,214 @@
+{
+  "sessionName": "eval-07_alu4",
+  "designDir": "plans/phase2/ide-eval/designs/07_alu4/",
+  "designFiles": [
+    "plans/phase2/ide-eval/designs/07_alu4/alu4.v",
+    "plans/phase2/ide-eval/designs/07_alu4/alu4_tb.v"
+  ],
+  "jsErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: net::ERR_CONNECTION_CLOSED",
+    "pageerror: Event",
+    "pageerror: Event",
+    "pageerror: Event",
+    "pageerror: Event",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "netErrors": [
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-07_alu4/spec"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-07_alu4/spec"
+    },
+    {
+      "status": "failed",
+      "url": "https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs/loader.js",
+      "err": "net::ERR_CONNECTION_CLOSED"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-07_alu4/spec"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-07_alu4/spec"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-07_alu4/report"
+    },
+    {
+      "status": 404,
+      "url": "http://localhost:8001/api/workspace/eval-07_alu4/report"
+    }
+  ],
+  "timeline": [
+    {
+      "ms": 3971,
+      "action": "create_session",
+      "ok": true,
+      "ms_step": 3694
+    },
+    {
+      "ms": 6382,
+      "action": "open_workbench",
+      "ok": true,
+      "ms_step": 2411
+    },
+    {
+      "ms": 6492,
+      "action": "screenshot",
+      "name": "01-workbench-empty"
+    },
+    {
+      "ms": 9091,
+      "action": "upload_files",
+      "ok": true,
+      "ms_step": 2599,
+      "files": [
+        "alu4.v",
+        "alu4_tb.v"
+      ]
+    },
+    {
+      "ms": 9187,
+      "action": "screenshot",
+      "name": "02-files-uploaded"
+    },
+    {
+      "ms": 9230,
+      "action": "files_panel",
+      "text": null,
+      "filesArea": "synthTop"
+    },
+    {
+      "ms": 13840,
+      "action": "run_lint",
+      "ok": true,
+      "ms_step": 4610
+    },
+    {
+      "ms": 14384,
+      "action": "show_lint_console",
+      "ok": true,
+      "ms_step": 544
+    },
+    {
+      "ms": 14395,
+      "action": "lint_result",
+      "console": "Lint\nSim\nSynth\nLint passed (0 warning(s))\nCopy\n$ iverilog -t null -g2012 /home/user/siliconcrew/workspace/eval-07_alu4/alu4.v\nedit & re-run command"
+    },
+    {
+      "ms": 14511,
+      "action": "screenshot",
+      "name": "03-lint"
+    },
+    {
+      "ms": 20774,
+      "action": "run_sim",
+      "ok": true,
+      "ms_step": 6263
+    },
+    {
+      "ms": 21324,
+      "action": "show_sim_console",
+      "ok": true,
+      "ms_step": 550
+    },
+    {
+      "ms": 21334,
+      "action": "sim_result",
+      "console": "Lint\nSim\nsim_0001\nSynth\nsim_0001 passed (alu4_tb) · TEST PASSED\nCopy\n$ iverilog -g2012 -I /home/user/siliconcrew/workspace/eval-07_alu4 -o /home/user/siliconcrew/workspace/eval-07_alu4/sim_runs/sim_0001/alu4_tb.out -f /home/user/siliconcrew/workspace/eval-07_alu4/sim_runs/sim_0001/iverilog_85_gw75x.f\n$ vvp /home/user/siliconcrew/workspace/eval-07_alu4/sim_runs/sim_0001/alu4_tb.out\nTEST PASSED\n/home/user/siliconcrew/workspace/eval-07_alu4/alu4_tb.v:20: $finish called at 8000 (1ps)\nedit & re-run command"
+    },
+    {
+      "ms": 21454,
+      "action": "screenshot",
+      "name": "04-sim"
+    },
+    {
+      "ms": 22848,
+      "action": "view_wave",
+      "ok": true,
+      "ms_step": 1394
+    },
+    {
+      "ms": 22953,
+      "action": "screenshot",
+      "name": "05-wave"
+    },
+    {
+      "ms": 38042,
+      "action": "run_synth",
+      "ok": true,
+      "ms_step": 15089
+    },
+    {
+      "ms": 38515,
+      "action": "show_synth_console",
+      "ok": true,
+      "ms_step": 472
+    },
+    {
+      "ms": 38528,
+      "action": "synth_result",
+      "console": "Lint\nSim\nsim_0001\nSynth\nsynth_0001\nSynthesizing synth_0001\nRunning on remote VM\n15s\nSynth\n2\nFloorplan\n3\nPlace\n4\nCTS\n5\nRoute\n6\nFinish\nsynth_0001 running · synth\nCopy\nNo further output.\nedit & re-run command"
+    },
+    {
+      "ms": 38637,
+      "action": "screenshot",
+      "name": "06-synth"
+    },
+    {
+      "ms": 40039,
+      "action": "nav_View RTL",
+      "ok": true,
+      "ms_step": 1402
+    },
+    {
+      "ms": 40152,
+      "action": "screenshot",
+      "name": "07-view-rtl"
+    },
+    {
+      "ms": 41246,
+      "action": "nav_View Spec",
+      "ok": true,
+      "ms_step": 1094
+    },
+    {
+      "ms": 41355,
+      "action": "screenshot",
+      "name": "08-view-spec"
+    },
+    {
+      "ms": 42409,
+      "action": "nav_View Signoff",
+      "ok": true,
+      "ms_step": 1054
+    },
+    {
+      "ms": 42521,
+      "action": "screenshot",
+      "name": "09-view-signoff"
+    },
+    {
+      "ms": 44856,
+      "action": "open_chat_route",
+      "ok": true,
+      "ms_step": 2335
+    },
+    {
+      "ms": 44950,
+      "action": "screenshot",
+      "name": "10-chat-route"
+    }
+  ]
+}
