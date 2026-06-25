@@ -202,6 +202,12 @@ class RTLDesignMCPServer:
         # deployments construct the server with a verified identity (token).
         self.identity = self._resolve_identity()
 
+        # Hosted flag, resolved once. In hosted mode the HTTP/SSE transports
+        # carry a *per-request* verified identity (see _current_identity); local
+        # / stdio keeps the single trusted process identity above, unchanged.
+        from src.platform_engines.settings import get_settings
+        self._hosted = get_settings().hosted
+
         # Wire cloud engines once (no-op in self-host).
         from src.platform_engines.settings import apply_platform_wiring
         apply_platform_wiring()
@@ -225,8 +231,34 @@ class RTLDesignMCPServer:
         "save_metrics_tool", "generate_report_tool",
     }
 
+    def _current_identity(self):
+        """The identity to act as for the in-flight call.
+
+        Hosted HTTP/SSE: the per-request identity verified by the auth
+        middleware and stashed on the request scope (``scope["state"]``), which
+        the transport surfaces via ``server.request_context.request.state``. This
+        replaces the process-wide ``self.identity`` so every tool runs as the
+        calling user. Local / stdio: there is no request — return the trusted
+        process identity (``LOCAL_IDENTITY``) verbatim, exactly as before.
+        """
+        if self._hosted:
+            ident = self._request_identity()
+            if ident is not None:
+                return ident
+        return self.identity
+
+    def _request_identity(self):
+        from src.platform_engines.mcp_auth import MCP_IDENTITY_STATE_KEY
+
+        try:
+            request = self.server.request_context.request
+        except (LookupError, AttributeError):
+            return None
+        state = getattr(request, "state", None) if request is not None else None
+        return getattr(state, MCP_IDENTITY_STATE_KEY, None) if state is not None else None
+
     def _scoped_user_id(self):
-        return auth_engine.scoped_user_id(self.identity)
+        return auth_engine.scoped_user_id(self._current_identity())
     
     def _setup_handlers(self):
         """Setup MCP protocol handlers"""
@@ -780,7 +812,7 @@ Ready to design! What would you like to create?"""
         # identity. Self-host's local identity is non-anonymous → always allowed.
         if name in self._PROTECTED_TOOLS:
             try:
-                authorize(self.identity, Action.SYNTHESIZE if name in TOOL_CATEGORIES["synthesis"] else Action.SAVE)
+                authorize(self._current_identity(), Action.SYNTHESIZE if name in TOOL_CATEGORIES["synthesis"] else Action.SAVE)
             except AuthError as e:
                 return [TextContent(type="text", text=f"❌ {e.message}")]
 
@@ -830,7 +862,8 @@ Ready to design! What would you like to create?"""
         tool_func = tool_map[name]
         active_session = self.current_session
         active_workspace = self.session_manager.get_workspace_path(active_session)
-        uid = self._scoped_user_id()
+        identity = self._current_identity()
+        uid = auth_engine.scoped_user_id(identity)
 
         try:
             log_tool_call(
@@ -849,7 +882,7 @@ Ready to design! What would you like to create?"""
                 tool_func.invoke,
                 arguments,
                 user_id=uid,
-                tier=self.identity.tier,
+                tier=identity.tier,
             )
             log_tool_result(
                 workspace=active_workspace,
@@ -876,6 +909,49 @@ Ready to design! What would you like to create?"""
             )
             return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
     
+    def _hosted_auth_middleware(self):
+        """Starlette middleware enforcing WorkOS bearer auth — hosted only.
+
+        Returns an empty list in local/self-host so the remote transports are
+        byte-for-byte today's "no auth" apps. In hosted mode it prepends the
+        per-request auth middleware (which runs *inside* CORS so 401s still get
+        CORS headers).
+        """
+        if not self._hosted:
+            return []
+        from starlette.middleware import Middleware
+        from src.platform_engines.mcp_auth import HostedMCPAuthMiddleware
+
+        return [Middleware(HostedMCPAuthMiddleware)]
+
+    def _well_known_routes(self):
+        """RFC 9728 protected-resource metadata route — hosted only (Slice 2)."""
+        if not self._hosted:
+            return []
+        from starlette.routing import Route
+        from starlette.responses import JSONResponse
+        from src.platform_engines.mcp_auth import (
+            PROTECTED_RESOURCE_PATH,
+            _resource_metadata_url,
+            protected_resource_metadata,
+        )
+
+        async def protected_resource(request):
+            # Name this exact deployment as the resource; the issuer/auth-server
+            # come from config so the AI client knows where to sign in.
+            resource = str(request.base_url).rstrip("/") + "/mcp"
+            return JSONResponse(protected_resource_metadata(resource_url=resource))
+
+        return [Route(PROTECTED_RESOURCE_PATH, endpoint=protected_resource, methods=["GET"])]
+
+    def _auth_banner(self) -> str:
+        return (
+            "   Auth: WorkOS bearer required (hosted); "
+            f"metadata at /.well-known/oauth-protected-resource"
+            if self._hosted
+            else "   No authentication required"
+        )
+
     async def run(self, transport: str = "stdio", host: str = "0.0.0.0", port: int = 8080):
         """Run the MCP server with the specified transport."""
         if transport == "stdio":
@@ -911,6 +987,7 @@ Ready to design! What would you like to create?"""
                 routes=[
                     Route("/sse", endpoint=handle_sse),
                     Mount("/messages/", app=sse.handle_post_message),
+                    *self._well_known_routes(),
                 ],
                 middleware=[
                     Middleware(
@@ -918,14 +995,17 @@ Ready to design! What would you like to create?"""
                         allow_origins=["*"],
                         allow_methods=["*"],
                         allow_headers=["*"],
-                    )
+                    ),
+                    # Hosted-only: per-request WorkOS auth, inside CORS. Empty in
+                    # self-host → identical to today's no-auth SSE app.
+                    *self._hosted_auth_middleware(),
                 ],
             )
 
             print(f"🚀 MCP SSE server running on http://{host}:{port}")
             print(f"   SSE endpoint:     http://{host}:{port}/sse")
             print(f"   Messages endpoint: http://{host}:{port}/messages/")
-            print(f"   No authentication required")
+            print(self._auth_banner())
 
             config = uvicorn.Config(app, host=host, port=port, log_level="info")
             server = uvicorn.Server(config)
@@ -952,6 +1032,7 @@ Ready to design! What would you like to create?"""
                 debug=True,
                 routes=[
                     Mount("/mcp", app=handle_mcp),
+                    *self._well_known_routes(),
                 ],
                 middleware=[
                     Middleware(
@@ -959,13 +1040,16 @@ Ready to design! What would you like to create?"""
                         allow_origins=["*"],
                         allow_methods=["*"],
                         allow_headers=["*"],
-                    )
+                    ),
+                    # Hosted-only: per-request WorkOS auth, inside CORS. Empty in
+                    # self-host → identical to today's no-auth Streamable HTTP app.
+                    *self._hosted_auth_middleware(),
                 ],
             )
 
             print(f"🚀 MCP Streamable HTTP server running on http://{host}:{port}")
             print(f"   MCP endpoint: http://{host}:{port}/mcp")
-            print(f"   No authentication required")
+            print(self._auth_banner())
 
             config = uvicorn.Config(app, host=host, port=port, log_level="info")
             web_server = uvicorn.Server(config)

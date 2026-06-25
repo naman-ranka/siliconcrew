@@ -105,3 +105,56 @@ class GoogleOAuthVerifier:
         from google.auth.transport import requests as g_requests
 
         return id_token.verify_oauth2_token(token, g_requests.Request(), self._client_id)
+
+
+class WorkOSVerifier:
+    """Verify a WorkOS-issued access token (hosted remote-MCP auth only).
+
+    WorkOS runs the login/consent screens and issues the token; we are only the
+    token-checker. This validates the RS256 signature against WorkOS's published
+    JWKS, checks issuer/audience/expiry (standard ``PyJWT`` — no hand-rolled
+    crypto), then maps the verified claims to an :class:`Identity`.
+
+    The verified subject becomes ``workos_<sub>`` — the same scheme the deployed
+    web sign-in uses once unified (Slice 3), so web and MCP share one ``user_id``.
+    """
+
+    def __init__(self, issuer: str, audience: str, jwks_url: str, _verify_fn=None):
+        self._issuer = issuer
+        self._audience = audience
+        self._jwks_url = jwks_url
+        self._verify_fn = _verify_fn  # injectable for tests (no network / JWKS)
+        self._jwk_client = None
+
+    def verify(self, token: str) -> Identity:
+        claims = self._verify_token(token)
+        sub = claims.get("sub")
+        if not sub:
+            raise AuthError("invalid_token", "Token missing subject claim.")
+        return Identity(
+            user_id=f"workos_{sub}",
+            email=claims.get("email"),
+            anonymous=False,
+            provider="workos",
+        )
+
+    def _verify_token(self, token: str) -> dict:
+        if self._verify_fn is not None:
+            return self._verify_fn(token)
+        import jwt  # lazy (PyJWT) — only imported in hosted mode
+
+        if self._jwk_client is None:
+            from jwt import PyJWKClient
+
+            self._jwk_client = PyJWKClient(self._jwks_url)
+        try:
+            signing_key = self._jwk_client.get_signing_key_from_jwt(token)
+            return jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                audience=self._audience,
+                issuer=self._issuer,
+            )
+        except jwt.PyJWTError as exc:  # signature/issuer/audience/expiry failures
+            raise AuthError("invalid_token", f"Token validation failed: {exc}") from exc

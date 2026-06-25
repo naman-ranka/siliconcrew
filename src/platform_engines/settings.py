@@ -46,6 +46,17 @@ class PlatformSettings:
     # Auth
     google_oauth_client_id: str  # OAuth audience; empty disables token verification
 
+    # Remote-MCP auth via WorkOS (hosted only — the deployed multi-tenant
+    # service). WorkOS is the "front desk": it runs the login UI, "Sign in with
+    # Google", and token issue/refresh/revoke. We only validate the token it
+    # issues on each MCP request. Every field is empty in local/self-host and is
+    # never read there — gated by ``hosted`` at the call sites.
+    workos_issuer: str        # token `iss` (e.g. https://api.workos.com/.../<client>)
+    workos_jwks_url: str      # JWKS endpoint for RS256 signature verification
+    workos_audience: str      # expected `aud` = our MCP resource identifier
+    workos_client_id: str     # WorkOS client id (informational / web sign-in)
+    mcp_resource_url: str     # public MCP resource URL named in RFC 9728 metadata
+
     # Workspace storage
     workspace_engine: str     # "local" | "cloud"
     workspace_bucket: str     # GCS bucket (cloud only)
@@ -73,6 +84,16 @@ class PlatformSettings:
     # automated agents/CI can drive signed-in flows without a real Google login.
     # Empty (default) = feature off. NEVER set in production.
     test_bearer_token: str = ""
+
+    @property
+    def workos_configured(self) -> bool:
+        """True when WorkOS token validation can run (hosted MCP auth).
+
+        Requires the issuer, the JWKS endpoint, and the expected audience; the
+        absence of any one disables remote-MCP auth (and is a misconfiguration
+        in hosted mode, surfaced as a 401 rather than silent anonymous access).
+        """
+        return bool(self.workos_issuer and self.workos_jwks_url and self.workos_audience)
 
     @property
     def is_cloud_orfs(self) -> bool:
@@ -107,6 +128,11 @@ def get_settings() -> PlatformSettings:
         orfs_service_token=_env("ORFS_SERVICE_TOKEN"),
         sim_engine=sim_engine,
         google_oauth_client_id=_env("GOOGLE_OAUTH_CLIENT_ID"),
+        workos_issuer=_env("WORKOS_ISSUER"),
+        workos_jwks_url=_env("WORKOS_JWKS_URL"),
+        workos_audience=_env("WORKOS_AUDIENCE"),
+        workos_client_id=_env("WORKOS_CLIENT_ID"),
+        mcp_resource_url=_env("MCP_RESOURCE_URL"),
         workspace_engine=workspace_engine,
         workspace_bucket=_env("WORKSPACE_BUCKET"),
         workspace_scratch_dir=_env("WORKSPACE_SCRATCH_DIR", "/tmp/siliconcrew-scratch"),
