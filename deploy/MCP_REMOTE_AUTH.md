@@ -33,16 +33,29 @@ Google OAuth / WIF setup). They are read **only** when `SILICONCREW_HOSTED=true`
 
 | Env var | Meaning |
 | --- | --- |
-| `WORKOS_ISSUER` | Token `iss` — the WorkOS authorization server (named in the metadata doc) |
-| `WORKOS_JWKS_URL` | JWKS endpoint used to verify the RS256 signature |
-| `WORKOS_AUDIENCE` | Expected `aud` — our MCP **resource identifier** (the `/mcp` URL) |
-| `WORKOS_CLIENT_ID` | WorkOS client id (web sign-in; informational on the backend) |
-| `MCP_RESOURCE_URL` | Public MCP resource URL advertised in the metadata document |
+| `WORKOS_CLIENT_ID` | WorkOS client id. **The only required var** — the issuer and JWKS URL are derived from it (`https://api.workos.com/` + `…/sso/jwks/<client_id>`). |
+| `WORKOS_AUDIENCE` | **MCP service only.** Expected `aud` = the MCP resource identifier (your `/mcp` URL). Leave **empty** on the web service. |
+| `MCP_RESOURCE_URL` | **MCP service only.** Public MCP resource URL advertised in the metadata document (usually the same `/mcp` URL). |
+| `WORKOS_ISSUER` / `WORKOS_JWKS_URL` | Optional overrides — set only for a **custom WorkOS auth domain** (otherwise derived from the client id). |
 
-Token validation is **active when all three of** `WORKOS_ISSUER`,
-`WORKOS_JWKS_URL`, `WORKOS_AUDIENCE` are set (`settings.workos_configured`). If
-hosted MCP is reachable but these are unset, every MCP call fail-closes with a
-`401` (never anonymous access).
+Validation is **active when WorkOS is configured** (`settings.workos_configured`
+= issuer + JWKS present, i.e. `WORKOS_CLIENT_ID` is set). If hosted MCP is
+reachable but WorkOS is unconfigured, every MCP call fail-closes with `401`.
+
+### Web vs MCP differ on audience (important)
+
+WorkOS issues two token profiles, and the backend runs as two separate Cloud Run
+services (web API `api.py`, MCP `mcp_server.py`) with separate env:
+
+- **Web API service** — AuthKit access tokens carry **no `aud`** claim. Set
+  `WORKOS_CLIENT_ID` and **leave `WORKOS_AUDIENCE` empty**. The verifier checks
+  issuer + signature + expiry only. (If you set an audience here, every web token
+  is rejected.)
+- **MCP service** — the AI client's token **is** audience-bound to your resource.
+  Set `WORKOS_AUDIENCE` = `MCP_RESOURCE_URL` = your `/mcp` URL **and register that
+  exact URL as a resource indicator in the WorkOS dashboard** (AuthKit → MCP /
+  resources). Without the registration WorkOS falls back to a default
+  environment-scoped audience and validation 401s.
 
 Staging shortcut (CI / automated agents): `SILICONCREW_TEST_BEARER_TOKEN` still
 works on the MCP path — a request whose bearer equals that secret authenticates
@@ -81,13 +94,26 @@ does → one `workos_<sub>` id. Until `WORKOS_*` is set, the backend keeps
 verifying Google tokens (`google_<sub>`) — **nothing changes until you flip it
 on.**
 
-Frontend (deploy step): point the deployed web sign-in at **WorkOS AuthKit**
-(WorkOS with Google as the upstream connection) instead of Google Identity
-Services. The user-facing button stays "Sign in with Google"; the token the SPA
-holds and sends as `Authorization: Bearer` becomes the WorkOS access token.
-Configure the AuthKit client id / redirect in the frontend runtime env and the
-WorkOS dashboard (add the deployed origin as an allowed redirect). Self-host is
-untouched (no client id configured → no auth UI at all).
+Frontend: the web app now ships a **WorkOS AuthKit** sign-in path
+(`@workos-inc/authkit-js`) alongside the existing Google one. It activates when a
+WorkOS client id is configured and **takes precedence** over Google; with neither
+configured there is no auth UI at all (self-host unchanged). The user-facing
+button stays "Sign in with Google" (configured as the WorkOS upstream); the token
+the SPA holds and sends as `Authorization: Bearer` becomes the WorkOS access
+token, which the SDK refreshes automatically.
+
+Frontend runtime env (read per-request by the server layout, like the Google
+vars — no rebuild needed):
+
+| Env var | Meaning |
+| --- | --- |
+| `WORKOS_CLIENT_ID` (or `NEXT_PUBLIC_WORKOS_CLIENT_ID`) | AuthKit client id; presence flips the web app to the WorkOS path |
+| `WORKOS_REDIRECT_URI` (or `NEXT_PUBLIC_WORKOS_REDIRECT_URI`) | OAuth callback; defaults to the app origin (`https://<app>/`) if unset |
+
+In the **WorkOS dashboard**: add `WORKOS_REDIRECT_URI` as an allowed redirect URI,
+and configure **Google** as the AuthKit connection so the upstream button matches
+today. The `@workos-inc/authkit-js` dependency is already in
+`frontend/package.json` — a normal `npm ci` / image build picks it up.
 
 > The live browser flow (add the MCP URL in the Claude app → Sign in with Google
 > through WorkOS → list/create/continue a session → confirm it also shows on the

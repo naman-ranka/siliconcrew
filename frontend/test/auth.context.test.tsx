@@ -8,7 +8,25 @@ import {
   userFromToken,
   authEnabled,
 } from "@/lib/auth";
-import { notifyAuthExpired } from "@/lib/authToken";
+import { notifyAuthExpired, authHeader } from "@/lib/authToken";
+
+// Mock the WorkOS AuthKit SDK (dynamically imported by the WorkOS path). The
+// Google-path tests never trigger the dynamic import, so this is inert for them.
+const workosSignOut = vi.fn();
+vi.mock("@workos-inc/authkit-js", () => ({
+  createClient: vi.fn(async () => ({
+    getAccessToken: vi.fn(async () => "workos-access-token"),
+    getUser: () => ({
+      email: "w@x.io",
+      firstName: "Wanda",
+      lastName: "OS",
+      profilePictureUrl: "pic",
+    }),
+    signIn: vi.fn(async () => {}),
+    signOut: workosSignOut,
+    dispose: vi.fn(),
+  })),
+}));
 
 const STORAGE_KEY = "sc-auth-token";
 
@@ -125,5 +143,33 @@ describe("config gating", () => {
     await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("anonymous"));
     expect(screen.getByTestId("token").textContent).toBe("none");
     expect(sessionStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe("WorkOS AuthKit path", () => {
+  it("WorkOS client id → enabled: seeds token + user from the SDK, no GIS", async () => {
+    render(
+      <AuthProvider workosClientId="client_01HX" workosRedirectUri="https://app.example/">
+        <Probe />
+      </AuthProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("signed_in"));
+    // Display user comes from getUser(); the bearer is the WorkOS access token.
+    expect(screen.getByTestId("email").textContent).toBe("w@x.io");
+    expect(screen.getByTestId("token").textContent).toBe("workos-access-token");
+    // The API layer sends the WorkOS bearer via the registered token getter.
+    expect(authHeader()).toEqual({ Authorization: "Bearer workos-access-token" });
+    // WorkOS path must NOT load the Google Identity Services script.
+    expect(document.querySelector('script[src*="gsi/client"]')).toBeNull();
+  });
+
+  it("WorkOS takes precedence when both client ids are configured", async () => {
+    render(
+      <AuthProvider clientId="google-cid" workosClientId="client_01HX">
+        <Probe />
+      </AuthProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId("token").textContent).toBe("workos-access-token"));
+    expect(document.querySelector('script[src*="gsi/client"]')).toBeNull();
   });
 });

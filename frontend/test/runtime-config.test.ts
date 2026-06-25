@@ -29,6 +29,8 @@ describe("runtime-config (client)", () => {
       apiUrl: "http://localhost:8000",
       wsUrl: "ws://localhost:8000",
       googleClientId: "",
+      workosClientId: "",
+      workosRedirectUri: "",
     });
   });
 });
@@ -42,6 +44,8 @@ describe("runtime-config (server)", () => {
       apiUrl: "https://backend.run.app",
       wsUrl: "wss://backend.run.app",
       googleClientId: "cid.apps.googleusercontent.com",
+      workosClientId: "",
+      workosRedirectUri: "",
     });
   });
 
@@ -66,6 +70,16 @@ describe("runtime-config (server)", () => {
       apiUrl: "http://localhost:8000",
       wsUrl: "ws://localhost:8000",
       googleClientId: "",
+      workosClientId: "",
+      workosRedirectUri: "",
     });
+  });
+
+  it("reads WORKOS_CLIENT_ID / WORKOS_REDIRECT_URI at request time", () => {
+    vi.stubEnv("WORKOS_CLIENT_ID", "client_01HX");
+    vi.stubEnv("WORKOS_REDIRECT_URI", "https://app.example.run.app/");
+    const env = readServerEnv();
+    expect(env.workosClientId).toBe("client_01HX");
+    expect(env.workosRedirectUri).toBe("https://app.example.run.app/");
   });
 });

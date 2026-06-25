@@ -7,7 +7,16 @@
 // plain (non-public) env vars *per request* and injects them into
 // `window.__SC_ENV__`; the browser reads that for both REST and WebSocket URLs.
 
-export type RuntimeEnv = { apiUrl: string; wsUrl: string; googleClientId: string };
+export type RuntimeEnv = {
+  apiUrl: string;
+  wsUrl: string;
+  googleClientId: string;
+  // WorkOS AuthKit (hosted identity unification). When set, the web sign-in
+  // goes through WorkOS (Google upstream) so web + MCP share one user_id. Empty
+  // keeps today's Google-direct sign-in (or no auth at all in self-host).
+  workosClientId: string;
+  workosRedirectUri: string;
+};
 
 declare global {
   interface Window {
@@ -25,6 +34,8 @@ const DEV_DEFAULT: RuntimeEnv = {
   apiUrl: "http://localhost:8000",
   wsUrl: "ws://localhost:8000",
   googleClientId: "",
+  workosClientId: "",
+  workosRedirectUri: "",
 };
 
 // Derive the ws(s):// origin from an http(s):// origin when WS_URL is unset.
@@ -41,7 +52,11 @@ export function readServerEnv(): RuntimeEnv {
   const wsUrl = process.env.WS_URL || deriveWsUrl(apiUrl);
   const googleClientId =
     process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
-  return { apiUrl, wsUrl, googleClientId };
+  const workosClientId =
+    process.env.WORKOS_CLIENT_ID || process.env.NEXT_PUBLIC_WORKOS_CLIENT_ID || "";
+  const workosRedirectUri =
+    process.env.WORKOS_REDIRECT_URI || process.env.NEXT_PUBLIC_WORKOS_REDIRECT_URI || "";
+  return { apiUrl, wsUrl, googleClientId, workosClientId, workosRedirectUri };
 }
 
 // Client-side: read the env injected by the layout. Falls back to the dev
@@ -53,6 +68,10 @@ export function getRuntimeEnv(): RuntimeEnv {
   return DEV_DEFAULT;
 }
 
+// Coalesce to "" so a partially-populated injected __SC_ENV__ (e.g. an older
+// server build that predates the WorkOS fields) never throws on a missing key.
 export const getApiBase = (): string => getRuntimeEnv().apiUrl;
 export const getWsBase = (): string => getRuntimeEnv().wsUrl;
-export const getGoogleClientId = (): string => getRuntimeEnv().googleClientId;
+export const getGoogleClientId = (): string => getRuntimeEnv().googleClientId ?? "";
+export const getWorkosClientId = (): string => getRuntimeEnv().workosClientId ?? "";
+export const getWorkosRedirectUri = (): string => getRuntimeEnv().workosRedirectUri ?? "";
