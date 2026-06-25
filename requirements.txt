@@ -24,3 +24,11 @@ numpy
 cocotb
 cocotb-test
 pytest
+psycopg[binary]>=3.1.8
+google-cloud-storage
+google-cloud-kms
+google-cloud-run
+google-cloud-logging
+# Remote-MCP auth (hosted only): validate WorkOS-issued JWTs (RS256 via JWKS).
+# Standard JWT-verify library — no hand-rolled crypto. Unused in local/self-host.
+pyjwt[crypto]>=2.0.0

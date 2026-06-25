@@ -13,10 +13,27 @@ import os
 import re
 from typing import Any, Dict, Optional
 
-from src.tools.run_docker import run_docker_command
+from src.platform_engines.tool_engine import get_tool_engine
 from src.tools.run_linter import run_linter
 
 XLS_IMAGE = os.environ.get("XLS_DOCKER_IMAGE", "siliconcrew-xls:latest")
+# Hard ceiling for an XLS stage (compiles are fast). Preserves the prior implicit
+# run_docker_command default while bounding native runs.
+XLS_TIMEOUT = int(os.environ.get("XLS_TIMEOUT", "3600"))
+
+
+def _xls_run(command: str, workspace: str) -> Dict[str, Any]:
+    """Execute one XLS command through the selected ToolEngine.
+
+    The command is cwd-relative (no ``/workspace`` paths), so it runs the same
+    whether the docker engine mounts ``workspace`` at ``/workspace`` or the
+    native engine runs directly in ``workspace``. Binaries (interpreter_main,
+    ir_converter_main, opt_main, codegen_main, benchmark_main, xlscc) come from
+    the XLS image (docker) or PATH (native / hosted image).
+    """
+    return get_tool_engine().run(
+        image=XLS_IMAGE, command=command, cwd=workspace, timeout=XLS_TIMEOUT, name_prefix="sc_xls"
+    )
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SAFE_RELATIVE_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
@@ -151,12 +168,9 @@ def run_dslx_interpreter(filename: str, cwd: str) -> Dict[str, Any]:
     if not _artifact_exists(workspace, safe_file):
         return _failure("interpreter", f"DSLX file not found: {safe_file}")
 
-    result = run_docker_command(
-        command=f"interpreter_main {safe_file}",
-        image=XLS_IMAGE,
-        cwd="/workspace",
-        workspace_path=workspace,
-    )
+    engine = get_tool_engine()
+    dslx_path = "/xls" if getattr(engine, "mode", "docker") == "docker" else "/opt/xls"
+    result = _xls_run(f"interpreter_main --dslx_path={dslx_path} {safe_file}", workspace)
     result["dslx_file"] = safe_file
     return _with_stage(result, "interpreter")
 
@@ -174,12 +188,9 @@ def compile_dslx_to_ir(filename: str, top_module: str, cwd: str) -> Dict[str, An
         return _failure("ir_conversion", f"DSLX file not found: {safe_file}")
 
     out_ir = f"{safe_top}.ir"
-    result = run_docker_command(
-        command=f"ir_converter_main --top={safe_top} {safe_file} > {out_ir}",
-        image=XLS_IMAGE,
-        cwd="/workspace",
-        workspace_path=workspace,
-    )
+    engine = get_tool_engine()
+    dslx_path = "/xls" if getattr(engine, "mode", "docker") == "docker" else "/opt/xls"
+    result = _xls_run(f"ir_converter_main --dslx_path={dslx_path} --top={safe_top} {safe_file} > {out_ir}", workspace)
     result["dslx_file"] = safe_file
     result["top_module"] = safe_top
     result["ir_filename"] = out_ir if result.get("success") else None
@@ -213,12 +224,7 @@ def experimental_compile_cpp_to_ir(
     if bool(block_from_class):
         args.append("--block_from_class")
 
-    result = run_docker_command(
-        command=f"xlscc {' '.join(args)} {safe_file} > {out_ir}",
-        image=XLS_IMAGE,
-        cwd="/workspace",
-        workspace_path=workspace,
-    )
+    result = _xls_run(f"xlscc {' '.join(args)} {safe_file} > {out_ir}", workspace)
     result["source_file"] = safe_file
     result["top_name"] = safe_top
     result["ir_filename"] = out_ir if result.get("success") else None
@@ -238,12 +244,7 @@ def optimize_xls_ir(ir_filename: str, cwd: str) -> Dict[str, Any]:
 
     base_name = os.path.splitext(safe_ir)[0]
     out_opt_ir = f"{base_name}.opt.ir"
-    result = run_docker_command(
-        command=f"opt_main {safe_ir} > {out_opt_ir}",
-        image=XLS_IMAGE,
-        cwd="/workspace",
-        workspace_path=workspace,
-    )
+    result = _xls_run(f"opt_main {safe_ir} > {out_opt_ir}", workspace)
     result["ir_filename"] = safe_ir
     result["opt_ir_filename"] = out_opt_ir if result.get("success") else None
     return _with_stage(result, "optimization")
@@ -256,6 +257,7 @@ def codegen_xls(
     clock_period_ps: int = 0,
     delay_model: str = "sky130",
     module_name: Optional[str] = None,
+    use_system_verilog: bool = False,
     cwd: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate Verilog/SystemVerilog from optimized XLS IR."""
@@ -277,6 +279,8 @@ def codegen_xls(
     out_v = f"{base_name}.v"
 
     args = [f"--generator={safe_generator}"]
+    if not use_system_verilog:
+        args.append("--use_system_verilog=false")
     if safe_generator == "pipeline":
         if safe_pipeline_stages > 0:
             args.append(f"--pipeline_stages={safe_pipeline_stages}")
@@ -287,12 +291,7 @@ def codegen_xls(
     if safe_module_name:
         args.append(f"--module_name={safe_module_name}")
 
-    result = run_docker_command(
-        command=f"codegen_main {' '.join(args)} {safe_opt_ir} > {out_v}",
-        image=XLS_IMAGE,
-        cwd="/workspace",
-        workspace_path=workspace,
-    )
+    result = _xls_run(f"codegen_main {' '.join(args)} {safe_opt_ir} > {out_v}", workspace)
     result["opt_ir_filename"] = safe_opt_ir
     result["generator"] = safe_generator
     result["pipeline_stages"] = safe_pipeline_stages
@@ -323,12 +322,7 @@ def benchmark_xls(opt_ir_filename: str, delay_model: str = "sky130", cwd: Option
     if safe_delay_model:
         args.append(f"--delay_model={safe_delay_model}")
     args.append(safe_opt_ir)
-    result = run_docker_command(
-        command=f"benchmark_main {' '.join(args)}",
-        image=XLS_IMAGE,
-        cwd="/workspace",
-        workspace_path=workspace,
-    )
+    result = _xls_run(f"benchmark_main {' '.join(args)}", workspace)
     result["opt_ir_filename"] = safe_opt_ir
     result["delay_model"] = safe_delay_model
     return _with_stage(result, "benchmark")
@@ -357,6 +351,7 @@ def run_xls_flow(
     cwd: Optional[str] = None,
     keep_intermediates: bool = True,
     run_lint: bool = True,
+    use_system_verilog: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute the preferred SiliconCrew XLS frontend path.
@@ -419,6 +414,7 @@ def run_xls_flow(
         clock_period_ps=clock_period_ps,
         delay_model=delay_model,
         module_name=module_name,
+        use_system_verilog=use_system_verilog,
         cwd=workspace,
     )
     artifacts["verilog_file"] = codegen.get("verilog_filename")
