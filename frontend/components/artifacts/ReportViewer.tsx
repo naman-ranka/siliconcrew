@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { FileText, RefreshCw, Download, FileOutput } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
+import { PpaHero } from "./PpaHero";
+import { EmptyState } from "@/components/workbench/EmptyState";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -26,7 +29,18 @@ export function ReportViewer() {
     selectedSynthesisRunId,
     selectSynthesisRun,
     loadSynthesisRuns,
+    runs,
+    selectedRunId,
+    reportLoading,
   } = useStore();
+
+  // PPA hero sources the unified run record (has ppa); prefer the report's run.
+  const ppaRunId = report?.run_id ?? selectedRunId ?? selectedSynthesisRunId;
+
+  // The run we'd target for (auto-)generation: the selected synth run, else the
+  // newest passed synth run.
+  const passedSynth = runs.find((r) => r.kind === "synth" && r.status === "passed");
+  const targetGenRunId = selectedSynthesisRunId ?? passedSynth?.id ?? null;
 
   useEffect(() => {
     if (currentSession) {
@@ -34,6 +48,19 @@ export function ReportViewer() {
       loadReport();
     }
   }, [currentSession, loadReport, loadSynthesisRuns]);
+
+  // Auto-generate the report once when a synth has passed but no markdown report
+  // exists yet — a successful tape-out should show its summary without a click.
+  const autoGenTriedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentSession || report || reportLoading) return;
+    if (!passedSynth || !targetGenRunId) return;
+    if (autoGenTriedRef.current === targetGenRunId) return;
+    autoGenTriedRef.current = targetGenRunId;
+    void generateReport(targetGenRunId).catch(() => {
+      /* keep the empty state with its manual Generate button as a fallback */
+    });
+  }, [currentSession, report, reportLoading, passedSynth, targetGenRunId, generateReport]);
 
   const handleDownload = () => {
     if (report) {
@@ -55,37 +82,72 @@ export function ReportViewer() {
     }
   };
 
-  if (!report) {
+  if (!report && reportLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-8">
-        <div className="w-16 h-16 rounded-2xl bg-surface-2 flex items-center justify-center mb-4">
-          <FileText className="h-8 w-8" />
-        </div>
-        <p className="text-sm font-medium">No report yet</p>
-        <p className="text-xs mt-1 mb-6 text-center max-w-[200px]">
-          Generate a report for the latest synthesis run to get a summary with metrics and analysis
-        </p>
-        {synthesisRuns.length > 0 && (
-          <div className="mb-4 w-full max-w-[260px]">
-            <Select value={selectedSynthesisRunId || synthesisRuns[0]?.run_id} onValueChange={selectSynthesisRun}>
-              <SelectTrigger className="h-9 text-xs">
-                <SelectValue placeholder="Select synthesis run" />
-              </SelectTrigger>
-              <SelectContent>
-                {synthesisRuns.map((run) => (
-                  <SelectItem key={run.run_id} value={run.run_id} className="text-xs">
-                    {run.run_id} · {run.status}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-        <Button onClick={handleGenerate} size="sm" className="gap-2">
-          <FileOutput className="h-4 w-4" />
-          Generate Report
-        </Button>
+      <div className="flex flex-col h-full p-6 gap-4" aria-hidden="true">
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-5 w-1/3" />
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-11/12" />
+        <Skeleton className="h-3 w-4/5" />
+        <Skeleton className="h-32 w-full mt-2" />
+        <Skeleton className="h-3 w-3/4" />
+        <Skeleton className="h-3 w-2/3" />
       </div>
+    );
+  }
+
+  if (!report) {
+    const hasPpa = runs.some((r) => r.kind === "synth" && r.ppa);
+    // If a synth has passed, the report can be generated *now* — say so, and
+    // name the run we'd generate it for (the old copy wrongly told the user to
+    // "run synthesis" even after it had succeeded).
+    const genRunId = targetGenRunId ?? synthesisRuns[0]?.run_id;
+    return (
+      <EmptyState
+        // Even without a generated markdown report, surface PPA if a synth run exists.
+        header={hasPpa ? <PpaHero runs={runs} runId={ppaRunId} /> : undefined}
+        icon={<FileText />}
+        headline={passedSynth ? "Generating report…" : "No report yet"}
+        assistantHint={
+          passedSynth ? (
+            <>The timing/PPA summary above is live; the full markdown report is being generated.</>
+          ) : (
+            <>
+              Synthesis runs the OpenROAD flow; if ORFS isn&apos;t available the
+              synth step reports that in the console.
+            </>
+          )
+        }
+        cta={
+          <>
+            {synthesisRuns.length > 0 && (
+              <div className="w-full max-w-[260px]">
+                <Select value={selectedSynthesisRunId || synthesisRuns[0]?.run_id} onValueChange={selectSynthesisRun}>
+                  <SelectTrigger className="h-9 text-xs">
+                    <SelectValue placeholder="Select synthesis run" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {synthesisRuns.map((run) => (
+                      <SelectItem key={run.run_id} value={run.run_id} className="text-xs">
+                        {run.run_id} · {run.status}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <Button onClick={handleGenerate} size="sm" className="gap-2">
+              <FileOutput className="h-4 w-4" />
+              {genRunId ? `Generate the report for ${genRunId}` : "Generate Report"}
+            </Button>
+          </>
+        }
+      >
+        {passedSynth
+          ? `Synthesis passed${targetGenRunId ? ` (${targetGenRunId})` : ""} — building the timing/PPA summary and spec-vs-result analysis.`
+          : "Run synthesis, then generate a report to get the timing/PPA summary and spec-vs-result analysis."}
+      </EmptyState>
     );
   }
 
@@ -145,6 +207,8 @@ export function ReportViewer() {
 
       {/* Content - Using native overflow for better scroll */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
+        {/* Timing-hero + PPA + compare-vs-previous (the artifact-first star) */}
+        <PpaHero runs={runs} runId={ppaRunId} />
         <div className="p-6 prose prose-sm dark:prose-invert max-w-none">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}

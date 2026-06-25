@@ -52,6 +52,18 @@ const config: Config = {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
         },
+        // Secondary brand accent (Claude blue) — links, info, "viewing X" banner.
+        info: {
+          DEFAULT: "hsl(var(--info))",
+          foreground: "hsl(var(--info-foreground))",
+        },
+        // Run/status semantics — meaning, never decoration.
+        status: {
+          pass: "hsl(var(--status-pass))",
+          fail: "hsl(var(--status-fail))",
+          warn: "hsl(var(--status-warn))",
+          running: "hsl(var(--status-running))",
+        },
         // Surface hierarchy
         surface: {
           0: "hsl(var(--surface-0))",
@@ -76,33 +88,61 @@ const config: Config = {
         "18": "4.5rem",
         "88": "22rem",
       },
+      transitionTimingFunction: {
+        // One easing language across the app (calm, slightly springy out-curve).
+        swift: "cubic-bezier(0.22, 1, 0.36, 1)",
+        "swift-in": "cubic-bezier(0.4, 0, 0.2, 1)",
+      },
+      transitionDuration: {
+        fast: "120ms",
+        base: "180ms",
+        slow: "280ms",
+      },
       animation: {
-        "fade-in": "fadeIn 0.2s ease-out",
-        "slide-in-right": "slideInRight 0.3s ease-out",
-        "slide-in-left": "slideInLeft 0.3s ease-out",
+        "fade-in": "fadeIn 0.18s cubic-bezier(0.22,1,0.36,1)",
+        "fade-in-up": "fadeInUp 0.22s cubic-bezier(0.22,1,0.36,1)",
+        "scale-in": "scaleIn 0.14s cubic-bezier(0.22,1,0.36,1)",
+        "slide-in-right": "slideInRight 0.28s cubic-bezier(0.22,1,0.36,1)",
+        "slide-in-left": "slideInLeft 0.28s cubic-bezier(0.22,1,0.36,1)",
         "pulse-subtle": "pulseSubtle 2s ease-in-out infinite",
+        shimmer: "shimmer 1.4s ease-in-out infinite",
       },
       keyframes: {
         fadeIn: {
           "0%": { opacity: "0" },
           "100%": { opacity: "1" },
         },
+        fadeInUp: {
+          "0%": { opacity: "0", transform: "translateY(4px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        scaleIn: {
+          "0%": { opacity: "0", transform: "scale(0.96)" },
+          "100%": { opacity: "1", transform: "scale(1)" },
+        },
         slideInRight: {
-          "0%": { transform: "translateX(100%)", opacity: "0" },
+          "0%": { transform: "translateX(12px)", opacity: "0" },
           "100%": { transform: "translateX(0)", opacity: "1" },
         },
         slideInLeft: {
-          "0%": { transform: "translateX(-100%)", opacity: "0" },
+          "0%": { transform: "translateX(-12px)", opacity: "0" },
           "100%": { transform: "translateX(0)", opacity: "1" },
         },
         pulseSubtle: {
           "0%, 100%": { opacity: "1" },
-          "50%": { opacity: "0.6" },
+          "50%": { opacity: "0.55" },
+        },
+        shimmer: {
+          "0%": { backgroundPosition: "-200% 0" },
+          "100%": { backgroundPosition: "200% 0" },
         },
       },
       boxShadow: {
-        "glow": "0 0 20px rgba(59, 130, 246, 0.3)",
-        "glow-sm": "0 0 10px rgba(59, 130, 246, 0.2)",
+        // Warm-tinted elevation scale (not cold/black) — calm depth.
+        e1: "0 1px 2px hsl(30 12% 4% / 0.30), 0 1px 1px hsl(30 12% 4% / 0.22)",
+        e2: "0 2px 6px hsl(30 12% 4% / 0.34), 0 1px 2px hsl(30 12% 4% / 0.24)",
+        e3: "0 8px 24px hsl(30 12% 4% / 0.40), 0 2px 6px hsl(30 12% 4% / 0.28)",
+        glow: "0 0 0 1px hsl(var(--primary) / 0.35), 0 0 18px hsl(var(--primary) / 0.18)",
       },
     },
   },

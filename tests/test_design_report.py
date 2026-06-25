@@ -14,7 +14,7 @@ from src.tools.design_report import (
     save_design_report,
     METRICS_FILENAME
 )
-from src.tools.spec_manager import DesignSpec, PortSpec, save_yaml_file
+from src.tools.spec_manager import DesignSpec, PortSpec, save_yaml_file, load_yaml_file
 
 
 class TestSaveMetrics(unittest.TestCase):
@@ -288,6 +288,8 @@ class TestRunScopedMetrics(unittest.TestCase):
         save_yaml_file(spec, os.path.join(self.test_dir, "run_demo_spec.yaml"))
 
         self.run_dir = os.path.join(self.test_dir, "synth_runs", "synth_0002")
+        os.makedirs(self.run_dir, exist_ok=True)
+        save_yaml_file(spec, os.path.join(self.run_dir, "run_demo_spec.yaml"))
         report_dir = os.path.join(self.run_dir, "orfs_reports", "sky130hd", "run_demo", "base")
         os.makedirs(report_dir, exist_ok=True)
 

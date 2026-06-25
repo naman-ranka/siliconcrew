@@ -1,0 +1,112 @@
+{
+  "run_id": "synth_0002",
+  "job_id": "job_71329f37e8",
+  "created_at": "2026-06-22T23:00:06.879129+00:00",
+  "status": "completed",
+  "mode": "pd_retry",
+  "parent_run_id": "synth_0001",
+  "source_run_id": "synth_0001",
+  "retry_start_stage": "cts",
+  "retry_max_stage": "finish",
+  "orfs_overrides": {},
+  "current_stage": "finish",
+  "platform": "sky130hd",
+  "top_module": "demo_top",
+  "input_files": [
+    "demo_top.v"
+  ],
+  "spec_file": "demo_top_spec.yaml",
+  "requested_clock_period_ns": 10.0,
+  "effective_clock_period_ns": 10.0,
+  "clock_period_ns": 10.0,
+  "clock_source": "requested",
+  "constraints_mode": "auto",
+  "utilization": 5,
+  "aspect_ratio": 1.0,
+  "core_margin": 2.0,
+  "pd_parameters": {
+    "utilization": 5,
+    "aspect_ratio": 1.0,
+    "core_margin": 2.0
+  },
+  "auto_checks": {
+    "constraints": "pass",
+    "signoff": "pass",
+    "equiv": "skip"
+  },
+  "check_notes": "PD retry completed",
+  "stages": {
+    "constraints": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "synth": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "floorplan": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "place": {
+      "status": "completed",
+      "artifacts": {
+        "odb": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/3_place.odb",
+        "sdc": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/3_place.sdc"
+      }
+    },
+    "cts": {
+      "status": "completed",
+      "artifacts": {
+        "report": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_reports/sky130hd/demo_top/base/4_cts_final.rpt",
+        "odb": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/4_cts.odb"
+      }
+    },
+    "grt": {
+      "status": "completed",
+      "artifacts": {
+        "odb": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/5_1_grt.odb"
+      }
+    },
+    "route": {
+      "status": "completed",
+      "artifacts": {
+        "report": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_reports/sky130hd/demo_top/base/5_route_drc.rpt",
+        "odb": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/5_route.odb"
+      }
+    },
+    "finish": {
+      "status": "completed",
+      "artifacts": {
+        "report": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_reports/sky130hd/demo_top/base/6_finish.rpt",
+        "netlist": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/6_final.v"
+      }
+    }
+  },
+  "retry_prerequisites": {
+    "3_place.odb": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/3_place.odb",
+    "3_place.sdc": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/3_place.sdc"
+  },
+  "provenance": {
+    "repo_commit": "unknown",
+    "orfs_image_digest": null,
+    "pdk": "sky130hd",
+    "iverilog_version": null,
+    "num_cores": 4
+  },
+  "docker_command": "fake",
+  "docker_success": true,
+  "docker_stdout_tail": "ok",
+  "docker_stderr_tail": "",
+  "netlist_path": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/6_final.v",
+  "summary_metrics": {
+    "area_um2": null,
+    "cell_count": null,
+    "wns_ns": null,
+    "tns_ns": null,
+    "power_uw": null
+  },
+  "next_action": "Inspect stage summaries and continue tuning.",
+  "finished_at": "2026-06-22T23:00:06.880136+00:00",
+  "elapsed_sec": 0.0
+}

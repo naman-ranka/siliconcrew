@@ -5,6 +5,7 @@ import { FileText, RefreshCw, Copy, Check, Download, ArrowUpDown, ArrowRightLeft
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EmptyState } from "@/components/workbench/EmptyState";
 import { cn } from "@/lib/utils";
 
 export function SpecViewer() {
@@ -40,15 +41,13 @@ export function SpecViewer() {
 
   if (!spec) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-8">
-        <div className="w-16 h-16 rounded-2xl bg-surface-2 flex items-center justify-center mb-4">
-          <FileText className="h-8 w-8" />
-        </div>
-        <p className="text-sm font-medium">No specification yet</p>
-        <p className="text-xs mt-1 text-center max-w-[200px]">
-          Ask the agent to design something to see the hardware specification here
-        </p>
-      </div>
+      <EmptyState
+        icon={<FileText />}
+        headline="No specification yet"
+        assistantHint="…or ask the assistant to draft one from your requirements."
+      >
+        Describe a design to generate its hardware specification here.
+      </EmptyState>
     );
   }
 

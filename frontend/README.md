@@ -117,12 +117,58 @@ API calls are proxied through Next.js rewrites in `next.config.mjs`.
 
 ## Environment Variables
 
-Create a `.env.local` file for custom configuration:
+Backend URLs are read at **runtime**, not build time, so a single image runs in
+any environment (local, staging, prod) without rebuilding. The server layout
+(`app/layout.tsx`) reads these and injects them into the page; the browser reads
+them via `lib/runtime-config.ts` and talks to the backend directly.
+
+| Var | Purpose | Default |
+|-----|---------|---------|
+| `API_URL` | Backend origin for REST (e.g. `https://siliconcrew-backend-….run.app`) | `http://localhost:8000` |
+| `WS_URL`  | Backend origin for WebSocket | derived from `API_URL` (`http`→`ws`) |
+| `GOOGLE_CLIENT_ID` | Google OAuth Web Client ID for sign-in (public value). Empty = no auth. | _(empty)_ |
+
+> These are **not** `NEXT_PUBLIC_*` on purpose — `NEXT_PUBLIC_*` is inlined at
+> build time, which is exactly what caused the prod `localhost:8000` /
+> ECONNREFUSED bug. Keeping them plain (read per request, injected into the page
+> by the server layout) means **one image runs in any environment** — including
+> self-host (no auth) vs hosted (auth) without a rebuild.
+
+For local dev, create `.env.local` (or just rely on the localhost defaults):
 
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_WS_URL=ws://localhost:8000
+API_URL=http://localhost:8000
+WS_URL=ws://localhost:8000
+
+# Google sign-in. Leave UNSET for self-host / local dev: no sign-in UI renders,
+# no token is sent, full access (anonymous) — zero config. When set, a "Sign in
+# with Google" button appears and the Google ID token is attached as
+# `Authorization: Bearer <token>` on every API call (REST + WS). Must equal the
+# backend's GOOGLE_OAUTH_CLIENT_ID (same OAuth client). Read at runtime, so no
+# rebuild needed per environment.
+GOOGLE_CLIENT_ID=
 ```
+
+> Back-compat: `NEXT_PUBLIC_GOOGLE_CLIENT_ID` is still honored as a fallback, but
+> `GOOGLE_CLIENT_ID` (runtime) is preferred so the image stays env-agnostic.
+
+The backend must allow the frontend origin via CORS — set `CORS_ALLOW_ORIGINS`
+(comma-separated) or `CORS_ALLOW_ORIGIN_REGEX` on the backend. Local dev origins
+(`http://localhost:3000`, `http://127.0.0.1:3000`) are always allowed.
+
+### Hosted auth (Google sign-in)
+
+The backend already verifies Google ID tokens (`GOOGLE_OAUTH_CLIENT_ID`); the
+frontend only needs `GOOGLE_CLIENT_ID` set to the **same** client ID (injected at
+runtime — no rebuild per environment).
+
+| `GOOGLE_CLIENT_ID` | Behavior |
+|--------------------|----------|
+| **unset** | Self-host / dev default. No auth UI, no GIS script, no token sent. Anonymous trial = full local access. |
+| **set**   | "Sign in with Google" via Google Identity Services. After sign-in the ID token rides `Authorization: Bearer` on REST and `?token=` on the chat WebSocket. Synth/save prompt sign-in when signed-out; lint/sim stay available. On a 401 the token is cleared → re-sign-in prompt. |
+
+No `next-auth` / server callback — GIS hands us the ID token and the backend
+re-verifies it. The decoded JWT is used for display only.
 
 ## Development
 
@@ -155,4 +201,5 @@ npm run build
 # Deploy the .next folder to Vercel
 ```
 
-Ensure `NEXT_PUBLIC_API_URL` points to your deployed backend.
+Set `API_URL` (and optionally `WS_URL`) on the deployment to point at your
+deployed backend — these are read at runtime, so no rebuild is needed per env.
