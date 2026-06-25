@@ -1,0 +1,60 @@
+name: Terraform
+
+# Manual ONLY. Never autonomous. You click "Run workflow" in the Actions tab and
+# choose plan (preview, changes nothing) or apply (makes the changes). Use this
+# for infra changes — env vars, secrets, scaling, new resources, the OAuth var.
+# App code rollouts go through Deploy App, not here. See deploy/CICD.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "plan = preview only · apply = make changes"
+        type: choice
+        options: [plan, apply]
+        default: plan
+
+permissions:
+  contents: read
+  id-token: write   # keyless Workload Identity Federation
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    env:
+      # Required Terraform variables (sourced from repo Variables/Secrets).
+      TF_VAR_project_id:             ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_region:                 ${{ vars.GCP_REGION }}
+      TF_VAR_google_oauth_client_id: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
+      TF_VAR_backend_image:          ${{ vars.BACKEND_IMAGE }}
+      TF_VAR_frontend_image:         ${{ vars.FRONTEND_IMAGE }}
+      TF_VAR_orfs_image:             ${{ vars.ORFS_IMAGE }}
+      TF_VAR_db_password:            ${{ secrets.TF_DB_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (keyless / WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Init (GCS remote state)
+        run: terraform init -backend-config="bucket=${{ vars.GCP_PROJECT_ID }}-siliconcrew-tfstate"
+
+      - name: Validate
+        run: terraform validate
+
+      - name: Plan
+        run: terraform plan -no-color -input=false -out=tfplan
+
+      - name: Apply
+        if: ${{ inputs.action == 'apply' }}
+        run: terraform apply -no-color -input=false -auto-approve tfplan
