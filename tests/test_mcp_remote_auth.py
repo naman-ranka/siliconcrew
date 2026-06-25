@@ -68,7 +68,9 @@ def test_local_mode_is_authless_and_unchanged(server):
 # --- hosted: per-request identity + isolation -------------------------------
 
 
-def test_hosted_uses_per_request_identity(server):
+def test_hosted_uses_per_request_identity(server, monkeypatch):
+    monkeypatch.setenv("SILICONCREW_HOSTED", "true")
+    reset_settings_cache()
     server._hosted = True
     alice = Identity(user_id="workos_alice", email="a@x.io", provider="workos")
     token = _bind_request(alice)
@@ -79,7 +81,9 @@ def test_hosted_uses_per_request_identity(server):
         request_ctx.reset(token)
 
 
-def test_hosted_two_users_are_isolated(server):
+def test_hosted_two_users_are_isolated(server, monkeypatch):
+    monkeypatch.setenv("SILICONCREW_HOSTED", "true")
+    reset_settings_cache()
     server._hosted = True
     for uid in ("workos_alice", "workos_bob"):
         token = _bind_request(Identity(user_id=uid, provider="workos"))
