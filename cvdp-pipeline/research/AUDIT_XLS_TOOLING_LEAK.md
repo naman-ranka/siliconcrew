@@ -176,3 +176,67 @@ orders: write a Python reference from the spec FIRST → generate expected vecto
 from them → fix RTL not test on disagreement. Tests whether an independent (spec-derived, RTL-blind)
 oracle converts the implementation-limited fails. User rejected the testbench-edit "anti-drift guard" as
 benchmark-overfit custom logic; the golden-FLOW is the general, standard-practice version.
+
+---
+
+## 7. Lean-prompt A/B — CONCLUSION (5/5 graded, all leak-scanned, 3 forensic subagents)
+
+The next lever from §6(d) was tested as a **lean benchmark prompt** (`CVDP_LEAN_PROMPT=1`): a self-contained
+25-line prompt that **drops the architect system prompt entirely**, makes golden-model-first **the** flow, and
+routes verification through a **cocotb (Python) testbench**. A/B against the b32 conflicted-prompt runs (which
+kept the architect prompt). Same 5 problems both arms.
+
+| problem | b33 verdict | leak | cocotb | architect | drift | failure CLASS |
+|---|---|---|---|---|---|---|
+| poly_decimator_0001 | FAIL 0/1 | clean | 1 | 0 | none | **structural** (hard-codes M=4; grader builds M=2/TAPS=2; instance names `u_pf0..` vs grader's `poly_branches[p].u_poly_filter`) |
+| phase_rotation_0010 | FAIL 0/18 | clean | 2 | 0 | none | **host-sim limit** (iverilog: "constant selects in always_* not supported") |
+| digital_stopwatch_0001 | FAIL 0/4 | clean | 4 | 0 | none | **shared blind spot** (independent golden + RTL share the SAME spec-misreading; local 12/12, container 0/4) |
+| dynamic_equalizer_0008 | FAIL 0/1 | clean | 1 | 0 | none | **unsolvable-by-construction** (grader checks a 16-value noise LUT + white-box `uu_awgn_real` instance name — neither in the spec) |
+| hdbn_codec_0001 | FAIL 0/1 | clean | 0 | 0 | n/a | **infra truncation** (`API Error: output exceeded 32000 token max` killed the run BEFORE any verification) |
+
+### The three findings
+
+**(1) Adoption SOLVED → drop the architect prompt for benchmark runs.** All 4 runs that reached verification
+used cocotb (1/2/4/1 calls), with **0 SystemVerilog self-checks and 0 architect injections**. The architect
+prompt's "write RTL and a self-checking testbench" line was the thing steering the agent to SV self-checks;
+removing it + cocotb routing flips behavior reliably. **Recommendation: keep lean+cocotb as the benchmark
+prompt.** (General-use SiliconCrew can keep the architect prompt; this is a benchmark-mode change.)
+
+**(2) Oracle-drift pathology ELIMINATED — the real, measurable win.** In b32, digital_stopwatch wrote a
+golden, **never ran it**, hand-wrote an SV testbench and **drifted it 6× to match the RTL → FALSE-PASS 14/14**
+(container 0/4). In b33, digital_stopwatch wrote an independent `stopwatch_model.py`, ran it in cocotb, and
+made the tests pass via **cocotb-timing fixes only — 0 RTL hacks, 0 assertion-weakening edits** (rigorously
+diffed), ending in an HONEST fail. Across all 5 b33 runs: **zero drift, zero false local passes.** False
+passes corrupt the tally; removing them makes every number trustworthy and aims the agent's effort at the RTL
+instead of at weakening the test.
+
+**(3) Conversion 0/5 → the bottleneck is NOT verification honesty anymore.** With drift gone, the failures
+resolve into causes a value-oracle CANNOT fix:
+- **structural** (poly): wrong parameterization / instance-hierarchy contract — orthogonal to any value check.
+- **shared blind spot** (digital_stopwatch): the self-written golden is independent in **mechanism** (never
+  reads RTL) but NOT in **comprehension** — the same agent encodes the same spec-misreading into both golden
+  and RTL, so they agree with each other while both miss the true spec. A self-authored oracle catches
+  *implementation* bugs (RTL ≠ agent's intent) but is blind to *comprehension* bugs (intent itself wrong).
+  **This is precisely why "reading the answer still fails."** The only oracle that breaks a shared blind spot
+  is one DERIVED INDEPENDENTLY OF THE AGENT (the hidden grader, or a spec-locked reference it didn't author).
+- **unsolvable-by-construction** (dynamic_equalizer): the grader's pass criteria (a 16-entry noise LUT, exact
+  white-box instance names) exist ONLY in the sealed harness — passable *only* by leakage. A property of the
+  BENCHMARK, not an agent gap; part of the 63→51 gap is therefore a HARD CEILING.
+- **infra truncation** (hdbn): output-token-limit error ended the run pre-verification. Actionable: raise
+  `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in the runner.
+
+### Honest full-92 expectation
+**~51/92** (band ~48–53), NOT 63. The 63→51 gap is 12 leaked-only problems; the formal-experiment re-runs
+showed ~80% fail clean, and dyn_eq_0008 confirms at least some are unsolvable-by-construction (answer key lives
+only in the harness). Lean+cocotb converted 0 of these 5 hard fails, so it does not move the count — it makes
+the count *honest*. Expect ~51; treat any gain as a genuine surprise; watch for small regressions from cocotb
+friction on currently-passing problems.
+
+### Next levers (in priority)
+1. **Structural-contract adherence** — make the agent honor the spec's parameterizable `generate`, exact
+   instance/hierarchy/port names, and the grader's param sweep (no value oracle supplies this).
+2. **An AGENT-INDEPENDENT oracle** — the only thing that breaks a shared blind spot (a spec-locked reference
+   the agent didn't author; otherwise the same misreading flows into golden and RTL alike).
+3. **Audit the leaked-12 for unsolvable-by-construction vs merely-hard** — to set a REAL honest ceiling before
+   chasing a number. (`dyn_eq` is one confirmed unsolvable; others unknown.)
+4. **Raise `CLAUDE_CODE_MAX_OUTPUT_TOKENS`** so long runs (hdbn) aren't truncated before verification.

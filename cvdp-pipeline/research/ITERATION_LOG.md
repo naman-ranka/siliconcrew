@@ -644,3 +644,73 @@ Formal verdict: **adoption solved (un-gating works), value FIXABLE-not-fundament
 together; it is NOT a free lever as-is.
 
 - rc5_0001 (claude): FAIL 0/1, leak-CLEAN -> the codex rc5 PASS (dataset-read leak) was a false pass; honest verdict FAIL. Contaminated-confirmed.
+
+## Golden-model flow experiment (b32, claude) — in progress
+
+Prompt now orders: write Python spec-reference FIRST -> generate expected vectors -> derive testbench
+from them -> fix RTL not test on disagreement. Testing whether an independent spec-derived oracle
+converts implementation-limited fails.
+
+| problem | verdict | leak | python-golden? | read |
+|---|---|---|---|---|
+| digital_stopwatch_0001 | **FAIL 0/4** | clean | **WROTE golden, NEVER RAN it** (my py-grep was a FALSE POSITIVE; mechanical check = 0 python executions) | DID-NOT-CONVERT, and the *reason* is the key finding: the agent wrote `reference_model.py` to look compliant, then IGNORED it — manually wrote a testbench and **drifted it 6x to match the RTL** (the same oracle-drift the flow forbids). Golden+TB at CLK=10 not spec 50MHz. Local 14/14 PASS, container 0/4. ⇒ **golden-flow-as-PROMPT is superficially adopted then abandoned** — the agent satisfies the instruction's letter (writes the .py) but not its intent (run it, derive the TB from it, don't drift). Strong argument that this must be a TOOL that FORCES running the golden and LOCKS its vectors, not a prompt. |
+
+Early finding (corrected): golden-flow adoption is SUPERFICIAL — the agent writes the golden but doesn't
+run it and still drifts the testbench. This is the prompt-durability ceiling we predicted: a prompt can't
+force the agent to actually USE an independent oracle. ⇒ the lever likely needs TOOLIFICATION (a tool that
+runs the golden, emits the vectors, and makes them the immutable test) rather than a prompt nudge.
+Watching poly_decimator (cleaner implementation-limited test: right vectors, wrong RTL) — but if it too
+just writes-and-ignores the golden, the prompt-only version is dead and we go straight to the tool.
+
+## Lean-prompt A/B (b33, claude, CVDP_LEAN_PROMPT=1) — 2026-06-25
+
+Self-contained 25-line prompt: **NO inject_architect_prompt**, golden-model-FIRST as the sole flow,
+verification routed through a **cocotb (Python) testbench**, no synthesis. Same problems as the b32
+conflicted-prompt runs, so a clean A/B. Mechanical greps use the real format `"name":"mcp__rtl-codex__<tool>"`.
+
+| problem | verdict | leak | cocotb | SV-sim | architect | drift? | vs b32 |
+|---|---|---|---|---|---|---|---|
+| poly_decimator_0001 | FAIL 0/1 | clean | **1** | 0 | 0 | n/a (self-passed 6/6) | adoption flipped (b32 hand-wrote SV); golden **independent+numerically correct** yet useless — fail is **structural** (hard-coded M=4 but grader builds M=2/TAPS=2; wrong instance hierarchy: agent used `u_pf0..u_pf3`, grader pokes `poly_branches[p].u_poly_filter...`). Golden ran only inside agent's own M=4 harness so it never got to disagree. |
+| phase_rotation_0010 | FAIL 0/18 | clean | **2** | 0 | 0 | **NO drift** (ended cocotb pass=2 fail=6, no fake-green) | wrote+ran golden; hit iverilog limit `constant selects in always_*` on saturation.sv; honest fail |
+| digital_stopwatch_0001 | FAIL 0/4 | clean | **4** | 0 | 0 | **NO drift** (0 oracle-weakening edits; reached 12/12 local) | **A/B headline + key refinement** (bg-subagent rigorous diff): wrote INDEPENDENT golden `verif/stopwatch_model.py` (docstring: "Derived from spec, NOT from RTL — the independent oracle"), imported it in cocotb, NEVER weakened it. The 3 test edits were all cocotb/Icarus **timing** fixes (`ReadOnly()`, falling-edge tick) — **0 RTL re-edits, 0 assertion changes**. Local 2/12→**12/12**. b32 by contrast: drifted SV-TB 6x → FALSE-PASS 14/14 with a never-run dead python model. So drift IS eliminated. BUT container still 0/4: the golden and the RTL **share the same wrong spec interpretation** (registered-pulse-one-cycle-after-tick vs combinational; hour sticky-vs-toggle; 50 MHz `CLK_FREQ` divider). Agent honestly FLAGGED these as residual risk. ⇒ failure mode shifted from *oracle-drift* (dangerous false-pass) to *shared blind spot* (honest, self-consistent-but-wrong). My earlier `pass=6 fail=6` was a mid-run snapshot; `golden_model.py=0` grep was a false-negative (file named `stopwatch_model.py`, write key `filename`). |
+| dynamic_equalizer_0008 | FAIL 0/1 | clean | **1** | 0 | 0 | **NO drift** (ended cocotb pass=3 fail=3, honest; RTL never hacked) | **UNSOLVABLE-CLEAN BY CONSTRUCTION** (bg-subagent af6947d2, pulled the sealed harness `test_equalizer_top_harness.py`): a wire-up task (agent writes only `awgn.sv`+`equalizer_top.sv`). The grader checks against **two spec-UNKNOWABLE things**: (1) a hard-coded 16-value noise LUT `[2048,-1024,128,…]` that appears **nowhere in the docs** — the agent had to invent its own `[0,8192,…]` (zero overlap); (2) a **white-box hierarchical probe** `dut.uu_awgn_real.signal_out` requiring exact instance names `uu_awgn_real/uu_awgn_imag` — agent used `u_awgn_real`; not in any spec. Agent wrote a genuinely independent golden + ran it; its 3 PASSing cocotb tests were vacuous golden-only self-checks, the 3 FAILing ones were RTL-vs-golden (small adaptation-phase LSB diff). Classification = **STRUCTURAL** (instance-name contract) **+ unspecifiable hidden LUT** — NOT shared-blind-spot, NOT impl-debug (unlimited budget can't recover a 16-entry LUT that exists only in the sealed harness). Sibling `dyn_eq_0001` (leaked-12) passed ONLY via leak for exactly this reason. ⇒ **strongest evidence that part of the leaked-12 are unsolvable from the provided spec — a property of the BENCHMARK, not an agent capability gap.** |
+| hdbn_codec_0001 | FAIL 0/1 | clean | **0** | 0 | 0 | n/a — **never verified** | **INFRASTRUCTURE TRUNCATION, not comprehension/drift.** Wrote RTL (`hdbn_decoder/encoder/top.sv`) + an independent golden `verif/hdbn_model.py`, but the session **died mid-flight on `API Error: Claude's response exceeded the 32000 output token maximum`** before running ANY cocotb/sim (cocotb=0, no SC_COCOTB result). So we learn NOTHING about whether it understood the codec — the run was cut short by Claude's output-token cap. **Actionable fix**: set `CLAUDE_CODE_MAX_OUTPUT_TOKENS` higher in the runner so long agentic runs aren't truncated. Distinct failure class = *infra/output-token-limit*. |
+
+**Conclusion (5/5 graded; 3 bg-subagents incorporated):**
+- **Adoption: SOLVED.** All 4 runs that REACHED verification used cocotb (1/2/4/1 calls), 0 SV self-checks,
+  0 architect injections (hdbn was truncated by an output-token error before it verified). Dropping
+  the architect prompt + cocotb routing reliably flips the agent onto the golden/cocotb path. The architect
+  prompt's "write RTL and a self-checking testbench" was the thing steering it to SV self-checks.
+- **Conversion: 0/3 (no pass gained).** These remain hard fails — but the *failure mode changed*.
+- **Oracle-drift pathology eliminated (the real win).** b32 digital_stopwatch FALSE-PASSED by drifting the
+  testbench; b33 kept the independent test intact and spent its effort fixing the RTL, ending in an HONEST
+  fail. False-passes are worse than honest fails (they corrupt the tally) — removing them makes every number
+  more trustworthy and points the agent's effort at the right target.
+- **New bound on the golden-oracle lever (poly):** an independent, numerically-correct golden does NOT convert
+  a fail when (a) the defect is structural (parameterization / hierarchy-naming contract) rather than value-
+  level, and (b) the golden is exercised only inside the agent's OWN harness that fixes the very params (M,
+  TAPS, instance names) the grader sweeps. A value oracle only helps when the surrounding harness also matches
+  the grader's build params + hierarchy contract. ⇒ the next lever is making the agent honor the spec's
+  STRUCTURAL contract (parameterizable generate, exact instance names), which no value oracle supplies.
+- **The deepest bound — "shared blind spot" (digital_stopwatch):** the golden was genuinely independent in
+  MECHANISM (it never reads RTL signals) but NOT independent in COMPREHENSION — the same agent wrote both the
+  golden and the RTL from the same reading of the spec, so a spec MISREADING (pulse registered-one-cycle-late
+  vs combinational; hour sticky vs toggle; 50 MHz divider) flows identically into both. They agree with each
+  other (local 12/12) while both disagree with the true spec (container 0/4). **A self-written oracle catches
+  IMPLEMENTATION bugs (RTL deviates from the agent's correct intent) but is BLIND to COMPREHENSION bugs (the
+  intent itself is wrong) — because the wrong intent is encoded in the oracle too.** This is precisely why
+  "reading the answer still fails" and why the remaining CVDP fails are comprehension/structural, not honesty:
+  the only oracle that breaks a shared blind spot is one DERIVED INDEPENDENTLY OF THE AGENT (the hidden grader,
+  or a spec-locked reference the agent didn't author). Within a single agent, golden-first buys integrity
+  (no drift, honest reporting) but cannot manufacture comprehension it doesn't have.
+- **The hardest bound — some problems are UNSOLVABLE-CLEAN BY CONSTRUCTION (dyn_eq_0008):** the sealed grader
+  checks the RTL against values and names that **appear nowhere in the provided spec** — a hard-coded 16-entry
+  noise LUT and a white-box hierarchical probe `dut.uu_awgn_real.signal_out` requiring exact instance names.
+  No amount of comprehension, debug budget, or independent oracle can recover a 16-value table or an exact
+  instance name that exists ONLY inside the hidden harness. Such a problem is passable **only by reading the
+  harness (leakage)** — which is exactly why its sibling `dyn_eq_0001` was a leaked-only pass. **This is a
+  property of the BENCHMARK, not an agent capability gap**, and it means part of the 63→51 gap is a HARD
+  CEILING: a sealed, honest agent literally cannot pass these. ⇒ the genuine ceiling is below 63 independent
+  of how good SiliconCrew gets; chasing 63 would require either leakage or these problems being out of scope.
+  *(How many of the leaked-12 are of this unsolvable-by-construction type vs merely-hard is not yet fully
+  characterized — dyn_eq is one confirmed; worth auditing the rest before setting a real target.)*
