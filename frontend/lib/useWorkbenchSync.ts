@@ -42,16 +42,20 @@ const POLL_MS = 5000;
  */
 export function useWorkbenchSync(): void {
   const loadWorkbench = useStore((s) => s.loadWorkbench);
+  const loadSessions = useStore((s) => s.loadSessions);
   const inFlight = useRef(false);
 
   useEffect(() => {
     const sync = async () => {
       if (inFlight.current) return;
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      if (!useStore.getState().currentSession) return;
       inFlight.current = true;
       try {
-        await loadWorkbench();
+        // Refresh the session list too, so a session created by another client
+        // (e.g. the user's AI app via MCP) shows up — then the current session's
+        // workbench (files/runs/synth) if one is selected.
+        await loadSessions();
+        if (useStore.getState().currentSession) await loadWorkbench();
       } finally {
         inFlight.current = false;
       }
@@ -74,5 +78,5 @@ export function useWorkbenchSync(): void {
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(poll);
     };
-  }, [loadWorkbench]);
+  }, [loadWorkbench, loadSessions]);
 }
