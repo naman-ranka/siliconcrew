@@ -241,8 +241,11 @@ def build_actions_router(
 
     router = APIRouter(prefix="/api/workspace/{session_id:path}", tags=["actions"])
 
-    def require_workspace(session_id: str) -> str:
-        workspace = resolve_workspace(session_id)
+    async def require_workspace(session_id: str) -> str:
+        # F6: workspace_for() is a blocking hydration (GCS download+untar in
+        # hosted) — resolve it off the event loop so one slow session's read
+        # can't stall every other in-flight request. (No-op cost in self-host.)
+        workspace = await asyncio.to_thread(resolve_workspace, session_id)
         if not workspace or not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
         return workspace
@@ -276,9 +279,11 @@ def build_actions_router(
         try:
             return await asyncio.to_thread(runner)
         finally:
+            # F6: the sync (tar + GCS upload) is blocking — run it off the event
+            # loop so it can't stall other in-flight requests.
             if mutates and sync_workspace is not None:
                 try:
-                    sync_workspace(session_id)
+                    await asyncio.to_thread(sync_workspace, session_id)
                 except Exception:
                     pass
 
@@ -287,14 +292,14 @@ def build_actions_router(
     @router.get("/manifest")
     async def get_manifest(session_id: str, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
         manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id, _uid=uid, _id=identity)
         return _ok({"manifest": manifest.model_dump()})
 
     @router.put("/manifest")
     async def put_manifest(session_id: str, body: ManifestUpdate, identity=Depends(require_signed_in)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
         manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id, _uid=uid, _id=identity, mutates=True)
         return _ok({"manifest": manifest.model_dump()})
@@ -302,7 +307,7 @@ def build_actions_router(
     @router.post("/files")
     async def upload_files(session_id: str, files: List[UploadFile] = File(...), identity=Depends(require_signed_in)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
         os.makedirs(workspace, exist_ok=True)
 
         saved: List[str] = []
@@ -329,7 +334,7 @@ def build_actions_router(
         refreshed manifest. Routes through ``file_ops.write_file`` — the SAME
         function the agent's write_file tool uses (one write path)."""
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             try:
@@ -348,7 +353,7 @@ def build_actions_router(
     @router.post("/lint")
     async def lint_action(session_id: str, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
@@ -378,7 +383,7 @@ def build_actions_router(
     @router.post("/simulate")
     async def simulate_action(session_id: str, body: SimulateRequest, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
@@ -410,7 +415,7 @@ def build_actions_router(
     @router.post("/synthesize")
     async def synthesize_action(session_id: str, body: SynthesizeRequest, identity=Depends(require_signed_in)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
@@ -454,7 +459,7 @@ def build_actions_router(
     @router.get("/runs")
     async def list_runs(session_id: str, kind: str = Query(default="all"), identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             runs: List[Dict[str, Any]] = []
@@ -471,7 +476,7 @@ def build_actions_router(
     @router.get("/runs/compare")
     async def compare_runs(session_id: str, a: str = Query(...), b: str = Query(...), identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             return (
@@ -503,7 +508,7 @@ def build_actions_router(
     @router.get("/runs/{run_id}")
     async def get_run(session_id: str, run_id: str, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             if run_id.startswith("sim_"):
@@ -554,14 +559,14 @@ def build_actions_router(
     @router.get("/jobs/{job_id}")
     async def get_job(session_id: str, job_id: str, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
         status = await run_scoped(session_id, workspace, get_synthesis_job_status, job_id, workspace, _uid=uid, _id=identity)
         return _ok({"job": status})
 
     @router.post("/runs/{run_id}/retry")
     async def retry_run(session_id: str, run_id: str, body: RetryRequest, identity=Depends(require_signed_in)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
         overrides_json = json.dumps(body.overrides) if body.overrides else ""
 
         def work():
@@ -583,7 +588,7 @@ def build_actions_router(
     @router.post("/runs/{run_id}/pin")
     async def pin_run(session_id: str, run_id: str, body: PinRequest, identity=Depends(require_signed_in)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             if run_id.startswith("sim_"):
