@@ -1006,6 +1006,12 @@ async def delete_thread(session_id: str, tid: str, identity: Identity = Depends(
     return {"status": "deleted", "thread_id": tid}
 
 
+# Keepalive cadence for the chat stream. LangGraph emits nothing during a long
+# tool call (e.g. a 60s+ ORFS synth wait); a `ping` well under the ~30s GCP load
+# balancer / proxy idle timeout keeps the connection from being dropped mid-run.
+_WS_HEARTBEAT_SEC = 20
+
+
 @app.websocket("/api/chat/{session_id:path}")
 async def chat_websocket(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for streaming chat."""
@@ -1143,11 +1149,26 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 pending_tool_calls: Dict[str, Dict[str, Any]] = {}
 
                 try:
-                    async for event in agent_graph.astream(
+                    # Heartbeat-wrapped iteration: wait for each stream event with
+                    # a timeout; on timeout (a long silent tool call) send a `ping`
+                    # keepalive and keep waiting. Serialized on this one coroutine,
+                    # so there's no concurrent-send race with the frames below.
+                    _stream = agent_graph.astream(
                         {"messages": input_messages},
                         config,
-                        stream_mode="updates"
-                    ):
+                        stream_mode="updates",
+                    ).__aiter__()
+                    while True:
+                        try:
+                            event = await asyncio.wait_for(
+                                _stream.__anext__(), timeout=_WS_HEARTBEAT_SEC
+                            )
+                        except asyncio.TimeoutError:
+                            await websocket.send_json({"type": "ping"})
+                            continue
+                        except StopAsyncIteration:
+                            break
+
                         if "agent" in event:
                             msg = event["agent"]["messages"][-1]
 
