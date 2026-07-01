@@ -1755,27 +1755,31 @@ _TERMINAL_SYNTH_STATES = {"completed", "failed"}
 
 
 def _reconcile_stale_status(run_dir: str, meta: Dict[str, Any]) -> Dict[str, Any]:
-    """Adopt on-disk finish-stage PPA as the source of truth for a run stuck at a
+    """Adopt on-disk artifacts as the source of truth for a run stuck at a
     non-terminal status.
 
     On serverless (Cloud Run) the worker that writes the terminal status can be
     killed once the HTTP response returns (instance scale-down), leaving
     run_meta at "running" even though ORFS finished and its artifacts synced to
-    object storage. ``_compute_summary_metrics`` parses the *finish-stage*
-    reports (6_finish.rpt / synth_stat.txt) — if area/cells are parseable, the
-    run demonstrably reached finish, so we adopt "completed" on read.
+    object storage.
 
-    Fail-safe: if no finish metrics are parseable, the status is left untouched
-    (never worse than today). Mutates and returns ``meta``; persists only when it
-    actually reconciles.
+    Completion signal: the **finish-stage report** (6_finish.rpt) must exist.
+    That is the only artifact that proves the full ORFS flow reached the finish
+    stage. ``synth_stat.txt`` (area/cell_count) alone is NOT sufficient — it is
+    written right after logic synthesis, so a run that failed later (e.g. before
+    CTS) also has it; keying on it would mis-mark a failed run as completed.
+
+    Fail-safe: no finish report → status left untouched (never worse than
+    today; a genuinely-failed run stays non-terminal rather than being falsely
+    marked completed). Mutates and returns ``meta``; persists only on reconcile.
     """
     if meta.get("status") in _TERMINAL_SYNTH_STATES:
         return meta
-    recomputed = _compute_summary_metrics(run_dir, meta)
-    if recomputed.get("area_um2") is None and recomputed.get("cell_count") is None:
+    # Only a present finish report proves the flow actually completed.
+    if _find_report_file(run_dir, "6_finish.rpt") is None:
         return meta  # not demonstrably finished — leave as-is
     meta["status"] = "completed"
-    meta["summary_metrics"] = recomputed
+    meta["summary_metrics"] = _compute_summary_metrics(run_dir, meta)
     if not meta.get("finished_at"):
         meta["finished_at"] = _now_iso()
     try:
