@@ -427,6 +427,21 @@ export const useStore = create<AppState>((set, get) => ({
         tool_results: msg.tool_results,
         blocks: buildBlocks(msg.content ?? "", msg.tool_calls, msg.tool_results),
       }));
+      // Reopen reconciliation (F4): if the last assistant turn ends on a tool call
+      // with no closing summary, it was interrupted before finishing (e.g. the WS
+      // dropped mid-synthesis). Mark it honestly instead of leaving a dangling
+      // "Waiting for Synthesis" that looks perpetually in-progress — the real
+      // status lives in the Runs / Signoff panel.
+      const last = messages[messages.length - 1];
+      if (last && last.role === "assistant") {
+        const b = last.blocks ?? [];
+        if (b.length > 0 && b[b.length - 1].type === "tool") {
+          last.blocks = [
+            ...b,
+            { type: "text", content: "_The reply was interrupted before a summary — see the Runs / Signoff panel for the final status._" },
+          ];
+        }
+      }
       set({ messages, chatError: null });
     } catch (error) {
       // A fresh session with no history is NOT an error — the backend now
