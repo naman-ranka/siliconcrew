@@ -35,11 +35,21 @@ class FakeSettings:
     workos_jwks_url: str = "https://api.workos.com/sso/jwks/client_x"
     workos_audience: str = "https://mcp.siliconcrew.app/mcp"
     workos_client_id: str = "client_x"
+    workos_authkit_domain: str = ""
+    workos_api_key: str = ""
+    mcp_authorization_server: str = "https://api.workos.com/sso/issuer/client_x"
+    mcp_issuer: str = "https://api.workos.com/sso/issuer/client_x"
+    mcp_jwks_url: str = "https://api.workos.com/sso/jwks/client_x"
     mcp_resource_url: str = "https://mcp.siliconcrew.app/mcp"
+    mcp_scopes_supported: tuple[str, ...] = ("mcp",)
 
     @property
     def workos_configured(self) -> bool:
         return bool(self.workos_issuer and self.workos_jwks_url)
+
+    @property
+    def mcp_auth_configured(self) -> bool:
+        return bool(self.mcp_issuer and self.mcp_jwks_url)
 
 
 def _claims_for(token: str) -> dict:
@@ -78,7 +88,7 @@ def test_workos_verifier_rejects_missing_subject():
 # require a match on the latter (audience set). Round-trips real RS256 tokens,
 # bypassing only the network JWKS fetch.
 
-ISS = "https://api.workos.com/"
+ISS = "https://api.workos.com/user_management/client_x"
 
 
 def _rsa_signed(payload: dict):
@@ -154,7 +164,14 @@ def test_resolve_invalid_token_raises():
 
 def test_resolve_unconfigured_server_raises():
     # No verifier and no test bearer: fail closed, never anonymous.
-    s = FakeSettings(workos_issuer="", workos_jwks_url="", workos_audience="")
+    s = FakeSettings(
+        workos_issuer="",
+        workos_jwks_url="",
+        workos_audience="",
+        mcp_authorization_server="",
+        mcp_issuer="",
+        mcp_jwks_url="",
+    )
     with pytest.raises(AuthError) as ei:
         M.resolve_bearer_identity("tok", settings=s, verifier=None)
     assert ei.value.code == "auth_unconfigured"
@@ -169,6 +186,67 @@ def test_protected_resource_metadata_names_workos_issuer():
     assert doc["resource"] == "https://mcp.siliconcrew.app/mcp"
     assert doc["resource_name"] == "SiliconCrew"
     assert "mcp" in doc["scopes_supported"]
+    assert doc["jwks_uri"] == "https://api.workos.com/sso/jwks/client_x"
+
+
+def test_protected_resource_metadata_can_name_authkit_oauth_server():
+    doc = M.protected_resource_metadata(
+        settings=FakeSettings(
+            mcp_authorization_server="https://tenant.authkit.app",
+            mcp_issuer="https://tenant.authkit.app",
+            mcp_jwks_url="https://tenant.authkit.app/oauth2/jwks",
+            mcp_scopes_supported=("openid", "email", "profile", "offline_access"),
+        )
+    )
+    assert doc["authorization_servers"] == ["https://tenant.authkit.app"]
+    assert doc["jwks_uri"] == "https://tenant.authkit.app/oauth2/jwks"
+    assert doc["scopes_supported"] == ["openid", "email", "profile", "offline_access"]
+
+
+def test_mcp_verifier_uses_mcp_issuer_not_web_issuer():
+    s = FakeSettings(
+        workos_issuer="https://api.workos.com/user_management/client_x",
+        workos_jwks_url="https://api.workos.com/sso/jwks/client_x",
+        mcp_issuer="https://tenant.authkit.app",
+        mcp_jwks_url="https://tenant.authkit.app/oauth2/jwks",
+    )
+    v = M.build_workos_verifier(s)
+    assert v._issuer == "https://tenant.authkit.app"
+    assert v._jwks_url == "https://tenant.authkit.app/oauth2/jwks"
+
+
+@pytest.mark.asyncio
+async def test_complete_workos_standalone_connect_posts_signed_in_user():
+    seen = {}
+
+    async def fake_post(url, payload, bearer):
+        seen.update({"url": url, "payload": payload, "bearer": bearer})
+        return {"redirect_uri": "https://tenant.authkit.app/oauth2/resume"}
+
+    result = await M.complete_workos_standalone_connect(
+        "ext_123",
+        Identity(user_id="workos_user_123", email="u@example.com", provider="workos"),
+        settings=FakeSettings(workos_api_key="sk_test"),
+        http_post_json=fake_post,
+    )
+    assert result == {"redirect_uri": "https://tenant.authkit.app/oauth2/resume"}
+    assert seen["url"] == "https://api.workos.com/authkit/oauth2/complete"
+    assert seen["bearer"] == "sk_test"
+    assert seen["payload"]["external_auth_id"] == "ext_123"
+    assert seen["payload"]["user"]["id"] == "workos_user_123"
+    assert seen["payload"]["user"]["email"] == "u@example.com"
+
+
+@pytest.mark.asyncio
+async def test_complete_workos_standalone_connect_requires_api_key():
+    with pytest.raises(AuthError) as ei:
+        await M.complete_workos_standalone_connect(
+            "ext_123",
+            Identity(user_id="workos_user_123", email="u@example.com", provider="workos"),
+            settings=FakeSettings(workos_api_key=""),
+            http_post_json=lambda *_: {"redirect_uri": "unused"},
+        )
+    assert ei.value.code == "auth_unconfigured"
 
 
 # --- middleware integration (mirrors deployed transport wiring) -------------

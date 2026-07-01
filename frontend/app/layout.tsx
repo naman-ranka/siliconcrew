@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { readServerEnv, SC_ENV_GLOBAL } from "@/lib/runtime-config";
 import { AuthProvider } from "@/lib/auth";
+import { McpConnectBridge } from "@/components/auth/McpConnectBridge";
 import "./globals.css";
 
 // Read backend URLs at request time (not build time) so one image runs in any
@@ -44,7 +45,10 @@ export default function RootLayout({
           workosClientId={env.workosClientId}
           workosRedirectUri={env.workosRedirectUri}
         >
-          <TooltipProvider delayDuration={300}>{children}</TooltipProvider>
+          <TooltipProvider delayDuration={300}>
+            <McpConnectBridge />
+            {children}
+          </TooltipProvider>
         </AuthProvider>
       </body>
     </html>

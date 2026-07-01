@@ -170,4 +170,5 @@ class WorkOSVerifier:
                 },
             )
         except jwt.PyJWTError as exc:  # signature/issuer/audience/expiry failures
+            print(f"[JWT ERROR] Token validation failed: {exc}")
             raise AuthError("invalid_token", f"Token validation failed: {exc}") from exc

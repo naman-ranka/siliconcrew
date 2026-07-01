@@ -45,6 +45,14 @@ resource "google_cloud_run_v2_service" "frontend" {
         name  = "GOOGLE_CLIENT_ID"
         value = var.google_oauth_client_id
       }
+      env {
+        name  = "WORKOS_CLIENT_ID"
+        value = var.workos_client_id
+      }
+      env {
+        name  = "WORKOS_REDIRECT_URI"
+        value = var.workos_redirect_uri
+      }
     }
   }
 
