@@ -4,6 +4,13 @@
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "siliconcrew": {
+      "type": "http",
+      "url": "https://siliconcrew-backend-psp2dkllmq-uc.a.run.app/mcp",
+      "headers": {
+        "Authorization": "Bearer ${SILICONCREW_MCP_TOKEN}"
+      }
     }
   }
 }
