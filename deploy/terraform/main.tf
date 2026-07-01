@@ -267,6 +267,19 @@ resource "google_cloud_run_v2_service" "backend" {
         value = var.workos_client_id
       }
       env {
+        name  = "WORKOS_AUTHKIT_DOMAIN"
+        value = var.workos_authkit_domain
+      }
+      env {
+        name = "WORKOS_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = "workos-api-key"
+            version = "latest"
+          }
+        }
+      }
+      env {
         name  = "WORKOS_AUDIENCE"
         value = var.workos_audience
       }
@@ -437,6 +450,13 @@ resource "google_secret_manager_secret_iam_member" "backend_anthropic_key" {
 
 resource "google_secret_manager_secret_iam_member" "backend_test_bearer" {
   secret_id  = "siliconcrew-test-bearer"
+  role       = "roles/secretmanager.secretAccessor"
+  member     = "serviceAccount:${google_service_account.backend.email}"
+  depends_on = [google_project_service.services]
+}
+
+resource "google_secret_manager_secret_iam_member" "backend_workos_api_key" {
+  secret_id  = "workos-api-key"
   role       = "roles/secretmanager.secretAccessor"
   member     = "serviceAccount:${google_service_account.backend.email}"
   depends_on = [google_project_service.services]

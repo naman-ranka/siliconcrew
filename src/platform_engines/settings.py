@@ -55,7 +55,13 @@ class PlatformSettings:
     workos_jwks_url: str      # JWKS endpoint for RS256 signature verification
     workos_audience: str      # expected `aud` = our MCP resource identifier
     workos_client_id: str     # WorkOS client id (informational / web sign-in)
+    workos_authkit_domain: str # AuthKit OAuth issuer/domain for MCP, if enabled
+    workos_api_key: str        # server-side key for Standalone Connect completion
+    mcp_authorization_server: str # OAuth AS advertised in RFC 9728 metadata
+    mcp_issuer: str            # issuer expected on MCP access tokens
+    mcp_jwks_url: str          # JWKS endpoint for MCP access-token verification
     mcp_resource_url: str     # public MCP resource URL named in RFC 9728 metadata
+    mcp_scopes_supported: tuple[str, ...] # scopes advertised to MCP clients
 
     # Workspace storage
     workspace_engine: str     # "local" | "cloud"
@@ -97,6 +103,17 @@ class PlatformSettings:
         return bool(self.workos_issuer and self.workos_jwks_url)
 
     @property
+    def mcp_auth_configured(self) -> bool:
+        """True when hosted MCP bearer-token validation can run.
+
+        MCP may use the AuthKit OAuth domain as its authorization server while
+        the web SPA keeps validating AuthKit JS user-management tokens. Keep the
+        two verifier profiles separate so enabling standard MCP OAuth discovery
+        does not break existing web sign-in.
+        """
+        return bool(self.mcp_issuer and self.mcp_jwks_url)
+
+    @property
     def is_cloud_orfs(self) -> bool:
         return self.orfs_engine == "cloud_job"
 
@@ -117,9 +134,27 @@ def get_settings() -> PlatformSettings:
     # WORKOS_CLIENT_ID (+ WORKOS_AUDIENCE on the MCP resource server). A custom
     # auth domain overrides the issuer/JWKS explicitly.
     workos_client_id = _env("WORKOS_CLIENT_ID")
-    workos_issuer = _env("WORKOS_ISSUER") or ("https://api.workos.com/" if workos_client_id else "")
+    workos_issuer = _env("WORKOS_ISSUER") or (
+        f"https://api.workos.com/user_management/{workos_client_id}" if workos_client_id else ""
+    )
     workos_jwks_url = _env("WORKOS_JWKS_URL") or (
         f"https://api.workos.com/sso/jwks/{workos_client_id}" if workos_client_id else ""
+    )
+    workos_authkit_domain = _env("WORKOS_AUTHKIT_DOMAIN").rstrip("/")
+    mcp_authorization_server = (
+        _env("MCP_AUTHORIZATION_SERVER").rstrip("/")
+        or workos_authkit_domain
+        or workos_issuer
+    )
+    mcp_issuer = _env("MCP_ISSUER").rstrip("/") or mcp_authorization_server
+    mcp_jwks_url = _env("MCP_JWKS_URL") or (
+        f"{workos_authkit_domain}/oauth2/jwks" if workos_authkit_domain else workos_jwks_url
+    )
+    mcp_scopes_raw = _env("MCP_SCOPES_SUPPORTED") or (
+        "openid,email,profile,offline_access" if workos_authkit_domain else "mcp"
+    )
+    mcp_scopes_supported = tuple(
+        scope.strip() for scope in mcp_scopes_raw.replace(" ", ",").split(",") if scope.strip()
     )
 
     orfs_engine = _env("ORFS_ENGINE", "cloud_job" if hosted else "local_docker")
@@ -143,7 +178,13 @@ def get_settings() -> PlatformSettings:
         workos_jwks_url=workos_jwks_url,
         workos_audience=_env("WORKOS_AUDIENCE"),
         workos_client_id=workos_client_id,
+        workos_authkit_domain=workos_authkit_domain,
+        workos_api_key=_env("WORKOS_API_KEY"),
+        mcp_authorization_server=mcp_authorization_server,
+        mcp_issuer=mcp_issuer,
+        mcp_jwks_url=mcp_jwks_url,
         mcp_resource_url=_env("MCP_RESOURCE_URL"),
+        mcp_scopes_supported=mcp_scopes_supported,
         workspace_engine=workspace_engine,
         workspace_bucket=_env("WORKSPACE_BUCKET"),
         workspace_scratch_dir=_env("WORKSPACE_SCRATCH_DIR", "/tmp/siliconcrew-scratch"),

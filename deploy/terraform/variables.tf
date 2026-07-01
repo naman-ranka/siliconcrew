@@ -59,6 +59,12 @@ variable "workos_client_id" {
   description = "WorkOS Client ID. Enables unified AuthKit authentication across web and remote MCP."
 }
 
+variable "workos_authkit_domain" {
+  type        = string
+  default     = ""
+  description = "AuthKit OAuth issuer/domain for MCP discovery, e.g. https://tenant.authkit.app. When set, MCP clients use AuthKit OAuth metadata/DCR while web tokens keep using WORKOS_CLIENT_ID."
+}
+
 variable "workos_audience" {
   type        = string
   default     = ""
