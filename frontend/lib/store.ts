@@ -1222,19 +1222,23 @@ export const useStore = create<AppState>((set, get) => ({
   loadRuns: async () => {
     const { currentSession, runKindFilter } = get();
     if (!currentSession) return;
-    set({ runsLoading: true });
-    try {
-      const runs = await workbenchApi.listRuns(currentSession.id, runKindFilter);
-      set((state) => ({
-        runs,
-        selectedRunId:
-          runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
-      }));
-    } catch {
-      set({ runs: [] });
-    } finally {
-      set({ runsLoading: false });
-    }
+    // F5: single-flight so the two synth-time loops (the runSynth job poll and
+    // the useWorkbenchSync active-run poll) never double-pull the run list.
+    return singleFlight(`runs:${currentSession.id}:${runKindFilter}`, async () => {
+      set({ runsLoading: true });
+      try {
+        const runs = await workbenchApi.listRuns(currentSession.id, runKindFilter);
+        set((state) => ({
+          runs,
+          selectedRunId:
+            runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
+        }));
+      } catch {
+        set({ runs: [] });
+      } finally {
+        set({ runsLoading: false });
+      }
+    });
   },
 
   setRunKindFilter: (kind) => {

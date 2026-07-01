@@ -86,6 +86,20 @@ describe("loadWorkbench: one-hydration snapshot", () => {
   });
 });
 
+describe("loadRuns: single-flight (F5 poll dedup)", () => {
+  it("concurrent poll + mount share ONE listRuns fetch", async () => {
+    let resolve!: (v: unknown) => void;
+    (workbenchApi.listRuns as any).mockReturnValue(new Promise((r) => (resolve = r)));
+
+    const a = useStore.getState().loadRuns();
+    const b = useStore.getState().loadRuns(); // the second polling loop
+    resolve([]);
+    await Promise.all([a, b]);
+
+    expect(workbenchApi.listRuns).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("refreshWorkspace: single-flight", () => {
   it("concurrent refreshes share ONE listFiles fetch", async () => {
     let resolve!: (v: unknown) => void;
