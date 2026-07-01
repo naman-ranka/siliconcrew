@@ -1,6 +1,16 @@
 from src.platform_engines.settings import get_settings, reset_settings_cache
 
 
+def _clear_synth_governance_env(monkeypatch):
+    for name in (
+        "SYNTH_RUNS_PER_DAY",
+        "SYNTH_COMPUTE_MINUTES_PER_MONTH",
+        "SYNTH_MAX_CONCURRENT_PER_USER",
+        "SYNTH_QUEUE_GLOBAL_WORKERS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _clear_mcp_auth_env(monkeypatch):
     for name in (
         "WORKOS_ISSUER",
@@ -89,3 +99,32 @@ def test_mcp_oauth_overrides_win(monkeypatch):
     assert settings.mcp_issuer == "https://issuer.example"
     assert settings.mcp_jwks_url == "https://issuer.example/jwks"
     assert settings.mcp_scopes_supported == ("read", "write")
+
+
+def test_synth_governance_defaults_and_overrides(monkeypatch):
+    _clear_synth_governance_env(monkeypatch)
+    reset_settings_cache()
+    try:
+        defaults = get_settings()
+    finally:
+        reset_settings_cache()
+
+    assert defaults.synth_runs_per_day == 20
+    assert defaults.synth_compute_minutes_per_month == 600
+    assert defaults.synth_max_concurrent_per_user == 5
+    assert defaults.synth_queue_global_workers == 16
+
+    monkeypatch.setenv("SYNTH_RUNS_PER_DAY", "7")
+    monkeypatch.setenv("SYNTH_COMPUTE_MINUTES_PER_MONTH", "90")
+    monkeypatch.setenv("SYNTH_MAX_CONCURRENT_PER_USER", "3")
+    monkeypatch.setenv("SYNTH_QUEUE_GLOBAL_WORKERS", "11")
+    reset_settings_cache()
+    try:
+        overridden = get_settings()
+    finally:
+        reset_settings_cache()
+
+    assert overridden.synth_runs_per_day == 7
+    assert overridden.synth_compute_minutes_per_month == 90
+    assert overridden.synth_max_concurrent_per_user == 3
+    assert overridden.synth_queue_global_workers == 11

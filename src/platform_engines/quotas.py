@@ -3,7 +3,7 @@
 The real risk in this workload is not raw demand — it is a user retry-looping a
 minutes-long, memory-heavy synth job. So the caps that matter are:
 
-  * **concurrency:** 1 in-flight synth job per user (the headline guard);
+  * **concurrency:** bounded in-flight synth jobs per user (the headline guard);
   * **rate:** synth runs/day;
   * **cost:** compute-minutes/month.
 
@@ -31,7 +31,7 @@ class QuotaPolicy:
 # signed-in users get sensible hosted-tier caps. Tune via config at deploy time.
 DEFAULT_POLICIES: Dict[str, QuotaPolicy] = {
     "anonymous": QuotaPolicy(synth_runs_per_day=0, compute_minutes_per_month=0, max_concurrent_synth=0),
-    "user": QuotaPolicy(synth_runs_per_day=20, compute_minutes_per_month=600, max_concurrent_synth=1),
+    "user": QuotaPolicy(synth_runs_per_day=20, compute_minutes_per_month=600, max_concurrent_synth=5),
 }
 DEFAULT_STALE_CONCURRENCY_SEC = 30 * 60
 
@@ -243,16 +243,33 @@ class PostgresQuotaStore:
             conn.commit()
 
 
+def _policies_from_settings(settings) -> Dict[str, QuotaPolicy]:
+    user_default = DEFAULT_POLICIES["user"]
+    user_policy = QuotaPolicy(
+        synth_runs_per_day=max(0, int(getattr(settings, "synth_runs_per_day", user_default.synth_runs_per_day))),
+        compute_minutes_per_month=max(
+            0,
+            int(getattr(settings, "synth_compute_minutes_per_month", user_default.compute_minutes_per_month)),
+        ),
+        max_concurrent_synth=max(
+            0,
+            int(getattr(settings, "synth_max_concurrent_per_user", user_default.max_concurrent_synth)),
+        ),
+    )
+    return {**DEFAULT_POLICIES, "user": user_policy}
+
+
 def build_quota_manager(settings) -> "QuotaManager":
     """Pick the quota store from settings: shared Postgres in hosted mode."""
+    policies = _policies_from_settings(settings)
     if settings.persistence_engine == "postgres" and settings.database_url:
         store = PostgresQuotaStore(settings.database_url)
         try:
             store.init_schema()
         except Exception:
             pass  # schema may already exist / be created out-of-band
-        return QuotaManager(store=store)
-    return QuotaManager(store=InMemoryQuotaStore())
+        return QuotaManager(store=store, policies=policies)
+    return QuotaManager(store=InMemoryQuotaStore(), policies=policies)
 
 
 @dataclass

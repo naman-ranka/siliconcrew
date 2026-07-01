@@ -312,6 +312,22 @@ resource "google_cloud_run_v2_service" "backend" {
         value = var.region
       }
       env {
+        name  = "SYNTH_RUNS_PER_DAY"
+        value = tostring(var.synth_runs_per_day)
+      }
+      env {
+        name  = "SYNTH_COMPUTE_MINUTES_PER_MONTH"
+        value = tostring(var.synth_compute_minutes_per_month)
+      }
+      env {
+        name  = "SYNTH_MAX_CONCURRENT_PER_USER"
+        value = tostring(var.synth_max_concurrent_per_user)
+      }
+      env {
+        name  = "SYNTH_QUEUE_GLOBAL_WORKERS"
+        value = tostring(var.synth_queue_global_workers)
+      }
+      env {
         name  = "ORFS_NUM_CORES"
         value = tostring(var.orfs_num_cores)
       }
