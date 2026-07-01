@@ -875,12 +875,12 @@ def generate_report_tool(run_id: str = None) -> str:
 @tool
 def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
     """
-    Run a cocotb (Python) testbench against your RTL in the CVDP reference container.
+    Run a cocotb (Python) testbench against your RTL in a pinned simulator container.
 
-    This is the trustworthy way to verify a design against a cocotb testbench: it runs in the SAME
-    pinned simulator image used for grading, so a PASS here predicts the real verdict. A run that does
-    not terminate is reported as a TIMEOUT — treat it as a FAILURE (combinational loop, missing clock,
-    or unbounded test), not an inconclusive result.
+    Compiles the listed sources and runs the named cocotb test module against the top-level design.
+    A run that does not terminate is reported as a TIMEOUT — treat it as a FAILURE (combinational
+    loop, missing clock, or unbounded test), not an inconclusive result. Returns a structured
+    pass/fail with an output tail.
 
     Args:
         verilog_files: DUT + dependency Verilog/SV sources (workspace-relative).
@@ -910,10 +910,47 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
 @tool
 def sby_tool(sby_file: str) -> str:
     """
-    Runs Formal Verification using SymbiYosys (SBY).
-    Use this ONLY when the user explicitly asks for "Formal Verification", "SBY", or "Proofs".
+    Run formal verification with SymbiYosys (SBY).
+
+    Proves or disproves assertions/properties about a design by exploring reachable states
+    (bounded or unbounded), rather than running specific input vectors. Well suited to checking
+    invariants that should hold for all inputs: state-machine legality (one-hot, no illegal states),
+    value and occupancy bounds (a counter or FIFO level stays in range), protocol/handshake
+    properties (request held until acknowledge, no overflow/underflow), and absence of deadlock or
+    combinational loops.
+
+    HOW TO WRITE A WORKING SETUP (these are the common mistakes):
+      * Clocks and resets are NORMAL input ports of your design. NEVER drive a clock with $anyseq.
+        Use $anyseq / $anyconst only for free DATA inputs you want the solver to range over.
+      * Put your `assert property (...)` (and any `assume`) in a thin formal harness module that
+        instantiates the DUT — or inline in the DUT under `ifdef FORMAL`.
+      * Engine: use `smtbmc z3` (z3 is the installed solver). boolector/yices are NOT available.
+      * `[files]` paths are resolved from the workspace root — list them workspace-relative
+        (e.g. `rtl/dut.sv`, `verif/dut_formal.sv`). (The tool also auto-resolves/normalizes these.)
+
+    Minimal example — dut_formal.sby:
+        [options]
+        mode bmc
+        depth 20
+        [engines]
+        smtbmc z3
+        [script]
+        read -formal dut.sv
+        read -formal dut_formal.sv
+        prep -top dut_formal
+        [files]
+        rtl/dut.sv
+        verif/dut_formal.sv
+    ...with verif/dut_formal.sv:
+        module dut_formal(input clk, input rst, input [7:0] data_in);
+            wire [3:0] count;
+            dut u(.clk(clk), .rst(rst), .data_in(data_in), .count(count));
+            always @(posedge clk) assert (count <= 4'd8);   // occupancy bound holds for ALL inputs
+        endmodule
+
     Args:
-        sby_file: Name of the .sby configuration file (e.g., 'fifo.sby').
+        sby_file: Name of the .sby configuration file (e.g., 'fifo.sby') describing the design and
+            the properties to prove.
     """
     workspace = get_workspace_path()
     abs_file = os.path.join(workspace, sby_file)
@@ -932,9 +969,12 @@ def sby_tool(sby_file: str) -> str:
     if status == "TIMEOUT":
         return ("SBY DID NOT FINISH ⏱️ within the time budget — the proof is inconclusive (deepen "
                 f"incrementally or simplify the property). Output:\n{tail}")
-    if status == "ERROR" and "rc=16" in tail:
-        return ("SBY could not run ⚠️ — no formal solver is available in this environment, so the proof "
-                f"engine errored. Rely on simulation/cocotb for now.\nOutput:\n{tail}")
+    if status == "ERROR":
+        return ("SBY did not complete ⚠️ — the proof engine errored (NOT a formal-verification dead end; "
+                "z3 IS available). Common causes: a clock driven by $anyseq (clocks/resets are normal "
+                "input ports — only use $anyseq for free data inputs), invalid Verilog in the formal "
+                "harness, or a missing source file in [files]. Use `[engines] smtbmc z3`, fix the harness, "
+                f"and retry.\nOutput:\n{tail}")
     return f"SBY Run finished. Status: {status} ⚠️\nOutput:\n{tail}"
 
 @tool
