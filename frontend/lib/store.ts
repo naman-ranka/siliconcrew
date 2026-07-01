@@ -825,16 +825,14 @@ export const useStore = create<AppState>((set, get) => ({
       const hasCode = files.some((f) => f.type === "verilog");
       const hasReport = files.some((f) => f.type === "report") || synthesisRuns.some((run) => run.report_available);
 
-      // Load content
-      if (hasSpec) {
-        await get().loadSpec();
-      }
-      if (hasCode) {
-        await get().loadCodeFiles();
-      }
-      if (hasReport) {
-        await get().loadReport(nextRunId);
-      }
+      // Load content in parallel — spec, code and report set independent state
+      // slices, so serial awaits only added latency (spec blocked code blocked
+      // report). Fetch them concurrently.
+      await Promise.all([
+        hasSpec ? get().loadSpec() : Promise.resolve(),
+        hasCode ? get().loadCodeFiles() : Promise.resolve(),
+        hasReport ? get().loadReport(nextRunId) : Promise.resolve(),
+      ]);
 
       // Get updated state after loading
       const newState = get();
@@ -976,6 +974,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   selectSynthesisRun: async (runId: string | null) => {
+    // Re-selecting the already-selected run would refetch the same report for
+    // nothing (the report is already loaded for it).
+    if (runId === get().selectedSynthesisRunId) return;
     set({ selectedSynthesisRunId: runId });
     await get().loadReport(runId);
   },
@@ -1093,6 +1094,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setRunKindFilter: (kind) => {
+    // Clicking the already-active filter shouldn't trigger a refetch.
+    if (get().runKindFilter === kind) return;
     set({ runKindFilter: kind });
     void get().loadRuns();
   },
