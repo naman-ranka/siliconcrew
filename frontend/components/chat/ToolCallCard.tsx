@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -38,6 +38,20 @@ const toolLabelMap: Record<string, string> = {
 
 export function ToolCallCard({ toolCall, result, isRunning }: ToolCallCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Live elapsed while the tool runs, frozen once it returns — so a 60s synth
+  // reads differently from a 0.2s lint. Times only from mount, so a reopened
+  // (already-complete) card shows no bogus duration.
+  const startedRef = useRef<number>(Date.now());
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (result) return; // freeze once the tool returns
+    const id = setInterval(
+      () => setElapsed(Math.round((Date.now() - startedRef.current) / 1000)),
+      500
+    );
+    return () => clearInterval(id);
+  }, [result]);
 
   const toolLabel = toolLabelMap[toolCall.name] || toolCall.name;
   const normalizedStatus = result?.status?.toLowerCase() ?? "";
@@ -96,6 +110,10 @@ export function ToolCallCard({ toolCall, result, isRunning }: ToolCallCardProps)
               {summary}
             </span>
           </>
+        )}
+
+        {elapsed > 0 && (
+          <span className="text-muted-foreground/40 tabular-nums shrink-0">· {elapsed}s</span>
         )}
 
         <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity shrink-0">

@@ -227,8 +227,31 @@ function MessageContent({ message }: { message: Message }) {
   );
 }
 
+// Counts seconds while `active`; resets when inactive. Shows elapsed time during
+// a "Thinking" gap so a long wait never reads as a frozen/broken spinner.
+function useRunningSeconds(active: boolean): number {
+  const [secs, setSecs] = useState(0);
+  const startRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active) {
+      startRef.current = null;
+      setSecs(0);
+      return;
+    }
+    startRef.current = Date.now();
+    const id = setInterval(
+      () => setSecs(Math.floor((Date.now() - (startRef.current ?? Date.now())) / 1000)),
+      500
+    );
+    return () => clearInterval(id);
+  }, [active]);
+  return secs;
+}
+
 function StreamingMessage({ showIcon = true }: { showIcon?: boolean }) {
   const { streamingMessage, isStreaming } = useStore();
+  const thinking = isStreaming && !!streamingMessage && streamingMessage.blocks.length === 0;
+  const thinkingSecs = useRunningSeconds(thinking);
 
   if (!isStreaming || !streamingMessage) return null;
 
@@ -245,7 +268,7 @@ function StreamingMessage({ showIcon = true }: { showIcon?: boolean }) {
               <span className="w-2 h-2 rounded-full bg-primary animate-pulse" style={{ animationDelay: "150ms" }} />
               <span className="w-2 h-2 rounded-full bg-primary animate-pulse" style={{ animationDelay: "300ms" }} />
             </div>
-            <span className="text-sm">Thinking...</span>
+            <span className="text-sm">Thinking{thinkingSecs > 0 ? ` · ${thinkingSecs}s` : "…"}</span>
           </div>
         ) : (
           streamingMessage.blocks.map((block, idx) =>
