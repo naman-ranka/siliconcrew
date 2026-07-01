@@ -24,6 +24,8 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import urllib.error
+import urllib.request
 from typing import Optional
 
 from src.platform_engines.auth import TEST_IDENTITY, _warn_test_bearer_once, parse_bearer
@@ -38,7 +40,8 @@ MCP_IDENTITY_STATE_KEY = "sc_mcp_identity"
 # Standard location of the protected-resource metadata document (RFC 9728).
 PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource"
 
-# Capabilities advertised in the metadata document.
+# Default capabilities advertised in the metadata document when settings do not
+# provide an MCP-specific scope list.
 MCP_SCOPES_SUPPORTED = ["mcp"]
 
 
@@ -52,12 +55,12 @@ def build_workos_verifier(settings=None) -> Optional[WorkOSVerifier]:
         from src.platform_engines.settings import get_settings
 
         settings = get_settings()
-    if not settings.workos_configured:
+    if not getattr(settings, "mcp_auth_configured", settings.workos_configured):
         return None
     return WorkOSVerifier(
-        issuer=settings.workos_issuer,
+        issuer=getattr(settings, "mcp_issuer", "") or settings.workos_issuer,
         audience=settings.workos_audience,
-        jwks_url=settings.workos_jwks_url,
+        jwks_url=getattr(settings, "mcp_jwks_url", "") or settings.workos_jwks_url,
     )
 
 
@@ -110,15 +113,105 @@ def protected_resource_metadata(settings=None, *, resource_url: Optional[str] = 
 
         settings = get_settings()
     resource = resource_url or settings.mcp_resource_url or settings.workos_audience
-    auth_servers = [settings.workos_issuer] if settings.workos_issuer else []
-    return {
+    auth_server = getattr(settings, "mcp_authorization_server", "") or settings.workos_issuer
+    scopes = list(getattr(settings, "mcp_scopes_supported", ()) or MCP_SCOPES_SUPPORTED)
+    doc = {
         "resource": resource,
-        "authorization_servers": auth_servers,
-        "scopes_supported": list(MCP_SCOPES_SUPPORTED),
+        "authorization_servers": [auth_server] if auth_server else [],
+        "scopes_supported": scopes,
         "bearer_methods_supported": ["header"],
         "resource_name": "SiliconCrew",
         "resource_documentation": "https://github.com/naman-ranka/siliconcrew",
     }
+    jwks_uri = getattr(settings, "mcp_jwks_url", "") or ""
+    if jwks_uri:
+        doc["jwks_uri"] = jwks_uri
+    return doc
+
+
+async def complete_workos_standalone_connect(
+    external_auth_id: str,
+    identity: Identity,
+    *,
+    settings=None,
+    http_post_json=None,
+) -> dict:
+    """Complete a WorkOS Standalone Connect MCP login.
+
+    WorkOS remains the OAuth authorization server and token issuer. SiliconCrew
+    only completes the user-authentication step after the frontend proves the
+    user is signed in with the existing web bearer token. The returned
+    ``redirect_uri`` sends the browser back to WorkOS; WorkOS then handles
+    consent/token issuance and redirects to the AI client's callback.
+    """
+    if settings is None:
+        from src.platform_engines.settings import get_settings
+
+        settings = get_settings()
+
+    external_auth_id = (external_auth_id or "").strip()
+    if not external_auth_id:
+        raise AuthError("invalid_request", "Missing external_auth_id.")
+    if not identity or identity.anonymous:
+        raise AuthError("signin_required", "A signed-in SiliconCrew user is required.")
+    if not identity.email:
+        raise AuthError("invalid_user", "Signed-in user is missing an email address.")
+
+    api_key = getattr(settings, "workos_api_key", "") or ""
+    if not api_key:
+        raise AuthError("auth_unconfigured", "WORKOS_API_KEY is required for MCP Connect completion.")
+
+    url = getattr(settings, "workos_connect_complete_url", "") or "https://api.workos.com/authkit/oauth2/complete"
+    payload = {
+        "external_auth_id": external_auth_id,
+        "user": {
+            "id": identity.user_id,
+            "email": identity.email,
+            "metadata": {
+                "provider": identity.provider,
+            },
+        },
+    }
+    post_json = http_post_json or _post_json
+    data = await post_json(url, payload, api_key)
+    redirect_uri = data.get("redirect_uri") if isinstance(data, dict) else None
+    if not redirect_uri:
+        raise AuthError("workos_complete_failed", "WorkOS completion response did not include redirect_uri.")
+    return {"redirect_uri": redirect_uri}
+
+
+async def _post_json(url: str, payload: dict, bearer_token: str) -> dict:
+    import asyncio
+
+    def _send() -> dict:
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {bearer_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", "replace")
+            raise AuthError(
+                "workos_complete_failed",
+                f"WorkOS completion failed with HTTP {exc.code}: {raw[:500]}",
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise AuthError("workos_complete_failed", f"WorkOS completion request failed: {exc.reason}") from exc
+        try:
+            return json.loads(raw) if raw else {}
+        except json.JSONDecodeError as exc:
+            raise AuthError("workos_complete_failed", "WorkOS completion returned invalid JSON.") from exc
+
+    return await asyncio.to_thread(_send)
 
 
 def _www_authenticate(resource_metadata_url: str, error: Optional[str] = None) -> str:

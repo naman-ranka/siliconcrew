@@ -17,14 +17,18 @@ one-account-across-web+MCP unification:
 
 ## 1. Roles
 
-- **WorkOS** hosts the login UI, "Sign in with Google" (Google configured as the
-  upstream connection), the AI-client connect/registration handshake, and token
-  issue / refresh / **revoke**. We own none of this.
-- **SiliconCrew** validates the WorkOS token on each request (RS256 against the
-  published JWKS, checking issuer / audience / expiry — standard PyJWT, no
-  hand-rolled crypto), maps the verified subject to a `workos_<sub>` user_id, and
-  runs as that user. Plus a tiny RFC 9728 metadata document telling clients where
-  to sign in. That is the whole job.
+- **WorkOS AuthKit** is the OAuth authorization server for remote MCP. It hosts
+  authorization-server metadata, Dynamic Client Registration / CIMD, consent,
+  token issue / refresh / revoke, and the JWKS.
+- **SiliconCrew** is the MCP resource server. It validates WorkOS tokens on each
+  MCP request (RS256 against the published JWKS, checking issuer / audience /
+  expiry — standard PyJWT, no hand-rolled crypto), maps the verified subject to
+  a `workos_<sub>` user_id, and runs as that user.
+- **Optional Standalone Connect**: if you want the browser to pass through the
+  SiliconCrew frontend for the user-auth step, set the WorkOS Login URI to
+  `https://<frontend>/mcp/connect`. The frontend signs the user in with the
+  existing web AuthKit path, calls `POST /api/mcp/oauth/complete`, and WorkOS
+  resumes the OAuth flow back to the AI client.
 
 ## 2. Hosted config (backend)
 
@@ -33,14 +37,25 @@ Google OAuth / WIF setup). They are read **only** when `SILICONCREW_HOSTED=true`
 
 | Env var | Meaning |
 | --- | --- |
-| `WORKOS_CLIENT_ID` | WorkOS client id. **The only required var** — the issuer and JWKS URL are derived from it (`https://api.workos.com/` + `…/sso/jwks/<client_id>`). |
+| `WORKOS_CLIENT_ID` | WorkOS user-management client id for the web SPA. The web issuer/JWKS are derived from it (`https://api.workos.com/user_management/<client_id>` and `https://api.workos.com/sso/jwks/<client_id>`). |
+| `WORKOS_AUTHKIT_DOMAIN` | **Recommended for MCP.** AuthKit OAuth issuer/domain, e.g. `https://premier-plant-48-staging.authkit.app`. When set, MCP metadata advertises this OAuth server and the MCP verifier uses `<domain>/oauth2/jwks`. |
+| `WORKOS_API_KEY` | **Only for Standalone Connect.** Server-side key used by `POST /api/mcp/oauth/complete` to call WorkOS's completion API. Leave empty if you let AuthKit host the full login UI. |
 | `WORKOS_AUDIENCE` | **MCP service only.** Expected `aud` = the MCP resource identifier (your `/mcp` URL). Leave **empty** on the web service. |
 | `MCP_RESOURCE_URL` | **MCP service only.** Public MCP resource URL advertised in the metadata document (usually the same `/mcp` URL). |
-| `WORKOS_ISSUER` / `WORKOS_JWKS_URL` | Optional overrides — set only for a **custom WorkOS auth domain** (otherwise derived from the client id). |
+| `MCP_AUTHORIZATION_SERVER` / `MCP_ISSUER` / `MCP_JWKS_URL` | Optional MCP-specific overrides. Normally `WORKOS_AUTHKIT_DOMAIN` is enough. |
+| `MCP_SCOPES_SUPPORTED` | Optional comma/space-separated scopes advertised to MCP clients. Defaults to `openid,email,profile,offline_access` when `WORKOS_AUTHKIT_DOMAIN` is set; otherwise `mcp` for the legacy direct path. |
+| `WORKOS_ISSUER` / `WORKOS_JWKS_URL` | Optional web-token overrides — set only for a custom WorkOS user-management token profile. |
 
-Validation is **active when WorkOS is configured** (`settings.workos_configured`
-= issuer + JWKS present, i.e. `WORKOS_CLIENT_ID` is set). If hosted MCP is
-reachable but WorkOS is unconfigured, every MCP call fail-closes with `401`.
+Web validation is active when `settings.workos_configured` is true. MCP
+validation is active when `settings.mcp_auth_configured` is true. If hosted MCP
+is reachable but its issuer/JWKS are unconfigured, every MCP call fail-closes
+with `401`.
+
+Web AuthKit JS access tokens use
+`iss=https://api.workos.com/user_management/<client_id>`. MCP OAuth tokens from
+the AuthKit domain use `iss=<WORKOS_AUTHKIT_DOMAIN>`. Keep those verifier
+profiles separate; the code does this via `workos_*` settings for web and
+`mcp_*` settings for remote MCP.
 
 ### Web vs MCP differ on audience (important)
 
@@ -70,9 +85,15 @@ production.**
 - An unauthenticated MCP call returns **`401`** with a `WWW-Authenticate: Bearer
   resource_metadata="https://<host>/.well-known/oauth-protected-resource"` header.
 - That well-known route serves the RFC 9728 **protected-resource metadata** (a
-  small JSON built from config) naming the WorkOS issuer as the authorization
-  server. The AI client reads it and walks the user through "Sign in with Google"
-  via WorkOS, then retries with `Authorization: Bearer <token>`.
+  small JSON built from config) naming the AuthKit OAuth domain as the
+  authorization server. The AI client discovers AuthKit's OAuth metadata,
+  registers dynamically when supported, walks the user through auth/consent, and
+  retries with `Authorization: Bearer <token>`.
+- For Standalone Connect, configure the WorkOS Login URI to
+  `https://<frontend>/mcp/connect`. The page stores WorkOS's `external_auth_id`,
+  signs the user in if needed, then calls the backend completion endpoint. The
+  backend calls `https://api.workos.com/authkit/oauth2/complete` with
+  `WORKOS_API_KEY` and returns WorkOS's `redirect_uri` to the browser.
 - Every authenticated tool call then runs as the calling user — sessions,
   reads, synthesis, etc. — scoped to their `workos_<sub>` tenant, with the
   existing per-user synthesis quota and capability gating enforced.

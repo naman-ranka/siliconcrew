@@ -102,7 +102,7 @@ def build_verifier(settings=None) -> Optional[IdentityVerifier]:
 
         return WorkOSVerifier(
             issuer=settings.workos_issuer,
-            audience=settings.workos_audience,
+            audience=None,  # Web/AuthKit SPA tokens carry no audience
             jwks_url=settings.workos_jwks_url,
         )
     if settings.google_oauth_client_id:

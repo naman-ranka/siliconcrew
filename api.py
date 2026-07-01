@@ -122,6 +122,10 @@ class ThreadPatch(BaseModel):
     model: Optional[str] = None
 
 
+class MCPConnectComplete(BaseModel):
+    external_auth_id: str
+
+
 class ThreadResponse(BaseModel):
     id: str
     session_id: str
@@ -313,10 +317,45 @@ async def lifespan(app: FastAPI):
     from src.platform_engines.settings import apply_platform_wiring
     apply_platform_wiring()
 
+    # Mount and run MCP server if in hosted mode
+    from src.platform_engines.settings import get_settings
+    settings = get_settings()
+    if settings.hosted:
+        print("[API] Hosted mode: initializing remote MCP server integration")
+        from mcp_server import RTLDesignMCPServer
+        mcp_server = RTLDesignMCPServer(codex_tools=True)
+        mcp_app, mcp_transport = mcp_server.get_http_app()
+
+        # Store them on app.state
+        app.state.mcp_server = mcp_server
+        app.state.mcp_transport = mcp_transport
+
+        # Enter the connection context
+        mcp_conn_context = mcp_transport.connect()
+        streams = await mcp_conn_context.__aenter__()
+
+        # Start the MCP server processing task
+        mcp_task = asyncio.create_task(
+            mcp_server.server.run(
+                streams[0],
+                streams[1],
+                mcp_server.server.create_initialization_options()
+            )
+        )
+        app.state.mcp_task = mcp_task
+        app.state.mcp_conn_context = mcp_conn_context
+
     yield
 
     # Shutdown
     print("[API] Shutting down...")
+    if hasattr(app.state, "mcp_task"):
+        print("[API] Stopping remote MCP server...")
+        app.state.mcp_task.cancel()
+        from contextlib import suppress
+        with suppress(asyncio.CancelledError):
+            await app.state.mcp_task
+        await app.state.mcp_conn_context.__aexit__(None, None, None)
 
 
 # =============================================================================
@@ -349,6 +388,94 @@ app.add_middleware(
 
 
 # =============================================================================
+# MCP REMOTE SERVICE MOUNTING (HOSTED ONLY)
+# =============================================================================
+
+from src.platform_engines.settings import get_settings
+if get_settings().hosted:
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+    from starlette.middleware import Middleware
+    from starlette.middleware.cors import CORSMiddleware
+    from src.platform_engines.mcp_auth import HostedMCPAuthMiddleware, PROTECTED_RESOURCE_PATH
+    from starlette.responses import JSONResponse
+    from fastapi import Request
+
+    async def handle_mcp_asgi(scope, receive, send):
+        parent_app_state = scope["app"].state.parent_app_state
+        transport = parent_app_state.mcp_transport
+        await transport.handle_request(scope, receive, send)
+
+    mcp_subapp = Starlette(
+        debug=False,
+        routes=[
+            # Starlette strips "/mcp" prefix, so the sub-app sees it as "/"
+            Mount("/", app=handle_mcp_asgi)
+        ],
+        middleware=[
+            Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]),
+            Middleware(HostedMCPAuthMiddleware)
+        ]
+    )
+    # Share parent state
+    mcp_subapp.state.parent_app_state = app.state
+
+    def mcp_resource_url_from_request(request: Request) -> str:
+        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+        host = request.headers.get("host", request.url.netloc)
+        return f"{scheme}://{host}/mcp"
+
+    def mcp_resource_url_from_scope(scope) -> str:
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        scheme = headers.get("x-forwarded-proto", scope.get("scheme", "http"))
+        host = headers.get("host")
+        if not host:
+            server = scope.get("server") or ("localhost", 80)
+            host = f"{server[0]}:{server[1]}"
+        return f"{scheme}://{host}/mcp"
+
+    def mcp_protected_resource_response(resource_url: str) -> JSONResponse:
+        from src.platform_engines.mcp_auth import protected_resource_metadata
+        return JSONResponse(protected_resource_metadata(resource_url=resource_url))
+
+    class MCPNoSlashMiddleware:
+        def __init__(self, app, mcp_app):
+            self.app = app
+            self.mcp_app = mcp_app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http" and scope.get("path") == f"/mcp{PROTECTED_RESOURCE_PATH}":
+                response = mcp_protected_resource_response(mcp_resource_url_from_scope(scope))
+                await response(scope, receive, send)
+                return
+
+            if scope["type"] == "http" and scope.get("path") == "/mcp":
+                sub_scope = dict(scope)
+                sub_scope["path"] = "/"
+                root_path = scope.get("root_path", "").rstrip("/")
+                sub_scope["root_path"] = f"{root_path}/mcp" if root_path else "/mcp"
+                await self.mcp_app(sub_scope, receive, send)
+                return
+
+            await self.app(scope, receive, send)
+
+    app.add_middleware(MCPNoSlashMiddleware, mcp_app=mcp_subapp)
+
+    app.mount("/mcp", mcp_subapp)
+
+    @app.get(PROTECTED_RESOURCE_PATH)
+    async def get_mcp_protected_resource_metadata(request: Request):
+        return mcp_protected_resource_response(mcp_resource_url_from_request(request))
+
+    @app.get(f"{PROTECTED_RESOURCE_PATH}/mcp")
+    async def get_mcp_scoped_protected_resource_metadata(request: Request):
+        return mcp_protected_resource_response(mcp_resource_url_from_request(request))
+
+
+# =============================================================================
 # AUTH DEPENDENCIES
 # =============================================================================
 
@@ -371,6 +498,43 @@ def require_signed_in(identity: Identity = Depends(get_identity)) -> Identity:
     except AuthError as e:
         raise HTTPException(status_code=403, detail={"code": e.code, "message": e.message})
     return identity
+
+
+def _auth_error_status(exc: AuthError) -> int:
+    if exc.code in {"auth_unconfigured"}:
+        return 503
+    if exc.code in {"workos_complete_failed"}:
+        return 502
+    if exc.code in {"signin_required"}:
+        return 403
+    return 400
+
+
+@app.post("/api/mcp/oauth/complete")
+async def complete_mcp_oauth(
+    payload: MCPConnectComplete,
+    identity: Identity = Depends(require_signed_in),
+):
+    """Complete WorkOS Standalone Connect after SiliconCrew web sign-in.
+
+    WorkOS redirects the browser to the SiliconCrew frontend Login URI with an
+    ``external_auth_id``. The frontend signs the user in using the existing web
+    AuthKit path, then calls this endpoint with its bearer token. We tell WorkOS
+    which authenticated SiliconCrew user completed the login, and return the
+    WorkOS redirect URI that continues the OAuth flow back to the AI client.
+    """
+    from src.platform_engines.mcp_auth import complete_workos_standalone_connect
+
+    try:
+        return await complete_workos_standalone_connect(
+            payload.external_auth_id,
+            identity,
+        )
+    except AuthError as exc:
+        raise HTTPException(
+            status_code=_auth_error_status(exc),
+            detail={"code": exc.code, "message": exc.message},
+        )
 
 
 def _uid(identity: Identity) -> Optional[str]:

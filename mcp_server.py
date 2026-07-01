@@ -952,6 +952,45 @@ Ready to design! What would you like to create?"""
             else "   No authentication required"
         )
 
+    def get_http_app(self):
+        """Construct the Starlette app for Streamable HTTP transport (without starting uvicorn).
+
+        Returns a tuple: (app, session_transport)
+        """
+        from mcp.server.streamable_http import StreamableHTTPServerTransport
+        from starlette.applications import Starlette
+        from starlette.routing import Mount
+        from starlette.middleware import Middleware
+        from starlette.middleware.cors import CORSMiddleware
+
+        # Create a session-less transport (no auth, stateless)
+        session_transport = StreamableHTTPServerTransport(
+            mcp_session_id=None,  # Stateless mode
+        )
+
+        async def handle_mcp(scope, receive, send):
+            await session_transport.handle_request(scope, receive, send)
+
+        app = Starlette(
+            debug=False,
+            routes=[
+                Mount("/mcp", app=handle_mcp),
+                *self._well_known_routes(),
+            ],
+            middleware=[
+                Middleware(
+                    CORSMiddleware,
+                    allow_origins=["*"],
+                    allow_methods=["*"],
+                    allow_headers=["*"],
+                ),
+                # Hosted-only: per-request WorkOS auth, inside CORS. Empty in
+                # self-host → identical to today's no-auth Streamable HTTP app.
+                *self._hosted_auth_middleware(),
+            ],
+        )
+        return app, session_transport
+
     async def run(self, transport: str = "stdio", host: str = "0.0.0.0", port: int = 8080):
         """Run the MCP server with the specified transport."""
         if transport == "stdio":

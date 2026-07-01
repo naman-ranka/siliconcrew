@@ -220,6 +220,8 @@ export function AuthProvider({
   const tokenRef = useRef<string | null>(null);
   const gisReady = useRef(false);
   const workosClient = useRef<WorkosClient | null>(null);
+  const workosClientReady = useRef<Promise<WorkosClient | null> | null>(null);
+  const workosRecovery = useRef<Promise<void> | null>(null);
 
   // Keep a ref in sync so the token getter seam always reads the latest value.
   const applyToken = useCallback((t: string | null, displayUser?: AuthUser | null) => {
@@ -345,7 +347,7 @@ export function AuthProvider({
       setStatus("signed_in");
     };
 
-    (async () => {
+    workosClientReady.current = (async () => {
       try {
         const { createClient } = await import("@workos-inc/authkit-js");
         const client = (await createClient(resolvedWorkosClientId, {
@@ -355,9 +357,11 @@ export function AuthProvider({
           onRefresh: ({ accessToken, user: u }: { accessToken: string; user: WorkosUser }) => {
             if (!disposed) apply(accessToken, u);
           },
-          onRefreshFailure: () => { if (!disposed) toAnonymous(true); },
+          onRefreshFailure: () => {
+            if (!disposed) toAnonymous(true);
+          },
         })) as unknown as WorkosClient;
-        if (disposed) { client.dispose?.(); return; }
+        if (disposed) { client.dispose?.(); return null; }
         workosClient.current = client;
         // Seed the current session if the user is already signed in.
         try {
@@ -366,9 +370,18 @@ export function AuthProvider({
         } catch {
           toAnonymous(false); // not signed in yet — anonymous, not an error
         }
-      } catch {
+        return client;
+      } catch (err) {
+        try {
+          useStore.getState().pushToast({
+            kind: "error",
+            title: "WorkOS Init Failed",
+            detail: String(err),
+          });
+        } catch { /* store not ready */ }
         // SDK failed to load/init — never crash the app; behave as anonymous.
         if (!disposed) toAnonymous(false);
+        return null;
       }
     })();
 
@@ -378,9 +391,17 @@ export function AuthProvider({
     setOnAuthExpired(() => {
       const c = workosClient.current;
       if (!c) { toAnonymous(true); return; }
-      c.getAccessToken({ forceRefresh: true })
-        .then((t) => apply(t, c.getUser()))
-        .catch(() => toAnonymous(true));
+      if (!workosRecovery.current) {
+        workosRecovery.current = c.getAccessToken()
+          .then((t) => apply(t, c.getUser()))
+          .catch(() => {
+            toAnonymous(true);
+          })
+          .finally(() => {
+            workosRecovery.current = null;
+          });
+      }
+      return workosRecovery.current;
     });
 
     return () => {
@@ -389,6 +410,8 @@ export function AuthProvider({
       setOnAuthExpired(null);
       try { workosClient.current?.dispose?.(); } catch { /* ignore */ }
       workosClient.current = null;
+      workosClientReady.current = null;
+      workosRecovery.current = null;
     };
   }, [mode, resolvedWorkosClientId, resolvedRedirectUri]);
 
@@ -396,13 +419,36 @@ export function AuthProvider({
 
   const signIn = useCallback(() => {
     if (mode === "workos") {
-      workosClient.current?.signIn().catch(() => { /* SDK not ready — retry */ });
+      void (async () => {
+        try {
+          let client = workosClient.current;
+          if (!client && workosClientReady.current) {
+            client = await workosClientReady.current;
+          }
+          if (!client) {
+            const { createClient } = await import("@workos-inc/authkit-js");
+            client = (await createClient(resolvedWorkosClientId, {
+              redirectUri: resolvedRedirectUri,
+            })) as unknown as WorkosClient;
+            workosClient.current = client;
+          }
+          await client.signIn();
+        } catch (err) {
+          try {
+            useStore.getState().pushToast({
+              kind: "error",
+              title: "Sign-in failed",
+              detail: err instanceof Error ? err.message : String(err),
+            });
+          } catch { /* store not ready */ }
+        }
+      })();
       return;
     }
     if (mode === "google") {
       try { window.google?.accounts.id.prompt(); } catch { /* GIS not ready yet */ }
     }
-  }, [mode]);
+  }, [mode, resolvedRedirectUri, resolvedWorkosClientId]);
 
   const signOut = useCallback(() => {
     if (mode === "workos") {

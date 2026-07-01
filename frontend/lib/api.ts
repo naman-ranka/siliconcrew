@@ -15,30 +15,42 @@ import type {
   LintResult,
   PpaDiff,
 } from "@/types";
-import { authHeader, getAuthToken, notifyAuthExpired } from "./authToken";
+import { authHeader, getAuthToken, recoverAuthExpired } from "./authToken";
 
 import { getApiBase, getWsBase } from "@/lib/runtime-config";
 
 const encodeSessionId = (sessionId: string): string => encodeURIComponent(sessionId);
 const encodeFilePath = (filename: string): string => encodeURIComponent(filename);
 
+async function fetchWithAuthRecovery(makeRequest: () => Promise<Response>): Promise<Response> {
+  const sentToken = getAuthToken();
+  let response = await makeRequest();
+  if (response.status !== 401) return response;
+
+  await recoverAuthExpired();
+  const recoveredToken = getAuthToken();
+  if (recoveredToken && recoveredToken !== sentToken) {
+    response = await makeRequest();
+  }
+  return response;
+}
+
 // Generic fetch wrapper with error handling
 async function apiFetch<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
-  const response = await fetch(`${getApiBase()}${endpoint}`, {
+  const response = await fetchWithAuthRecovery(() => fetch(`${getApiBase()}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
       ...authHeader(),
       ...options?.headers,
     },
-  });
+  }));
 
   if (!response.ok) {
     // Expired/invalid token → let the auth layer drop to anonymous + re-prompt.
-    if (response.status === 401) notifyAuthExpired();
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     // Attach the HTTP status so callers can branch on graceful states (e.g. BYOK:
     // 400 self-host, 503 vault-off) without parsing the message string.
@@ -224,11 +236,10 @@ export const workspaceApi = {
 // Workbench action layer — manifest, IDE-first buttons, unified runs.
 // Every endpoint returns the uniform { ok, ... } envelope (api-contract.md).
 async function actionFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${getApiBase()}${endpoint}`, {
+  const response = await fetchWithAuthRecovery(() => fetch(`${getApiBase()}${endpoint}`, {
     ...options,
     headers: { "Content-Type": "application/json", ...authHeader(), ...options?.headers },
-  });
-  if (response.status === 401) notifyAuthExpired();
+  }));
   const body = await response.json().catch(() => null);
   if (!response.ok || (body && body.ok === false)) {
     const err = body?.detail?.error || body?.error || { message: response.statusText };
@@ -254,12 +265,11 @@ export const workbenchApi = {
     for (const f of files) form.append("files", f, f.name);
     // FormData sets its own multipart Content-Type (with boundary) — only add
     // Authorization here, never Content-Type.
-    const response = await fetch(`${getApiBase()}${ws(sessionId)}/files`, {
+    const response = await fetchWithAuthRecovery(() => fetch(`${getApiBase()}${ws(sessionId)}/files`, {
       method: "POST",
       body: form,
       headers: { ...authHeader() },
-    });
-    if (response.status === 401) notifyAuthExpired();
+    }));
     const body = await response.json().catch(() => null);
     if (!response.ok || (body && body.ok === false)) {
       throw new Error(body?.detail?.error?.message || "Upload failed");

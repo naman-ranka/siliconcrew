@@ -217,3 +217,5 @@ deploy/terraform/LICENSE.txt
 # GCP service account keys
 gcp-key.json
 
+# Local agent customizations and skills
+.agents/

@@ -11,7 +11,7 @@
 // sent — behavior stays bit-for-bit identical to today.
 
 let _getToken: () => string | null = () => null;
-let _onAuthExpired: (() => void) | null = null;
+let _onAuthExpired: (() => void | Promise<void>) | null = null;
 
 /** Registered by AuthProvider so the API layer can read the live token. */
 export function setAuthTokenGetter(fn: () => string | null): void {
@@ -24,13 +24,18 @@ export function getAuthToken(): string | null {
 }
 
 /** Registered by AuthProvider; invoked by the API layer on a 401. */
-export function setOnAuthExpired(fn: (() => void) | null): void {
+export function setOnAuthExpired(fn: (() => void | Promise<void>) | null): void {
   _onAuthExpired = fn;
 }
 
 /** Called by the API layer when a request 401s (expired/invalid token). */
 export function notifyAuthExpired(): void {
-  _onAuthExpired?.();
+  void _onAuthExpired?.();
+}
+
+/** Async variant used by fetch wrappers that can retry after token recovery. */
+export async function recoverAuthExpired(): Promise<void> {
+  await _onAuthExpired?.();
 }
 
 /** Authorization header for the current token, or {} when none. Conditional so
