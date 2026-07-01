@@ -224,6 +224,11 @@ resource "google_cloud_run_v2_service" "backend" {
 
   template {
     service_account = google_service_account.backend.email
+    # F7 (warm reads): pin a user's requests to one instance so its already-
+    # hydrated scratch workspace is reused across their calls instead of each
+    # cold-downloading. Pairs with startup_cpu_boost below; set
+    # backend_min_instances=1 to also keep one instance always warm.
+    session_affinity = true
     scaling {
       min_instance_count = var.backend_min_instances
       max_instance_count = var.backend_max_instances

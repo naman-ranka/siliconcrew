@@ -1046,8 +1046,11 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
     # the same workspace/<session_id> directory the session manager uses; in
     # hosted mode it stages the session's object-storage tarball into local
     # scratch and returns that POSIX path. The tools never know the difference.
+    # F7: hydrate the workspace once on WS connect (session open) so the first
+    # artifact read isn't a cold full download — and F6: off the event loop so a
+    # cold hydration doesn't block the accept / other connections.
     _ws_provider = get_workspace_provider()
-    workspace = _ws_provider.workspace_for(session_id)
+    workspace = await asyncio.to_thread(_ws_provider.workspace_for, session_id)
 
     # Bind this connection's task to its session/workspace/identity. Each
     # WebSocket runs in its own asyncio task, so this contextvar is task-local
