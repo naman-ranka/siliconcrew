@@ -247,13 +247,20 @@ def build_actions_router(
             raise HTTPException(status_code=404, detail="Session not found")
         return workspace
 
-    async def run_scoped(session_id: str, workspace: str, fn, *args, _uid=None, _id=None, **kwargs):
+    async def run_scoped(session_id: str, workspace: str, fn, *args, _uid=None, _id=None, mutates: bool = False, **kwargs):
         """Run a sync tool call bound to this request's SessionContext, off-thread.
 
         Binds the tenant (``_uid``) and tier into the task-local SessionContext so
         tenancy + synth quota enforcement see them, copies the contextvar into the
         worker thread (so tools reading ``get_workspace_path()`` resolve this
-        session), and persists the workspace back (cloud) on exit.
+        session), and — **only after a mutating action** (``mutates=True``) —
+        persists the workspace back to object storage (cloud) on exit.
+
+        Reads pass ``mutates=False`` (the default) and therefore never upload.
+        This is the F1 fix: a read-only GET re-tarring+uploading the whole
+        workspace made post-synth "list my runs" take tens of seconds, and a
+        stale read's sync could clobber a concurrent write's object. Self-host
+        passes ``sync_workspace=None``, so the ``finally`` is a no-op regardless.
         """
         ctx = SessionContext(
             session_id=session_id,
@@ -269,7 +276,7 @@ def build_actions_router(
         try:
             return await asyncio.to_thread(runner)
         finally:
-            if sync_workspace is not None:
+            if mutates and sync_workspace is not None:
                 try:
                     sync_workspace(session_id)
                 except Exception:
@@ -289,7 +296,7 @@ def build_actions_router(
         uid = require_owned(session_id, identity)
         workspace = require_workspace(session_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
-        manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id, _uid=uid, _id=identity)
+        manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id, _uid=uid, _id=identity, mutates=True)
         return _ok({"manifest": manifest.model_dump()})
 
     @router.post("/files")
@@ -311,7 +318,9 @@ def build_actions_router(
                 f.write(content)
             saved.append(name)
 
-        manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id, _uid=uid, _id=identity)
+        # Files were written to the workspace above (outside run_scoped), so this
+        # call must persist them → mutates=True even though read_manifest reads.
+        manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id, _uid=uid, _id=identity, mutates=True)
         return _ok({"uploaded": saved, "manifest": manifest.model_dump()})
 
     @router.put("/code/{filename:path}")
@@ -329,7 +338,7 @@ def build_actions_router(
                 return {"error": str(exc)}
             return {"manifest": manifest_mod.read_manifest(workspace, session_id)}
 
-        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error"):
             _err("invalid_path", out["error"], status=400)
         return _ok({"saved": os.path.basename(filename), "manifest": out["manifest"].model_dump()})
@@ -389,7 +398,7 @@ def build_actions_router(
             )
             return {"simRun": sim_run}
 
-        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error") == "no_sim_top":
             _err("no_sim_top", "No simTop in the manifest and none provided.", status=400)
         if out.get("error") == "no_files":
@@ -427,7 +436,7 @@ def build_actions_router(
             )
             return {"result": result}
 
-        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error") == "no_synth_top":
             _err("no_synth_top", "No synthTop in the manifest and none provided.", status=400)
         if out.get("error") == "no_files":
@@ -564,7 +573,7 @@ def build_actions_router(
                 orfs_overrides_json=overrides_json,
             )
 
-        result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if isinstance(result, dict) and result.get("status") == "rejected":
             _err((result.get("error") or {}).get("code", "quota_exceeded"),
                  (result.get("error") or {}).get("message", "Quota exceeded."),
@@ -595,7 +604,7 @@ def build_actions_router(
                 json.dump(meta, f, indent=2)
             return {"run_id": run_id, "pinned": body.pinned}
 
-        result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if not result:
             _err("not_found", f"Run {run_id} not found.", status=404)
         return _ok({"runId": run_id, "pinned": body.pinned})
