@@ -278,8 +278,22 @@ def _allocate_run_dir(workspace: str) -> tuple[str, str]:
 
 
 def _write_json(path: str, data: Dict[str, Any]) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    # Atomic write: serialize to a temp file in the same dir, then os.replace()
+    # (atomic on POSIX). Reads self-heal run_meta.json (reconcile / PPA re-finalize)
+    # and can now run concurrently — hydration + workspace reads moved off the
+    # event loop (F6) — so a plain truncate-then-write would let a concurrent
+    # reader see a half-written / empty JSON. os.replace swaps the whole file in.
+    tmp = f"{path}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 def _read_json(path: str) -> Dict[str, Any]:

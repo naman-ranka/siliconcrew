@@ -82,6 +82,9 @@ def test_workbench_snapshot_hydrates_once_no_sync(tmp_path):
         f.write(DUT)
     with open(os.path.join(ws, "design_spec.yaml"), "w") as f:
         f.write("top: counter\n")
+    # A loose report so the snapshot's report payload is exercised (shape check).
+    with open(os.path.join(ws, "counter_report.md"), "w") as f:
+        f.write("# report\n")
 
     r = c.get(f"/api/workspace/{SID}/workbench")
     assert r.status_code == 200, r.text
@@ -95,7 +98,9 @@ def test_workbench_snapshot_hydrates_once_no_sync(tmp_path):
     assert any(f["name"] == "counter.v" and f["type"] == "verilog" for f in body["files"])
     assert body["spec"] and body["spec"]["filename"] == "design_spec.yaml"
     assert any(cf["filename"] == "counter.v" for cf in body["code"])
-    assert "report" in body  # None here (no synth run), key present
+    # Report payload must use run_id (frontend ReportData), NOT runId.
+    assert body["report"] and "run_id" in body["report"] and "runId" not in body["report"]
+    assert body["report"]["filename"] == "counter_report.md"
 
 
 def test_self_host_no_sync_configured_is_unchanged(tmp_path):

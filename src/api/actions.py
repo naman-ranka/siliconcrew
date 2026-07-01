@@ -305,7 +305,9 @@ def _snapshot_report(workspace: str) -> Optional[Dict[str, Any]]:
         return None
     with open(report_path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
-    return {"filename": os.path.basename(report_path), "content": content, "runId": run_id}
+    # Field name must match the frontend ReportData shape (run_id), same as the
+    # /report endpoint's ReportResponse — NOT runId.
+    return {"filename": os.path.basename(report_path), "content": content, "run_id": run_id}
 
 
 def build_actions_router(
