@@ -1749,6 +1749,42 @@ def get_run_dir(workspace: str, run_id: Optional[str]) -> Optional[str]:
     return path if os.path.exists(path) else None
 
 
+# A run whose persisted status is one of these is done; anything else
+# (running / queued / unknown) is non-terminal and eligible for reconciliation.
+_TERMINAL_SYNTH_STATES = {"completed", "failed"}
+
+
+def _reconcile_stale_status(run_dir: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Adopt on-disk finish-stage PPA as the source of truth for a run stuck at a
+    non-terminal status.
+
+    On serverless (Cloud Run) the worker that writes the terminal status can be
+    killed once the HTTP response returns (instance scale-down), leaving
+    run_meta at "running" even though ORFS finished and its artifacts synced to
+    object storage. ``_compute_summary_metrics`` parses the *finish-stage*
+    reports (6_finish.rpt / synth_stat.txt) — if area/cells are parseable, the
+    run demonstrably reached finish, so we adopt "completed" on read.
+
+    Fail-safe: if no finish metrics are parseable, the status is left untouched
+    (never worse than today). Mutates and returns ``meta``; persists only when it
+    actually reconciles.
+    """
+    if meta.get("status") in _TERMINAL_SYNTH_STATES:
+        return meta
+    recomputed = _compute_summary_metrics(run_dir, meta)
+    if recomputed.get("area_um2") is None and recomputed.get("cell_count") is None:
+        return meta  # not demonstrably finished — leave as-is
+    meta["status"] = "completed"
+    meta["summary_metrics"] = recomputed
+    if not meta.get("finished_at"):
+        meta["finished_at"] = _now_iso()
+    try:
+        _persist_run_meta(run_dir, meta)
+    except Exception:
+        pass
+    return meta
+
+
 def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
     index = _load_index(workspace)
     items: List[Dict[str, Any]] = []
@@ -1768,6 +1804,10 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
             continue
 
         meta = _read_run_meta(run_dir)
+        # Reconcile a status stuck non-terminal (e.g. a Cloud Run worker killed
+        # after the response returned) using on-disk finish artifacts, so a
+        # finished run doesn't read as "running" forever.
+        meta = _reconcile_stale_status(run_dir, meta)
         # Self-heal: re-finalize PPA for completed runs whose stored
         # summary_metrics predate the shared finalizer (missing cell_count or the
         # derived fmax_mhz). This repairs historical runs on read without a
