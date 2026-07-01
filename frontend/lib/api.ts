@@ -301,6 +301,20 @@ export const workbenchApi = {
   listRuns: (sessionId: string, kind: "all" | "sim" | "synth" = "all") =>
     actionFetch<{ ok: true; runs: RunSummary[] }>(`${ws(sessionId)}/runs?kind=${kind}`).then((r) => r.runs),
 
+  // F4: one hydration returning the whole workbench (manifest+runs+files+spec+
+  // code+report), replacing the ~18-call fan-out on initial load.
+  getWorkbench: (sessionId: string) =>
+    actionFetch<{
+      ok: true;
+      manifest: DesignManifest;
+      runs: RunSummary[];
+      files: FileInfo[];
+      spec: SpecData | null;
+      code: CodeFile[];
+      report: ReportData | null;
+      synthesisRuns: SynthesisRun[];
+    }>(`${ws(sessionId)}/workbench`),
+
   getRun: (sessionId: string, runId: string) =>
     actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/runs/${encodeURIComponent(runId)}`).then((r) => r.run),
 

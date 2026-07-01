@@ -60,6 +60,44 @@ def test_reads_do_not_sync_writes_do(tmp_path):
     assert synced == [SID, SID, SID]
 
 
+def test_workbench_snapshot_hydrates_once_no_sync(tmp_path):
+    """F4: the snapshot resolves the workspace ONCE (not ~18×), never syncs, and
+    returns manifest+runs+files+spec+code+report in one response."""
+    base = str(tmp_path)
+    resolves: list[str] = []
+    synced: list[str] = []
+
+    def resolve(session_id: str) -> str:
+        resolves.append(session_id)
+        ws = os.path.join(base, session_id)
+        os.makedirs(ws, exist_ok=True)
+        return ws
+
+    app = FastAPI()
+    app.include_router(build_actions_router(resolve, sync_workspace=lambda sid: synced.append(sid)))
+    c = TestClient(app)
+    ws = os.path.join(base, SID)
+    os.makedirs(ws, exist_ok=True)
+    with open(os.path.join(ws, "counter.v"), "w") as f:
+        f.write(DUT)
+    with open(os.path.join(ws, "design_spec.yaml"), "w") as f:
+        f.write("top: counter\n")
+
+    r = c.get(f"/api/workspace/{SID}/workbench")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    # One hydration for the whole snapshot (the fan-out was ~18).
+    assert resolves.count(SID) == 1, resolves
+    assert synced == [], "snapshot (a read) must not upload"
+    # Combined payload with the expected shapes.
+    assert "manifest" in body and "runs" in body
+    assert any(f["name"] == "counter.v" and f["type"] == "verilog" for f in body["files"])
+    assert body["spec"] and body["spec"]["filename"] == "design_spec.yaml"
+    assert any(cf["filename"] == "counter.v" for cf in body["code"])
+    assert "report" in body  # None here (no synth run), key present
+
+
 def test_self_host_no_sync_configured_is_unchanged(tmp_path):
     """Self-host wires sync_workspace=None: mutating endpoints still work and the
     finally is a no-op (no crash, behavior identical to before)."""

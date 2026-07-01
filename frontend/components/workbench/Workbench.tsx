@@ -83,12 +83,14 @@ export function Workbench() {
         await loadSessions();
         list = useStore.getState().sessions;
       }
-      let cur = useStore.getState().currentSession;
-      if (!cur && list.length > 0) {
+      const cur = useStore.getState().currentSession;
+      if (cur) {
+        // Already selected (remount) → load its workbench once.
+        await loadWorkbench();
+      } else if (list.length > 0) {
+        // selectSession loads the workbench itself — F4: no second refresh.
         await selectSession(list[0]);
-        cur = useStore.getState().currentSession;
       }
-      if (cur) await loadWorkbench();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus]);

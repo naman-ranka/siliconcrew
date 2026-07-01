@@ -27,6 +27,41 @@ import type {
 import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi } from "./api";
 import { generateId } from "./utils";
 
+// F4/F5: store-level single-flight for the workspace hydrate + workbench load,
+// keyed by session id. Every trigger — mount, selectSession, chat-complete,
+// upload, the active-run poll, manual refresh — shares one in-flight promise, so
+// the heavy hydration runs ONCE even when several fire together (the double-open
+// and the two polling loops overlapping during a synth). Cleared on settle.
+const _inflight = new Map<string, Promise<unknown>>();
+function singleFlight<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = _inflight.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+  const p = fn().finally(() => {
+    if (_inflight.get(key) === p) _inflight.delete(key);
+  });
+  _inflight.set(key, p);
+  return p;
+}
+
+// Which artifact tab a file type maps to (initial-load tab selection).
+const _fileTypeToTab: Record<string, ArtifactTab | undefined> = {
+  spec: "spec",
+  verilog: "code",
+  waveform: "waveform",
+  schematic: "schematic",
+  report: "report",
+};
+function newestArtifactTab(files: FileInfo[]): ArtifactTab | null {
+  let best: { tab: ArtifactTab; ts: number } | null = null;
+  for (const f of files) {
+    const tab = _fileTypeToTab[f.type];
+    if (!tab) continue;
+    const ts = f.modified ? new Date(f.modified).getTime() : 0;
+    if (!best || ts > best.ts) best = { tab, ts };
+  }
+  return best?.tab ?? null;
+}
+
 interface AppState {
   // Project state
   projects: Project[];
@@ -403,10 +438,13 @@ export const useStore = create<AppState>((set, get) => ({
     });
 
     if (session) {
-      // Threads first (sets activeThreadId), then that thread's history, then files.
+      // Threads first (sets activeThreadId), then that thread's history, then the
+      // workbench (manifest + runs + workspace) in ONE snapshot hydration. This
+      // is the single load on open — callers no longer follow with loadWorkbench
+      // (F4: was a double refresh).
       await get().loadThreads();
       await get().loadChatHistory();
-      await get().refreshWorkspace();
+      await get().loadWorkbench();
     }
   },
 
@@ -799,6 +837,7 @@ export const useStore = create<AppState>((set, get) => ({
   refreshWorkspace: async () => {
     const { currentSession } = get();
     if (!currentSession) return;
+    return singleFlight(`refresh:${currentSession.id}`, async () => {
 
     const parseModified = (modified?: string) => (modified ? new Date(modified).getTime() : 0);
 
@@ -932,6 +971,7 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (error) {
       console.error("Failed to refresh workspace:", error);
     }
+    });
   },
 
   loadSpec: async () => {
@@ -1070,7 +1110,59 @@ export const useStore = create<AppState>((set, get) => ({
   // ====================== Workbench actions ======================
 
   loadWorkbench: async () => {
-    await Promise.all([get().loadManifest(), get().loadRuns(), get().refreshWorkspace()]);
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    // F4: single-flight + a ONE-hydration snapshot instead of the ~18-call
+    // fan-out. Falls back to the granular loaders if the snapshot is
+    // unavailable (older backend) or errors — behavior stays correct.
+    return singleFlight(`workbench:${sid}`, async () => {
+      try {
+        const snap = await workbenchApi.getWorkbench(sid);
+        if (get().currentSession?.id !== sid) return; // switched away mid-flight
+        const files = snap.files ?? [];
+        const runs = snap.runs ?? [];
+        const synthesisRuns = snap.synthesisRuns ?? [];
+        set((state) => ({
+          manifest: snap.manifest ?? null,
+          manifestLoading: false,
+          runs,
+          runsLoading: false,
+          selectedRunId:
+            runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
+          files,
+          spec: snap.spec ?? null,
+          codeFiles: snap.code ?? [],
+          selectedCodeFile:
+            snap.code?.find((f) => f.filename === state.selectedCodeFile)?.filename ??
+            snap.code?.[0]?.filename ??
+            null,
+          report: snap.report ?? null,
+          synthesisRuns,
+          selectedSynthesisRunId:
+            synthesisRuns.find((r) => r.run_id === state.selectedSynthesisRunId)?.run_id ??
+            synthesisRuns[0]?.run_id ??
+            null,
+          // Derive the artifact file-lists from the single files listing.
+          waveformFiles: files.filter((f) => f.type === "waveform").map((f) => f.name),
+          layoutFiles: files.filter((f) => f.type === "layout").map((f) => f.name),
+          schematicFiles: files.filter((f) => f.type === "schematic").map((f) => f.name),
+        }));
+        // Reveal the artifacts panel on the newest artifact (initial-load UX).
+        const hasContent =
+          !!snap.spec || (snap.code?.length ?? 0) > 0 || !!snap.report || files.length > 0;
+        if (hasContent) {
+          const tab = newestArtifactTab(files);
+          set((s) => ({
+            artifactsVisible: true,
+            activeArtifactTab: tab ?? s.activeArtifactTab,
+          }));
+        }
+      } catch {
+        // Snapshot unavailable → the original granular fan-out (still correct).
+        await Promise.all([get().loadManifest(), get().loadRuns(), get().refreshWorkspace()]);
+      }
+    });
   },
 
   loadManifest: async () => {
