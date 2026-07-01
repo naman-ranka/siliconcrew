@@ -3,6 +3,7 @@ import {
   getApiBase,
   getWsBase,
   getGoogleClientId,
+  getWorkosUseLocalStorageRefresh,
   getRuntimeEnv,
   readServerEnv,
 } from "@/lib/runtime-config";
@@ -18,10 +19,12 @@ describe("runtime-config (client)", () => {
       apiUrl: "https://api.example.run.app",
       wsUrl: "wss://api.example.run.app",
       googleClientId: "cid.apps.googleusercontent.com",
+      workosUseLocalStorageRefresh: true,
     };
     expect(getApiBase()).toBe("https://api.example.run.app");
     expect(getWsBase()).toBe("wss://api.example.run.app");
     expect(getGoogleClientId()).toBe("cid.apps.googleusercontent.com");
+    expect(getWorkosUseLocalStorageRefresh()).toBe(true);
   });
 
   it("falls back to local dev defaults when nothing is injected", () => {
@@ -31,6 +34,7 @@ describe("runtime-config (client)", () => {
       googleClientId: "",
       workosClientId: "",
       workosRedirectUri: "",
+      workosUseLocalStorageRefresh: false,
     });
   });
 });
@@ -46,6 +50,7 @@ describe("runtime-config (server)", () => {
       googleClientId: "cid.apps.googleusercontent.com",
       workosClientId: "",
       workosRedirectUri: "",
+      workosUseLocalStorageRefresh: false,
     });
   });
 
@@ -72,6 +77,7 @@ describe("runtime-config (server)", () => {
       googleClientId: "",
       workosClientId: "",
       workosRedirectUri: "",
+      workosUseLocalStorageRefresh: false,
     });
   });
 
@@ -81,5 +87,10 @@ describe("runtime-config (server)", () => {
     const env = readServerEnv();
     expect(env.workosClientId).toBe("client_01HX");
     expect(env.workosRedirectUri).toBe("https://app.example.run.app/");
+  });
+
+  it("reads WORKOS_USE_LOCAL_STORAGE_REFRESH at request time", () => {
+    vi.stubEnv("WORKOS_USE_LOCAL_STORAGE_REFRESH", "true");
+    expect(readServerEnv().workosUseLocalStorageRefresh).toBe(true);
   });
 });

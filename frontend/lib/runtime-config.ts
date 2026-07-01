@@ -16,6 +16,7 @@ export type RuntimeEnv = {
   // keeps today's Google-direct sign-in (or no auth at all in self-host).
   workosClientId: string;
   workosRedirectUri: string;
+  workosUseLocalStorageRefresh: boolean;
 };
 
 declare global {
@@ -36,11 +37,17 @@ const DEV_DEFAULT: RuntimeEnv = {
   googleClientId: "",
   workosClientId: "",
   workosRedirectUri: "",
+  workosUseLocalStorageRefresh: false,
 };
 
 // Derive the ws(s):// origin from an http(s):// origin when WS_URL is unset.
 function deriveWsUrl(apiUrl: string): string {
   return apiUrl.replace(/^http/, "ws");
+}
+
+function envFlag(name: string, fallbackName?: string): boolean {
+  const raw = process.env[name] || (fallbackName ? process.env[fallbackName] : "");
+  return ["1", "true", "yes", "on"].includes((raw || "").trim().toLowerCase());
 }
 
 // Server-side: read runtime env (NOT NEXT_PUBLIC_, so it is read at request
@@ -56,7 +63,18 @@ export function readServerEnv(): RuntimeEnv {
     process.env.WORKOS_CLIENT_ID || process.env.NEXT_PUBLIC_WORKOS_CLIENT_ID || "";
   const workosRedirectUri =
     process.env.WORKOS_REDIRECT_URI || process.env.NEXT_PUBLIC_WORKOS_REDIRECT_URI || "";
-  return { apiUrl, wsUrl, googleClientId, workosClientId, workosRedirectUri };
+  const workosUseLocalStorageRefresh = envFlag(
+    "WORKOS_USE_LOCAL_STORAGE_REFRESH",
+    "NEXT_PUBLIC_WORKOS_USE_LOCAL_STORAGE_REFRESH"
+  );
+  return {
+    apiUrl,
+    wsUrl,
+    googleClientId,
+    workosClientId,
+    workosRedirectUri,
+    workosUseLocalStorageRefresh,
+  };
 }
 
 // Client-side: read the env injected by the layout. Falls back to the dev
@@ -75,3 +93,5 @@ export const getWsBase = (): string => getRuntimeEnv().wsUrl;
 export const getGoogleClientId = (): string => getRuntimeEnv().googleClientId ?? "";
 export const getWorkosClientId = (): string => getRuntimeEnv().workosClientId ?? "";
 export const getWorkosRedirectUri = (): string => getRuntimeEnv().workosRedirectUri ?? "";
+export const getWorkosUseLocalStorageRefresh = (): boolean =>
+  Boolean(getRuntimeEnv().workosUseLocalStorageRefresh);

@@ -12,20 +12,16 @@ import { notifyAuthExpired, authHeader } from "@/lib/authToken";
 
 // Mock the WorkOS AuthKit SDK (dynamically imported by the WorkOS path). The
 // Google-path tests never trigger the dynamic import, so this is inert for them.
-const workosSignOut = vi.fn();
+const workosMocks = vi.hoisted(() => ({
+  createClient: vi.fn(),
+  getAccessToken: vi.fn(),
+  getUser: vi.fn(),
+  signIn: vi.fn(),
+  signOut: vi.fn(),
+  dispose: vi.fn(),
+}));
 vi.mock("@workos-inc/authkit-js", () => ({
-  createClient: vi.fn(async () => ({
-    getAccessToken: vi.fn(async () => "workos-access-token"),
-    getUser: () => ({
-      email: "w@x.io",
-      firstName: "Wanda",
-      lastName: "OS",
-      profilePictureUrl: "pic",
-    }),
-    signIn: vi.fn(async () => {}),
-    signOut: workosSignOut,
-    dispose: vi.fn(),
-  })),
+  createClient: workosMocks.createClient,
 }));
 
 const STORAGE_KEY = "sc-auth-token";
@@ -57,7 +53,31 @@ function Probe() {
 beforeEach(() => {
   vi.unstubAllEnvs();
   sessionStorage.clear();
+  localStorage.clear();
+  document.cookie = "workos-has-session=; Max-Age=0; path=/";
   document.querySelectorAll('script[src*="gsi/client"]').forEach((s) => s.remove());
+  workosMocks.createClient.mockReset();
+  workosMocks.getAccessToken.mockReset();
+  workosMocks.getUser.mockReset();
+  workosMocks.signIn.mockReset();
+  workosMocks.signOut.mockReset();
+  workosMocks.dispose.mockReset();
+  workosMocks.getAccessToken.mockResolvedValue("workos-access-token");
+  workosMocks.getUser.mockReturnValue({
+    email: "w@x.io",
+    firstName: "Wanda",
+    lastName: "OS",
+    profilePictureUrl: "pic",
+  });
+  workosMocks.signIn.mockResolvedValue(undefined);
+  workosMocks.signOut.mockResolvedValue(undefined);
+  workosMocks.createClient.mockResolvedValue({
+    getAccessToken: workosMocks.getAccessToken,
+    getUser: workosMocks.getUser,
+    signIn: workosMocks.signIn,
+    signOut: workosMocks.signOut,
+    dispose: workosMocks.dispose,
+  });
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -171,5 +191,71 @@ describe("WorkOS AuthKit path", () => {
     );
     await waitFor(() => expect(screen.getByTestId("token").textContent).toBe("workos-access-token"));
     expect(document.querySelector('script[src*="gsi/client"]')).toBeNull();
+  });
+
+  it("passes the local-storage refresh toggle through to AuthKit", async () => {
+    (window as any).__SC_ENV__ = {
+      apiUrl: "https://api.example",
+      wsUrl: "wss://api.example",
+      googleClientId: "",
+      workosClientId: "client_01HX",
+      workosRedirectUri: "https://app.example/",
+      workosUseLocalStorageRefresh: true,
+    };
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>
+    );
+
+    await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("signed_in"));
+    expect(workosMocks.createClient).toHaveBeenCalledWith(
+      "client_01HX",
+      expect.objectContaining({
+        redirectUri: "https://app.example/",
+        devMode: true,
+      })
+    );
+  });
+
+  it("clears stale WorkOS browser session hints when bootstrap refresh fails", async () => {
+    sessionStorage.setItem("workos:code-verifier", "stale-code-verifier");
+    sessionStorage.setItem("workos-org-id:client_01HX", "org_123");
+    localStorage.setItem("workos:refresh-token:client_01HX", "stale-refresh");
+    document.cookie = "workos-has-session=client_01HX; path=/";
+    workosMocks.getAccessToken.mockRejectedValueOnce(new Error("No access token available"));
+
+    render(
+      <AuthProvider workosClientId="client_01HX" workosRedirectUri="https://app.example/">
+        <Probe />
+      </AuthProvider>
+    );
+
+    await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("anonymous"));
+    expect(screen.getByTestId("token").textContent).toBe("none");
+    expect(sessionStorage.getItem("workos:code-verifier")).toBeNull();
+    expect(sessionStorage.getItem("workos-org-id:client_01HX")).toBeNull();
+    expect(localStorage.getItem("workos:refresh-token:client_01HX")).toBeNull();
+    expect(document.cookie).not.toContain("workos-has-session");
+    expect(workosMocks.signOut).toHaveBeenCalledWith({ navigate: false });
+  });
+
+  it("forces WorkOS refresh on 401 recovery and clears session hints if refresh fails", async () => {
+    render(
+      <AuthProvider workosClientId="client_01HX" workosRedirectUri="https://app.example/">
+        <Probe />
+      </AuthProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("signed_in"));
+
+    workosMocks.getAccessToken.mockRejectedValueOnce(new Error("refresh failed"));
+    await act(async () => {
+      notifyAuthExpired();
+    });
+
+    await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("anonymous"));
+    expect(workosMocks.getAccessToken).toHaveBeenLastCalledWith({ forceRefresh: true });
+    expect(workosMocks.signOut).toHaveBeenCalledWith({ navigate: false });
   });
 });

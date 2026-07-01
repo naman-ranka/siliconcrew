@@ -35,11 +35,16 @@ import {
   getGoogleClientId,
   getWorkosClientId,
   getWorkosRedirectUri,
+  getWorkosUseLocalStorageRefresh,
 } from "./runtime-config";
 import { useStore } from "./store";
 
 const GIS_SRC = "https://accounts.google.com/gsi/client";
 const STORAGE_KEY = "sc-auth-token";
+const WORKOS_HAS_SESSION_COOKIE = "workos-has-session";
+const WORKOS_CODE_VERIFIER_KEY = "workos:code-verifier";
+const WORKOS_REFRESH_TOKEN_KEY = "workos:refresh-token";
+const WORKOS_LEGACY_ORG_ID_KEY = "workos_organization_id";
 
 export type AuthUser = { email: string | null; name?: string; picture?: string };
 export type AuthStatus = "loading" | "anonymous" | "signed_in";
@@ -164,6 +169,61 @@ function userFromWorkos(u: WorkosUser | null): AuthUser | null {
   return { email: u.email ?? null, name, picture: u.profilePictureUrl ?? undefined };
 }
 
+function workosOrgIdKey(clientId: string): string {
+  return `workos-org-id:${clientId}`;
+}
+
+function workosRefreshTokenKey(clientId: string): string {
+  return `${WORKOS_REFRESH_TOKEN_KEY}:${clientId}`;
+}
+
+function expireCookie(name: string): void {
+  if (typeof document === "undefined") return;
+  const expires = "expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  const maxAge = "Max-Age=0";
+  const base = `${encodeURIComponent(name)}=; ${expires}; ${maxAge}; path=/`;
+  try {
+    document.cookie = base;
+    const host = window.location.hostname;
+    if (!host || host === "localhost" || /^[\d.]+$/.test(host)) return;
+    const parts = host.split(".");
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const domain = parts.slice(i).join(".");
+      document.cookie = `${base}; domain=${domain}`;
+      document.cookie = `${base}; domain=.${domain}`;
+    }
+  } catch {
+    /* ignore cookie cleanup failures */
+  }
+}
+
+function clearWorkosBrowserSessionHints(clientId: string): void {
+  if (typeof window === "undefined") return;
+  expireCookie(WORKOS_HAS_SESSION_COOKIE);
+  const keys = [
+    WORKOS_CODE_VERIFIER_KEY,
+    WORKOS_REFRESH_TOKEN_KEY,
+    workosRefreshTokenKey(clientId),
+    WORKOS_LEGACY_ORG_ID_KEY,
+    workosOrgIdKey(clientId),
+  ];
+  for (const storage of [window.sessionStorage, window.localStorage]) {
+    for (const key of keys) {
+      try { storage.removeItem(key); } catch { /* ignore */ }
+    }
+  }
+}
+
+async function clearWorkosSession(client: WorkosClient | null, clientId: string): Promise<void> {
+  clearWorkosBrowserSessionHints(clientId);
+  if (!client) return;
+  try {
+    await Promise.resolve(client.signOut({ navigate: false }));
+  } catch {
+    /* No active SDK access token is common after a failed refresh. */
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Context
 // ---------------------------------------------------------------------------
@@ -205,6 +265,7 @@ export function AuthProvider({
   const resolvedRedirectUri =
     (workosRedirectUriProp ?? getWorkosRedirectUri() ?? "").trim() ||
     (typeof window !== "undefined" ? window.location.origin + "/" : "");
+  const resolvedWorkosUseLocalStorageRefresh = getWorkosUseLocalStorageRefresh();
 
   // WorkOS wins when both are configured (the unified path).
   const mode: AuthMode = resolvedWorkosClientId
@@ -352,12 +413,14 @@ export function AuthProvider({
         const { createClient } = await import("@workos-inc/authkit-js");
         const client = (await createClient(resolvedWorkosClientId, {
           redirectUri: resolvedRedirectUri,
+          devMode: resolvedWorkosUseLocalStorageRefresh,
           // The SDK refreshes proactively; mirror the new token into our ref so
           // the (sync) token getter seam always returns a fresh bearer.
           onRefresh: ({ accessToken, user: u }: { accessToken: string; user: WorkosUser }) => {
             if (!disposed) apply(accessToken, u);
           },
           onRefreshFailure: () => {
+            void clearWorkosSession(workosClient.current, resolvedWorkosClientId);
             if (!disposed) toAnonymous(true);
           },
         })) as unknown as WorkosClient;
@@ -368,6 +431,7 @@ export function AuthProvider({
           const accessToken = await client.getAccessToken();
           apply(accessToken, client.getUser());
         } catch {
+          await clearWorkosSession(client, resolvedWorkosClientId);
           toAnonymous(false); // not signed in yet — anonymous, not an error
         }
         return client;
@@ -392,10 +456,11 @@ export function AuthProvider({
       const c = workosClient.current;
       if (!c) { toAnonymous(true); return; }
       if (!workosRecovery.current) {
-        workosRecovery.current = c.getAccessToken()
+        workosRecovery.current = c.getAccessToken({ forceRefresh: true })
           .then((t) => apply(t, c.getUser()))
-          .catch(() => {
-            toAnonymous(true);
+          .catch(async () => {
+            await clearWorkosSession(c, resolvedWorkosClientId);
+            if (!disposed) toAnonymous(true);
           })
           .finally(() => {
             workosRecovery.current = null;
@@ -413,7 +478,12 @@ export function AuthProvider({
       workosClientReady.current = null;
       workosRecovery.current = null;
     };
-  }, [mode, resolvedWorkosClientId, resolvedRedirectUri]);
+  }, [
+    mode,
+    resolvedWorkosClientId,
+    resolvedRedirectUri,
+    resolvedWorkosUseLocalStorageRefresh,
+  ]);
 
   // --- dispatch -------------------------------------------------------------
 
@@ -429,6 +499,7 @@ export function AuthProvider({
             const { createClient } = await import("@workos-inc/authkit-js");
             client = (await createClient(resolvedWorkosClientId, {
               redirectUri: resolvedRedirectUri,
+              devMode: resolvedWorkosUseLocalStorageRefresh,
             })) as unknown as WorkosClient;
             workosClient.current = client;
           }
@@ -448,7 +519,12 @@ export function AuthProvider({
     if (mode === "google") {
       try { window.google?.accounts.id.prompt(); } catch { /* GIS not ready yet */ }
     }
-  }, [mode, resolvedRedirectUri, resolvedWorkosClientId]);
+  }, [
+    mode,
+    resolvedRedirectUri,
+    resolvedWorkosClientId,
+    resolvedWorkosUseLocalStorageRefresh,
+  ]);
 
   const signOut = useCallback(() => {
     if (mode === "workos") {
@@ -457,11 +533,11 @@ export function AuthProvider({
       setUser(null);
       setStatus("anonymous");
       // navigate:false → clear the WorkOS session without a full-page redirect.
-      try { workosClient.current?.signOut({ navigate: false }); } catch { /* ignore */ }
+      void clearWorkosSession(workosClient.current, resolvedWorkosClientId);
       return;
     }
     signOutGoogle();
-  }, [mode, signOutGoogle]);
+  }, [mode, resolvedWorkosClientId, signOutGoogle]);
 
   const value: AuthState = { enabled, status, user, token, signIn, signOut };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
