@@ -496,6 +496,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     set({ isStreaming: true, streamingMessage, chatError: null, chatErrorCode: null });
 
+    let terminalReceived = false;
     const socket = ws;
     socket.onmessage = (event) => {
       if (get().ws !== socket) return;
@@ -556,7 +557,11 @@ export const useStore = create<AppState>((set, get) => ({
           break;
         }
 
+        case "ping":
+          break; // server keepalive during long tool jobs; no UI effect
+
         case "done":
+          terminalReceived = true;
           const { streamingMessage: finalMsg, messages: finalMessages } = get();
           if (finalMsg) {
             set({
@@ -571,30 +576,62 @@ export const useStore = create<AppState>((set, get) => ({
           get().loadThreads();
           break;
 
-        case "error":
+        case "error": {
+          terminalReceived = true;
+          // Keep whatever streamed so far instead of discarding the trace.
+          const { streamingMessage: em, messages: emsgs } = get();
+          const keep = em && ((em.blocks?.length ?? 0) > 0 || em.content);
           set({
+            messages: keep ? [...emsgs, em!] : emsgs,
             chatError: data.error,
             chatErrorCode: data.code ?? null,
             isStreaming: false,
             streamingMessage: null,
           });
           break;
+        }
       }
     };
 
-    socket.onerror = () => {
+    // A socket that closes/errors WITHOUT a done/error frame is an unexpected drop
+    // (e.g. an idle/proxy timeout during a long tool job). Recover instead of
+    // leaving the UI stuck "streaming": preserve the partial trace, re-enable
+    // input, surface the state, and refetch persisted history — the agent can keep
+    // running server-side (Cloud Run), so the completed result often lands there.
+    // Guarded so error+close only handle the drop once.
+    const finalizeDrop = () => {
       if (get().ws !== socket) return;
+      if (terminalReceived) {
+        set({ ws: null, wsSessionId: null, wsThreadId: null });
+        return;
+      }
+      terminalReceived = true;
+      const { streamingMessage: dm, messages: dmsgs } = get();
+      const keep = dm && ((dm.blocks?.length ?? 0) > 0 || dm.content);
       set({
-        chatError: "WebSocket connection error",
-        isStreaming: false,
+        messages: keep ? [...dmsgs, dm!] : dmsgs,
         streamingMessage: null,
+        isStreaming: false,
+        ws: null,
+        wsSessionId: null,
+        wsThreadId: null,
+        chatError: "Connection lost — fetching the latest result from the server…",
+        chatErrorCode: "ws_dropped",
       });
+      // Pragmatic resume: refetch persisted history (with a couple of backoff
+      // retries) to pick up a run the server finished after the socket dropped.
+      let attempt = 0;
+      const poll = () => {
+        attempt += 1;
+        void get().loadChatHistory().finally(() => {
+          if (attempt < 3) setTimeout(poll, attempt * 2000);
+        });
+      };
+      setTimeout(poll, 1500);
     };
 
-    socket.onclose = () => {
-      if (get().ws !== socket) return;
-      set({ ws: null, wsSessionId: null, wsThreadId: null });
-    };
+    socket.onerror = finalizeDrop;
+    socket.onclose = finalizeDrop;
   },
 
   stopStreaming: () => {
