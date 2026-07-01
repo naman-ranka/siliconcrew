@@ -12,12 +12,18 @@ is unchanged (no sync, no GCS) and covered by tests.
 | **F4** open fan-out | `refreshWorkspace()` fired **twice** on open (selectSession + mount) × ~18 calls, **each a separate GCS download** → ~10.1s | one **snapshot** `GET /workbench` hydrates **once** and returns manifest+runs+files+spec+code+report; store **single-flight** dedups every trigger; the double load is removed. Verified: snapshot resolves the workspace once (not ~18×), one load per open, concurrent callers share one fetch |
 | **F5** synth polling | **two** loops each re-pulled/uploaded the workspace every few seconds → sustained "minutes" | `loadRuns`/`loadWorkbench`/`refreshWorkspace` single-flight → overlapping polls share one fetch; with F1 they no longer upload. Verified: two concurrent `loadRuns` share one call |
 | **F7** cold start | first read after an instance spins up paid a full cold download on the loop | workspace prewarmed **once on WS connect** (off-thread); Cloud Run `session_affinity=true` (+ existing `startup_cpu_boost`; `backend_min_instances=1` to keep one warm) |
+| **F2** concurrent hydration | F6 made the WS-connect + snapshot hydrations of one session run in parallel → two `extractall()` into the live scratch dir → torn/partial reads | per-session lock + **temp-dir → atomic swap** in `CloudWorkspaceProvider`: an in-progress untar is never visible; concurrent openers can't tear each other |
+| **F3** redundant re-download | `workspace_for` re-downloaded+re-untarred unconditionally (prewarm scratch thrown away by the next read) | **generation-skip**: reuse scratch when it already reflects the object's GCS generation (sibling marker). The second open-time hydration is a cache hit → one untar, and the F7 prewarm is actually reused |
 
-Out of scope (follow-ups, per the brief): **F3** (skip re-download when the
-object generation is unchanged — removes the remaining per-read download) and
-**F8** (per-artifact object keys instead of one tarball — retires this class of
-problem). **F2** (explicit per-session lock) is subsumed by the frontend
-single-flight + F1.
+**Why F2/F3 became mandatory (review follow-up):** F6 turned the two same-session
+open hydrations from accidentally-serialized (on the loop) into genuinely
+parallel (threads), making the concurrent-`extractall` race reachable on *every*
+open; and F7's prewarm was a near-no-op (and mildly harmful — a second concurrent
+untar) until F3 let the snapshot reuse the warmed scratch. F2 (lock + temp-swap)
++ F3 (generation-skip) fix both: one untar per open, never torn, prewarm reused.
+
+Still out of scope (follow-up): **F8** (per-artifact object keys instead of one
+tarball — retires this whole class of problem).
 
 ## Live (hosted) capture — deploy-time
 
