@@ -1,0 +1,1031 @@
+<!-- @dsCard group="Screens" name="Workbench" subtitle="Full /workbench screen — pipeline, artifacts, runs, agent chat" width="1440" height="880" -->
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SiliconCrew · Workbench (design)</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind (Play CDN — full JIT incl. opacity modifiers) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // Design tokens mirrored 1:1 from the app's tailwind.config.ts + globals.css.
+    tailwind.config = {
+      darkMode: ["class"],
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Inter", "system-ui", "sans-serif"],
+            mono: ["JetBrains Mono", "ui-monospace", "monospace"],
+          },
+          colors: {
+            border: "hsl(var(--border) / <alpha-value>)",
+            input: "hsl(var(--input) / <alpha-value>)",
+            ring: "hsl(var(--ring) / <alpha-value>)",
+            background: "hsl(var(--background) / <alpha-value>)",
+            foreground: "hsl(var(--foreground) / <alpha-value>)",
+            primary: { DEFAULT: "hsl(var(--primary) / <alpha-value>)", foreground: "hsl(var(--primary-foreground) / <alpha-value>)" },
+            secondary: { DEFAULT: "hsl(var(--secondary) / <alpha-value>)", foreground: "hsl(var(--secondary-foreground) / <alpha-value>)" },
+            destructive: { DEFAULT: "hsl(var(--destructive) / <alpha-value>)", foreground: "hsl(var(--destructive-foreground) / <alpha-value>)" },
+            muted: { DEFAULT: "hsl(var(--muted) / <alpha-value>)", foreground: "hsl(var(--muted-foreground) / <alpha-value>)" },
+            accent: { DEFAULT: "hsl(var(--accent) / <alpha-value>)", foreground: "hsl(var(--accent-foreground) / <alpha-value>)" },
+            popover: { DEFAULT: "hsl(var(--popover) / <alpha-value>)", foreground: "hsl(var(--popover-foreground) / <alpha-value>)" },
+            card: { DEFAULT: "hsl(var(--card) / <alpha-value>)", foreground: "hsl(var(--card-foreground) / <alpha-value>)" },
+            success: { DEFAULT: "hsl(var(--success) / <alpha-value>)", foreground: "hsl(var(--success-foreground) / <alpha-value>)" },
+            warning: { DEFAULT: "hsl(var(--warning) / <alpha-value>)", foreground: "hsl(var(--warning-foreground) / <alpha-value>)" },
+            info: { DEFAULT: "hsl(var(--info) / <alpha-value>)", foreground: "hsl(var(--info-foreground) / <alpha-value>)" },
+            status: {
+              pass: "hsl(var(--status-pass) / <alpha-value>)",
+              fail: "hsl(var(--status-fail) / <alpha-value>)",
+              warn: "hsl(var(--status-warn) / <alpha-value>)",
+              running: "hsl(var(--status-running) / <alpha-value>)",
+            },
+            surface: {
+              0: "hsl(var(--surface-0) / <alpha-value>)",
+              1: "hsl(var(--surface-1) / <alpha-value>)",
+              2: "hsl(var(--surface-2) / <alpha-value>)",
+              3: "hsl(var(--surface-3) / <alpha-value>)",
+            },
+          },
+          borderRadius: { lg: "var(--radius)", md: "calc(var(--radius) - 2px)", sm: "calc(var(--radius) - 4px)" },
+          boxShadow: {
+            e1: "0 1px 2px hsl(30 12% 4% / 0.30), 0 1px 1px hsl(30 12% 4% / 0.22)",
+            e2: "0 2px 6px hsl(30 12% 4% / 0.34), 0 1px 2px hsl(30 12% 4% / 0.24)",
+            e3: "0 8px 24px hsl(30 12% 4% / 0.40), 0 2px 6px hsl(30 12% 4% / 0.28)",
+          },
+          transitionTimingFunction: { swift: "cubic-bezier(0.22, 1, 0.36, 1)" },
+          transitionDuration: { fast: "120ms", base: "180ms", slow: "280ms" },
+          animation: {
+            "fade-in": "fadeIn 0.18s cubic-bezier(0.22,1,0.36,1)",
+            "slide-in-right": "slideInRight 0.28s cubic-bezier(0.22,1,0.36,1)",
+            "pulse-subtle": "pulseSubtle 2s ease-in-out infinite",
+          },
+          keyframes: {
+            fadeIn: { "0%": { opacity: "0" }, "100%": { opacity: "1" } },
+            slideInRight: { "0%": { transform: "translateX(12px)", opacity: "0" }, "100%": { transform: "translateX(0)", opacity: "1" } },
+            pulseSubtle: { "0%,100%": { opacity: "1" }, "50%": { opacity: "0.55" } },
+          },
+        },
+      },
+    };
+  </script>
+
+  <style type="text/tailwindcss">
+    @layer base {
+      :root {
+        --background: 40 8% 7%; --foreground: 40 18% 90%;
+        --card: 36 9% 11%; --card-foreground: 40 18% 90%;
+        --popover: 33 10% 13%; --popover-foreground: 40 18% 90%;
+        --primary: 14 63% 60%; --primary-foreground: 0 0% 100%;
+        --secondary: 33 9% 15%; --secondary-foreground: 40 18% 90%;
+        --muted: 33 8% 17%; --muted-foreground: 38 8% 58%;
+        --accent: 33 9% 19%; --accent-foreground: 40 18% 90%;
+        --info: 210 47% 61%; --info-foreground: 0 0% 100%;
+        --destructive: 8 56% 54%; --destructive-foreground: 0 0% 100%;
+        --success: 136 49% 49%; --success-foreground: 0 0% 100%;
+        --warning: 43 73% 49%; --warning-foreground: 0 0% 0%;
+        --status-pass: 136 49% 49%; --status-fail: 8 62% 62%; --status-warn: 43 73% 49%; --status-running: 210 47% 61%;
+        --border: 33 9% 18%; --input: 33 8% 17%; --ring: 14 63% 60%; --radius: 0.5rem;
+        --surface-0: 40 8% 7%; --surface-1: 36 9% 11%; --surface-2: 33 9% 14%; --surface-3: 30 9% 17%;
+      }
+      .light {
+        --background: 40 30% 95%; --foreground: 30 18% 16%;
+        --card: 42 40% 99%; --card-foreground: 30 18% 16%;
+        --popover: 42 40% 99%; --popover-foreground: 30 18% 16%;
+        --primary: 14 64% 44%; --primary-foreground: 0 0% 100%;
+        --secondary: 40 24% 91%; --secondary-foreground: 30 18% 16%;
+        --muted: 40 22% 90%; --muted-foreground: 36 13% 37%;
+        --accent: 40 24% 88%; --accent-foreground: 30 18% 16%;
+        --info: 210 62% 40%; --info-foreground: 0 0% 100%;
+        --destructive: 8 64% 46%; --destructive-foreground: 0 0% 100%;
+        --success: 136 52% 30%; --success-foreground: 0 0% 100%;
+        --warning: 34 92% 31%; --warning-foreground: 0 0% 100%;
+        --status-pass: 136 52% 30%; --status-fail: 8 64% 43%; --status-warn: 34 92% 31%; --status-running: 210 62% 40%;
+        --border: 38 22% 83%; --input: 38 22% 83%; --ring: 14 64% 44%;
+        --surface-0: 40 30% 95%; --surface-1: 42 36% 98%; --surface-2: 40 24% 91%; --surface-3: 38 20% 87%;
+      }
+      body { font-family: Inter, system-ui, sans-serif; }
+    }
+    .thin-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }
+  </style>
+
+  <!-- React + JSX (module-mode Babel so ESM imports work) -->
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.3.1",
+        "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.400.0?deps=react@18.3.1"
+      }
+    }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+</head>
+<body class="bg-background text-foreground antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module" data-presets="react">
+    import React, { useState } from "react";
+    import { createRoot } from "react-dom/client";
+    import {
+      CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRightOpen,
+      FileText, Code2, CheckCircle2, Waves, Cpu, BadgeCheck, Play, Lock,
+      Upload, FileCode2, FileTerminal, FileClock, FileType2, File as FileIcon, Crown, FlaskConical, Download,
+      Pin, PinOff, GitCompare, RefreshCw,
+      Code, Activity, Layout, BarChart3, Clock, Boxes, Zap, Gauge, ArrowRight,
+      ChevronUp, ChevronDown, ChevronRight, ChevronsUpDown, Terminal, Pencil, Copy, Check, Plus,
+      Eye, CornerUpRight, Coins, Hash, User, Bot, Sparkles, Wrench, Sun, Moon,
+      X, FileCode, FilePlus, Save, ZoomIn, ZoomOut, Maximize2, Crosshair,
+    } from "lucide-react";
+
+    const cn = (...a) => a.filter(Boolean).join(" ");
+
+    /* ---------------- dummy data (a "16-deep 8-bit sync FIFO" session) --------- */
+    const SESSION = { id: "fifo-signoff", name: "Sync FIFO · 16×8", model_name: "claude-opus-pro", total_tokens: 48213, total_cost: 0.82 };
+
+    const MANIFEST = {
+      synthTop: "sync_fifo", simTop: "sync_fifo_tb", clockPeriodNs: 7, platform: "sky130hd",
+      files: [
+        { name: "sync_fifo.v", role: "rtl" },
+        { name: "fifo_mem.v", role: "rtl" },
+        { name: "sync_fifo_tb.v", role: "tb" },
+        { name: "constraints.sdc", role: "sdc" },
+        { name: "defines.vh", role: "include" },
+      ],
+    };
+
+    const RUNS = [
+      { id: "S-04", kind: "synth", status: "passed", top: "sync_fifo", createdAt: mins(4), pinned: true,
+        ppa: { areaUm2: 1284.5, cells: 412, wnsNs: 0.42, tnsNs: 0, fmaxMhz: 158.7, powerMw: 3.1 } },
+      { id: "R-07", kind: "sim", status: "passed", top: "sync_fifo_tb", createdAt: mins(11), pinned: false, passMarkerFound: true, vcdPath: "dump.vcd" },
+      { id: "R-06", kind: "sim", status: "failed", top: "sync_fifo_tb", createdAt: mins(26), pinned: false,
+        failure: { timeNs: 320, firstFailureLine: "ASSERT failed: overflow flag not asserted on write-when-full" } },
+      { id: "R-06.1", kind: "sim", status: "passed", top: "sync_fifo_tb", createdAt: mins(19), pinned: false, parentRunId: "R-06", passMarkerFound: true },
+      { id: "S-03", kind: "synth", status: "passed", top: "sync_fifo", createdAt: mins(41), pinned: false,
+        ppa: { areaUm2: 1310.0, cells: 420, wnsNs: 0.28, tnsNs: 0, fmaxMhz: 151.2, powerMw: 3.3 } },
+    ];
+
+    const SELECTED_RUN = "S-04";
+
+    const CONSOLE = {
+      lint: { status: "passed", command: "verilator --lint-only -Wall sync_fifo.v fifo_mem.v", summary: "Lint passed (2 warning(s))",
+        detail: "sync_fifo.v:44 warning: parameter DEPTH unused in this scope\nfifo_mem.v:19 warning: implicit conversion narrows 9 -> 8 bits" },
+      sim:  { status: "passed", runId: "R-07", command: "iverilog -g2012 -o sim.out sync_fifo.v fifo_mem.v sync_fifo_tb.v\nvvp sim.out",
+        summary: "R-07 passed (sync_fifo_tb) · TEST PASSED", detail: "All 1024 randomized push/pop transactions matched the reference model.\nTEST PASSED" },
+      synth:{ status: "passed", runId: "S-04", command: "orfs flow sky130hd sync_fifo --clock 7ns",
+        summary: "S-04 completed", detail: "Placed 412 cells · routed 0 DRC violations\nWNS +0.42ns · TNS 0.00ns · met at 158.7 MHz" },
+    };
+    const ACTIVE_CONSOLE_DEFAULT = "synth";
+
+    const MESSAGES = [
+      { id: "u1", role: "user", content: "Design a synchronous FIFO, 16 deep, 8-bit wide, with full/empty flags and an overflow guard. Then lint, simulate and synthesize it.", timestamp: iso(30) },
+      { id: "a1", role: "assistant", timestamp: iso(29), blocks: [
+        { type: "text", content: "I'll draft the spec, implement the RTL across `sync_fifo.v` and `fifo_mem.v`, then run the pipeline. Here's the plan and the build." },
+        { type: "tool", toolCall: { id: "t1", name: "write_spec", args: { filename: "spec.md", module_name: "sync_fifo" } }, result: { status: "success", content: "Wrote spec.md (16-deep × 8-bit, full/empty/overflow, single clock @7ns)." } },
+        { type: "tool", toolCall: { id: "t2", name: "write_file", args: { filename: "sync_fifo.v" } }, result: { status: "success", content: "Wrote sync_fifo.v (98 lines)." } },
+        { type: "tool", toolCall: { id: "t3", name: "linter_tool", args: { verilog_files: ["sync_fifo.v", "fifo_mem.v"] } }, result: { status: "passed", content: "Lint passed — 2 warnings, 0 errors." } },
+        { type: "tool", toolCall: { id: "t4", name: "simulation_tool", args: { design_file: "sync_fifo_tb.v" } }, result: { status: "test_passed", content: "R-07 passed · 1024/1024 transactions matched · TEST PASSED" } },
+        { type: "tool", toolCall: { id: "t5", name: "start_synthesis", args: { module_name: "sync_fifo" } }, result: { status: "success", content: "S-04 completed · WNS +0.42ns · 412 cells · 158.7 MHz" } },
+        { type: "text", content: "**Done — clean tape-out.** Timing is met with **+0.42 ns** of slack (158.7 MHz), area is 1,284 µm² across 412 cells, and the overflow guard that broke `R-06` is fixed (see `R-06.1`). The Report tab has the full PPA breakdown." },
+      ]},
+    ];
+
+    const REPORT_MD = [
+      "## Signoff — sync_fifo @ sky130hd",
+      "",
+      "Timing **met** with **+0.42 ns** worst negative slack at a 7 ns target (≈158.7 MHz).",
+      "Zero routing DRC violations; design is clean for tape-out.",
+      "",
+      "| Metric | Value | vs S-03 |",
+      "|---|---|---|",
+      "| Worst slack (WNS) | +0.42 ns | +0.14 ns |",
+      "| Area | 1,284.5 µm² | −2.0% |",
+      "| Cells | 412 | −8 |",
+      "| Fmax | 158.7 MHz | +5.0% |",
+      "| Power | 3.1 mW | −6.1% |",
+    ].join("\n");
+
+    const SPEC_FIELDS = [
+      ["Module", "sync_fifo"], ["Depth", "16 entries"], ["Width", "8 bits"],
+      ["Clock", "7 ns (single domain)"], ["Flags", "full, empty, overflow"], ["Reset", "synchronous, active-high"],
+    ];
+
+    const CODE_FILES = {
+      "sync_fifo.v": `// sync_fifo.v — 16-deep x 8-bit synchronous FIFO
+// full / empty / overflow flags, single clock domain @ 7ns
+module sync_fifo #(
+  parameter WIDTH = 8,
+  parameter DEPTH = 16
+) (
+  input                     clk,
+  input                     rst,
+  input                     wr_en,
+  input                     rd_en,
+  input      [WIDTH-1:0]    din,
+  output reg [WIDTH-1:0]    dout,
+  output                    full,
+  output                    empty,
+  output reg                overflow
+);
+  localparam AW = $clog2(DEPTH);
+  reg [AW:0] wptr, rptr;
+
+  fifo_mem #(.WIDTH(WIDTH), .DEPTH(DEPTH)) mem (
+    .clk   (clk),
+    .wr_en (wr_en && !full),
+    .waddr (wptr[AW-1:0]),
+    .raddr (rptr[AW-1:0]),
+    .din   (din),
+    .dout  (dout)
+  );
+
+  assign full  = (wptr[AW] != rptr[AW]) && (wptr[AW-1:0] == rptr[AW-1:0]);
+  assign empty = (wptr == rptr);
+
+  always @(posedge clk) begin
+    if (rst) begin
+      wptr     <= 0;
+      rptr     <= 0;
+      overflow <= 1'b0;
+    end else begin
+      if (wr_en && !full)  wptr <= wptr + 1'b1;
+      if (rd_en && !empty) rptr <= rptr + 1'b1;
+      // overflow guard — was missing in R-06, fixed in R-06.1
+      if (wr_en && full)   overflow <= 1'b1;
+    end
+  end
+endmodule`,
+      "fifo_mem.v": `// fifo_mem.v — dual-address synchronous memory for sync_fifo
+module fifo_mem #(
+  parameter WIDTH = 8,
+  parameter DEPTH = 16
+) (
+  input                    clk,
+  input                    wr_en,
+  input  [$clog2(DEPTH)-1:0] waddr,
+  input  [$clog2(DEPTH)-1:0] raddr,
+  input  [WIDTH-1:0]       din,
+  output [WIDTH-1:0]       dout
+);
+  reg [WIDTH-1:0] ram [0:DEPTH-1];
+
+  always @(posedge clk) begin
+    if (wr_en) ram[waddr] <= din;
+  end
+
+  assign dout = ram[raddr];
+endmodule`,
+    };
+
+    // Minimal Verilog highlighter → returns one HTML string per line.
+    function hlVerilog(src) {
+      const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const kw = /\b(module|endmodule|input|output|inout|reg|wire|logic|assign|always|begin|end|if|else|case|endcase|posedge|negedge|parameter|localparam|default|for|integer|genvar|generate|endgenerate)\b/g;
+      return esc(src).split("\n").map((line) => {
+        let code = line, comment = "";
+        const ci = line.indexOf("//");
+        if (ci >= 0) { code = line.slice(0, ci); comment = '<span class="text-muted-foreground/60 italic">' + line.slice(ci) + "</span>"; }
+        code = code
+          .replace(/\b(\d+'[bhdBHD][0-9a-fA-FxXzZ_]+|\d+)\b/g, '<span class="text-info">$1</span>')
+          .replace(/(\$\w+)/g, '<span class="text-status-warn">$1</span>')
+          .replace(kw, '<span class="text-primary">$1</span>');
+        return code + comment;
+      });
+    }
+
+    // ---- generated waveform (dump.vcd from the passing run R-07) --------------
+    const WAVE = (() => {
+      const end = 200, clk = { name: "clk", scope: "sync_fifo_tb", width: 1, times: [], values: [] };
+      for (let t = 0; t <= end; t += 5) { clk.times.push(t); clk.values.push((t / 5) % 2 === 0 ? 0 : 1); }
+      const sig = (name, scope, width, times, values) => ({ name, scope, width, isBus: width > 1, times, values });
+      return {
+        filename: "dump.vcd", endtime: end, timescale: "ns", signalCount: 12,
+        signals: [
+          clk,
+          sig("rst", "sync_fifo_tb", 1, [0, 15], [1, 0]),
+          sig("wr_en", "sync_fifo_tb", 1, [0, 20, 40, 65, 90, 120], [0, 1, 1, 0, 1, 0]),
+          sig("rd_en", "sync_fifo_tb", 1, [0, 75, 100, 140, 175], [0, 1, 0, 1, 0]),
+          sig("din", "sync_fifo_tb", 8, [0, 20, 40, 90], [0, 0x3a, 0xa5, 0x1c]),
+          sig("dout", "sync_fifo_tb", 8, [0, 80, 105, 150], [0, 0x3a, 0xa5, 0x1c]),
+          sig("full", "sync_fifo_tb", 1, [0, 120, 160], [0, 1, 0]),
+          sig("empty", "sync_fifo_tb", 1, [0, 25, 185], [1, 0, 1]),
+          sig("wptr", "sync_fifo_tb.dut", 5, [0, 25, 45, 95], [0, 1, 2, 3]),
+          sig("rptr", "sync_fifo_tb.dut", 5, [0, 80, 105, 150], [0, 1, 2, 3]),
+          sig("overflow", "sync_fifo_tb.dut", 1, [0], [0]),
+        ],
+      };
+    })();
+
+    function mins(m) { return new Date(Date.now() - m * 60000).toISOString(); }
+    function iso(m) { return new Date(Date.now() - m * 60000).toISOString(); }
+    function relativeTime(iso) {
+      const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+      if (s < 60) return s + "s ago"; const m = Math.floor(s / 60);
+      if (m < 60) return m + "m ago"; const h = Math.floor(m / 60);
+      if (h < 24) return h + "h ago"; return Math.floor(h / 24) + "d ago";
+    }
+    const statusDot = (s) => s === "passed" ? "bg-status-pass" : s === "failed" ? "bg-status-fail" : s === "running" ? "bg-status-running animate-pulse-subtle" : "bg-muted-foreground";
+    const statusText = (s) => s === "passed" ? "text-status-pass" : s === "failed" ? "text-status-fail" : s === "running" ? "text-status-running" : "text-muted-foreground";
+
+    /* ---------------- small shared bits --------------------------------------- */
+    function Btn({ variant = "default", size = "default", className, children, ...p }) {
+      const base = "inline-flex items-center justify-center whitespace-nowrap rounded-md font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none";
+      const variants = {
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        ghost: "hover:bg-surface-2 hover:text-foreground",
+        outline: "border border-border bg-transparent hover:bg-surface-2",
+      };
+      const sizes = { default: "h-9 px-4 text-sm", sm: "h-8 px-3 text-xs", icon: "h-9 w-9" };
+      return <button className={cn(base, variants[variant], sizes[size], className)} {...p}>{children}</button>;
+    }
+    function PanelHeader({ label, icon, children, className }) {
+      return (
+        <div className={cn("flex items-center gap-2 h-9 px-3 border-b border-border bg-surface-1 shrink-0", className)}>
+          {icon}
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
+          {children && <div className="flex items-center gap-1 ml-auto">{children}</div>}
+        </div>
+      );
+    }
+    const ROLE_LABEL = { rtl: "RTL", tb: "TB", sdc: "SDC", include: "INC", other: "OTHER" };
+    const ROLE_BADGE = {
+      rtl: "bg-info/12 text-info border-info/25", tb: "bg-primary/12 text-primary border-primary/25",
+      sdc: "bg-surface-3 text-foreground/70 border-border", include: "bg-surface-3 text-muted-foreground border-border", other: "bg-surface-3 text-muted-foreground border-border",
+    };
+    function roleIcon(role) {
+      const c = "h-3.5 w-3.5";
+      return role === "rtl" ? <FileCode2 className={c} /> : role === "tb" ? <FileTerminal className={c} /> : role === "sdc" ? <FileClock className={c} /> : role === "include" ? <FileType2 className={c} /> : <FileIcon className={c} />;
+    }
+
+    /* ---------------- top bar -------------------------------------------------- */
+    function TopBar({ dark, setDark }) {
+      return (
+        <header className="flex items-center justify-between h-12 px-3 border-b border-border bg-surface-0 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-primary/15 flex items-center justify-center">
+                <CircuitBoard className="h-4 w-4 text-primary" />
+              </div>
+              <span className="font-semibold text-sm">SiliconCrew</span>
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">Workbench</span>
+            </div>
+            <div className="h-5 w-px bg-border" />
+            <span className="text-[11px] text-muted-foreground hidden sm:inline">Session</span>
+            <button className="flex items-center gap-2 h-7 px-2 rounded-md border border-border bg-surface-1 hover:bg-surface-2 text-xs">
+              <span className="h-1.5 w-1.5 rounded-full bg-status-pass" />
+              <span className="font-medium max-w-[160px] truncate">{SESSION.name}</span>
+              <ChevronsUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </div>
+          <div className="flex items-center gap-1">
+            <Btn variant="ghost" size="icon" className="h-8 w-8" title="Toggle theme" onClick={() => setDark(!dark)}>
+              {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </Btn>
+            <Btn variant="ghost" size="sm" className="gap-1.5 text-xs"><MessagesSquare className="h-3.5 w-3.5" /> Chat view</Btn>
+            <button className="flex items-center gap-2 h-8 pl-1 pr-2 rounded-full hover:bg-surface-2">
+              <span className="h-6 w-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[11px] font-semibold">NY</span>
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </div>
+        </header>
+      );
+    }
+
+    /* ---------------- pipeline spine ------------------------------------------ */
+    function PipelineStepper() {
+      const hasRtl = MANIFEST.files.some((f) => f.role === "rtl");
+      const latestSim = RUNS.find((r) => r.kind === "sim");
+      const latestSynth = RUNS.find((r) => r.kind === "synth");
+      const stages = [
+        { id: "spec", name: "Spec", icon: <FileText className="h-4 w-4" />, statusText: MANIFEST.synthTop, reached: true },
+        { id: "rtl", name: "RTL", icon: <Code2 className="h-4 w-4" />, status: "passed", statusText: MANIFEST.files.filter(f=>f.role==="rtl").length + " file(s)", reached: hasRtl },
+        { id: "lint", name: "Lint", icon: <CheckCircle2 className="h-4 w-4" />, status: "passed", statusText: "2 warn", isAction: true, reached: true },
+        { id: "sim", name: "Simulate", icon: <Waves className="h-4 w-4" />, status: latestSim.status, statusText: latestSim.status, isAction: true, reached: true },
+        { id: "synth", name: "Synthesize", icon: <Cpu className="h-4 w-4" />, status: latestSynth.status, statusText: latestSynth.status, isAction: true, reached: true },
+        { id: "signoff", name: "Signoff", icon: <BadgeCheck className="h-4 w-4" />, status: "passed", statusText: "report", reached: true },
+      ];
+      const activeId = "signoff";
+      return (
+        <div className="flex items-stretch gap-0.5 px-3 py-1.5 border-b border-border bg-surface-1 overflow-x-auto">
+          {stages.map((stage, i) => {
+            const isActive = stage.id === activeId;
+            const next = stages[i + 1];
+            return (
+              <div key={stage.id} className="flex items-center">
+                <button className={cn(
+                  "group relative flex h-9 items-center gap-2 rounded-lg px-2.5 text-left min-w-[108px] border transition-all duration-base ease-swift",
+                  isActive ? "border-primary/60 bg-primary/10 shadow-e1" : "border-transparent hover:border-border hover:bg-surface-2 active:scale-[0.98]"
+                )}>
+                  <span className={cn("relative shrink-0", isActive ? "text-primary" : stage.isAction ? "text-foreground/70 group-hover:text-primary" : "text-muted-foreground")}>
+                    {stage.isAction ? (
+                      <>
+                        <span className="block transition-opacity duration-base ease-swift group-hover:opacity-0">{stage.icon}</span>
+                        <Play className="absolute inset-0 h-4 w-4 fill-current opacity-0 transition-opacity duration-base ease-swift group-hover:opacity-100" />
+                      </>
+                    ) : stage.icon}
+                  </span>
+                  <span className="flex min-w-0 flex-col leading-tight">
+                    <span className={cn("flex items-center gap-1.5 text-xs font-medium", isActive ? "text-foreground" : "text-foreground/80")}>{stage.name}</span>
+                    <span className="flex items-center gap-1.5">
+                      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", stage.status ? statusDot(stage.status) : "scale-75 bg-muted-foreground/30")} />
+                      <span className="truncate max-w-[80px] font-mono text-[11px] text-muted-foreground">{stage.statusText}</span>
+                    </span>
+                  </span>
+                </button>
+                {i < stages.length - 1 && (
+                  <span className="flex w-4 shrink-0 items-center justify-center">
+                    <span className={cn("h-px w-full", next?.reached ? "bg-primary/40" : "bg-border")} />
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    /* ---------------- left rail: files + runs ---------------------------------- */
+    function FileTree() {
+      const [sel, setSel] = useState("sync_fifo.v");
+      return (
+        <div className="relative flex flex-col min-h-0">
+          <PanelHeader label="Files">
+            <Btn variant="ghost" size="sm" className="h-6 gap-1 text-xs"><Upload className="h-3.5 w-3.5" /> Upload</Btn>
+          </PanelHeader>
+          <div className="flex-1 overflow-y-auto thin-scrollbar py-1">
+            {MANIFEST.files.map((f) => {
+              const isSynthTop = f.role === "rtl" && f.name === "sync_fifo.v";
+              const isSimTop = f.role === "tb";
+              const openable = f.name.endsWith(".v") || f.name.endsWith(".sv");
+              const isSelected = openable && sel === f.name;
+              return (
+                <div key={f.name} className={cn("group relative flex items-center gap-1.5 pl-2.5 pr-2 py-1 mx-1 rounded-md", isSelected ? "bg-primary/10 text-foreground" : "hover:bg-surface-2")}>
+                  <span className={cn("absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-full bg-primary", isSelected ? "opacity-100" : "opacity-0")} />
+                  <button onClick={() => openable && setSel(f.name)} className={cn("flex items-center gap-2 min-w-0 flex-1 text-left rounded", openable ? "cursor-pointer" : "cursor-default")}>
+                    <span className={cn("shrink-0", isSelected ? "text-primary" : "text-muted-foreground")}>{roleIcon(f.role)}</span>
+                    <span className={cn("text-xs font-mono truncate", isSelected && "font-medium")}>{f.name}</span>
+                    {isSynthTop && <Crown className="h-3 w-3 text-info shrink-0" />}
+                    {isSimTop && <FlaskConical className="h-3 w-3 text-primary shrink-0" />}
+                  </button>
+                  <Download className="h-3 w-3 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70" />
+                  <span className={cn("inline-flex items-center justify-center text-[9px] font-semibold leading-none tracking-wide px-1.5 py-0.5 rounded border shrink-0", ROLE_BADGE[f.role])}>{ROLE_LABEL[f.role]}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="px-3 py-2 border-t border-border text-[10px] text-muted-foreground space-y-1 font-mono">
+            <div className="flex items-center gap-1.5 min-w-0"><Crown className="h-3 w-3 text-info shrink-0" /><span className="text-muted-foreground/70">synthTop</span><span className="truncate text-foreground/80">{MANIFEST.synthTop}</span></div>
+            <div className="flex items-center gap-1.5 min-w-0"><FlaskConical className="h-3 w-3 text-primary shrink-0" /><span className="text-muted-foreground/70">simTop</span><span className="truncate text-foreground/80">{MANIFEST.simTop}</span></div>
+            <div className="flex items-center gap-1.5 pt-0.5 text-muted-foreground/70"><span>clk {MANIFEST.clockPeriodNs}ns</span><span>·</span><span>{MANIFEST.platform}</span></div>
+          </div>
+        </div>
+      );
+    }
+
+    function RunsTimeline({ selected, onSelect }) {
+      const [filter, setFilter] = useState("all");
+      const childrenByParent = new Map();
+      for (const r of RUNS) if (r.parentRunId) { const a = childrenByParent.get(r.parentRunId) ?? []; a.push(r); childrenByParent.set(r.parentRunId, a); }
+      const roots = RUNS.filter((r) => !r.parentRunId);
+      const filtered = roots.filter((r) => filter === "all" || r.kind === filter);
+      const row = (r, depth = 0, isLast = false) => {
+        const sel = r.id === selected;
+        const kids = childrenByParent.get(r.id) ?? [];
+        return (
+          <div key={r.id} className="relative">
+            {depth > 0 && (
+              <span className="pointer-events-none absolute inset-y-0 left-0" style={{ width: depth * 16 }}>
+                <span className="absolute top-0 w-px bg-border" style={{ left: (depth - 1) * 16 + 11, bottom: isLast ? "50%" : 0 }} />
+                <span className="absolute h-px bg-border" style={{ left: (depth - 1) * 16 + 11, width: 9, top: "50%" }} />
+              </span>
+            )}
+            <div onClick={() => onSelect(r.id)} style={{ paddingLeft: 8 + depth * 16 }}
+              className={cn("group relative flex items-center gap-2 px-2 py-1.5 mx-1 rounded-md cursor-pointer transition-all duration-fast ease-swift", sel ? "bg-primary/10 shadow-e1" : "hover:bg-surface-2")}>
+              <span className={cn("absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary", sel ? "opacity-100" : "opacity-0")} />
+              <span className={cn("h-2 w-2 rounded-full shrink-0", statusDot(r.status))} />
+              <span className={cn("shrink-0", sel ? "text-primary" : "text-muted-foreground")}>{r.kind === "sim" ? <Waves className="h-3.5 w-3.5" /> : <Cpu className="h-3.5 w-3.5" />}</span>
+              <div className="flex flex-col min-w-0 flex-1 leading-tight">
+                <span className="text-xs font-mono truncate">{r.id}{r.top && <span className="text-muted-foreground"> · {r.top}</span>}</span>
+                <span className="text-[10px]">
+                  <span className={statusText(r.status)}>{r.status}</span>
+                  {r.kind === "sim" && r.failure?.timeNs != null && <span className="text-muted-foreground"> @ {r.failure.timeNs}ns</span>}
+                  <span className="text-muted-foreground"> · {relativeTime(r.createdAt)}</span>
+                </span>
+              </div>
+              {r.pinned ? <Pin className="h-3.5 w-3.5 shrink-0 text-primary" /> : <PinOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-60" />}
+            </div>
+            {kids.map((c, ci) => row(c, depth + 1, ci === kids.length - 1))}
+          </div>
+        );
+      };
+      return (
+        <div className="flex flex-col min-h-0 border-t border-border">
+          <PanelHeader label="Runs">
+            <Btn variant="ghost" size="icon" className="h-6 w-6"><GitCompare className="h-3.5 w-3.5" /></Btn>
+            <Btn variant="ghost" size="icon" className="h-6 w-6"><RefreshCw className="h-3.5 w-3.5" /></Btn>
+          </PanelHeader>
+          <div className="flex gap-1 px-3 pt-2 pb-2">
+            {["all", "sim", "synth"].map((f) => (
+              <button key={f} onClick={() => setFilter(f)} className={cn("text-[10px] px-2 py-0.5 rounded-full border capitalize", filter === f ? "border-primary/50 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-surface-2")}>{f}</button>
+            ))}
+          </div>
+          <div className="flex-1 overflow-y-auto thin-scrollbar pb-1 max-h-[40vh]">{filtered.map((r) => row(r, 0))}</div>
+        </div>
+      );
+    }
+
+    /* ---------------- center: viewing banner + artifacts + console ------------- */
+    function ViewingBanner({ run }) {
+      if (!run) return null;
+      const meta = ["latest " + run.kind, run.top, run.status].filter(Boolean).join(" · ");
+      return (
+        <div className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-info/20 bg-info/5">
+          <Eye className="h-3.5 w-3.5 text-info shrink-0" />
+          <span className="text-muted-foreground shrink-0">Viewing</span>
+          <span className="font-mono text-info bg-info/10 px-1.5 py-0.5 rounded shrink-0">{run.id}</span>
+          <div className="flex min-w-0 flex-1 items-center gap-2"><span className="text-muted-foreground truncate">· {meta}</span></div>
+        </div>
+      );
+    }
+
+    function MetricCard({ icon, label, value, unit, delta, better }) {
+      return (
+        <div className="rounded-lg border border-border bg-surface-1 p-3 flex flex-col gap-1.5 shadow-e1">
+          <div className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+            <span className="text-muted-foreground/70">{icon}</span>{label}
+          </div>
+          <div className="text-xl font-semibold font-mono tabular-nums leading-none text-foreground">{value}{unit && <span className="text-xs font-normal text-muted-foreground ml-1">{unit}</span>}</div>
+          {delta && <div className={cn("text-[10px] font-mono tabular-nums", better ? "text-status-pass" : "text-status-fail")}>{delta} vs prev</div>}
+        </div>
+      );
+    }
+    function PpaHero({ run }) {
+      const p = run.ppa;
+      return (
+        <div className="border-b border-border bg-surface-0 p-4">
+          <div className="rounded-xl border border-status-pass/40 bg-status-pass/5 p-4 mb-3 flex items-center gap-4 shadow-e1">
+            <div className="h-11 w-11 shrink-0 rounded-lg flex items-center justify-center bg-status-pass/15"><Clock className="h-5 w-5 text-status-pass" /></div>
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Worst Negative Slack</span>
+              <span className="text-2xl font-bold font-mono tabular-nums leading-none text-status-pass">+{p.wnsNs.toFixed(2)} ns</span>
+            </div>
+            <div className="ml-auto flex flex-col items-end gap-1 text-right">
+              <span className="text-xs font-semibold uppercase tracking-wide px-2 py-1 rounded-md bg-status-pass/15 text-status-pass">Timing met</span>
+              <div className="text-[11px] text-muted-foreground font-mono tabular-nums">TNS {p.tnsNs.toFixed(2)} ns</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <MetricCard icon={<CircuitBoard className="h-3 w-3" />} label="Area" value={p.areaUm2.toFixed(1)} unit="µm²" delta="−2.0%" better />
+            <MetricCard icon={<Boxes className="h-3 w-3" />} label="Cells" value={p.cells} delta="−1.9%" better />
+            <MetricCard icon={<Gauge className="h-3 w-3" />} label="Fmax" value={p.fmaxMhz.toFixed(1)} unit="MHz" delta="+5.0%" better />
+            <MetricCard icon={<Zap className="h-3 w-3" />} label="Power" value={p.powerMw.toFixed(1)} unit="mW" delta="−6.1%" better />
+          </div>
+          <div className="mt-2 text-[11px] text-muted-foreground flex items-center gap-1 font-mono">comparing <span className="text-info">S-03</span><ArrowRight className="h-3 w-3" /><span className="text-foreground">S-04</span></div>
+        </div>
+      );
+    }
+
+    function ReportBody() {
+      // lightweight markdown-ish render for the report copy
+      const lines = REPORT_MD.split("\n");
+      const rows = lines.filter((l) => l.startsWith("|") && !l.includes("---"));
+      const paras = lines.filter((l) => l && !l.startsWith("|") && !l.startsWith("#"));
+      return (
+        <div className="p-4 text-sm text-foreground/90 space-y-3 overflow-y-auto thin-scrollbar">
+          <h2 className="text-base font-semibold tracking-tight">Signoff — sync_fifo @ sky130hd</h2>
+          {paras.map((p, i) => <p key={i} className="leading-relaxed text-foreground/80" dangerouslySetInnerHTML={{ __html: p.replace(/\*\*(.+?)\*\*/g, '<strong class="text-foreground font-semibold">$1</strong>') }} />)}
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="min-w-full text-xs">
+              <thead className="bg-surface-2"><tr>{rows[0].split("|").filter(Boolean).map((h, i) => <th key={i} className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">{h.trim()}</th>)}</tr></thead>
+              <tbody>{rows.slice(1).map((r, ri) => <tr key={ri} className="border-t border-border">{r.split("|").filter(Boolean).map((c, ci) => <td key={ci} className={cn("px-3 py-2 font-mono", ci === 0 && "text-muted-foreground")}>{c.trim()}</td>)}</tr>)}</tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    function CodeViewer() {
+      const names = Object.keys(CODE_FILES);
+      const [file, setFile] = useState(names[0]);
+      const [open, setOpen] = useState(false);
+      const [copied, setCopied] = useState(false);
+      const lines = hlVerilog(CODE_FILES[file]);
+      return (
+        <div className="flex flex-col h-full">
+          <div className="flex items-center justify-between p-3 border-b border-border gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="relative">
+                <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 h-8 w-[200px] px-2 rounded-md border border-border bg-surface-1 hover:bg-surface-2 text-xs">
+                  <FileCode className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-mono truncate flex-1 text-left">{file}</span>
+                  <ChevronsUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+                {open && (
+                  <div className="absolute z-30 mt-1 w-[200px] rounded-md border border-border bg-popover shadow-e2 p-1">
+                    {names.map((n) => (
+                      <button key={n} onClick={() => { setFile(n); setOpen(false); }} className={cn("flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs font-mono text-left hover:bg-surface-2", n === file && "bg-surface-2 text-foreground")}>
+                        <FileCode className="h-3.5 w-3.5 text-muted-foreground" />{n}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <span className="text-xs text-muted-foreground">{names.length} files</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Btn variant="ghost" size="icon" className="h-7 w-7" title="New file"><FilePlus className="h-3.5 w-3.5" /></Btn>
+              <Btn variant="ghost" size="icon" className="h-7 w-7" title="Edit"><Pencil className="h-3.5 w-3.5" /></Btn>
+              <Btn variant="ghost" size="icon" className="h-7 w-7" title="Refresh"><RefreshCw className="h-3.5 w-3.5" /></Btn>
+              <Btn variant="ghost" size="icon" className="h-7 w-7" title="Copy" onClick={() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? <Check className="h-3.5 w-3.5 text-status-pass" /> : <Copy className="h-3.5 w-3.5" />}</Btn>
+              <Btn variant="ghost" size="icon" className="h-7 w-7" title="Download"><Download className="h-3.5 w-3.5" /></Btn>
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto thin-scrollbar bg-surface-0 font-mono text-[12.5px] leading-[1.55]">
+            <table className="w-full border-collapse">
+              <tbody>
+                {lines.map((html, i) => (
+                  <tr key={i} className="hover:bg-surface-1/60">
+                    <td className="select-none text-right pr-3 pl-3 w-[1%] whitespace-nowrap text-muted-foreground/40 tabular-nums border-r border-border/50">{i + 1}</td>
+                    <td className="pl-3 pr-4 whitespace-pre text-foreground/85" dangerouslySetInnerHTML={{ __html: html || " " }} />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    function WaveformViewer() {
+      const NAME_COL = 168, LANE_H = 26, BASE = 800, MINL = 600, PAD = 28;
+      const [zoom, setZoom] = useState(1);
+      const [radix, setRadix] = useState("hex");
+      const [cursor, setCursor] = useState(null); // ns
+      const [collapsed, setCollapsed] = useState(new Set());
+      const lanesRef = React.useRef(null);
+      const end = WAVE.endtime;
+      const laneW = Math.max(MINL, BASE * zoom);
+      const scale = (laneW - PAD) / end;
+      const groups = [];
+      for (const s of WAVE.signals) { let g = groups.find((x) => x[0] === s.scope); if (!g) { g = [s.scope, []]; groups.push(g); } g[1].push(s); }
+      const ticks = Array.from({ length: 9 }, (_, i) => Math.round((end / 8) * i));
+      const fmtBus = (v) => radix === "hex" ? "0x" + v.toString(16).toUpperCase() : String(v);
+      const valueAt = (sig, at) => {
+        if (at == null) return null; let idx = -1;
+        for (let i = 0; i < sig.times.length; i++) { if (sig.times[i] <= at) idx = i; else break; }
+        if (idx < 0) return null;
+        return (sig.width ?? 1) > 1 ? fmtBus(sig.values[idx]) : String(sig.values[idx]);
+      };
+      const xToNs = (clientX) => { const h = lanesRef.current; if (!h) return null; const x = clientX - h.getBoundingClientRect().left - NAME_COL; if (x < 0) return null; return Math.min(Math.max(0, x / scale), end); };
+      const toggle = (sc) => setCollapsed((p) => { const n = new Set(p); n.has(sc) ? n.delete(sc) : n.add(sc); return n; });
+      const cursorX = cursor != null ? cursor * scale : null;
+
+      const Lane = ({ sig }) => {
+        const isBus = sig.isBus || (sig.width ?? 1) > 1, h = LANE_H;
+        if (isBus) {
+          return (
+            <svg width={laneW} height={h} className="block">
+              <line x1={0} y1={4} x2={laneW} y2={4} className="stroke-muted-foreground/40" strokeWidth={1} />
+              <line x1={0} y1={h - 4} x2={laneW} y2={h - 4} className="stroke-muted-foreground/40" strokeWidth={1} />
+              {sig.times.map((time, i) => {
+                const x = time * scale, nextX = i < sig.times.length - 1 ? sig.times[i + 1] * scale : laneW;
+                const label = radix === "hex" ? sig.values[i].toString(16).toUpperCase() : String(sig.values[i]);
+                return (
+                  <g key={i}>
+                    <line x1={x} y1={4} x2={x} y2={h - 4} className="stroke-primary" strokeWidth={1} />
+                    {nextX - x > 22 && <text x={x + (nextX - x) / 2} y={h / 2 + 4} textAnchor="middle" className="fill-foreground text-[9px] font-mono">{label}</text>}
+                  </g>
+                );
+              })}
+            </svg>
+          );
+        }
+        let d = "";
+        sig.times.forEach((time, i) => { const x = time * scale, y = sig.values[i] ? 5 : h - 5; if (i === 0) d = `M ${x} ${y}`; else { const py = sig.values[i - 1] ? 5 : h - 5; d += ` L ${x} ${py} L ${x} ${y}`; } });
+        d += ` L ${laneW} ${sig.values[sig.values.length - 1] ? 5 : h - 5}`;
+        return <svg width={laneW} height={h} className="block"><path d={d} className="stroke-primary" strokeWidth={1.5} fill="none" /></svg>;
+      };
+
+      return (
+        <div className="flex flex-col h-full">
+          <div className="flex items-center justify-between p-3 border-b border-border">
+            <div className="flex items-center gap-2">
+              <button className="flex items-center gap-2 h-8 w-[230px] px-2 rounded-md border border-border bg-surface-1 text-xs">
+                <Activity className="h-4 w-4 text-muted-foreground" /><span className="font-mono truncate flex-1 text-left">dump.vcd</span><ChevronsUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+              {cursor != null && <button onClick={() => setCursor(null)} className="text-[11px] text-info font-mono hover:underline">cursor @ {Math.round(cursor)}ns ✕</button>}
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="flex items-center rounded-md border border-border bg-surface-1 p-0.5 mr-1">
+                {["hex", "dec"].map((r) => (
+                  <button key={r} onClick={() => setRadix(r)} className={cn("px-2 py-0.5 text-[10px] font-mono uppercase rounded-[3px]", radix === r ? "bg-surface-3 text-foreground shadow-e1" : "text-muted-foreground hover:text-foreground hover:bg-surface-2")}>{r}</button>
+                ))}
+              </div>
+              <Btn variant="ghost" size="icon" className="h-7 w-7" title="Fit" onClick={() => setZoom(1)}><Maximize2 className="h-3.5 w-3.5" /></Btn>
+              <Btn variant="ghost" size="icon" className="h-7 w-7" title="Zoom out" onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}><ZoomOut className="h-3.5 w-3.5" /></Btn>
+              <span className="text-xs text-muted-foreground w-12 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
+              <Btn variant="ghost" size="icon" className="h-7 w-7" title="Zoom in" onClick={() => setZoom((z) => Math.min(4, Math.round((z + 0.25) * 100) / 100))}><ZoomIn className="h-3.5 w-3.5" /></Btn>
+              <Btn variant="ghost" size="icon" className="h-7 w-7" title="Refresh"><RefreshCw className="h-3.5 w-3.5" /></Btn>
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto thin-scrollbar">
+            <div style={{ minWidth: NAME_COL + laneW }}>
+              <div className="flex sticky top-0 z-10 bg-surface-1 border-b border-border">
+                <div style={{ width: NAME_COL }} className="shrink-0 px-2 py-1 text-[10px] text-muted-foreground">signal</div>
+                <div className="relative" style={{ width: laneW, height: 20 }}>
+                  {ticks.map((t, i) => <span key={i} className="absolute text-[9px] text-muted-foreground font-mono" style={{ left: Math.min(laneW - 24, t * scale + 2), top: 3 }}>{t}</span>)}
+                </div>
+              </div>
+              <div ref={lanesRef} className="relative" onClick={(e) => { const t = xToNs(e.clientX); if (t != null) setCursor(t); }} title="Click to place a measurement cursor">
+                <div className="absolute inset-0 z-0 pointer-events-none">
+                  {ticks.map((t, i) => <div key={i} className="absolute top-0 bottom-0 w-px bg-border/40" style={{ left: NAME_COL + t * scale }} />)}
+                </div>
+                {cursorX != null && (
+                  <div className="absolute top-0 bottom-0 w-px bg-info z-30" style={{ left: NAME_COL + cursorX }}>
+                    <span className="absolute top-0 left-1 text-[9px] text-info font-mono bg-background/80 px-1 rounded">{Math.round(cursor)}ns</span>
+                  </div>
+                )}
+                {groups.map(([scope, sigs]) => {
+                  const isC = collapsed.has(scope);
+                  return (
+                    <div key={scope}>
+                      <button onClick={(e) => { e.stopPropagation(); toggle(scope); }} className="flex items-center gap-1 w-full px-2 py-1 bg-surface-2/60 hover:bg-surface-2 border-b border-border text-left relative z-10">
+                        {isC ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                        <span className="text-[10px] font-mono text-info truncate">{scope}</span><span className="text-[9px] text-muted-foreground">({sigs.length})</span>
+                      </button>
+                      {!isC && sigs.map((sig) => {
+                        const v = valueAt(sig, cursor);
+                        return (
+                          <div key={sig.name} className="flex items-center border-b border-border/60 hover:bg-surface-1 relative z-10">
+                            <div style={{ width: NAME_COL }} className="shrink-0 px-2 py-1 text-xs font-mono flex items-center gap-1">
+                              <span className="truncate">{sig.name}</span>
+                              {(sig.width ?? 1) > 1 && <span className="text-[9px] text-muted-foreground">[{sig.width}]</span>}
+                              {v != null && <span className="ml-auto text-[10px] font-semibold tabular-nums text-info">={v}</span>}
+                            </div>
+                            <div className="shrink-0"><Lane sig={sig} /></div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <div className="p-2 border-t border-border text-xs text-muted-foreground flex items-center gap-3">
+            <span>End: {WAVE.endtime} ns</span><span>{WAVE.signalCount} signals</span><span>{groups.length} scopes</span>
+          </div>
+        </div>
+      );
+    }
+
+    const TABS = [
+      { id: "spec", label: "Spec", icon: <FileText className="h-3.5 w-3.5" />, badge: 1 },
+      { id: "code", label: "Code", icon: <Code className="h-3.5 w-3.5" />, badge: 2 },
+      { id: "waveform", label: "Wave", icon: <Activity className="h-3.5 w-3.5" />, badge: 1 },
+      { id: "schematic", label: "Schem", icon: <CircuitBoard className="h-3.5 w-3.5" />, badge: 1 },
+      { id: "layout", label: "Layout", icon: <Layout className="h-3.5 w-3.5" />, badge: 1 },
+      { id: "report", label: "Report", icon: <BarChart3 className="h-3.5 w-3.5" />, badge: 2 },
+    ];
+    function ArtifactsPanel({ run }) {
+      const [tab, setTab] = useState("report");
+      return (
+        <div className="flex flex-col h-full bg-surface-0 border-l border-border">
+          <div className="flex items-center gap-2 h-9 px-3 border-b border-border bg-surface-1 shrink-0">
+            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Artifacts</h2>
+            <span className="text-[10px] text-muted-foreground bg-surface-2 px-1.5 py-0.5 rounded-full">7</span>
+            <div className="flex items-center gap-1 ml-auto"><Btn variant="ghost" size="icon" className="h-6 w-6"><PanelRightClose className="h-4 w-4" /></Btn></div>
+          </div>
+          <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex justify-start border-b border-border h-11 px-2 gap-1 items-center bg-surface-0">
+              {TABS.map((t) => (
+                <button key={t.id} onClick={() => setTab(t.id)} className={cn("relative flex items-center px-2.5 py-1.5 gap-1.5 rounded-md transition-all", tab === t.id ? "bg-surface-2 shadow-sm" : "hover:bg-surface-1")}>
+                  <span className={tab === t.id ? "text-primary" : "text-muted-foreground"}>{t.icon}</span>
+                  <span className="text-xs">{t.label}</span>
+                  {t.badge > 0 && <span className={cn("ml-1 h-4 min-w-[16px] px-1 rounded-full text-[10px] font-medium flex items-center justify-center", tab === t.id ? "bg-surface-3 text-foreground" : "bg-surface-2 text-muted-foreground")}>{t.badge}</span>}
+                </button>
+              ))}
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden animate-fade-in">
+              {tab === "report" && <div className="h-full overflow-y-auto thin-scrollbar"><PpaHero run={run} /><ReportBody /></div>}
+              {tab === "code" && <CodeViewer />}
+              {tab === "waveform" && <WaveformViewer />}
+              {tab === "spec" && (
+                <div className="h-full overflow-y-auto thin-scrollbar p-4">
+                  <div className="rounded-lg border border-border bg-surface-1 divide-y divide-border">
+                    {SPEC_FIELDS.map(([k, v]) => (
+                      <div key={k} className="flex items-center justify-between px-4 py-2.5 text-sm"><span className="text-muted-foreground">{k}</span><span className="font-mono text-foreground">{v}</span></div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(tab === "schematic" || tab === "layout") && (
+                <div className="h-full flex flex-col items-center justify-center gap-3 text-muted-foreground">
+                  {tab === "schematic" ? <CircuitBoard className="h-8 w-8 opacity-40" /> : <Layout className="h-8 w-8 opacity-40" />}
+                  <span className="text-sm capitalize">{tab} viewer</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Console() {
+      const [active, setActive] = useState(ACTIVE_CONSOLE_DEFAULT);
+      const [expanded, setExpanded] = useState(false);
+      const [copied, setCopied] = useState(false);
+      const [editing, setEditing] = useState(false);
+      const tabs = [{ id: "lint", label: "Lint" }, { id: "sim", label: "Sim" }, { id: "synth", label: "Synth" }];
+      const last = CONSOLE[active];
+      return (
+        <div className={cn("flex flex-col border-t border-border bg-surface-1 transition-[height] duration-base ease-swift", expanded ? "h-64" : "h-auto")}>
+          <div className="flex items-center gap-1 px-2 h-9 border-b border-border">
+            <Terminal className="h-3.5 w-3.5 text-muted-foreground mr-1" />
+            {tabs.map((t) => {
+              const le = CONSOLE[t.id]; const on = active === t.id;
+              return (
+                <button key={t.id} onClick={() => setActive(t.id)} className={cn("flex items-center gap-1.5 text-xs px-2 py-1 rounded-md transition-colors", on ? "bg-surface-2 text-foreground shadow-e1 font-medium" : "text-muted-foreground hover:bg-surface-2/60 hover:text-foreground")}>
+                  <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", statusDot(le.status))} />{t.label}
+                  {le.runId && <span className={cn("font-mono text-[10px] rounded px-1 py-px", on ? "bg-surface-0 text-muted-foreground" : "text-muted-foreground")}>{le.runId}</span>}
+                </button>
+              );
+            })}
+            <div className="ml-auto flex items-center gap-1">
+              <Btn variant="ghost" size="icon" className="h-6 w-6" onClick={() => setExpanded(!expanded)}>{expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}</Btn>
+            </div>
+          </div>
+          {!expanded && (
+            <div className="px-3 py-2 text-xs flex items-center gap-2 min-h-[2.25rem]">
+              <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", statusDot(last.status))} />
+              <span className="truncate">{last.summary}</span>
+            </div>
+          )}
+          {expanded && (
+            <div className="flex flex-col flex-1 min-h-0 animate-fade-in">
+              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border text-xs">
+                <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", statusDot(last.status))} />
+                <span className="truncate text-foreground">{last.summary}</span>
+                <button onClick={() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }} className="ml-auto flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md shrink-0 text-muted-foreground hover:bg-surface-2 hover:text-foreground">
+                  {copied ? <Check className="h-3 w-3 text-status-pass" /> : <Copy className="h-3 w-3" />}{copied ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <div className="flex-1 overflow-auto thin-scrollbar p-2 space-y-2 font-mono text-[11px]">
+                <pre className="whitespace-pre-wrap break-words text-[10px] leading-relaxed text-info bg-surface-2 rounded px-2 py-1.5">{last.command.split("\n").map((c) => "$ " + c).join("\n")}</pre>
+                <pre className="whitespace-pre-wrap break-words text-[10px] leading-relaxed text-muted-foreground px-1">{last.detail}</pre>
+              </div>
+              <div className="border-t border-border px-2 py-1.5 text-[10px]">
+                {!editing ? (
+                  <button onClick={() => setEditing(true)} className="text-muted-foreground hover:text-foreground flex items-center gap-1"><Pencil className="h-3 w-3" /> edit &amp; re-run command</button>
+                ) : (
+                  <div className="space-y-1">
+                    <textarea defaultValue={last.command} rows={2} className="w-full bg-surface-0 border border-border rounded p-1 text-[10px] font-mono" />
+                    <div className="flex items-center gap-2">
+                      <Btn size="sm" className="h-6 gap-1 text-[10px]"><Play className="h-3 w-3" /> Re-run {active}</Btn>
+                      <button onClick={() => setEditing(false)} className="text-muted-foreground hover:text-foreground">cancel</button>
+                      <span className="text-[9px] text-muted-foreground">re-runs via the tool — the UI never shells raw EDA</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /* ---------------- right rail: chat ---------------------------------------- */
+    const toolLabelMap = {
+      write_spec: "Writing Specification", write_file: "Writing File", linter_tool: "Running Linter",
+      simulation_tool: "Running Simulation", start_synthesis: "Starting Synthesis",
+    };
+    function ToolCallCard({ toolCall, result }) {
+      const [open, setOpen] = useState(false);
+      const s = (result?.status || "").toLowerCase();
+      const ok = ["success", "passed", "test_passed"].includes(s);
+      const err = s.includes("fail") || s.includes("error");
+      const args = toolCall.args;
+      const summary = args.filename || args.design_file || args.module_name || (Array.isArray(args.verilog_files) ? args.verilog_files.join(", ") : null);
+      return (
+        <div className="text-xs">
+          <button className="flex items-center gap-1.5 text-muted-foreground/70 hover:text-foreground transition-colors w-full text-left group" onClick={() => setOpen(!open)}>
+            <span className="shrink-0">{ok ? <Check className="h-3 w-3 text-success/70" /> : err ? <X className="h-3 w-3 text-destructive/70" /> : <Wrench className="h-3 w-3" />}</span>
+            <span className="font-mono">{toolLabelMap[toolCall.name] || toolCall.name}</span>
+            {summary && <><span className="text-muted-foreground/30">·</span><span className="font-mono truncate max-w-[200px] text-muted-foreground/50">{summary}</span></>}
+            <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity shrink-0">{open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}</span>
+          </button>
+          {open && result && (
+            <div className="mt-2 ml-5 space-y-2">
+              <pre className="text-xs bg-surface-1 border border-border/40 p-2 rounded overflow-x-auto max-h-[180px] font-mono text-foreground/70">{JSON.stringify(toolCall.args, null, 2)}</pre>
+              <pre className={cn("text-xs border p-2 rounded overflow-x-auto whitespace-pre-wrap font-mono", err ? "bg-destructive/5 border-destructive/20 text-destructive/80" : "bg-surface-1 border-border/40 text-foreground/70")}>{result.content}</pre>
+            </div>
+          )}
+        </div>
+      );
+    }
+    function MdText({ content }) {
+      const html = content
+        .replace(/`([^`]+)`/g, '<code class="bg-surface-2 text-primary px-1.5 py-0.5 rounded text-[13px] font-mono">$1</code>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-foreground">$1</strong>');
+      return <div className="prose prose-sm max-w-none text-sm leading-relaxed text-foreground/90" dangerouslySetInnerHTML={{ __html: html }} />;
+    }
+    function ChatArea() {
+      return (
+        <div className="flex flex-col h-full bg-background">
+          <div className="flex items-center justify-between h-14 px-4 border-b border-border bg-surface-0">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"><Cpu className="h-4 w-4 text-primary" /></div>
+              <div className="min-w-0">
+                <h1 className="font-semibold text-sm truncate">{SESSION.name}</h1>
+                <button className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"><span>Chat 1</span><ChevronDown className="h-3 w-3" /></button>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><Hash className="h-3.5 w-3.5" /><span>48.2k</span></div>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><Coins className="h-3.5 w-3.5" /><span>$0.82</span></div>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto thin-scrollbar">
+            <div className="max-w-3xl mx-auto py-6">
+              {MESSAGES.map((m) => m.role === "user" ? (
+                <div key={m.id} className="flex justify-end gap-3 px-4 py-3">
+                  <div className="max-w-[75%]">
+                    <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words">{m.content}</div>
+                  </div>
+                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center self-end mb-0.5"><User className="h-4 w-4 text-primary-foreground" /></div>
+                </div>
+              ) : (
+                <div key={m.id} className="flex items-start gap-3 px-4 py-3">
+                  <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"><Bot className="h-4 w-4 text-primary" /></div>
+                  <div className="flex-1 min-w-0 space-y-3">
+                    {m.blocks.map((b, i) => b.type === "text" ? <MdText key={i} content={b.content} /> : <ToolCallCard key={i} toolCall={b.toolCall} result={b.result} />)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="p-3 border-t border-border bg-surface-0">
+            <div className="flex items-end gap-2 rounded-xl border border-border bg-surface-1 px-3 py-2 focus-within:border-primary/50">
+              <textarea rows={1} placeholder="Ask the architect to refine the design…" className="flex-1 bg-transparent resize-none outline-none text-sm placeholder:text-muted-foreground py-1" />
+              <Btn size="icon" className="h-8 w-8 rounded-lg"><ArrowRight className="h-4 w-4" /></Btn>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ---------------- shell ---------------------------------------------------- */
+    function Workbench() {
+      const [dark, setDark] = useState(true);
+      const [chatOpen, setChatOpen] = useState(true);
+      const [selectedRun, setSelectedRun] = useState(SELECTED_RUN);
+      const run = RUNS.find((r) => r.id === selectedRun) || RUNS[0];
+      const viewRun = run.kind === "synth" ? run : RUNS.find((r) => r.id === SELECTED_RUN);
+      React.useEffect(() => { document.documentElement.classList.toggle("dark", dark); document.documentElement.classList.toggle("light", !dark); }, [dark]);
+      return (
+        <main className="h-screen w-screen overflow-hidden flex flex-col bg-background">
+          <TopBar dark={dark} setDark={setDark} />
+          <PipelineStepper />
+          <div className="flex-1 min-h-0 flex">
+            {/* Left rail */}
+            <div className="w-[20%] min-w-[220px] max-w-[340px] flex flex-col bg-surface-0 border-r border-border min-h-0">
+              <div className="flex-1 min-h-0 overflow-y-auto thin-scrollbar"><FileTree /></div>
+              <RunsTimeline selected={selectedRun} onSelect={setSelectedRun} />
+            </div>
+            {/* Center */}
+            <div className="flex-1 flex flex-col min-h-0">
+              <ViewingBanner run={viewRun} />
+              <div className="flex-1 min-h-0"><ArtifactsPanel run={RUNS.find(r=>r.id==="S-04")} /></div>
+              <Console />
+            </div>
+            {/* Right rail */}
+            {chatOpen && (
+              <div className="w-[28%] min-w-[300px] max-w-[460px] flex flex-col border-l border-border min-h-0 animate-fade-in">
+                <PanelHeader label="AI Assistant" icon={<MessageSquare className="h-3.5 w-3.5 text-primary" />}>
+                  <span className="text-[10px] text-muted-foreground mr-1 hidden lg:inline">same tools · same workspace</span>
+                  <Btn variant="ghost" size="icon" className="h-6 w-6" title="Collapse assistant" onClick={() => setChatOpen(false)}><PanelRightClose className="h-4 w-4" /></Btn>
+                </PanelHeader>
+                <div className="flex-1 min-h-0"><ChatArea /></div>
+              </div>
+            )}
+          </div>
+          {!chatOpen && (
+            <button onClick={() => setChatOpen(true)} className="fixed right-0 top-1/2 -translate-y-1/2 z-50 flex items-center gap-1 bg-surface-2 border border-border border-r-0 rounded-l-md px-2 py-3 text-xs text-muted-foreground shadow-e1 hover:text-primary hover:bg-surface-3">
+              <PanelRightOpen className="h-4 w-4" /><span className="[writing-mode:vertical-rl] rotate-180">AI Assistant</span>
+            </button>
+          )}
+        </main>
+      );
+    }
+
+    createRoot(document.getElementById("root")).render(<Workbench />);
+  </script>
+</body>
+</html>

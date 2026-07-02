@@ -1,0 +1,1752 @@
+<!-- @dsCard group="Screens" name="Workbench v2" subtitle="Refined EDA IDE — file tree, run split-button, ⌘K palette, docked runs/console" width="1440" height="880" -->
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SiliconCrew · Workbench v2</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: ["class"],
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Inter", "system-ui", "sans-serif"],
+            mono: ["JetBrains Mono", "ui-monospace", "monospace"],
+          },
+          colors: {
+            border: "hsl(var(--border) / <alpha-value>)",
+            input: "hsl(var(--input) / <alpha-value>)",
+            ring: "hsl(var(--ring) / <alpha-value>)",
+            background: "hsl(var(--background) / <alpha-value>)",
+            foreground: "hsl(var(--foreground) / <alpha-value>)",
+            primary: { DEFAULT: "hsl(var(--primary) / <alpha-value>)", foreground: "hsl(var(--primary-foreground) / <alpha-value>)" },
+            secondary: { DEFAULT: "hsl(var(--secondary) / <alpha-value>)", foreground: "hsl(var(--secondary-foreground) / <alpha-value>)" },
+            destructive: { DEFAULT: "hsl(var(--destructive) / <alpha-value>)", foreground: "hsl(var(--destructive-foreground) / <alpha-value>)" },
+            muted: { DEFAULT: "hsl(var(--muted) / <alpha-value>)", foreground: "hsl(var(--muted-foreground) / <alpha-value>)" },
+            accent: { DEFAULT: "hsl(var(--accent) / <alpha-value>)", foreground: "hsl(var(--accent-foreground) / <alpha-value>)" },
+            popover: { DEFAULT: "hsl(var(--popover) / <alpha-value>)", foreground: "hsl(var(--popover-foreground) / <alpha-value>)" },
+            card: { DEFAULT: "hsl(var(--card) / <alpha-value>)", foreground: "hsl(var(--card-foreground) / <alpha-value>)" },
+            success: { DEFAULT: "hsl(var(--success) / <alpha-value>)", foreground: "hsl(var(--success-foreground) / <alpha-value>)" },
+            warning: { DEFAULT: "hsl(var(--warning) / <alpha-value>)", foreground: "hsl(var(--warning-foreground) / <alpha-value>)" },
+            info: { DEFAULT: "hsl(var(--info) / <alpha-value>)", foreground: "hsl(var(--info-foreground) / <alpha-value>)" },
+            status: {
+              pass: "hsl(var(--status-pass) / <alpha-value>)",
+              fail: "hsl(var(--status-fail) / <alpha-value>)",
+              warn: "hsl(var(--status-warn) / <alpha-value>)",
+              running: "hsl(var(--status-running) / <alpha-value>)",
+            },
+            surface: {
+              0: "hsl(var(--surface-0) / <alpha-value>)",
+              1: "hsl(var(--surface-1) / <alpha-value>)",
+              2: "hsl(var(--surface-2) / <alpha-value>)",
+              3: "hsl(var(--surface-3) / <alpha-value>)",
+            },
+          },
+          borderRadius: { lg: "var(--radius)", md: "calc(var(--radius) - 2px)", sm: "calc(var(--radius) - 4px)" },
+          boxShadow: {
+            e1: "0 1px 2px hsl(30 12% 4% / 0.30), 0 1px 1px hsl(30 12% 4% / 0.22)",
+            e2: "0 2px 6px hsl(30 12% 4% / 0.34), 0 1px 2px hsl(30 12% 4% / 0.24)",
+            e3: "0 8px 24px hsl(30 12% 4% / 0.40), 0 2px 6px hsl(30 12% 4% / 0.28)",
+          },
+          transitionTimingFunction: { swift: "cubic-bezier(0.22, 1, 0.36, 1)" },
+          transitionDuration: { fast: "120ms", base: "180ms", slow: "280ms" },
+          animation: {
+            "fade-in": "fadeIn 0.14s cubic-bezier(0.22,1,0.36,1)",
+            "pulse-subtle": "pulseSubtle 2s ease-in-out infinite",
+          },
+          keyframes: {
+            fadeIn: { "0%": { opacity: "0" }, "100%": { opacity: "1" } },
+            pulseSubtle: { "0%,100%": { opacity: "1" }, "50%": { opacity: "0.5" } },
+          },
+        },
+      },
+    };
+  </script>
+
+  <style type="text/tailwindcss">
+    @layer base {
+      :root {
+        --background: 40 8% 7%; --foreground: 40 18% 90%;
+        --card: 36 9% 11%; --card-foreground: 40 18% 90%;
+        --popover: 33 10% 13%; --popover-foreground: 40 18% 90%;
+        --primary: 14 63% 60%; --primary-foreground: 0 0% 100%;
+        --secondary: 33 9% 15%; --secondary-foreground: 40 18% 90%;
+        --muted: 33 8% 17%; --muted-foreground: 38 8% 58%;
+        --accent: 33 9% 19%; --accent-foreground: 40 18% 90%;
+        --info: 210 47% 61%; --info-foreground: 0 0% 100%;
+        --destructive: 8 56% 54%; --destructive-foreground: 0 0% 100%;
+        --success: 136 49% 49%; --success-foreground: 0 0% 100%;
+        --warning: 43 73% 49%; --warning-foreground: 0 0% 0%;
+        --status-pass: 136 49% 49%; --status-fail: 8 62% 62%; --status-warn: 43 73% 49%; --status-running: 210 47% 61%;
+        --border: 33 9% 18%; --input: 33 8% 17%; --ring: 14 63% 60%; --radius: 0.5rem;
+        --surface-0: 40 8% 7%; --surface-1: 36 9% 11%; --surface-2: 33 9% 14%; --surface-3: 30 9% 17%;
+      }
+      .light {
+        --background: 40 30% 95%; --foreground: 30 18% 16%;
+        --card: 42 40% 99%; --card-foreground: 30 18% 16%;
+        --popover: 42 40% 99%; --popover-foreground: 30 18% 16%;
+        --primary: 14 64% 44%; --primary-foreground: 0 0% 100%;
+        --secondary: 40 24% 91%; --secondary-foreground: 30 18% 16%;
+        --muted: 40 22% 90%; --muted-foreground: 36 13% 37%;
+        --accent: 40 24% 88%; --accent-foreground: 30 18% 16%;
+        --info: 210 62% 40%; --info-foreground: 0 0% 100%;
+        --destructive: 8 64% 46%; --destructive-foreground: 0 0% 100%;
+        --success: 136 52% 30%; --success-foreground: 0 0% 100%;
+        --warning: 34 92% 31%; --warning-foreground: 0 0% 100%;
+        --status-pass: 136 52% 30%; --status-fail: 8 64% 43%; --status-warn: 34 92% 31%; --status-running: 210 62% 40%;
+        --border: 38 22% 83%; --input: 38 22% 83%; --ring: 14 64% 44%;
+        --surface-0: 40 30% 95%; --surface-1: 42 36% 98%; --surface-2: 40 24% 91%; --surface-3: 38 20% 87%;
+      }
+      body { font-family: Inter, system-ui, sans-serif; }
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    .thin-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }
+  </style>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.3.1",
+        "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.400.0?deps=react@18.3.1"
+      }
+    }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+</head>
+<body class="bg-background text-foreground antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module" data-presets="react">
+    import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+    import { createRoot } from "react-dom/client";
+    import {
+      CircuitBoard, MessageSquare, PanelRightClose, PanelRightOpen, PanelBottomClose, PanelBottomOpen,
+      FileText, Code2, Waves, Cpu, Play, ChevronDown, ChevronRight, ChevronUp, ChevronsUpDown,
+      Terminal, Pencil, Copy, Check, Coins, Hash, User, Bot, Sun, Moon, X,
+      FileCode, FileCode2, FileTerminal, FileClock, FileType2, File as FileIcon,
+      Crown, FlaskConical, Download, Pin, PinOff, GitCompare, RefreshCw,
+      Activity, Layout, BarChart3, Clock, Boxes, Zap, Gauge, ArrowRight,
+      Folder, FolderOpen, Search, Command, Plus, GitBranch, Wrench, ListTree,
+      Maximize2, ZoomIn, ZoomOut, CornerDownRight, MoreHorizontal, Send, Sliders, Info,
+      AlertTriangle, ClipboardList, Filter as FilterIcon, Layers,
+      Github, Settings, LogOut, KeyRound, Plug, ExternalLink, SquarePen, Sparkles, ClipboardCheck,
+    } from "lucide-react";
+
+    const cn = (...a) => a.filter(Boolean).join(" ");
+    const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+    const MOD = isMac ? "⌘" : "Ctrl";
+
+    /* ======================= sample data (shared with v1) ==================== */
+    const SESSION = { id: "fifo-signoff", name: "Sync FIFO · 16×8", model_name: "claude-opus-pro", total_tokens: 48213, total_cost: 0.82 };
+    const MANIFEST = { synthTop: "sync_fifo", simTop: "sync_fifo_tb", clockPeriodNs: 7, platform: "sky130hd" };
+
+    // Real model catalog (src/model_catalog.py) + the deployed MCP server (.mcp.json).
+    const MODELS = [
+      { id:"gemini-3-flash-preview", label:"Gemini 3 Flash", provider:"Google", tier:"fast", hint:"Fast, low-cost default — great for most RTL work.", price:"$0.50 / $3.00" },
+      { id:"gemini-3.1-flash-lite-preview", label:"Gemini 3.1 Flash Lite", provider:"Google", tier:"fast", hint:"Cheapest + quickest; light edits and quick questions.", price:"$0.25 / $1.50" },
+      { id:"gemini-3.1-pro-preview", label:"Gemini 3.1 Pro", provider:"Google", tier:"capable", hint:"Deeper reasoning for tricky debugging / architecture.", price:"$2.00 / $12.00" },
+      { id:"gpt-5.4-mini", label:"GPT-5.4 mini", provider:"OpenAI", tier:"fast", hint:"Fast and inexpensive OpenAI option.", price:"$0.30 / $2.50" },
+      { id:"gpt-5-mini", label:"GPT-5 mini", provider:"OpenAI", tier:"fast", hint:"Compact OpenAI model for routine tasks.", price:"$0.30 / $2.50" },
+      { id:"gpt-5.4", label:"GPT-5.4", provider:"OpenAI", tier:"capable", hint:"Strong general reasoning.", price:"$2.00 / $12.00" },
+      { id:"gpt-5.3-codex", label:"GPT-5.3 Codex", provider:"OpenAI", tier:"capable", hint:"Code-tuned; thorough on larger designs.", price:"$2.00 / $12.00" },
+      { id:"claude-sonnet-4-6", label:"Claude Sonnet 4.6", provider:"Anthropic", tier:"balanced", hint:"Balanced quality/speed; reliable tool use.", price:"$0.30 / $2.50" },
+      { id:"claude-opus-4-6", label:"Claude Opus 4.6", provider:"Anthropic", tier:"capable", hint:"Most capable; best for hard, multi-step work.", price:"$2.00 / $12.00" },
+    ];
+    const REPO_URL = "https://github.com/naman-ranka/siliconcrew";
+    const MCP_URL = "https://siliconcrew-backend-psp2dkllmq-uc.a.run.app/mcp";
+    const THREADS = [
+      { id:"t1", name:"FIFO signoff", updated:"2m" },
+      { id:"t2", name:"Debug overflow assert", updated:"22m" },
+      { id:"t3", name:"Timing exploration", updated:"1h" },
+    ];
+
+    const RUNS = [
+      { id: "S-04", kind: "synth", status: "passed", top: "sync_fifo", createdAt: mins(4), pinned: true,
+        ppa: { areaUm2: 1284.5, cells: 412, wnsNs: 0.42, tnsNs: 0, fmaxMhz: 158.7, powerMw: 3.1 } },
+      { id: "R-07", kind: "sim", status: "passed", top: "sync_fifo_tb", createdAt: mins(11), pinned: false, passMarkerFound: true, vcdPath: "dump.vcd" },
+      { id: "R-06", kind: "sim", status: "failed", top: "sync_fifo_tb", createdAt: mins(26), pinned: false,
+        failure: { timeNs: 320, firstFailureLine: "ASSERT failed: overflow flag not asserted on write-when-full" } },
+      { id: "R-06.1", kind: "sim", status: "passed", top: "sync_fifo_tb", createdAt: mins(19), pinned: false, parentRunId: "R-06", passMarkerFound: true },
+      { id: "S-03", kind: "synth", status: "passed", top: "sync_fifo", createdAt: mins(41), pinned: false,
+        ppa: { areaUm2: 1310.0, cells: 420, wnsNs: 0.28, tnsNs: 0, fmaxMhz: 151.2, powerMw: 3.3 } },
+    ];
+
+    const CONSOLE = {
+      lint: { status: "passed", command: "verilator --lint-only -Wall sync_fifo.v fifo_mem.v", summary: "Lint passed · 2 warnings",
+        detail: "sync_fifo.v:44 warning: parameter DEPTH unused in this scope\nfifo_mem.v:19 warning: implicit conversion narrows 9 -> 8 bits" },
+      sim:  { status: "passed", runId: "R-07", command: "iverilog -g2012 -o sim.out sync_fifo.v fifo_mem.v sync_fifo_tb.v\nvvp sim.out",
+        summary: "R-07 passed · TEST PASSED", detail: "All 1024 randomized push/pop transactions matched the reference model.\nTEST PASSED" },
+      synth:{ status: "passed", runId: "S-04", command: "orfs flow sky130hd sync_fifo --clock 7ns",
+        summary: "S-04 · WNS +0.42ns · 412 cells · 158.7 MHz", detail: "Placed 412 cells · routed 0 DRC violations\nWNS +0.42ns · TNS 0.00ns · met at 158.7 MHz" },
+    };
+
+    /* ---- Activity: one unified tool-call history (agent + you), shaped to the
+       real /lint, /simulate, /synthesize response bodies in src/api/actions.py ---- */
+    const ACTIVITY_SEED = [
+      { id:"ac1", actor:"agent", kind:"spec",  tool:"write_spec", target:"spec.md", status:"ok", ts:iso(31), summary:"16×8 · full/empty/overflow @7ns",
+        args:{ filename:"spec.md", module_name:"sync_fifo" }, result:{ saved:"spec.md" } },
+      { id:"ac2", actor:"agent", kind:"write", tool:"write_file", target:"sync_fifo.v", status:"ok", ts:iso(30), summary:"98 lines",
+        args:{ filename:"sync_fifo.v" }, result:{ saved:"sync_fifo.v", bytes:2317 } },
+      { id:"ac3", actor:"agent", kind:"write", tool:"write_file", target:"fifo_mem.v", status:"ok", ts:iso(30), summary:"31 lines",
+        args:{ filename:"fifo_mem.v" }, result:{ saved:"fifo_mem.v", bytes:1271 } },
+      { id:"ac4", actor:"agent", kind:"lint",  tool:"linter_tool", target:"rtl (2 files)", status:"warn", ts:iso(29), summary:"passed · 2 warnings",
+        args:{ verilog_files:["sync_fifo.v","fifo_mem.v"] },
+        result:{ status:"passed", command:"iverilog -t null -Wall sync_fifo.v fifo_mem.v", errors:[], warnings:[
+          { file:"sync_fifo.v", line:44, severity:"warning", message:"parameter DEPTH unused in this scope" },
+          { file:"fifo_mem.v", line:19, severity:"warning", message:"implicit conversion narrows 9 → 8 bits" },
+        ] } },
+      { id:"ac5", actor:"agent", kind:"sim",   tool:"run_isolated_simulation", target:"sync_fifo_tb", status:"failed", ts:iso(28), runId:"R-06", vcdPath:"build/sim/R-06/dump.vcd",
+        summary:"FAIL @320ns · overflow assert", args:{ simTop:"sync_fifo_tb", mode:"rtl" },
+        result:{ runId:"R-06", status:"failed", passMarker:"TEST PASSED", markerFound:false, vcdPath:"build/sim/R-06/dump.vcd",
+          log:"ASSERT failed: overflow flag not asserted on write-when-full\nTEST FAILED @ t=320ns" } },
+      { id:"ac6", actor:"user",  kind:"write", tool:"write_file", target:"sync_fifo.v", status:"ok", ts:iso(20), summary:"add overflow guard",
+        args:{ filename:"sync_fifo.v" }, result:{ saved:"sync_fifo.v", bytes:2360 } },
+      { id:"ac7", actor:"user",  kind:"lint",  tool:"linter_tool", target:"rtl (2 files)", status:"warn", ts:iso(19), summary:"passed · 2 warnings",
+        args:{ verilog_files:["sync_fifo.v","fifo_mem.v"] },
+        result:{ status:"passed", command:"iverilog -t null -Wall sync_fifo.v fifo_mem.v", errors:[], warnings:[
+          { file:"sync_fifo.v", line:44, severity:"warning", message:"parameter DEPTH unused in this scope" },
+          { file:"fifo_mem.v", line:19, severity:"warning", message:"implicit conversion narrows 9 → 8 bits" },
+        ] } },
+      { id:"ac8", actor:"user",  kind:"sim",   tool:"run_isolated_simulation", target:"sync_fifo_tb", status:"passed", ts:iso(19), runId:"R-06.1", parent:"R-06", vcdPath:"build/sim/R-06.1/dump.vcd",
+        summary:"PASS · retry of R-06", args:{ simTop:"sync_fifo_tb", mode:"rtl" },
+        result:{ runId:"R-06.1", status:"passed", passMarker:"TEST PASSED", markerFound:true, transactions:"1024/1024", vcdPath:"build/sim/R-06.1/dump.vcd", log:"1024/1024 transactions matched\nTEST PASSED" } },
+      { id:"ac9", actor:"agent", kind:"sim",   tool:"run_isolated_simulation", target:"sync_fifo_tb", status:"passed", ts:iso(11), runId:"R-07", vcdPath:"build/sim/R-07/dump.vcd",
+        summary:"PASS · regression", args:{ simTop:"sync_fifo_tb", mode:"rtl", pass_marker:"TEST PASSED" },
+        result:{ runId:"R-07", status:"passed", passMarker:"TEST PASSED", markerFound:true, transactions:"1024/1024", vcdPath:"build/sim/R-07/dump.vcd", log:"TEST PASSED" } },
+      { id:"ac10", actor:"agent", kind:"synth", tool:"start_synthesis", target:"sync_fifo", status:"passed", ts:iso(4), runId:"S-04",
+        summary:"WNS +0.42ns · 412 cells · 158.7 MHz", args:{ synthTop:"sync_fifo", platform:"sky130hd", clockPeriodNs:7 },
+        result:{ runId:"S-04", jobId:"job_8f21", status:"passed", ppa:{ wnsNs:0.42, tnsNs:0, cells:412, areaUm2:1284.5, fmaxMhz:158.7, powerMw:3.1 }, drc:0, log:"S-04 complete · WNS +0.42ns · TNS 0 · 412 cells · 0 DRC" } },
+      { id:"ac11", actor:"user",  kind:"metric", tool:"get_synthesis_metrics", target:"S-04", status:"ok", ts:iso(3), runId:"S-04",
+        summary:"area 1284.5µm² · 3.1mW", args:{ run_id:"S-04" }, result:{ wns_ns:0.42, area_um2:1284.5, cell_count:412, power_mw:3.1 } },
+      { id:"ac12", actor:"agent", kind:"report", tool:"generate_report_tool", target:"S-04", status:"ok", ts:iso(2), runId:"S-04",
+        summary:"signoff report · timing met", args:{ run_id:"S-04" }, result:{ filename:"design_report.md", run_id:"S-04" } },
+    ];
+
+    const ACT_KIND = {
+      spec:  { icon: ClipboardList, label:"spec" },
+      write: { icon: FileCode2, label:"write" },
+      lint:  { icon: FileText, label:"lint" },
+      sim:   { icon: Waves, label:"sim" },
+      synth: { icon: Cpu, label:"synth" },
+      metric:{ icon: Gauge, label:"metric" },
+      report:{ icon: BarChart3, label:"report" },
+    };
+    const actDot = (s) => s==="passed"||s==="ok" ? "bg-status-pass" : s==="failed" ? "bg-status-fail" : s==="warn" ? "bg-status-warn" : s==="running" ? "bg-status-running animate-pulse-subtle" : "bg-muted-foreground/40";
+    const actText = (s) => s==="passed"||s==="ok" ? "text-status-pass" : s==="failed" ? "text-status-fail" : s==="warn" ? "text-status-warn" : s==="running" ? "text-status-running" : "text-muted-foreground";
+    const ActMark = ({ s, cls="h-3 w-3" }) => s==="failed" ? <X className={cn(cls,"text-status-fail")} /> : s==="warn" ? <AlertTriangle className={cn(cls,"text-status-warn")} /> : s==="running" ? <RefreshCw className={cn(cls,"text-status-running animate-spin")} /> : <Check className={cn(cls,"text-status-pass")} />;
+    const ActActor = ({ a }) => a==="agent"
+      ? <span className="text-primary/70" title="agent"><Bot className="h-3 w-3" /></span>
+      : <span className="text-info/70" title="you"><User className="h-3 w-3" /></span>;
+
+    const MESSAGES = [
+      { id: "u1", role: "user", content: "16-deep 8-bit sync FIFO, full/empty flags + overflow guard. Lint, sim, synth.", timestamp: iso(30) },
+      { id: "a1", role: "assistant", timestamp: iso(29), blocks: [
+        { type: "text", content: "Drafting spec, implementing RTL across `sync_fifo.v` and `fifo_mem.v`, then running the pipeline." },
+        { type: "tool", toolCall: { id: "t1", name: "write_spec", args: { filename: "spec.md", module_name: "sync_fifo" } }, result: { status: "success", content: "Wrote spec.md (16×8, full/empty/overflow, single clock @7ns)." } },
+        { type: "tool", toolCall: { id: "t2", name: "write_file", args: { filename: "sync_fifo.v" } }, result: { status: "success", content: "Wrote sync_fifo.v (98 lines)." } },
+        { type: "tool", toolCall: { id: "t3", name: "linter_tool", args: { verilog_files: ["sync_fifo.v", "fifo_mem.v"] } }, result: { status: "passed", content: "Lint passed — 2 warnings, 0 errors." } },
+        { type: "tool", toolCall: { id: "t4", name: "simulation_tool", args: { design_file: "sync_fifo_tb.v" } }, result: { status: "test_passed", content: "R-07 passed · 1024/1024 transactions matched · TEST PASSED" } },
+        { type: "tool", toolCall: { id: "t5", name: "start_synthesis", args: { module_name: "sync_fifo" } }, result: { status: "success", content: "S-04 · WNS +0.42ns · 412 cells · 158.7 MHz" } },
+        { type: "text", content: "**Timing met** — +0.42 ns slack (158.7 MHz), 1,284 µm² across 412 cells. The overflow guard that broke `R-06` is fixed in `R-06.1`. Full PPA in the Report tab." },
+      ]},
+    ];
+
+    const REPORT_MD = [
+      "Timing **met** with **+0.42 ns** worst negative slack at a 7 ns target (≈158.7 MHz).",
+      "Zero routing DRC violations; design is clean for tape-out.",
+      "",
+      "| Metric | Value | vs S-03 |",
+      "|---|---|---|",
+      "| Worst slack (WNS) | +0.42 ns | +0.14 ns |",
+      "| Area | 1,284.5 µm² | −2.0% |",
+      "| Cells | 412 | −8 |",
+      "| Fmax | 158.7 MHz | +5.0% |",
+      "| Power | 3.1 mW | −6.1% |",
+    ].join("\n");
+
+    const SPEC_FIELDS = [
+      ["Module", "sync_fifo"], ["Depth", "16 entries"], ["Width", "8 bits"],
+      ["Clock", "7 ns (single domain)"], ["Flags", "full, empty, overflow"], ["Reset", "synchronous, active-high"],
+    ];
+
+    const CODE_FILES = {
+      "sync_fifo.v": `// sync_fifo.v — 16-deep x 8-bit synchronous FIFO
+// full / empty / overflow flags, single clock domain @ 7ns
+module sync_fifo #(
+  parameter WIDTH = 8,
+  parameter DEPTH = 16
+) (
+  input                     clk,
+  input                     rst,
+  input                     wr_en,
+  input                     rd_en,
+  input      [WIDTH-1:0]    din,
+  output reg [WIDTH-1:0]    dout,
+  output                    full,
+  output                    empty,
+  output reg                overflow
+);
+  localparam AW = $clog2(DEPTH);
+  reg [AW:0] wptr, rptr;
+
+  fifo_mem #(.WIDTH(WIDTH), .DEPTH(DEPTH)) mem (
+    .clk   (clk),
+    .wr_en (wr_en && !full),
+    .waddr (wptr[AW-1:0]),
+    .raddr (rptr[AW-1:0]),
+    .din   (din),
+    .dout  (dout)
+  );
+
+  assign full  = (wptr[AW] != rptr[AW]) && (wptr[AW-1:0] == rptr[AW-1:0]);
+  assign empty = (wptr == rptr);
+
+  always @(posedge clk) begin
+    if (rst) begin
+      wptr     <= 0;
+      rptr     <= 0;
+      overflow <= 1'b0;
+    end else begin
+      if (wr_en && !full)  wptr <= wptr + 1'b1;
+      if (rd_en && !empty) rptr <= rptr + 1'b1;
+      // overflow guard — was missing in R-06, fixed in R-06.1
+      if (wr_en && full)   overflow <= 1'b1;
+    end
+  end
+endmodule`,
+      "fifo_mem.v": `// fifo_mem.v — dual-address synchronous memory for sync_fifo
+module fifo_mem #(
+  parameter WIDTH = 8,
+  parameter DEPTH = 16
+) (
+  input                    clk,
+  input                    wr_en,
+  input  [$clog2(DEPTH)-1:0] waddr,
+  input  [$clog2(DEPTH)-1:0] raddr,
+  input  [WIDTH-1:0]       din,
+  output [WIDTH-1:0]       dout
+);
+  reg [WIDTH-1:0] ram [0:DEPTH-1];
+
+  always @(posedge clk) begin
+    if (wr_en) ram[waddr] <= din;
+  end
+
+  assign dout = ram[raddr];
+endmodule`,
+    };
+
+    function hlVerilog(src) {
+      const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const kw = /\b(module|endmodule|input|output|inout|reg|wire|logic|assign|always|begin|end|if|else|case|endcase|posedge|negedge|parameter|localparam|default|for|integer|genvar|generate|endgenerate)\b/g;
+      return esc(src).split("\n").map((line) => {
+        let code = line, comment = "";
+        const ci = line.indexOf("//");
+        if (ci >= 0) { code = line.slice(0, ci); comment = '<span class="text-muted-foreground/60 italic">' + line.slice(ci) + "</span>"; }
+        code = code
+          .replace(/\b(\d+'[bhdBHD][0-9a-fA-FxXzZ_]+|\d+)\b/g, '<span class="text-info">$1</span>')
+          .replace(/(\$\w+)/g, '<span class="text-status-warn">$1</span>')
+          .replace(kw, '<span class="text-primary">$1</span>');
+        return code + comment;
+      });
+    }
+
+    const WAVE = (() => {
+      const end = 200, clk = { name: "clk", scope: "sync_fifo_tb", width: 1, times: [], values: [] };
+      for (let t = 0; t <= end; t += 5) { clk.times.push(t); clk.values.push((t / 5) % 2 === 0 ? 0 : 1); }
+      const sig = (name, scope, width, times, values) => ({ name, scope, width, isBus: width > 1, times, values });
+      return {
+        filename: "dump.vcd", endtime: end, timescale: "ns", signalCount: 12,
+        signals: [
+          clk,
+          sig("rst", "sync_fifo_tb", 1, [0, 15], [1, 0]),
+          sig("wr_en", "sync_fifo_tb", 1, [0, 20, 40, 65, 90, 120], [0, 1, 1, 0, 1, 0]),
+          sig("rd_en", "sync_fifo_tb", 1, [0, 75, 100, 140, 175], [0, 1, 0, 1, 0]),
+          sig("din", "sync_fifo_tb", 8, [0, 20, 40, 90], [0, 0x3a, 0xa5, 0x1c]),
+          sig("dout", "sync_fifo_tb", 8, [0, 80, 105, 150], [0, 0x3a, 0xa5, 0x1c]),
+          sig("full", "sync_fifo_tb", 1, [0, 120, 160], [0, 1, 0]),
+          sig("empty", "sync_fifo_tb", 1, [0, 25, 185], [1, 0, 1]),
+          sig("wptr", "sync_fifo_tb.dut", 5, [0, 25, 45, 95], [0, 1, 2, 3]),
+          sig("rptr", "sync_fifo_tb.dut", 5, [0, 80, 105, 150], [0, 1, 2, 3]),
+          sig("overflow", "sync_fifo_tb.dut", 1, [0], [0]),
+        ],
+      };
+    })();
+
+    function mins(m) { return new Date(Date.now() - m * 60000).toISOString(); }
+    function iso(m) { return new Date(Date.now() - m * 60000).toISOString(); }
+    function relativeTime(iso) {
+      const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+      if (s < 60) return s + "s"; const m = Math.floor(s / 60);
+      if (m < 60) return m + "m"; const h = Math.floor(m / 60);
+      if (h < 24) return h + "h"; return Math.floor(h / 24) + "d";
+    }
+    const statusDot = (s) => s === "passed" ? "bg-status-pass" : s === "failed" ? "bg-status-fail" : s === "running" ? "bg-status-running animate-pulse-subtle" : "bg-muted-foreground/40";
+    const statusText = (s) => s === "passed" ? "text-status-pass" : s === "failed" ? "text-status-fail" : s === "running" ? "text-status-running" : "text-muted-foreground";
+
+    /* ======================= file tree model ================================= */
+    const ROLE_TAG = { rtl: "rtl", tb: "tb", sdc: "sdc", include: "vh", out: "" };
+    function roleIcon(role, name) {
+      const c = "h-3.5 w-3.5";
+      if (role === "tb") return <FileTerminal className={c} />;
+      if (role === "sdc") return <FileClock className={c} />;
+      if (role === "include") return <FileType2 className={c} />;
+      if (role === "out") return name?.endsWith(".vcd") ? <Activity className={c} /> : <FileIcon className={c} />;
+      return <FileCode2 className={c} />;
+    }
+    const FILE_TREE = [
+      { type: "folder", name: "rtl", children: [
+        { type: "file", name: "sync_fifo.v", role: "rtl", synthTop: true },
+        { type: "file", name: "fifo_mem.v", role: "rtl" },
+        { type: "file", name: "defines.vh", role: "include" },
+      ]},
+      { type: "folder", name: "tb", children: [
+        { type: "file", name: "sync_fifo_tb.v", role: "tb", simTop: true },
+      ]},
+      { type: "folder", name: "constraints", children: [
+        { type: "file", name: "constraints.sdc", role: "sdc" },
+      ]},
+      { type: "folder", name: "build", children: [
+        { type: "folder", name: "sim", children: [ { type: "file", name: "dump.vcd", role: "out", ro: true } ] },
+        { type: "folder", name: "synth", children: [ { type: "file", name: "sync_fifo.netlist.v", role: "out", ro: true }, { type: "file", name: "report.json", role: "out", ro: true } ] },
+        { type: "folder", name: "pnr", children: [ { type: "file", name: "sync_fifo.def", role: "out", ro: true } ] },
+      ]},
+    ];
+
+    /* ======================= primitives ====================================== */
+    function Btn({ variant = "ghost", size = "sm", className, children, ...p }) {
+      const base = "inline-flex items-center justify-center whitespace-nowrap rounded-md font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:pointer-events-none";
+      const variants = {
+        primary: "bg-primary text-primary-foreground hover:bg-primary/90",
+        ghost: "text-foreground/80 hover:bg-surface-2 hover:text-foreground",
+        outline: "border border-border bg-transparent hover:bg-surface-2",
+      };
+      const sizes = { sm: "h-7 px-2.5 text-xs gap-1.5", xs: "h-6 px-2 text-[11px] gap-1", icon: "h-7 w-7", "icon-sm": "h-6 w-6" };
+      return <button className={cn(base, variants[variant], sizes[size], className)} {...p}>{children}</button>;
+    }
+    function Kbd({ children }) {
+      return <kbd className="inline-flex items-center h-4 min-w-[16px] px-1 rounded border border-border bg-surface-2 text-[9px] font-mono text-muted-foreground">{children}</kbd>;
+    }
+    // click-outside
+    function useOutside(ref, onClose, active) {
+      useEffect(() => {
+        if (!active) return;
+        const h = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+        document.addEventListener("mousedown", h);
+        return () => document.removeEventListener("mousedown", h);
+      }, [active, onClose]);
+    }
+
+    /* ======================= command catalog (drives every run surface) ====== */
+    const MANIFEST_FILES = [
+      { name: "sync_fifo.v", role: "rtl" }, { name: "fifo_mem.v", role: "rtl" }, { name: "defines.vh", role: "include" },
+      { name: "sync_fifo_tb.v", role: "tb" }, { name: "constraints.sdc", role: "sdc" },
+    ];
+    function filesForStage(stage) {
+      const map = { lint: ["rtl","include"], sim: ["rtl","tb","include"], synth: ["rtl","sdc"] };
+      const roles = new Set(map[stage] || ["rtl","tb","include","sdc"]);
+      return MANIFEST_FILES.filter((f) => roles.has(f.role)).map((f) => f.name);
+    }
+    const PLATFORMS = ["sky130hd","sky130hs","nangate45","asap7","gf180","ihp-sg13g2"];
+    const PD_STAGES = ["floorplan","place","cts","grt","route","finish"];
+
+    const COMMANDS = {
+      lint: { id:"lint", label:"Lint", tool:"linter_tool", icon:<FileText className="h-3.5 w-3.5"/>, short:`${MOD} L`,
+        desc:"Icarus syntax check. Manifest supplies rtl + include.", autoArgs:[{key:"verilog_files",stage:"lint"}], params:[] },
+      sim: { id:"sim", label:"Simulate", tool:"run_isolated_simulation", kind:"sim", icon:<Waves className="h-3.5 w-3.5"/>, short:`${MOD} R`,
+        desc:"Isolated RTL/post-synth sim — own sim_runs/ dir + VCD + provenance.", reads:"sim",
+        autoArgs:[{key:"sim_top",from:"simTop"}], params:[
+          { key:"mode", editor:"enum", options:["rtl","post_synth"], default:"rtl", source:"choice" },
+          { key:"sim_profile", editor:"enum", options:["auto","pinned","compat"], default:"auto", source:"choice", adv:true },
+          { key:"pass_marker", editor:"text", default:"TEST PASSED", source:"text", adv:true },
+        ] },
+      synth: { id:"synth", label:"Synthesize", tool:"start_synthesis", kind:"synth", async:true, icon:<Cpu className="h-3.5 w-3.5"/>, short:`${MOD} Y`,
+        desc:"Async ORFS job → { job_id, run_id }. Files = rtl (SDC attached).",
+        autoArgs:[{key:"verilog_files",stage:"synth-v"},{key:"top_module",from:"synthTop"}], params:[
+          { key:"platform", editor:"enum", options:PLATFORMS, default:"sky130hd", source:"manifest" },
+          { key:"clock_period_ns", editor:"number", default:7, min:0.1, step:0.1, unit:"ns", source:"manifest" },
+          { key:"utilization", editor:"number", default:5, min:1, max:100, step:1, unit:"%", source:"default", adv:true },
+          { key:"aspect_ratio", editor:"number", default:1, min:0.1, step:0.1, source:"default", adv:true },
+          { key:"core_margin", editor:"number", default:2, min:0, step:0.5, unit:"\u00b5m", source:"default", adv:true },
+          { key:"run_equiv", editor:"bool", default:false, source:"default", adv:true },
+        ] },
+      pnr: { id:"pnr", label:"Place & Route", tool:"retry_pd", kind:"synth", async:true, icon:<CircuitBoard className="h-3.5 w-3.5"/>, short:`${MOD} E`,
+        desc:"Branches a child PD run and reruns downstream ORFS stages.", params:[
+          { key:"run_id", editor:"enum", options:["S-04","S-03"], default:"S-04", source:"run" },
+          { key:"start_stage", editor:"enum", options:PD_STAGES, default:"floorplan", source:"choice" },
+          { key:"max_stage", editor:"enum", options:PD_STAGES, default:"finish", source:"choice" },
+          { key:"timeout_sec", editor:"number", default:1200, min:60, step:60, unit:"s", source:"default", adv:true },
+        ] },
+    };
+    const RUN_ORDER = ["lint","sim","synth","pnr"];
+    function cmdDefaults(cmd) { const o = {}; (cmd.params||[]).forEach((p) => { o[p.key] = p.default; }); return o; }
+    function buildPayload(cmd, vals) {
+      const args = {};
+      (cmd.params||[]).forEach((p) => { let v = vals[p.key]; if (v === undefined) v = p.default; if (p.optional && (v === "" || v === undefined)) return; if (v === undefined) return; if (p.editor === "number") v = Number(v); args[p.key] = v; });
+      (cmd.autoArgs||[]).forEach((a) => { if (a.stage) { const st = a.stage === "synth-v" ? "synth" : a.stage; let f = filesForStage(st); if (a.stage === "synth-v") f = f.filter((x) => !x.endsWith(".sdc")); args[a.key] = f; } else if (a.from) args[a.key] = MANIFEST[a.from]; });
+      return { tool: cmd.tool, arguments: args };
+    }
+
+    function SplitRunButton({ onRun, onOptions }) {
+      const [open, setOpen] = useState(false);
+      const ref = useRef(null);
+      useOutside(ref, () => setOpen(false), open);
+      return (
+        <div className="relative flex items-stretch" ref={ref}>
+          <button onClick={() => onRun("synth")} title="Synthesize · manifest defaults" className="inline-flex items-center gap-1.5 h-7 pl-2.5 pr-2.5 rounded-l-md bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors">
+            <Play className="h-3.5 w-3.5 fill-current" /> Run
+          </button>
+          <button onClick={() => setOpen((o) => !o)} className={cn("inline-flex items-center h-7 px-1 rounded-r-md border-l border-primary-foreground/20 bg-primary text-primary-foreground hover:bg-primary/90 transition-colors", open && "bg-primary/90")}>
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+          {open && (
+            <div className="absolute right-0 top-8 z-50 w-64 rounded-md border border-border bg-popover shadow-e3 p-1 animate-fade-in">
+              {RUN_ORDER.map((id) => { const a = COMMANDS[id]; return (
+                <div key={id} className="group flex items-center rounded hover:bg-surface-2">
+                  <button onClick={() => { onRun(id); setOpen(false); }} className="flex items-center gap-2 flex-1 min-w-0 px-2 py-1.5 text-xs text-foreground/90 text-left">
+                    <span className="text-muted-foreground">{a.icon}</span><span className="truncate">{a.label}</span>
+                  </button>
+                  <span className="mr-1 opacity-0 group-hover:opacity-100"><Kbd>{a.short}</Kbd></span>
+                  <button onClick={() => { onOptions(id); setOpen(false); }} title="Options…" className="mr-1 h-6 w-6 grid place-items-center rounded text-muted-foreground hover:text-foreground hover:bg-surface-3"><Sliders className="h-3.5 w-3.5"/></button>
+                </div>
+              ); })}
+              <div className="h-px bg-border my-1" />
+              <button onClick={() => { onRun("synth"); setOpen(false); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs text-foreground/90 hover:bg-surface-2">
+                <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />Re-run last<span className="ml-auto font-mono text-[10px] text-muted-foreground">S-04</span>
+              </button>
+              <div className="px-2 pt-1 pb-0.5 text-[9px] text-muted-foreground/60 font-mono">click = run defaults · ⚙ = options</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Live pill — one honest "latest significant activity" fact, replacing the
+    // 4-dot stage chip (a single green dot can't tell you if your CURRENT rtl is clean).
+    function LivePill({ activity, onOpen }) {
+      const e = activity && activity[0];
+      if (!e) return null;
+      const tone = e.status==="running" ? "run" : e.status==="failed" ? "fail" : e.status==="warn" ? "warn" : "pass";
+      const cls = tone==="run" ? "border-status-running/30 bg-status-running/10 text-status-running"
+        : tone==="fail" ? "border-status-fail/30 bg-status-fail/10 text-status-fail"
+        : tone==="warn" ? "border-status-warn/30 bg-status-warn/10 text-status-warn"
+        : "border-status-pass/30 bg-status-pass/10 text-status-pass";
+      const label = e.runId || ACT_KIND[e.kind]?.label || e.kind;
+      const word = e.status==="running" ? "running" : e.status==="ok" ? "done" : e.status;
+      return (
+        <button onClick={onOpen} title="Open Activity" className={cn("hidden md:inline-flex items-center gap-1.5 h-7 pl-2 pr-2.5 rounded-md border text-[11px] font-medium", cls)}>
+          <span className={cn("h-1.5 w-1.5 rounded-full", actDot(e.status))} />
+          <span className="font-mono">{ACT_KIND[e.kind]?.label} {label}</span>
+          <span className="opacity-70">· {word}</span>
+          {e.status==="running" ? <RefreshCw className="h-3 w-3 animate-spin" /> : <span className="opacity-50 font-mono">· {relativeTime(e.ts)}</span>}
+        </button>
+      );
+    }
+
+    /* ======================= param modal (tier-2 command dialog) ============= */
+    const SRC_BADGE = { manifest:"text-info border-info/30 bg-info/10", choice:"text-status-warn border-status-warn/30 bg-status-warn/10", run:"text-status-pass border-status-pass/30 bg-status-pass/10", default:"text-muted-foreground border-border bg-surface-2", text:"text-muted-foreground border-border bg-surface-2" };
+    function SrcTag({ s }) { return <span className={cn("text-[8px] font-mono uppercase tracking-wide px-1 rounded border", SRC_BADGE[s] || SRC_BADGE.default)}>{s === "text" ? "input" : s}</span>; }
+    function MParam({ p, value, onChange }) {
+      const v = value ?? p.default;
+      if (p.editor === "enum") {
+        if (p.options.length <= 4 && p.options.every((o) => String(o).length <= 10)) {
+          return <div className="flex items-center rounded-md border border-border bg-surface-1 p-0.5 gap-0.5">{p.options.map((o) => <button key={o} onClick={() => onChange(o)} className={cn("px-2 py-1 text-[11px] font-mono rounded-[4px] transition-colors", v === o ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-surface-2")}>{o}</button>)}</div>;
+        }
+        return <select value={v} onChange={(e) => onChange(e.target.value)} className="h-7 rounded-md border border-border bg-surface-1 px-2 text-xs font-mono text-foreground outline-none focus:border-primary/50 min-w-[150px]">{p.options.map((o) => <option key={o} value={o}>{o}</option>)}</select>;
+      }
+      if (p.editor === "bool") return <button onClick={() => onChange(!v)} className={cn("relative h-5 w-9 rounded-full transition-colors", v ? "bg-primary" : "bg-surface-3")}><span className={cn("absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform", v ? "translate-x-4" : "translate-x-0.5")}/></button>;
+      if (p.editor === "number") return <div className="flex items-center gap-1"><input type="number" value={v} min={p.min} max={p.max} step={p.step} onChange={(e) => onChange(e.target.value)} className="h-7 w-24 rounded-md border border-border bg-surface-1 px-2 text-xs font-mono text-foreground outline-none focus:border-primary/50 tabular-nums"/>{p.unit && <span className="text-[10px] text-muted-foreground font-mono">{p.unit}</span>}</div>;
+      return <input type="text" value={v} onChange={(e) => onChange(e.target.value)} className="h-7 w-52 rounded-md border border-border bg-surface-1 px-2 text-xs font-mono text-foreground outline-none focus:border-primary/50"/>;
+    }
+    function CommandModal({ id, onClose, onInvoke }) {
+      const cmd = COMMANDS[id];
+      const [vals, setVals] = useState(() => cmdDefaults(cmd));
+      const [adv, setAdv] = useState(false);
+      const [inspect, setInspect] = useState(false);
+      const set = (k, x) => setVals((s) => ({ ...s, [k]: x }));
+      const call = useMemo(() => buildPayload(cmd, vals), [cmd, vals]);
+      useEffect(() => {
+        const h = (e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onInvoke(id, vals); } };
+        window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
+      }, [vals]);
+      const basic = (cmd.params||[]).filter((p) => !p.adv);
+      const advp = (cmd.params||[]).filter((p) => p.adv);
+      const autoRows = (cmd.autoArgs||[]).map((a) => { let val; if (a.stage) { const st = a.stage === "synth-v" ? "synth" : a.stage; let f = filesForStage(st); if (a.stage === "synth-v") f = f.filter((x) => !x.endsWith(".sdc")); val = f.join(", "); } else val = MANIFEST[a.from]; return [a.key, String(val)]; });
+      if (cmd.reads) autoRows.push(["reads (files)", filesForStage(cmd.reads).join(", ")]);
+      const Field = ({ p }) => (
+        <div className="flex items-center gap-3">
+          <div className="w-36 shrink-0 flex items-center gap-1.5"><label className="text-xs font-mono text-foreground/85">{p.key}</label><SrcTag s={p.source}/></div>
+          <MParam p={p} value={vals[p.key]} onChange={(x) => set(p.key, x)} />
+        </div>
+      );
+      return (
+        <div className="fixed inset-0 z-[110] flex items-start justify-center pt-[11vh] bg-background/60 backdrop-blur-[2px] animate-fade-in" onClick={onClose}>
+          <div className="w-[560px] max-w-[92vw] rounded-lg border border-border bg-popover shadow-e3 overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2.5 px-4 h-12 border-b border-border shrink-0">
+              <span className="text-primary">{cmd.icon}</span>
+              <div className="flex flex-col leading-tight"><span className="text-sm font-semibold">{cmd.label}</span><code className="text-[10px] font-mono text-muted-foreground">{cmd.tool}</code></div>
+              {cmd.async && <span className="text-[9px] font-mono uppercase text-status-running border border-status-running/30 rounded px-1 py-0.5">async job</span>}
+              <button onClick={onClose} className="ml-auto h-7 w-7 grid place-items-center rounded hover:bg-surface-2 text-muted-foreground"><X className="h-4 w-4"/></button>
+            </div>
+            <div className="p-4 space-y-3 max-h-[52vh] overflow-y-auto thin-scrollbar">
+              <p className="text-[11.5px] text-muted-foreground leading-relaxed -mt-0.5">{cmd.desc}</p>
+              {autoRows.length > 0 && (
+                <div className="rounded-md border border-info/25 bg-info/[0.05] px-3 py-2 space-y-1">
+                  <div className="flex items-center gap-1.5 text-[10px] font-semibold text-info"><Info className="h-3 w-3"/>Supplied by manifest</div>
+                  {autoRows.map(([k, val]) => <div key={k} className="flex gap-2 text-[10.5px] font-mono"><span className="text-muted-foreground w-24 shrink-0">{k}</span><span className="text-foreground/80 break-words min-w-0">{val}</span></div>)}
+                </div>
+              )}
+              {basic.length === 0 && advp.length === 0 ? <div className="text-xs text-muted-foreground italic">No parameters — runs with manifest defaults.</div> : basic.map((p) => <Field key={p.key} p={p} />)}
+              {advp.length > 0 && (
+                <div>
+                  <button onClick={() => setAdv((a) => !a)} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"><ChevronRight className={cn("h-3.5 w-3.5 transition-transform", adv && "rotate-90")}/>Advanced ({advp.length})</button>
+                  {adv && <div className="space-y-3 mt-2 pl-3 border-l-2 border-border ml-1.5 pt-1">{advp.map((p) => <Field key={p.key} p={p} />)}</div>}
+                </div>
+              )}
+              <div>
+                <button onClick={() => setInspect((i) => !i)} className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"><ChevronRight className={cn("h-3.5 w-3.5 transition-transform", inspect && "rotate-90")}/>Inspect tool call</button>
+                {inspect && <pre className="mt-2 text-[10.5px] font-mono leading-relaxed bg-surface-0 border border-border rounded p-2.5 overflow-x-auto text-foreground/80">{JSON.stringify(call, null, 2)}</pre>}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border shrink-0">
+              <span className="text-[10px] text-muted-foreground font-mono truncate">files &amp; tops from manifest · {SESSION.id}</span>
+              <div className="ml-auto flex items-center gap-2">
+                <button onClick={onClose} className="h-8 px-3 rounded-md text-xs text-foreground/80 hover:bg-surface-2">Cancel</button>
+                <button onClick={() => onInvoke(id, vals)} className="h-8 px-3.5 rounded-md bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-1.5 hover:bg-primary/90">{cmd.async ? <><Cpu className="h-3.5 w-3.5"/>Dispatch</> : <><Play className="h-3.5 w-3.5 fill-current"/>Run</>}<Kbd>⌘↵</Kbd></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Toasts({ items }) {
+      return (
+        <div className="fixed bottom-9 right-4 z-[120] flex flex-col gap-2 items-end">
+          {items.map((t) => (
+            <div key={t.key} className="flex items-center gap-2.5 rounded-md border border-border bg-popover shadow-e3 pl-2.5 pr-3 h-9 animate-fade-in min-w-[230px]">
+              <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", statusDot(t.status))} />
+              {t.tool && <span className="text-[10px] font-mono text-muted-foreground shrink-0">{t.tool}</span>}
+              <span className="text-xs text-foreground/90 truncate">{t.msg}</span>
+              {t.status === "running" ? <RefreshCw className="h-3 w-3 text-status-running animate-spin ml-auto shrink-0"/> : <Check className="h-3.5 w-3.5 text-status-pass ml-auto shrink-0"/>}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    /* ======================= command palette (⌘K) ============================ */
+    function CommandPalette({ open, onClose, onRun, onOptions }) {
+      const [q, setQ] = useState("");
+      const inputRef = useRef(null);
+      const items = [
+        ...RUN_ORDER.map((id) => ({ ...COMMANDS[id], group: "Run", options: true })),
+        { id: "rerun", label: "Re-run last", short: `${MOD} ↵`, icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Run" },
+        { id: "compare", label: "Compare runs", short: "", icon: <GitCompare className="h-3.5 w-3.5" />, group: "Runs" },
+        { id: "open-runs", label: "Open runs panel", short: `${MOD} J`, icon: <ListTree className="h-3.5 w-3.5" />, group: "Runs" },
+      ];
+      const filtered = items.filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
+      useEffect(() => { if (open) { setQ(""); setTimeout(() => inputRef.current?.focus(), 0); } }, [open]);
+      if (!open) return null;
+      return (
+        <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[14vh] bg-background/60 backdrop-blur-[2px] animate-fade-in" onClick={onClose}>
+          <div className="w-[540px] max-w-[90vw] rounded-lg border border-border bg-popover shadow-e3 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-3 h-11 border-b border-border">
+              <Search className="h-4 w-4 text-muted-foreground" />
+              <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Run a command…" className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground" />
+              <Kbd>esc</Kbd>
+            </div>
+            <div className="max-h-[320px] overflow-y-auto thin-scrollbar py-1">
+              {filtered.length === 0 && <div className="px-3 py-6 text-center text-xs text-muted-foreground">No matches</div>}
+              {["Run", "Runs"].map((group) => {
+                const g = filtered.filter((i) => i.group === group);
+                if (!g.length) return null;
+                return (
+                  <div key={group}>
+                    <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">{group}</div>
+                    {g.map((i) => (
+                      <div key={i.id} className="group flex items-center rounded hover:bg-surface-2 mx-1">
+                        <button onClick={() => { if (RUN_ORDER.includes(i.id)) onRun(i.id); else if (i.id === "rerun") onRun("synth"); onClose(); }} className="flex items-center gap-2.5 flex-1 min-w-0 px-2 py-1.5 text-sm text-foreground/90 text-left">
+                          <span className="text-muted-foreground">{i.icon}</span><span className="truncate">{i.label}</span>
+                        </button>
+                        {i.short && <span className="mr-1 opacity-0 group-hover:opacity-100"><Kbd>{i.short}</Kbd></span>}
+                        {i.options && <button onClick={() => { onOptions(i.id); onClose(); }} title="Options…" className="mr-1.5 h-6 w-6 grid place-items-center rounded text-muted-foreground hover:text-foreground hover:bg-surface-3"><Sliders className="h-3.5 w-3.5"/></button>}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="px-3 py-1.5 border-t border-border/60 flex items-center gap-3 text-[9px] font-mono text-muted-foreground/60">
+              <span>enter — run defaults</span><span className="flex items-center gap-1"><Sliders className="h-2.5 w-2.5"/> options</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ======================= artifact quick-open (⌘P) ======================= */
+    function QuickOpen({ open, onClose, artifacts, onOpen }) {
+      const [q, setQ] = useState("");
+      const inputRef = useRef(null);
+      useEffect(() => { if (open) { setQ(""); setTimeout(() => inputRef.current?.focus(), 0); } }, [open]);
+      if (!open) return null;
+      const list = artifacts.filter((a) => a.label.toLowerCase().includes(q.toLowerCase()) || a.type.includes(q.toLowerCase()));
+      return (
+        <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[14vh] bg-background/60 backdrop-blur-[2px] animate-fade-in" onClick={onClose}>
+          <div className="w-[500px] max-w-[90vw] rounded-lg border border-border bg-popover shadow-e3 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-3 h-11 border-b border-border">
+              <Search className="h-4 w-4 text-muted-foreground" />
+              <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Open artifact…" className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground" />
+              <Kbd>esc</Kbd>
+            </div>
+            <div className="max-h-[300px] overflow-y-auto thin-scrollbar py-1">
+              {list.length === 0 && <div className="px-3 py-6 text-center text-xs text-muted-foreground">No artifacts</div>}
+              {list.map((a) => { const I = ART_TYPE[a.type]; return (
+                <button key={a.key} onClick={() => { onOpen(a.key); onClose(); }} className="flex items-center gap-2.5 w-full px-3 py-1.5 text-sm text-foreground/90 hover:bg-surface-2 text-left">
+                  <span className="text-muted-foreground"><I className="h-3.5 w-3.5" /></span>
+                  <span className="truncate">{a.label}</span>
+                  <span className="ml-auto text-[10px] font-mono text-muted-foreground/60 uppercase">{ART_TLABEL[a.type]}</span>
+                </button>
+              ); })}
+            </div>
+            <div className="px-3 py-1.5 border-t border-border/60 text-[9px] font-mono text-muted-foreground/60">every openable artifact across the design</div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ======================= context menu ==================================== */
+    function ContextMenu({ menu, onClose, onRun, onOptions }) {
+      const ref = useRef(null);
+      useOutside(ref, onClose, !!menu);
+      useEffect(() => {
+        if (!menu) return;
+        const esc = (e) => e.key === "Escape" && onClose();
+        window.addEventListener("keydown", esc);
+        return () => window.removeEventListener("keydown", esc);
+      }, [menu]);
+      if (!menu) return null;
+      const f = menu.file;
+      const isV = f.name.endsWith(".v") || f.name.endsWith(".sv");
+      const items = [];
+      items.push({ label: "Open", icon: <FileCode className="h-3.5 w-3.5" /> });
+      if (isV) {
+        items.push({ sep: true });
+        items.push({ label: "Lint", icon: <FileText className="h-3.5 w-3.5" />, short: `${MOD} L`, act: () => onRun("lint") });
+        items.push({ label: "Simulate", icon: <Waves className="h-3.5 w-3.5" />, short: `${MOD} R`, act: () => onRun("sim") });
+        if (f.synthTop) items.push({ label: "Synthesize", icon: <Cpu className="h-3.5 w-3.5" />, short: `${MOD} Y`, act: () => onRun("synth") });
+        items.push({ sep: true });
+        items.push({ label: "Simulate… (options)", icon: <Sliders className="h-3.5 w-3.5" />, act: () => onOptions("sim") });
+        if (f.synthTop) items.push({ label: "Synthesize… (options)", icon: <Sliders className="h-3.5 w-3.5" />, act: () => onOptions("synth") });
+      }
+      items.push({ sep: true });
+      items.push({ label: "Copy path", icon: <Copy className="h-3.5 w-3.5" /> });
+      items.push({ label: "Download", icon: <Download className="h-3.5 w-3.5" /> });
+      return (
+        <div ref={ref} className="fixed z-[90] w-52 rounded-md border border-border bg-popover shadow-e3 p-1 animate-fade-in" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 260) }}>
+          <div className="px-2 py-1 text-[10px] font-mono text-muted-foreground truncate border-b border-border mb-1">{f.name}</div>
+          {items.map((it, i) => it.sep ? <div key={i} className="h-px bg-border my-1" /> : (
+            <button key={i} onClick={() => { it.act && it.act(); onClose(); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs text-foreground/90 hover:bg-surface-2">
+              <span className="text-muted-foreground">{it.icon}</span>{it.label}{it.short && <span className="ml-auto"><Kbd>{it.short}</Kbd></span>}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    /* ======================= chrome: models · profile · MCP ================= */
+    function ModelPicker({ model, onChange }) {
+      const [open, setOpen] = useState(false); const ref = useRef(null); useOutside(ref, () => setOpen(false), open);
+      const cur = MODELS.find((m) => m.id === model) || MODELS[0];
+      return (
+        <div className="relative" ref={ref}>
+          <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-1.5 h-7 px-2 rounded-md border border-border bg-surface-1 hover:bg-surface-2 text-[11px]">
+            <Sparkles className="h-3 w-3 text-primary" /><span className="font-medium max-w-[110px] truncate">{cur.label}</span><ChevronDown className="h-3 w-3 text-muted-foreground" />
+          </button>
+          {open && (
+            <div className="absolute right-0 top-8 z-50 w-72 rounded-md border border-border bg-popover shadow-e3 p-1 animate-fade-in max-h-[380px] overflow-y-auto thin-scrollbar">
+              {["Anthropic","OpenAI","Google"].map((pv) => (
+                <div key={pv}>
+                  <div className="px-2 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">{pv}</div>
+                  {MODELS.filter((m) => m.provider === pv).map((m) => { const on = m.id === model; return (
+                    <button key={m.id} onClick={() => { onChange(m.id); setOpen(false); }} className={cn("w-full text-left px-2 py-1.5 rounded hover:bg-surface-2", on && "bg-surface-2")}>
+                      <div className="flex items-center gap-2"><span className="text-xs font-medium text-foreground/90">{m.label}</span><span className={cn("text-[8px] font-mono uppercase px-1 rounded border", m.tier === "capable" ? "border-primary/30 text-primary" : "border-border text-muted-foreground")}>{m.tier}</span>{on && <Check className="h-3.5 w-3.5 ml-auto text-primary" />}</div>
+                      <div className="text-[10.5px] text-muted-foreground leading-snug mt-0.5">{m.hint}</div>
+                      <div className="text-[9px] font-mono text-muted-foreground/50 mt-0.5">{m.price} /Mtok</div>
+                    </button>
+                  ); })}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+    function ThreadMenu({ threads, active, onSelect, onNew }) {
+      const [open, setOpen] = useState(false); const ref = useRef(null); useOutside(ref, () => setOpen(false), open);
+      const cur = threads.find((t) => t.id === active) || threads[0];
+      return (
+        <div className="relative" ref={ref}>
+          <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-1.5 h-7 px-1.5 rounded-md hover:bg-surface-2 text-xs min-w-0">
+            <MessageSquare className="h-3.5 w-3.5 text-primary shrink-0" /><span className="font-medium truncate max-w-[130px]">{cur.name}</span><ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+          </button>
+          {open && (
+            <div className="absolute left-0 top-8 z-50 w-60 rounded-md border border-border bg-popover shadow-e3 p-1 animate-fade-in">
+              <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground flex items-center">Chats<span className="ml-auto text-[9px] normal-case text-muted-foreground/50">one session · many chats</span></div>
+              {threads.map((t) => { const on = t.id === active; return (
+                <button key={t.id} onClick={() => { onSelect(t.id); setOpen(false); }} className={cn("flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs hover:bg-surface-2", on && "bg-surface-2")}>
+                  <MessageSquare className="h-3 w-3 text-muted-foreground shrink-0" /><span className="truncate">{t.name}</span><span className="ml-auto text-[9px] font-mono text-muted-foreground/50">{t.updated}</span>{on && <Check className="h-3 w-3 text-primary shrink-0" />}
+                </button>
+              ); })}
+              <div className="h-px bg-border my-1" />
+              <button onClick={() => { onNew(); setOpen(false); }} className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs text-foreground/80 hover:bg-surface-2"><SquarePen className="h-3.5 w-3.5" />New chat</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+    function GithubButton() {
+      return <a href={REPO_URL} target="_blank" rel="noreferrer" title="Open-source repo · naman-ranka/siliconcrew" className="h-7 w-7 grid place-items-center rounded-md text-foreground/70 hover:bg-surface-2 hover:text-foreground"><Github className="h-4 w-4" /></a>;
+    }
+    function PMItem({ icon, label, onClick, badge }) {
+      return <button onClick={onClick} className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs text-foreground/80 hover:bg-surface-2"><span className="text-muted-foreground">{icon}</span>{label}{badge && <span className="ml-auto text-[8px] font-mono uppercase px-1 rounded border border-border text-muted-foreground/60">{badge}</span>}</button>;
+    }
+    function ProfileMenu({ onOpenMcp }) {
+      const [open, setOpen] = useState(false); const ref = useRef(null); useOutside(ref, () => setOpen(false), open);
+      return (
+        <div className="relative" ref={ref}>
+          <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-1.5 h-7 pl-0.5 pr-1.5 rounded-full hover:bg-surface-2">
+            <span className="h-5 w-5 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-semibold">NR</span>
+            <ChevronDown className="h-3 w-3 text-muted-foreground" />
+          </button>
+          {open && (
+            <div className="absolute right-0 top-9 z-50 w-64 rounded-md border border-border bg-popover shadow-e3 p-1 animate-fade-in">
+              <div className="flex items-center gap-2.5 px-2 py-2">
+                <span className="h-8 w-8 rounded-full bg-primary/20 text-primary grid place-items-center text-xs font-semibold">NR</span>
+                <div className="min-w-0"><div className="text-xs font-semibold truncate">Naman Ranka</div><div className="text-[10px] text-muted-foreground truncate">naman@siliconcrew.dev</div></div>
+              </div>
+              <div className="h-px bg-border my-1" />
+              <PMItem icon={<Plug className="h-3.5 w-3.5" />} label="Connect via MCP" badge="handoff" onClick={() => { setOpen(false); onOpenMcp(); }} />
+              <PMItem icon={<KeyRound className="h-3.5 w-3.5" />} label="API keys" />
+              <PMItem icon={<Settings className="h-3.5 w-3.5" />} label="Settings" />
+              <a href={REPO_URL} target="_blank" rel="noreferrer" className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs text-foreground/80 hover:bg-surface-2"><Github className="h-3.5 w-3.5 text-muted-foreground" />Open-source repo<ExternalLink className="h-3 w-3 ml-auto text-muted-foreground/50" /></a>
+              <div className="h-px bg-border my-1" />
+              <PMItem icon={<LogOut className="h-3.5 w-3.5" />} label="Sign out" />
+            </div>
+          )}
+        </div>
+      );
+    }
+    function CopyBtn({ text, label = "Copy" }) {
+      const [done, setDone] = useState(false);
+      return <button onClick={() => { try { navigator.clipboard.writeText(text); } catch (e) {} setDone(true); setTimeout(() => setDone(false), 1400); }} className="inline-flex items-center gap-1 h-6 px-2 rounded text-[11px] bg-surface-2 hover:bg-surface-3 text-foreground/80">{done ? <ClipboardCheck className="h-3 w-3 text-status-pass" /> : <Copy className="h-3 w-3" />}{done ? "Copied" : label}</button>;
+    }
+    function McpStep({ n }) { return <span className="h-5 w-5 grid place-items-center rounded-full bg-primary/15 text-primary text-[10px] font-bold shrink-0">{n}</span>; }
+    function McpModal({ onClose }) {
+      const [client, setClient] = useState("claude");
+      const [adv, setAdv] = useState(false);
+      useEffect(() => { const h = (e) => e.key === "Escape" && onClose(); window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, []);
+      const configs = {
+        claude: `// claude_desktop_config.json\n{\n  "mcpServers": {\n    "siliconcrew": {\n      "type": "http",\n      "url": "${MCP_URL}"\n    }\n  }\n}`,
+        cursor: `// ~/.cursor/mcp.json\n{\n  "mcpServers": {\n    "siliconcrew": { "url": "${MCP_URL}" }\n  }\n}`,
+        cli: `claude mcp add --transport http siliconcrew ${MCP_URL}`,
+      };
+      const continuePrompt = `Use the "siliconcrew" MCP server and continue session ${SESSION.id}.\nCall get_manifest, list the workspace files, and read the latest runs.\nContext: 16×8 synchronous FIFO — top sync_fifo, tb sync_fifo_tb, sky130hd @7ns.\nPick up from run S-04 (timing met, WNS +0.42ns). After any RTL edit: lint, then simulate.\nRe-synthesize when I ask and report WNS / area / power.`;
+      const newPrompt = `Use the "siliconcrew" MCP server. Start a new session and scaffold an 8-bit\nsynchronous FIFO: write the spec, generate RTL, then lint and simulate.`;
+      return (
+        <div className="fixed inset-0 z-[120] flex items-start justify-center pt-[7vh] bg-background/60 backdrop-blur-[2px] animate-fade-in" onClick={onClose}>
+          <div className="w-[620px] max-w-[92vw] rounded-lg border border-border bg-popover shadow-e3 overflow-hidden flex flex-col max-h-[86vh]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2.5 px-4 h-12 border-b border-border shrink-0">
+              <div className="w-6 h-6 rounded-md bg-primary/15 grid place-items-center"><Plug className="h-3.5 w-3.5 text-primary" /></div>
+              <div className="flex flex-col leading-tight"><span className="text-sm font-semibold">Continue in your own AI</span><span className="text-[10px] text-muted-foreground">SiliconCrew is an open MCP server — connect any client to this workspace</span></div>
+              <button onClick={onClose} className="ml-auto h-7 w-7 grid place-items-center rounded hover:bg-surface-2 text-muted-foreground"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="p-4 space-y-4 overflow-y-auto thin-scrollbar">
+              {/* step 1 — add url */}
+              <div>
+                <div className="flex items-center gap-2 mb-2"><McpStep n="1" /><span className="text-xs font-semibold">Add the server URL to your client</span><div className="ml-auto flex items-center rounded-md border border-border bg-surface-1 p-0.5">{[["claude","Claude Desktop"],["cursor","Cursor"],["cli","Claude Code"]].map(([k,l]) => <button key={k} onClick={() => setClient(k)} className={cn("px-2 py-0.5 text-[10px] rounded-[4px]", client === k ? "bg-surface-3 text-foreground" : "text-muted-foreground")}>{l}</button>)}</div></div>
+                <div className="flex items-center gap-2 rounded-md border border-border bg-surface-1 px-3 py-2 mb-2">
+                  <Plug className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <span className="font-mono text-[11px] text-foreground/80 truncate">{MCP_URL}</span>
+                  <span className="ml-auto"><CopyBtn text={MCP_URL} label="Copy URL" /></span>
+                </div>
+                <div className="relative"><pre className="text-[10.5px] font-mono leading-relaxed bg-surface-0 border border-border rounded p-3 overflow-x-auto text-foreground/80 whitespace-pre">{configs[client]}</pre><div className="absolute top-2 right-2"><CopyBtn text={configs[client]} /></div></div>
+              </div>
+              {/* step 2 — oauth */}
+              <div>
+                <div className="flex items-center gap-2 mb-2"><McpStep n="2" /><span className="text-xs font-semibold">Sign in when your client prompts</span></div>
+                <div className="flex items-center gap-3 rounded-md border border-border bg-surface-1 px-3 py-2.5">
+                  <span className="h-7 w-7 grid place-items-center rounded-full bg-surface-3 shrink-0"><svg viewBox="0 0 24 24" className="h-4 w-4"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1Z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23Z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84Z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38Z"/></svg></span>
+                  <div className="min-w-0"><div className="text-xs font-medium text-foreground/90">OAuth via Google</div><div className="text-[10.5px] text-muted-foreground leading-snug">Adding the URL opens SiliconCrew's sign-in page in your browser — authorize with Google and the connector is added. No API key to paste.</div></div>
+                </div>
+                <button onClick={() => setAdv((a) => !a)} className="flex items-center gap-1 mt-2 text-[10.5px] text-muted-foreground hover:text-foreground"><ChevronRight className={cn("h-3 w-3 transition-transform", adv && "rotate-90")} />Advanced · CI &amp; headless (token)</button>
+                {adv && <div className="mt-1.5 rounded-md border border-border bg-surface-0 px-3 py-2 text-[10.5px] text-muted-foreground leading-relaxed">For non-interactive use, set <span className="font-mono text-foreground/80">Authorization: Bearer $SILICONCREW_MCP_TOKEN</span> instead of OAuth. Mint a token under <span className="text-foreground/80">API keys</span>.</div>}
+              </div>
+              {/* step 3 — prompts */}
+              <div>
+                <div className="flex items-center gap-2 mb-2"><McpStep n="3" /><span className="text-xs font-semibold">Tell your AI what to do</span></div>
+                <div className="space-y-2">
+                  <div className="rounded-md border border-primary/30 bg-primary/[0.05] p-2.5">
+                    <div className="flex items-center gap-1.5 mb-1.5"><CornerDownRight className="h-3 w-3 text-primary" /><span className="text-[11px] font-semibold text-foreground/90">Continue this session</span><span className="ml-auto"><CopyBtn text={continuePrompt} label="Copy prompt" /></span></div>
+                    <pre className="text-[10.5px] font-mono leading-relaxed text-foreground/75 whitespace-pre-wrap">{continuePrompt}</pre>
+                  </div>
+                  <div className="rounded-md border border-border bg-surface-1 p-2.5">
+                    <div className="flex items-center gap-1.5 mb-1.5"><SquarePen className="h-3 w-3 text-muted-foreground" /><span className="text-[11px] font-semibold text-foreground/80">Start a new session</span><span className="ml-auto"><CopyBtn text={newPrompt} label="Copy prompt" /></span></div>
+                    <pre className="text-[10.5px] font-mono leading-relaxed text-muted-foreground whitespace-pre-wrap">{newPrompt}</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border shrink-0">
+              <span className="text-[10px] font-mono text-muted-foreground truncate">session {SESSION.id}</span>
+              <a href={REPO_URL} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-[11px] text-foreground/70 hover:text-foreground"><Github className="h-3.5 w-3.5" />repo<ExternalLink className="h-3 w-3" /></a>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ======================= top bar ========================================= */
+    function TopBar({ dark, setDark, onPalette, activity, onOpenActivity, onOpenMcp }) {
+      const [sessOpen, setSessOpen] = useState(false);
+      const ref = useRef(null);
+      useOutside(ref, () => setSessOpen(false), sessOpen);
+      return (
+        <header className="flex items-center gap-3 h-10 pl-2.5 pr-2 border-b border-border bg-surface-1 shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-md bg-primary/15 flex items-center justify-center"><CircuitBoard className="h-3.5 w-3.5 text-primary" /></div>
+            <span className="font-semibold text-[13px]">SiliconCrew</span>
+          </div>
+          <div className="h-4 w-px bg-border" />
+          <div className="relative" ref={ref}>
+            <button onClick={() => setSessOpen((o) => !o)} className="flex items-center gap-2 h-7 px-2 rounded-md hover:bg-surface-2 text-xs">
+              <span className="h-1.5 w-1.5 rounded-full bg-status-pass" />
+              <span className="font-medium max-w-[150px] truncate">{SESSION.name}</span>
+              <ChevronsUpDown className="h-3 w-3 text-muted-foreground" />
+            </button>
+            {sessOpen && (
+              <div className="absolute left-0 top-8 z-50 w-56 rounded-md border border-border bg-popover shadow-e3 p-1 animate-fade-in">
+                <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">Sessions</div>
+                <button className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs bg-surface-2"><span className="h-1.5 w-1.5 rounded-full bg-status-pass" />{SESSION.name}<Check className="h-3.5 w-3.5 ml-auto text-primary" /></button>
+                <button className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs text-muted-foreground hover:bg-surface-2"><span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />AXI arbiter · 4-port</button>
+                <div className="h-px bg-border my-1" />
+                <button className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-xs text-foreground/80 hover:bg-surface-2"><Plus className="h-3.5 w-3.5" />New session</button>
+              </div>
+            )}
+          </div>
+
+          <LivePill activity={activity} onOpen={onOpenActivity} />
+
+          <div className="ml-auto flex items-center gap-1.5">
+            <button onClick={onPalette} className="hidden sm:flex items-center gap-2 h-7 pl-2 pr-1.5 rounded-md border border-border bg-surface-0 hover:bg-surface-2 text-xs text-muted-foreground">
+              <Search className="h-3.5 w-3.5" /><span className="text-[11px]">Commands</span><Kbd>{MOD} K</Kbd>
+            </button>
+            <GithubButton />
+            <Btn variant="ghost" size="icon" title="Toggle theme" onClick={() => setDark(!dark)}>{dark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}</Btn>
+            <div className="h-4 w-px bg-border mx-0.5" />
+            <ProfileMenu onOpenMcp={onOpenMcp} />
+          </div>
+        </header>
+      );
+    }
+
+    /* ======================= file explorer =================================== */
+    function FileRow({ node, depth, selected, onSelect, onContext }) {
+      const isSel = selected === node.name;
+      return (
+        <div
+          onClick={() => onSelect(node.name)}
+          onContextMenu={(e) => { e.preventDefault(); onContext({ x: e.clientX, y: e.clientY, file: node }); }}
+          style={{ paddingLeft: depth * 12 + 8 }}
+          className={cn("group relative flex items-center gap-1.5 pr-2 h-[26px] cursor-pointer select-none", isSel ? "bg-surface-2 text-foreground" : "hover:bg-surface-1 text-foreground/85")}
+        >
+          {isSel && <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary" />}
+          <span className={cn("shrink-0", isSel ? "text-primary" : node.role === "out" ? "text-muted-foreground/60" : "text-muted-foreground")}>{roleIcon(node.role, node.name)}</span>
+          <span className={cn("text-xs font-mono truncate", node.ro && "text-muted-foreground/70")}>{node.name}</span>
+          {node.synthTop && <Crown className="h-3 w-3 text-info/80 shrink-0" title="synth top" />}
+          {node.simTop && <FlaskConical className="h-3 w-3 text-status-pass/80 shrink-0" title="sim top" />}
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            <Download className="h-3 w-3 text-muted-foreground/0 group-hover:text-muted-foreground/60" />
+            {ROLE_TAG[node.role] && <span className="text-[9px] font-mono uppercase tracking-wide text-muted-foreground/50">{ROLE_TAG[node.role]}</span>}
+          </div>
+        </div>
+      );
+    }
+    function FolderRow({ node, depth, open, onToggle, selected, onSelect, onContext, openMap }) {
+      return (
+        <div>
+          <div onClick={onToggle} style={{ paddingLeft: depth * 12 + 6 }} className="group flex items-center gap-1 h-[26px] cursor-pointer select-none hover:bg-surface-1 text-foreground/80">
+            <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform", open && "rotate-90")} />
+            <span className="text-muted-foreground">{open ? <FolderOpen className="h-3.5 w-3.5" /> : <Folder className="h-3.5 w-3.5" />}</span>
+            <span className="text-xs font-medium">{node.name}</span>
+          </div>
+          {open && node.children.map((c) => (
+            c.type === "folder"
+              ? <FolderRow key={c.name} node={c} depth={depth + 1} open={openMap[c.name] ?? false} onToggle={() => onToggle(c.name)} selected={selected} onSelect={onSelect} onContext={onContext} openMap={openMap} />
+              : <FileRow key={c.name} node={c} depth={depth + 1} selected={selected} onSelect={onSelect} onContext={onContext} />
+          ))}
+        </div>
+      );
+    }
+    function FileExplorer({ selected, onSelect, onContext }) {
+      const [openMap, setOpenMap] = useState({ rtl: true, tb: true, constraints: false, build: false, sim: true, synth: true, pnr: false });
+      const toggle = (name) => setOpenMap((m) => ({ ...m, [name]: !m[name] }));
+      return (
+        <div className="flex flex-col h-full min-h-0">
+          <div className="flex items-center gap-2 h-8 px-2 shrink-0">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Explorer</span>
+            <div className="ml-auto flex items-center gap-0.5">
+              <Btn variant="ghost" size="icon-sm" title="New file"><Plus className="h-3.5 w-3.5" /></Btn>
+              <Btn variant="ghost" size="icon-sm" title="Collapse all" onClick={() => setOpenMap({})}><ListTree className="h-3.5 w-3.5" /></Btn>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto thin-scrollbar pb-2">
+            <div className="px-2 py-1 text-[10px] font-mono text-muted-foreground/60 uppercase tracking-wide">sync_fifo</div>
+            {FILE_TREE.map((n) => (
+              <FolderRow key={n.name} node={n} depth={0} open={openMap[n.name] ?? false} onToggle={toggle} selected={selected} onSelect={onSelect} onContext={onContext} openMap={openMap} />
+            ))}
+          </div>
+          <div className="px-2 py-1.5 border-t border-border/60 flex items-center gap-2 text-[10px] font-mono text-muted-foreground shrink-0">
+            <Crown className="h-3 w-3 text-info/70" /><span className="text-foreground/70">{MANIFEST.synthTop}</span>
+            <FlaskConical className="h-3 w-3 text-status-pass/70 ml-1" /><span className="text-foreground/70">{MANIFEST.simTop}</span>
+          </div>
+        </div>
+      );
+    }
+
+    /* ======================= center: tabs + viewers ========================== */
+    /* ======================= center: open-tabs artifact editor ============== */
+    // Every openable thing is a descriptor. Sources (tree, runs, ⌘P) resolve to
+    // these and call openArtifact(). Grounded in actions.py: code (_snapshot_code),
+    // spec (_snapshot_spec yaml), wave (sim VCD, fetched+parsed client-side),
+    // schematic (yosys SVG), layout (ORFS stage previews), report (per run_id).
+    const ART_TYPE = { code: Code2, spec: FileText, wave: Activity, schematic: CircuitBoard, layout: Layout, report: BarChart3 };
+    const ART_TLABEL = { code: "code", spec: "spec", wave: "waveform", schematic: "schematic", layout: "layout", report: "report" };
+    const FILE_ARTIFACTS = [
+      { key: "code:sync_fifo.v", type: "code", label: "sync_fifo.v", path: "sync_fifo.v" },
+      { key: "code:fifo_mem.v", type: "code", label: "fifo_mem.v", path: "fifo_mem.v" },
+      { key: "spec", type: "spec", label: "spec.yaml" },
+      { key: "schematic", type: "schematic", label: "sync_fifo · schematic" },
+    ];
+    function runArtifacts(runs) {
+      const out = [];
+      for (const r of runs) {
+        if (r.kind === "synth") { out.push({ key: `report:${r.id}`, type: "report", runId: r.id, label: `${r.id} · report` }); out.push({ key: `layout:${r.id}`, type: "layout", runId: r.id, label: `${r.id} · layout` }); }
+        else { out.push({ key: `wave:${r.id}`, type: "wave", runId: r.id, label: `${r.id} · waveform`, status: r.status }); }
+      }
+      return out;
+    }
+    const allArtifacts = (runs) => [...FILE_ARTIFACTS, ...runArtifacts(runs)];
+
+    function MetricCard({ icon, label, value, unit, delta, better }) {
+      return (
+        <div className="rounded-md border border-border/70 bg-surface-1 px-3 py-2 flex flex-col gap-1">
+          <div className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+            <span className="text-muted-foreground/60">{icon}</span>{label}
+          </div>
+          <div className="text-lg font-semibold font-mono tabular-nums leading-none text-foreground">{value}{unit && <span className="text-[11px] font-normal text-muted-foreground ml-1">{unit}</span>}</div>
+          {delta && <div className={cn("text-[10px] font-mono tabular-nums", better ? "text-status-pass" : "text-status-fail")}>{delta}</div>}
+        </div>
+      );
+    }
+    function ReportView({ run }) {
+      const p = run.ppa;
+      const lines = REPORT_MD.split("\n");
+      const rows = lines.filter((l) => l.startsWith("|") && !l.includes("---"));
+      const paras = lines.filter((l) => l && !l.startsWith("|"));
+      return (
+        <div className="h-full overflow-y-auto thin-scrollbar">
+          <div className="p-4 border-b border-border/60">
+            <div className="flex items-end gap-6 mb-3">
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Worst Negative Slack</span>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-bold font-mono tabular-nums leading-none text-status-pass">+{p.wnsNs.toFixed(2)}</span>
+                  <span className="text-sm text-muted-foreground font-mono">ns</span>
+                  <span className="ml-2 text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-status-pass/12 text-status-pass border border-status-pass/25">Met</span>
+                </div>
+              </div>
+              <div className="flex flex-col gap-0.5 pb-1 text-[11px] font-mono text-muted-foreground">
+                <span>TNS {p.tnsNs.toFixed(2)} ns</span>
+                <span>DRC 0 violations</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <MetricCard icon={<CircuitBoard className="h-3 w-3" />} label="Area" value={p.areaUm2.toFixed(1)} unit="µm²" delta="−2.0%" better />
+              <MetricCard icon={<Boxes className="h-3 w-3" />} label="Cells" value={p.cells} delta="−8" better />
+              <MetricCard icon={<Gauge className="h-3 w-3" />} label="Fmax" value={p.fmaxMhz.toFixed(1)} unit="MHz" delta="+5.0%" better />
+              <MetricCard icon={<Zap className="h-3 w-3" />} label="Power" value={p.powerMw.toFixed(1)} unit="mW" delta="−6.1%" better />
+            </div>
+          </div>
+          <div className="p-4 space-y-3 text-sm">
+            {paras.map((p2, i) => <p key={i} className="leading-relaxed text-foreground/80" dangerouslySetInnerHTML={{ __html: p2.replace(/\*\*(.+?)\*\*/g, '<strong class="text-foreground font-semibold">$1</strong>') }} />)}
+            <div className="overflow-x-auto rounded-md border border-border">
+              <table className="min-w-full text-xs">
+                <thead className="bg-surface-2"><tr>{rows[0].split("|").filter(Boolean).map((h, i) => <th key={i} className="px-3 py-1.5 text-left font-semibold uppercase tracking-wide text-muted-foreground text-[10px]">{h.trim()}</th>)}</tr></thead>
+                <tbody>{rows.slice(1).map((r, ri) => <tr key={ri} className="border-t border-border">{r.split("|").filter(Boolean).map((c, ci) => <td key={ci} className={cn("px-3 py-1.5 font-mono tabular-nums", ci === 0 ? "text-muted-foreground" : "text-foreground/90")}>{c.trim()}</td>)}</tr>)}</tbody>
+              </table>
+            </div>
+            <div className="text-[11px] text-muted-foreground flex items-center gap-1.5 font-mono pt-1">compare <span className="text-muted-foreground/80">S-03</span><ArrowRight className="h-3 w-3" /><span className="text-foreground">S-04</span></div>
+          </div>
+        </div>
+      );
+    }
+
+    function CodeView({ file }) {
+      const names = Object.keys(CODE_FILES);
+      const active = CODE_FILES[file] ? file : names[0];
+      const [copied, setCopied] = useState(false);
+      const lines = hlVerilog(CODE_FILES[active]);
+      return (
+        <div className="flex flex-col h-full">
+          <div className="flex items-center justify-between px-3 h-8 border-b border-border/60 shrink-0">
+            <span className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground"><ChevronRight className="h-3 w-3" />rtl<ChevronRight className="h-3 w-3" /><span className="text-foreground/80">{active}</span></span>
+            <div className="flex items-center gap-0.5">
+              <Btn variant="ghost" size="icon-sm" title="Edit"><Pencil className="h-3.5 w-3.5" /></Btn>
+              <Btn variant="ghost" size="icon-sm" title="Copy" onClick={() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }}>{copied ? <Check className="h-3.5 w-3.5 text-status-pass" /> : <Copy className="h-3.5 w-3.5" />}</Btn>
+              <Btn variant="ghost" size="icon-sm" title="Download"><Download className="h-3.5 w-3.5" /></Btn>
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto thin-scrollbar bg-surface-0 font-mono text-[12.5px] leading-[1.55]">
+            <table className="w-full border-collapse">
+              <tbody>
+                {lines.map((html, i) => (
+                  <tr key={i} className="hover:bg-surface-1/50">
+                    <td className="select-none text-right pr-3 pl-3 w-[1%] whitespace-nowrap text-muted-foreground/35 tabular-nums">{i + 1}</td>
+                    <td className="pl-3 pr-4 whitespace-pre text-foreground/85" dangerouslySetInnerHTML={{ __html: html || " " }} />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    function WaveformView({ art }) {
+      const NAME_COL = 168, LANE_H = 26, BASE = 760, MINL = 560, PAD = 28;
+      const [zoom, setZoom] = useState(1);
+      const [radix, setRadix] = useState("hex");
+      const [cursor, setCursor] = useState(art && art.status === "failed" ? 320 : null);
+      const [collapsed, setCollapsed] = useState(new Set());
+      const lanesRef = useRef(null);
+      const end = WAVE.endtime;
+      const laneW = Math.max(MINL, BASE * zoom);
+      const scale = (laneW - PAD) / end;
+      const groups = [];
+      for (const s of WAVE.signals) { let g = groups.find((x) => x[0] === s.scope); if (!g) { g = [s.scope, []]; groups.push(g); } g[1].push(s); }
+      const ticks = Array.from({ length: 9 }, (_, i) => Math.round((end / 8) * i));
+      const fmtBus = (v) => radix === "hex" ? "0x" + v.toString(16).toUpperCase() : String(v);
+      const valueAt = (sig, at) => {
+        if (at == null) return null; let idx = -1;
+        for (let i = 0; i < sig.times.length; i++) { if (sig.times[i] <= at) idx = i; else break; }
+        if (idx < 0) return null;
+        return (sig.width ?? 1) > 1 ? fmtBus(sig.values[idx]) : String(sig.values[idx]);
+      };
+      const xToNs = (clientX) => { const h = lanesRef.current; if (!h) return null; const x = clientX - h.getBoundingClientRect().left - NAME_COL; if (x < 0) return null; return Math.min(Math.max(0, x / scale), end); };
+      const toggle = (sc) => setCollapsed((p) => { const n = new Set(p); n.has(sc) ? n.delete(sc) : n.add(sc); return n; });
+      const cursorX = cursor != null ? cursor * scale : null;
+      const Lane = ({ sig }) => {
+        const isBus = sig.isBus || (sig.width ?? 1) > 1, h = LANE_H;
+        if (isBus) {
+          return (
+            <svg width={laneW} height={h} className="block">
+              <line x1={0} y1={4} x2={laneW} y2={4} className="stroke-muted-foreground/40" strokeWidth={1} />
+              <line x1={0} y1={h - 4} x2={laneW} y2={h - 4} className="stroke-muted-foreground/40" strokeWidth={1} />
+              {sig.times.map((time, i) => {
+                const x = time * scale, nextX = i < sig.times.length - 1 ? sig.times[i + 1] * scale : laneW;
+                const label = radix === "hex" ? sig.values[i].toString(16).toUpperCase() : String(sig.values[i]);
+                return (<g key={i}>
+                  <line x1={x} y1={4} x2={x} y2={h - 4} className="stroke-primary" strokeWidth={1} />
+                  {nextX - x > 22 && <text x={x + (nextX - x) / 2} y={h / 2 + 4} textAnchor="middle" className="fill-foreground text-[9px] font-mono">{label}</text>}
+                </g>);
+              })}
+            </svg>
+          );
+        }
+        let d = "";
+        sig.times.forEach((time, i) => { const x = time * scale, y = sig.values[i] ? 5 : h - 5; if (i === 0) d = `M ${x} ${y}`; else { const py = sig.values[i - 1] ? 5 : h - 5; d += ` L ${x} ${py} L ${x} ${y}`; } });
+        d += ` L ${laneW} ${sig.values[sig.values.length - 1] ? 5 : h - 5}`;
+        return <svg width={laneW} height={h} className="block"><path d={d} className="stroke-primary" strokeWidth={1.5} fill="none" /></svg>;
+      };
+      return (
+        <div className="flex flex-col h-full">
+          <div className="flex items-center justify-between px-3 h-8 border-b border-border/60 shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground">{art && art.status === "failed" && <span className="h-1.5 w-1.5 rounded-full bg-status-fail" />}<span className="text-foreground/80">{art ? art.path || (art.runId + "/dump.vcd") : "dump.vcd"}</span></span>
+              {cursor != null && <button onClick={() => setCursor(null)} className={cn("text-[11px] font-mono hover:underline", art && art.status === "failed" ? "text-status-fail" : "text-info")}>@{Math.round(cursor)}ns{art && art.status === "failed" ? " · overflow not set" : ""} ✕</button>}
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="flex items-center rounded-md border border-border bg-surface-1 p-0.5 mr-1">
+                {["hex", "dec"].map((r) => <button key={r} onClick={() => setRadix(r)} className={cn("px-1.5 py-0.5 text-[10px] font-mono uppercase rounded-[3px]", radix === r ? "bg-surface-3 text-foreground" : "text-muted-foreground hover:text-foreground")}>{r}</button>)}
+              </div>
+              <Btn variant="ghost" size="icon-sm" title="Fit" onClick={() => setZoom(1)}><Maximize2 className="h-3.5 w-3.5" /></Btn>
+              <Btn variant="ghost" size="icon-sm" title="Zoom out" onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}><ZoomOut className="h-3.5 w-3.5" /></Btn>
+              <span className="text-[11px] text-muted-foreground w-10 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
+              <Btn variant="ghost" size="icon-sm" title="Zoom in" onClick={() => setZoom((z) => Math.min(4, Math.round((z + 0.25) * 100) / 100))}><ZoomIn className="h-3.5 w-3.5" /></Btn>
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto thin-scrollbar">
+            <div style={{ minWidth: NAME_COL + laneW }}>
+              <div className="flex sticky top-0 z-10 bg-surface-1 border-b border-border">
+                <div style={{ width: NAME_COL }} className="shrink-0 px-2 py-1 text-[10px] text-muted-foreground">signal</div>
+                <div className="relative" style={{ width: laneW, height: 20 }}>
+                  {ticks.map((t, i) => <span key={i} className="absolute text-[9px] text-muted-foreground font-mono" style={{ left: Math.min(laneW - 24, t * scale + 2), top: 3 }}>{t}</span>)}
+                </div>
+              </div>
+              <div ref={lanesRef} className="relative" onClick={(e) => { const t = xToNs(e.clientX); if (t != null) setCursor(t); }}>
+                <div className="absolute inset-0 z-0 pointer-events-none">
+                  {ticks.map((t, i) => <div key={i} className="absolute top-0 bottom-0 w-px bg-border/40" style={{ left: NAME_COL + t * scale }} />)}
+                </div>
+                {cursorX != null && <div className="absolute top-0 bottom-0 w-px bg-info z-30" style={{ left: NAME_COL + cursorX }}><span className="absolute top-0 left-1 text-[9px] text-info font-mono bg-background/80 px-1 rounded">{Math.round(cursor)}ns</span></div>}
+                {groups.map(([scope, sigs]) => {
+                  const isC = collapsed.has(scope);
+                  return (
+                    <div key={scope}>
+                      <button onClick={(e) => { e.stopPropagation(); toggle(scope); }} className="flex items-center gap-1 w-full px-2 py-1 bg-surface-2/50 hover:bg-surface-2 border-b border-border text-left relative z-10">
+                        {isC ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                        <span className="text-[10px] font-mono text-info truncate">{scope}</span><span className="text-[9px] text-muted-foreground">({sigs.length})</span>
+                      </button>
+                      {!isC && sigs.map((sig) => {
+                        const v = valueAt(sig, cursor);
+                        return (
+                          <div key={sig.name} className="flex items-center border-b border-border/50 hover:bg-surface-1 relative z-10">
+                            <div style={{ width: NAME_COL }} className="shrink-0 px-2 py-1 text-xs font-mono flex items-center gap-1">
+                              <span className="truncate">{sig.name}</span>
+                              {(sig.width ?? 1) > 1 && <span className="text-[9px] text-muted-foreground">[{sig.width}]</span>}
+                              {v != null && <span className="ml-auto text-[10px] font-semibold tabular-nums text-info">={v}</span>}
+                            </div>
+                            <div className="shrink-0"><Lane sig={sig} /></div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function SchematicView() {
+      return (
+        <div className="h-full flex flex-col">
+          <div className="flex items-center gap-2 h-8 px-3 border-b border-border/60 shrink-0 text-[11px] font-mono text-muted-foreground">yosys · sync_fifo.svg</div>
+          <div className="flex-1 grid place-items-center bg-surface-0 overflow-auto thin-scrollbar">
+            <svg width="492" height="240" className="text-foreground"><g transform="translate(28,0)">
+              {["clk","rst","wr_en","din"].map((p,i)=>(<g key={p}><line x1="20" y1={40+i*40} x2="70" y2={40+i*40} className="stroke-muted-foreground/50" /><text x="16" y={44+i*40} textAnchor="end" className="fill-muted-foreground text-[10px] font-mono">{p}</text></g>))}
+              <rect x="70" y="20" width="220" height="200" rx="6" className="fill-surface-1 stroke-border" strokeWidth="1.5" />
+              <text x="180" y="38" textAnchor="middle" className="fill-foreground/80 text-[11px] font-mono">sync_fifo</text>
+              <rect x="150" y="60" width="120" height="60" rx="4" className="fill-surface-2 stroke-primary/40" />
+              <text x="210" y="94" textAnchor="middle" className="fill-primary text-[10px] font-mono">fifo_mem</text>
+              <rect x="90" y="140" width="60" height="30" rx="4" className="fill-surface-2 stroke-border" /><text x="120" y="159" textAnchor="middle" className="fill-foreground/70 text-[9px] font-mono">wptr</text>
+              <rect x="170" y="140" width="60" height="30" rx="4" className="fill-surface-2 stroke-border" /><text x="200" y="159" textAnchor="middle" className="fill-foreground/70 text-[9px] font-mono">rptr</text>
+              {["dout","full","empty","overflow"].map((p,i)=>(<g key={p}><line x1="290" y1={50+i*38} x2="340" y2={50+i*38} className="stroke-muted-foreground/50" /><text x="346" y={54+i*38} className="fill-muted-foreground text-[10px] font-mono">{p}</text></g>))}
+            </g></svg>
+          </div>
+        </div>
+      );
+    }
+    function LayoutView({ run }) {
+      const stages = ["floorplan","place","cts","route"];
+      const [stage, setStage] = useState("route");
+      return (
+        <div className="h-full flex flex-col">
+          <div className="flex items-center gap-1.5 h-9 px-3 border-b border-border/60 shrink-0">
+            <span className="text-[11px] font-mono text-muted-foreground mr-1">ORFS stage preview{run ? ` · ${run.id}` : ""}</span>
+            {stages.map((s)=><button key={s} onClick={()=>setStage(s)} className={cn("h-6 px-2 rounded text-[11px] font-mono", stage===s ? "bg-surface-3 text-foreground" : "text-muted-foreground hover:bg-surface-2")}>{s}</button>)}
+            <span className="ml-auto text-[11px] font-mono text-status-pass">0 DRC</span>
+          </div>
+          <div className="flex-1 grid place-items-center bg-surface-0 p-4">
+            <svg width="300" height="300" className="border border-border">
+              <rect x="0" y="0" width="300" height="300" className="fill-surface-1" />
+              <rect x="20" y="20" width="260" height="260" className="fill-none stroke-info/40" strokeWidth="1" />
+              {Array.from({ length: stage==="floorplan"?0:120 }).map((_,i)=>{ const c=i%12, r=Math.floor(i/12); return <rect key={i} x={30+c*21} y={30+r*21} width={14} height={12} className={cn(stage==="route"?"fill-primary/30":"fill-muted-foreground/25")} />; })}
+              {stage==="route" && Array.from({ length: 14 }).map((_,i)=><line key={i} x1={28+i*18} y1={24} x2={28+i*18} y2={276} className="stroke-info/40" strokeWidth="0.75" />)}
+              {stage==="cts" && <g className="stroke-status-warn/60" fill="none"><path d="M150 30 L80 150 M150 30 L220 150 M80 150 L50 260 M80 150 L110 260 M220 150 L190 260 M220 150 L250 260" /></g>}
+            </svg>
+          </div>
+        </div>
+      );
+    }
+    function SpecView() {
+      const [raw, setRaw] = useState(false);
+      return (
+        <div className="h-full overflow-y-auto thin-scrollbar p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="flex items-center rounded-md border border-border bg-surface-1 p-0.5">
+              {["fields","raw"].map((m)=><button key={m} onClick={()=>setRaw(m==="raw")} className={cn("px-2 py-0.5 text-[11px] rounded-[4px]", (raw===(m==="raw")) ? "bg-surface-3 text-foreground" : "text-muted-foreground")}>{m}</button>)}
+            </div>
+            <span className="text-[11px] font-mono text-muted-foreground">spec.yaml</span>
+            <span className="ml-auto text-[10px] font-mono text-muted-foreground/60">contract · linted against rtl</span>
+          </div>
+          {raw ? (
+            <pre className="text-[12px] font-mono leading-relaxed text-foreground/80 bg-surface-0 border border-border rounded p-3 max-w-md">{SPEC_FIELDS.map(([k,v])=>`${k.toLowerCase()}: ${/[, ]/.test(v)?'"'+v+'"':v}`).join("\n")}</pre>
+          ) : (
+            <div className="rounded-md border border-border bg-surface-1 divide-y divide-border/60 max-w-md">
+              {SPEC_FIELDS.map(([k,v])=>(
+                <div key={k} className="flex items-center justify-between px-3 py-2">
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide">{k}</span>
+                  <span className="flex items-center gap-2 font-mono text-[13px] text-foreground/90">{v}<Check className="h-3 w-3 text-status-pass" title="implemented in rtl" /></span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function ArtifactCenter({ tabs, active, onActivate, onClose, flashKey, resolve, runs }) {
+      const art = active ? resolve(active) : null;
+      const reportRun = art && art.type === "report" ? runs.find((r) => r.id === art.runId) : null;
+      const layoutRun = art && art.type === "layout" ? runs.find((r) => r.id === art.runId) : null;
+      return (
+        <div className="flex flex-col h-full min-h-0 bg-surface-0">
+          {tabs.length > 0 && (
+            <div className="flex items-stretch h-9 border-b border-border/70 bg-surface-1 shrink-0 overflow-x-auto thin-scrollbar">
+              {tabs.map((k) => {
+                const a = resolve(k); if (!a) return null; const I = ART_TYPE[a.type]; const on = active === k;
+                return (
+                  <div key={k} onClick={() => onActivate(k)} className={cn("group relative flex items-center gap-1.5 pl-3 pr-2 border-r border-border/50 cursor-pointer whitespace-nowrap transition-colors", on ? "bg-surface-0 text-foreground" : "text-muted-foreground hover:bg-surface-2/50", flashKey === k && "animate-flash")}>
+                    {on && <span className="absolute top-0 left-0 right-0 h-0.5 bg-primary" />}
+                    <span className={on ? "text-primary" : "text-muted-foreground/70"}><I className="h-3.5 w-3.5" /></span>
+                    <span className="text-xs">{a.label}</span>
+                    <button onClick={(e) => { e.stopPropagation(); onClose(k); }} className="ml-1 h-4 w-4 grid place-items-center rounded hover:bg-surface-3 text-muted-foreground/50 hover:text-foreground opacity-0 group-hover:opacity-100"><X className="h-3 w-3" /></button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="flex-1 min-h-0 overflow-hidden animate-fade-in">
+            {!art ? (
+              <div className="h-full grid place-items-center">
+                <div className="flex flex-col items-center gap-3 text-center max-w-xs">
+                  <div className="h-12 w-12 rounded-xl bg-surface-2 grid place-items-center text-muted-foreground/50"><Layers className="h-6 w-6" /></div>
+                  <div className="text-sm font-medium text-foreground/80">Nothing open</div>
+                  <div className="text-[12px] text-muted-foreground leading-relaxed">Open a file from the tree, or an artifact from a run. Press <Kbd>{MOD} P</Kbd> to quick-open anything.</div>
+                </div>
+              </div>
+            ) : art.type === "code" ? <CodeView file={art.path} />
+              : art.type === "spec" ? <SpecView />
+              : art.type === "wave" ? <WaveformView art={art} />
+              : art.type === "schematic" ? <SchematicView />
+              : art.type === "layout" ? <LayoutView run={layoutRun} />
+              : art.type === "report" ? (reportRun && reportRun.ppa ? <ReportView run={reportRun} /> : (
+                  <div className="h-full grid place-items-center text-center">
+                    <div className="flex flex-col items-center gap-2 text-muted-foreground/60"><RefreshCw className="h-6 w-6 animate-spin text-status-running" /><span className="text-xs font-mono">{art.runId} · synthesizing…</span></div>
+                  </div>
+                ))
+              : null}
+          </div>
+        </div>
+      );
+    }
+
+    /* ======================= bottom dock: activity + runs =================== */
+    // Stream (1a): one chronological, filterable tool-call history. Rows expand to
+    // the real MCP call + typed result (lint → file:line diagnostics, sim → VCD link).
+    const ACT_FILTERS = [["all","All"],["lint","Lint"],["sim","Sim"],["synth","Synth"],["write","Writes"]];
+    function LintDiagnostics({ result, onOpenLine }) {
+      const items = [...(result.errors||[]).map(d=>({...d,severity:"error"})), ...(result.warnings||[])];
+      return (
+        <div className="space-y-1">
+          {result.command && <div className="font-mono text-[10.5px] text-info bg-surface-2/60 rounded px-2 py-1">$ {result.command}</div>}
+          {items.length===0 ? <div className="text-[11px] text-status-pass font-mono px-1">clean · 0 diagnostics</div> : items.map((d,i)=>(
+            <button key={i} onClick={()=>onOpenLine&&onOpenLine(d)} className="group flex items-center gap-2 w-full text-left px-2 py-1 rounded hover:bg-surface-2">
+              {d.severity==="error" ? <X className="h-3 w-3 text-status-fail shrink-0" /> : <AlertTriangle className="h-3 w-3 text-status-warn shrink-0" />}
+              <span className="font-mono text-[11px] text-info shrink-0">{d.file}:{d.line}</span>
+              <span className="text-[11px] text-foreground/80 truncate">{d.message}</span>
+              <ArrowRight className="h-3 w-3 text-muted-foreground/0 group-hover:text-muted-foreground/50 ml-auto shrink-0" />
+            </button>
+          ))}
+        </div>
+      );
+    }
+    function ActivityRow({ e, open, onToggle, onOpenRun, onOpenWave, onOpenFile, onReRun }) {
+      const Icon = (ACT_KIND[e.kind]||ACT_KIND.write).icon;
+      return (
+        <div className="mx-2 my-0.5">
+          <button onClick={onToggle} className={cn("group w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-left transition-colors", open ? "bg-surface-2" : "hover:bg-surface-1")}>
+            <span className={cn("shrink-0 grid place-items-center h-6 w-6 rounded-md", e.status==="failed" ? "bg-status-fail/10" : e.status==="running" ? "bg-status-running/10" : "bg-surface-2")}>
+              <span className={actText(e.status)}><Icon className="h-3.5 w-3.5" /></span>
+            </span>
+            <span className="shrink-0"><ActMark s={e.status} /></span>
+            <span className="font-mono text-[12px] text-foreground/90 shrink-0">{e.tool}</span>
+            <span className="font-mono text-[11px] text-muted-foreground truncate shrink-0 max-w-[150px]">{e.target}{e.runId && <span className="text-primary/70"> · {e.runId}</span>}</span>
+            <span className={cn("text-[11px] truncate", e.status==="failed" ? "text-status-fail" : "text-muted-foreground/80")}>{e.summary}</span>
+            <span className="ml-auto flex items-center gap-2 shrink-0"><ActActor a={e.actor} /><span className="font-mono text-[10px] text-muted-foreground/60 tabular-nums">{relativeTime(e.ts)}</span><ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground/50 transition-transform", open && "rotate-90")} /></span>
+          </button>
+          {open && (
+            <div className="ml-10 mr-2 mb-2 mt-1 space-y-2 animate-fade-in">
+              {e.kind==="lint" ? (
+                <LintDiagnostics result={e.result} onOpenLine={(d)=>onOpenFile(d.file, d.line)} />
+              ) : (
+                <>
+                  <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-wide">args</div>
+                  <pre className="text-[10.5px] font-mono leading-relaxed bg-surface-0 border border-border/60 rounded px-2 py-1.5 overflow-x-auto text-foreground/70 whitespace-pre-wrap">{JSON.stringify(e.args, null, 2)}</pre>
+                  <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-wide">result</div>
+                  <pre className={cn("text-[10.5px] font-mono leading-relaxed rounded px-2 py-1.5 overflow-x-auto whitespace-pre-wrap border", e.status==="failed" ? "bg-status-fail/5 border-status-fail/20 text-status-fail" : "bg-surface-0 border-border/60 text-foreground/70")}>{typeof e.result==="string" ? e.result : (e.result?.log || JSON.stringify(e.result, null, 2))}</pre>
+                </>
+              )}
+              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                {e.kind==="sim" && e.vcdPath && <button onClick={()=>onOpenWave(e)} title={`fetch & parse ${e.vcdPath}`} className="h-6 px-2 rounded text-[11px] bg-surface-2 hover:bg-surface-3 text-foreground/80 inline-flex items-center gap-1"><Waves className="h-3 w-3" />Open waveform</button>}
+                {e.runId && <button onClick={()=>onOpenRun(e.runId)} className="h-6 px-2 rounded text-[11px] bg-surface-2 hover:bg-surface-3 text-foreground/80 inline-flex items-center gap-1"><ListTree className="h-3 w-3" />Open {e.runId}</button>}
+                {e.kind==="synth" && <button className="h-6 px-2 rounded text-[11px] bg-surface-2 hover:bg-surface-3 text-foreground/80 inline-flex items-center gap-1"><GitCompare className="h-3 w-3" />Compare</button>}
+                <button onClick={()=>onReRun(e)} className="h-6 px-2 rounded text-[11px] bg-surface-2 hover:bg-surface-3 text-foreground/80 inline-flex items-center gap-1"><RefreshCw className="h-3 w-3" />Re-run</button>
+                <span className="ml-auto font-mono text-[9px] text-muted-foreground/40 uppercase tracking-wide self-center">GET /activity</span>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+    function ActivityFeed({ activity, onOpenRun, onOpenWave, onOpenFile, onReRun }) {
+      const [filter, setFilter] = useState("all");
+      const [actor, setActor] = useState("all");
+      const [q, setQ] = useState("");
+      const [openId, setOpenId] = useState("ac5");
+      const errCount = activity.filter(e=>e.status==="failed").length;
+      const counts = useMemo(()=>{ const c={}; activity.forEach(e=>c[e.kind]=(c[e.kind]||0)+1); return c; }, [activity]);
+      const list = activity.filter(e => {
+        if (filter==="err") { if (e.status!=="failed") return false; }
+        else if (filter!=="all" && e.kind!==filter) return false;
+        if (actor!=="all" && e.actor!==actor) return false;
+        if (q && !(`${e.tool} ${e.target} ${e.summary} ${e.runId||""}`.toLowerCase().includes(q.toLowerCase()))) return false;
+        return true;
+      });
+      return (
+        <div className="flex flex-col h-full min-h-0">
+          <div className="flex items-center gap-1.5 px-3 h-9 border-b border-border/60 shrink-0 flex-wrap">
+            {ACT_FILTERS.map(([k,l])=>(
+              <button key={k} onClick={()=>setFilter(k)} className={cn("inline-flex items-center gap-1 h-6 px-2 rounded-full text-[11px] font-medium border transition-colors", filter===k ? "border-primary/40 bg-primary/15 text-foreground" : "border-border bg-surface-1 text-muted-foreground hover:text-foreground hover:bg-surface-2")}>
+                {l}<span className="text-[9px] font-mono tabular-nums opacity-60">{k==="all"?activity.length:(counts[k]||0)}</span>
+              </button>
+            ))}
+            <button onClick={()=>setFilter(filter==="err"?"all":"err")} className={cn("inline-flex items-center gap-1 h-6 px-2 rounded-full text-[11px] font-medium border transition-colors", filter==="err" ? "border-status-fail/40 bg-status-fail/15 text-status-fail" : "border-border bg-surface-1 text-muted-foreground hover:text-foreground hover:bg-surface-2")}>
+              <AlertTriangle className="h-3 w-3" />Errors<span className="text-[9px] font-mono tabular-nums opacity-60">{errCount}</span>
+            </button>
+            <div className="h-4 w-px bg-border mx-0.5" />
+            <button onClick={()=>setActor(actor==="all"?"agent":actor==="agent"?"user":"all")} className="inline-flex items-center gap-1 h-6 px-2 rounded-full text-[11px] border border-border bg-surface-1 text-muted-foreground hover:text-foreground">
+              {actor==="all" ? <><Bot className="h-3 w-3" /><User className="h-3 w-3" />Both</> : actor==="agent" ? <><Bot className="h-3 w-3" />Agent</> : <><User className="h-3 w-3" />You</>}
+            </button>
+            <div className="ml-auto flex items-center gap-1.5 h-6 px-2 rounded-md border border-border bg-surface-1 w-[150px]">
+              <Search className="h-3 w-3 text-muted-foreground" /><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search…" className="flex-1 bg-transparent outline-none text-[11px] placeholder:text-muted-foreground min-w-0" />
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto thin-scrollbar py-1">
+            {list.length===0 && <div className="px-3 py-8 text-center text-xs text-muted-foreground">No matching activity</div>}
+            {list.map(e => <ActivityRow key={e.id} e={e} open={openId===e.id} onToggle={()=>setOpenId(openId===e.id?null:e.id)} onOpenRun={onOpenRun} onOpenWave={onOpenWave} onOpenFile={onOpenFile} onReRun={onReRun} />)}
+          </div>
+        </div>
+      );
+    }
+    function RunsPane({ runs, selected, onSelect, onOpenArtifact, unread }) {
+      const childrenByParent = new Map();
+      for (const r of runs) if (r.parentRunId) { const a = childrenByParent.get(r.parentRunId) ?? []; a.push(r); childrenByParent.set(r.parentRunId, a); }
+      const roots = runs.filter((r) => !r.parentRunId);
+      const glyphsFor = (r) => r.kind === "synth" ? [[`report:${r.id}`, BarChart3], [`layout:${r.id}`, Layers]] : [[`wave:${r.id}`, Activity]];
+      const Row = ({ r, child }) => {
+        const sel = r.id === selected;
+        return (
+          <div onClick={() => onSelect(r.id)} className={cn("group grid grid-cols-[16px_18px_1fr_110px_116px_54px_66px] items-center gap-2 px-3 h-8 cursor-pointer text-xs border-b border-border/40", sel ? "bg-surface-2" : "hover:bg-surface-1")}>
+            <span className={cn("h-2 w-2 rounded-full", statusDot(r.status))} />
+            <span className={cn(sel ? "text-primary" : "text-muted-foreground")}>{r.kind === "sim" ? <Waves className="h-3.5 w-3.5" /> : <Cpu className="h-3.5 w-3.5" />}</span>
+            <span className="font-mono flex items-center gap-1.5 min-w-0">{child && <CornerDownRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />}<span className="truncate">{r.id}</span>{unread && unread.includes(r.id) && <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse-subtle shrink-0" title="new" />}</span>
+            <span className="font-mono text-muted-foreground truncate">{r.top}</span>
+            <span className={cn("font-mono", statusText(r.status))}>{r.status}{r.kind === "sim" && r.failure ? ` @${r.failure.timeNs}ns` : ""}</span>
+            <span className="font-mono text-muted-foreground tabular-nums">{relativeTime(r.createdAt)}</span>
+            <span className="flex items-center gap-0.5 justify-end">
+              {glyphsFor(r).map(([k, I]) => <button key={k} onClick={(e) => { e.stopPropagation(); onOpenArtifact && onOpenArtifact(k, r.id); }} title={`open ${k.split(":")[0]}`} className="h-5 w-5 grid place-items-center rounded text-muted-foreground/50 hover:text-foreground hover:bg-surface-3"><I className="h-3 w-3" /></button>)}
+              {r.pinned && <Pin className="h-3 w-3 text-primary shrink-0" />}
+            </span>
+          </div>
+        );
+      };
+      return (
+        <div className="flex flex-col h-full min-h-0">
+          <div className="grid grid-cols-[16px_18px_1fr_110px_116px_54px_66px] items-center gap-2 px-3 h-6 shrink-0 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/70 border-b border-border/60">
+            <span></span><span></span><span>Run</span><span>Top</span><span>Result</span><span>Age</span><span className="text-right">Open</span>
+          </div>
+          <div className="flex-1 overflow-y-auto thin-scrollbar">
+            {roots.map((r) => (
+              <React.Fragment key={r.id}>
+                <Row r={r} />
+                {(childrenByParent.get(r.id) ?? []).map((c) => <Row key={c.id} r={c} child />)}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    function BottomDock({ open, setOpen, dockTab, setDockTab, selectedRun, onSelectRun, runs, activity, onOpenRun, onOpenWave, onOpenFile, onReRun, onOpenArtifact, unread }) {
+      const isRuns = dockTab === "runs";
+      const running = activity.find(e => e.status==="running");
+      return (
+        <div className={cn("flex flex-col border-t border-border bg-surface-1 shrink-0", open ? "h-56" : "h-8")}>
+          <div className="flex items-center gap-1 px-2 h-8 shrink-0">
+            <button onClick={() => { setDockTab("activity"); setOpen(true); }} className={cn("flex items-center gap-1.5 text-xs px-2 h-6 rounded transition-colors", !isRuns ? "bg-surface-2 text-foreground font-medium" : "text-muted-foreground hover:text-foreground hover:bg-surface-2/50")}>
+              <Activity className="h-3.5 w-3.5" />Activity<span className="font-mono text-[10px] text-muted-foreground">{activity.length}</span>
+            </button>
+            <button onClick={() => { setDockTab("runs"); setOpen(true); }} className={cn("flex items-center gap-1.5 text-xs px-2 h-6 rounded transition-colors", isRuns ? "bg-surface-2 text-foreground font-medium" : "text-muted-foreground hover:text-foreground hover:bg-surface-2/50")}>
+              <ListTree className="h-3.5 w-3.5" />Runs<span className="font-mono text-[10px] text-muted-foreground">{runs.length}</span>
+            </button>
+            {running && <span className="ml-1 inline-flex items-center gap-1.5 h-6 pl-2 pr-2.5 rounded-full border border-status-running/30 bg-status-running/10 text-status-running text-[11px] font-medium"><span className="h-1.5 w-1.5 rounded-full bg-status-running animate-pulse-subtle" />{running.runId||running.tool} · running<RefreshCw className="h-3 w-3 animate-spin" /></span>}
+            <div className="ml-auto flex items-center gap-0.5">
+              {isRuns && open && <Btn variant="ghost" size="icon-sm" title="Compare"><GitCompare className="h-3.5 w-3.5" /></Btn>}
+              <Btn variant="ghost" size="icon-sm" title="Refresh"><RefreshCw className="h-3.5 w-3.5" /></Btn>
+              <Btn variant="ghost" size="icon-sm" onClick={() => setOpen(!open)} title={open ? "Collapse" : "Expand"}>{open ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}</Btn>
+            </div>
+          </div>
+          {open && <div className="flex-1 min-h-0 animate-fade-in">{isRuns ? <RunsPane runs={runs} selected={selectedRun} onSelect={onSelectRun} onOpenArtifact={onOpenArtifact} unread={unread} /> : <ActivityFeed activity={activity} onOpenRun={onOpenRun} onOpenWave={onOpenWave} onOpenFile={onOpenFile} onReRun={onReRun} />}</div>}
+        </div>
+      );
+    }
+
+    /* ======================= assistant ======================================= */
+    const toolLabelMap = { write_spec: "write_spec", write_file: "write_file", linter_tool: "linter_tool", simulation_tool: "simulation_tool", start_synthesis: "start_synthesis" };
+    function ToolCallCard({ toolCall, result }) {
+      const [open, setOpen] = useState(false);
+      const s = (result?.status || "").toLowerCase();
+      const ok = ["success", "passed", "test_passed"].includes(s);
+      const err = s.includes("fail") || s.includes("error");
+      const args = toolCall.args;
+      const summary = args.filename || args.design_file || args.module_name || (Array.isArray(args.verilog_files) ? args.verilog_files.join(", ") : null);
+      return (
+        <div className="text-xs">
+          <button className="flex items-center gap-1.5 text-muted-foreground/70 hover:text-foreground transition-colors w-full text-left group" onClick={() => setOpen(!open)}>
+            <span className="shrink-0">{ok ? <Check className="h-3 w-3 text-status-pass" /> : err ? <X className="h-3 w-3 text-status-fail" /> : <Wrench className="h-3 w-3" />}</span>
+            <span className="font-mono">{toolLabelMap[toolCall.name] || toolCall.name}</span>
+            {summary && <><span className="text-muted-foreground/30">·</span><span className="font-mono truncate max-w-[160px] text-muted-foreground/50">{summary}</span></>}
+            <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity shrink-0">{open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}</span>
+          </button>
+          {open && result && (
+            <div className="mt-1.5 ml-4 space-y-1.5">
+              <pre className="text-[10.5px] bg-surface-1 border border-border/40 p-2 rounded overflow-x-auto max-h-[160px] font-mono text-foreground/70">{JSON.stringify(toolCall.args, null, 2)}</pre>
+              <pre className={cn("text-[10.5px] border p-2 rounded overflow-x-auto whitespace-pre-wrap font-mono", err ? "bg-status-fail/5 border-status-fail/20 text-status-fail" : "bg-surface-1 border-border/40 text-foreground/70")}>{result.content}</pre>
+            </div>
+          )}
+        </div>
+      );
+    }
+    function MdText({ content }) {
+      const html = content
+        .replace(/`([^`]+)`/g, '<code class="bg-surface-2 text-primary px-1 py-0.5 rounded text-[12px] font-mono">$1</code>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-foreground">$1</strong>');
+      return <div className="text-[13px] leading-relaxed text-foreground/90" dangerouslySetInnerHTML={{ __html: html }} />;
+    }
+    function Assistant({ onCollapse, model, setModel, onOpenMcp }) {
+      const [thread, setThread] = useState("t1");
+      const [threads, setThreads] = useState(THREADS);
+      const newChat = () => { const id = "t" + (threads.length + 1); setThreads((t) => [{ id, name: "New chat", updated: "now" }, ...t]); setThread(id); };
+      return (
+        <div className="flex flex-col h-full bg-surface-0">
+          <div className="flex items-center gap-1 h-9 pl-1.5 pr-1.5 border-b border-border/70 shrink-0">
+            <ThreadMenu threads={threads} active={thread} onSelect={setThread} onNew={newChat} />
+            <div className="ml-auto flex items-center gap-0.5">
+              <ModelPicker model={model} onChange={setModel} />
+              <Btn variant="ghost" size="icon-sm" title="Connect via MCP" onClick={onOpenMcp}><Plug className="h-4 w-4" /></Btn>
+              <Btn variant="ghost" size="icon-sm" title="New chat" onClick={newChat}><SquarePen className="h-3.5 w-3.5" /></Btn>
+              <Btn variant="ghost" size="icon-sm" title="Collapse" onClick={onCollapse}><PanelRightClose className="h-4 w-4" /></Btn>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto thin-scrollbar px-3 py-3 space-y-4">
+            {MESSAGES.map((m) => m.role === "user" ? (
+              <div key={m.id} className="flex justify-end">
+                <div className="max-w-[85%] bg-primary text-primary-foreground rounded-lg rounded-tr-sm px-3 py-2 text-[13px] leading-relaxed">{m.content}</div>
+              </div>
+            ) : (
+              <div key={m.id} className="flex items-start gap-2">
+                <div className="shrink-0 w-6 h-6 rounded-md bg-primary/10 flex items-center justify-center mt-0.5"><Bot className="h-3.5 w-3.5 text-primary" /></div>
+                <div className="flex-1 min-w-0 space-y-2.5">
+                  {m.blocks.map((b, i) => b.type === "text" ? <MdText key={i} content={b.content} /> : <ToolCallCard key={i} toolCall={b.toolCall} result={b.result} />)}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="p-2.5 border-t border-border/70 shrink-0">
+            <div className="flex items-end gap-2 rounded-lg border border-border bg-surface-1 px-2.5 py-1.5 focus-within:border-primary/50">
+              <textarea rows={1} placeholder="Message…" className="flex-1 bg-transparent resize-none outline-none text-[13px] placeholder:text-muted-foreground py-0.5 max-h-24" />
+              <Btn variant="primary" size="icon-sm" className="rounded-md"><Send className="h-3.5 w-3.5" /></Btn>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ======================= shell =========================================== */
+    function Workbench() {
+      const [dark, setDark] = useState(true);
+      const [selectedFile, setSelectedFile] = useState("sync_fifo.v");
+      const [openTabs, setOpenTabs] = useState(["report:S-04"]);
+      const [activeTab, setActiveTab] = useState("report:S-04");
+      const [flashKey, setFlashKey] = useState(null);
+      const [unread, setUnread] = useState([]);
+      const [chatOpen, setChatOpen] = useState(true);
+      const [dockOpen, setDockOpen] = useState(true);
+      const [dockTab, setDockTab] = useState("activity");
+      const [selectedRun, setSelectedRun] = useState("S-04");
+      const [paletteOpen, setPaletteOpen] = useState(false);
+      const [quickOpen, setQuickOpen] = useState(false);
+      const [ctxMenu, setCtxMenu] = useState(null);
+      const [runs, setRuns] = useState(RUNS);
+      const [activity, setActivity] = useState(() => [...ACTIVITY_SEED].reverse());
+      const [modalCmd, setModalCmd] = useState(null);
+      const [model, setModel] = useState("gemini-3-flash-preview");
+      const [mcpOpen, setMcpOpen] = useState(false);
+      const [toasts, setToasts] = useState([]);
+      const runsRef = useRef(runs);
+      useEffect(() => { runsRef.current = runs; }, [runs]);
+
+      const artifacts = useMemo(() => allArtifacts(runs), [runs]);
+      const resolveArt = useCallback((key) => allArtifacts(runsRef.current).find((a) => a.key === key), []);
+      // THE abstraction — every source calls this. focus-if-open, else open.
+      const openArtifact = useCallback((key) => {
+        if (!key || !resolveArt(key)) return;
+        setOpenTabs((t) => t.includes(key) ? t : [...t, key]);
+        setActiveTab(key);
+        setFlashKey(key); setTimeout(() => setFlashKey(null), 500);
+      }, [resolveArt]);
+      const closeTab = useCallback((key) => {
+        setOpenTabs((t) => { const n = t.filter((k) => k !== key); setActiveTab((a) => a === key ? (n[n.length - 1] || null) : a); return n; });
+      }, []);
+      const openRunArtifact = useCallback((rid) => {
+        const r = runsRef.current.find((x) => x.id === rid);
+        if (!r) return;
+        setUnread((u) => u.filter((x) => x !== rid));
+        openArtifact(r.kind === "synth" ? `report:${rid}` : `wave:${rid}`);
+      }, [openArtifact]);
+      const openArtifactKey = useCallback((key, rid) => { if (rid) setUnread((u) => u.filter((x) => x !== rid)); openArtifact(key); }, [openArtifact]);
+
+      const pushActivity = useCallback((e) => setActivity((a) => [e, ...a]), []);
+      const updateActivity = useCallback((id, patch) => setActivity((a) => a.map((e) => e.id === id ? { ...e, ...patch } : e)), []);
+      const openWaveform = useCallback((e) => { if (e.runId) openArtifact(`wave:${e.runId}`); }, [openArtifact]);
+      const openFileAt = useCallback((name) => { setSelectedFile(name); openArtifact(`code:${name}`); }, [openArtifact]);
+
+      const pushToast = useCallback((t) => {
+        const key = Math.random().toString(36).slice(2);
+        setToasts((a) => [...a.slice(-3), { ...t, key }]);
+        setTimeout(() => setToasts((a) => a.filter((x) => x.key !== key)), 3400);
+      }, []);
+
+      function nextRunId(cmd, values) {
+        const rs = runsRef.current;
+        if (cmd.id === "pnr") { const p = (values && values.run_id) || "S-04"; const kids = rs.filter((r) => String(r.parentRunId) === p).length; return `${p}.${kids + 1}`; }
+        const prefix = cmd.kind === "sim" ? "R" : "S";
+        const nums = rs.map((r) => { const m = String(r.id).match(new RegExp("^" + prefix + "-(\\d+)")); return m ? parseInt(m[1], 10) : 0; });
+        return `${prefix}-${String(Math.max(0, ...nums) + 1).padStart(2, "0")}`;
+      }
+
+      const runCommand = useCallback((id, values) => {
+        const cmd = COMMANDS[id]; if (!cmd) return;
+        const actId = "a" + Date.now();
+        const actor = "user";
+        if (cmd.kind === "sim" || cmd.kind === "synth") {
+          const newId = nextRunId(cmd, values);
+          const isSim = cmd.kind === "sim";
+          const top = isSim ? MANIFEST.simTop : MANIFEST.synthTop;
+          const parent = id === "pnr" ? ((values && values.run_id) || "S-04") : undefined;
+          const run = { id: newId, kind: isSim ? "sim" : "synth", status: "running", top, createdAt: new Date().toISOString(), pinned: false, parentRunId: parent };
+          setRuns((r) => [run, ...r]);
+          setSelectedRun(newId); setDockTab("activity"); setDockOpen(true);
+          pushActivity({ id: actId, actor, kind: isSim ? "sim" : "synth", tool: cmd.tool, target: top, status: "running", ts: new Date().toISOString(), runId: newId, summary: "dispatched", args: values || {}, result: { runId: newId, status: "running" } });
+          pushToast({ tool: cmd.tool, msg: `Dispatched ${newId} · ${cmd.label.toLowerCase()}`, status: "running" });
+          setTimeout(() => {
+            const ppa = { areaUm2: 1284.5, cells: 412, wnsNs: 0.42, tnsNs: 0, fmaxMhz: 158.7, powerMw: 3.1 };
+            setRuns((r) => r.map((x) => x.id === newId ? { ...x, status: "passed", ...(isSim ? { passMarkerFound: true, vcdPath: "dump.vcd" } : { ppa }) } : x));
+            setUnread((u) => [...u, newId]); // surfaces on the run row — no auto-switch of the center
+            updateActivity(actId, isSim
+              ? { status: "passed", summary: "PASS · 1024/1024", vcdPath: `build/sim/${newId}/dump.vcd`, result: { runId: newId, status: "passed", passMarker: "TEST PASSED", markerFound: true, transactions: "1024/1024", vcdPath: `build/sim/${newId}/dump.vcd`, log: "TEST PASSED" } }
+              : { status: "passed", summary: "WNS +0.42ns · 412 cells · 158.7 MHz", result: { runId: newId, status: "passed", ppa, drc: 0, log: `${newId} complete · WNS +0.42ns · 0 DRC` } });
+            pushToast({ msg: `${newId} passed`, status: "passed" });
+          }, 1800);
+        } else {
+          // lint (sync) — structured diagnostics, mirrors POST /lint. No auto-switch of the center.
+          setDockTab("activity"); setDockOpen(true);
+          pushActivity({ id: actId, actor, kind: "lint", tool: "linter_tool", target: "rtl (2 files)", status: "warn", ts: new Date().toISOString(), summary: "passed · 2 warnings",
+            args: { verilog_files: ["sync_fifo.v", "fifo_mem.v"] },
+            result: { status: "passed", command: "iverilog -t null -Wall sync_fifo.v fifo_mem.v", errors: [], warnings: [
+              { file: "sync_fifo.v", line: 44, severity: "warning", message: "parameter DEPTH unused in this scope" },
+              { file: "fifo_mem.v", line: 19, severity: "warning", message: "implicit conversion narrows 9 → 8 bits" },
+            ] } });
+          pushToast({ tool: cmd.tool, msg: "Lint passed · 2 warnings", status: "warn" });
+        }
+      }, [pushToast, pushActivity, updateActivity]);
+
+      const openModal = useCallback((id) => setModalCmd(id), []);
+
+      useEffect(() => { document.documentElement.classList.toggle("dark", dark); document.documentElement.classList.toggle("light", !dark); }, [dark]);
+      useEffect(() => {
+        const h = (e) => {
+          const mod = e.metaKey || e.ctrlKey;
+          if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen((o) => !o); }
+          else if (mod && e.key.toLowerCase() === "p") { e.preventDefault(); setQuickOpen((o) => !o); }
+          else if (e.key === "Escape") { setPaletteOpen(false); setQuickOpen(false); }
+          else if (mod && e.key.toLowerCase() === "l") { e.preventDefault(); runCommand("lint"); }
+          else if (mod && e.key.toLowerCase() === "r") { e.preventDefault(); runCommand("sim"); }
+          else if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); runCommand("synth"); }
+          else if (mod && e.key.toLowerCase() === "e") { e.preventDefault(); runCommand("pnr"); }
+          else if (mod && e.key.toLowerCase() === "j") { e.preventDefault(); setDockTab("runs"); setDockOpen(true); }
+        };
+        window.addEventListener("keydown", h);
+        return () => window.removeEventListener("keydown", h);
+      }, [runCommand]);
+
+      const openFile = (name) => {
+        setSelectedFile(name);
+        if (CODE_FILES[name]) openArtifact(`code:${name}`);
+        else if (name === "spec.yaml") openArtifact("spec");
+        else if (name.endsWith(".vcd")) openArtifact("wave:R-07");
+        else if (name.endsWith(".json")) openArtifact("report:S-04");
+        else if (name.endsWith(".v") || name.endsWith(".sv") || name.endsWith(".vh") || name.endsWith(".sdc")) openArtifact(`code:${name}`);
+      };
+
+      return (
+        <main className="h-screen w-screen overflow-hidden flex flex-col bg-background text-foreground">
+          <TopBar dark={dark} setDark={setDark} onPalette={() => setPaletteOpen(true)} activity={activity} onOpenActivity={() => { setDockTab("activity"); setDockOpen(true); }} onOpenMcp={() => setMcpOpen(true)} />
+          <div className="flex-1 min-h-0 flex">
+            {/* left explorer */}
+            <div className="w-[19%] min-w-[200px] max-w-[300px] flex flex-col bg-surface-0 border-r border-border/70 min-h-0">
+              <FileExplorer selected={selectedFile} onSelect={openFile} onContext={setCtxMenu} />
+            </div>
+            {/* center + dock */}
+            <div className="flex-1 flex flex-col min-h-0 border-r border-border/70">
+              <div className="flex-1 min-h-0"><ArtifactCenter tabs={openTabs} active={activeTab} onActivate={setActiveTab} onClose={closeTab} flashKey={flashKey} resolve={resolveArt} runs={runs} /></div>
+              <BottomDock open={dockOpen} setOpen={setDockOpen} dockTab={dockTab} setDockTab={setDockTab} selectedRun={selectedRun} onSelectRun={openRunArtifact} runs={runs} activity={activity} onOpenRun={openRunArtifact} onOpenWave={openWaveform} onOpenFile={openFileAt} onReRun={(e) => runCommand(e.kind === "synth" ? "synth" : e.kind === "sim" ? "sim" : "lint")} onOpenArtifact={openArtifactKey} unread={unread} />
+            </div>
+            {/* right assistant */}
+            {chatOpen ? (
+              <div className="w-[26%] min-w-[280px] max-w-[420px] flex flex-col min-h-0 animate-fade-in"><Assistant onCollapse={() => setChatOpen(false)} model={model} setModel={setModel} onOpenMcp={() => setMcpOpen(true)} /></div>
+            ) : (
+              <button onClick={() => setChatOpen(true)} className="w-8 shrink-0 flex flex-col items-center gap-2 py-3 bg-surface-1 border-l border-border/70 text-muted-foreground hover:text-primary" title="Open assistant">
+                <PanelRightOpen className="h-4 w-4" />
+                <span className="text-[10px] uppercase tracking-wider [writing-mode:vertical-rl] rotate-180">Assistant</span>
+              </button>
+            )}
+          </div>
+
+          <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onRun={runCommand} onOptions={openModal} />
+          <QuickOpen open={quickOpen} onClose={() => setQuickOpen(false)} artifacts={artifacts} onOpen={openArtifact} />
+          <ContextMenu menu={ctxMenu} onClose={() => setCtxMenu(null)} onRun={(id) => runCommand(id)} onOptions={openModal} />
+          {modalCmd && <CommandModal id={modalCmd} onClose={() => setModalCmd(null)} onInvoke={(id, vals) => { runCommand(id, vals); setModalCmd(null); }} />}
+          {mcpOpen && <McpModal onClose={() => setMcpOpen(false)} />}
+          <Toasts items={toasts} />
+        </main>
+      );
+    }
+
+    createRoot(document.getElementById("root")).render(<Workbench />);
+  </script>
+</body>
+</html>
