@@ -35,6 +35,7 @@ from pydantic import BaseModel
 
 from src.api.activity import read_activity
 from src.api import workspace_fs
+from src.api.invoke import TOOL_REGISTRY, InvokeError, run_registered_tool
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.utils.session_context import SessionContext, session_scope
 from src.utils.paths import is_within
@@ -100,6 +101,11 @@ class PinRequest(BaseModel):
 
 class CodeSave(BaseModel):
     content: str
+
+
+class InvokeRequest(BaseModel):
+    tool: str
+    arguments: Optional[Dict[str, Any]] = None
 
 
 # --- Shared helpers ---------------------------------------------------------
@@ -689,6 +695,47 @@ def build_actions_router(
         except ValueError:
             _err("invalid_path", f"Path escapes the workspace: {path}", status=404)
         return _ok({"path": path, "entries": entries})
+
+    # ---- Curated tool invocation (the Command Surface) -----------------------
+
+    @router.post("/invoke")
+    async def invoke_tool(session_id: str, body: InvokeRequest, identity=Depends(get_identity)):
+        """Run one allowlisted tool with user-supplied choices. Fixed registry
+        (src/api/invoke.py) — not a generic RPC. Logged to the per-session
+        event log like every other invocation path (source ui)."""
+        uid = require_owned(session_id, identity)
+        workspace = await require_workspace(session_id)
+
+        spec = TOOL_REGISTRY.get(body.tool)
+        if spec is None:
+            _err("unknown_tool", f"'{body.tool}' is not an invocable tool.", status=404)
+        if spec.signed_in and getattr(identity, "anonymous", False):
+            _err("signin_required", f"'{body.tool}' requires signing in.", status=401)
+
+        def work():
+            call_id = _ui_log_call(workspace, session_id, body.tool, body.arguments or {})
+            try:
+                result = run_registered_tool(body.tool, workspace, session_id, body.arguments)
+            except InvokeError as exc:
+                _ui_log_result(workspace, session_id, body.tool, call_id, str(exc), ok=False)
+                return {"invokeError": exc}
+            except Exception as exc:  # the tool itself failed — an honest error result
+                _ui_log_result(workspace, session_id, body.tool, call_id, str(exc), ok=False)
+                return {"error": str(exc)}
+            summary = result if isinstance(result, str) else json.dumps(result)[:2000]
+            # Structured tools signal failure via a status field; strings are
+            # treated as success (the tool would have raised otherwise).
+            ok = not (isinstance(result, dict) and str(result.get("status", "")).lower() in ("error", "fail", "failed"))
+            _ui_log_result(workspace, session_id, body.tool, call_id, summary, ok=ok)
+            return {"result": result}
+
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=spec.mutates)
+        if "invokeError" in out:
+            exc = out["invokeError"]
+            _err(exc.code, str(exc), status=exc.status)
+        if "error" in out:
+            _err("tool_failed", out["error"], status=502)
+        return _ok({"tool": body.tool, "result": out["result"]})
 
     # ---- Workbench snapshot (F4: one hydration, one response) ---------------
 

@@ -44,6 +44,7 @@ interface WorkbenchUiState {
   paletteOpen: boolean;
   quickOpenOpen: boolean;
   commandModal: string | null;
+  commandSurfaceOpen: boolean;
   // Tab key to flash (attention pulse) — set by openTab, cleared by clearFlash.
   flashKey: string | null;
   contextMenu: ContextMenuState | null;
@@ -61,6 +62,7 @@ interface WorkbenchUiState {
   setPaletteOpen: (open: boolean) => void;
   setQuickOpenOpen: (open: boolean) => void;
   setCommandModal: (id: string | null) => void;
+  setCommandSurfaceOpen: (open: boolean) => void;
   setContextMenu: (menu: ContextMenuState | null) => void;
   clearFlash: () => void;
 }
@@ -84,6 +86,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         perSession: {},
 
         paletteOpen: false,
+        commandSurfaceOpen: false,
         quickOpenOpen: false,
         commandModal: null,
         flashKey: null,
@@ -156,6 +159,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         },
 
         setPaletteOpen: (open) => set({ paletteOpen: open }),
+        setCommandSurfaceOpen: (open) => set({ commandSurfaceOpen: open }),
         setQuickOpenOpen: (open) => set({ quickOpenOpen: open }),
         setCommandModal: (id) => set({ commandModal: id }),
         setContextMenu: (menu) => set({ contextMenu: menu }),

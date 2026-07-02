@@ -384,6 +384,12 @@ export const workbenchApi = {
   getJob: (sessionId: string, jobId: string) =>
     actionFetch<{ ok: true; job: Record<string, unknown> }>(`${ws(sessionId)}/jobs/${encodeURIComponent(jobId)}`).then((r) => r.job),
 
+  invokeTool: (sessionId: string, tool: string, args: Record<string, unknown>) =>
+    actionFetch<{ ok: true; tool: string; result: unknown }>(`${ws(sessionId)}/invoke`, {
+      method: "POST",
+      body: JSON.stringify({ tool, arguments: args }),
+    }),
+
   retryRun: (
     sessionId: string,
     runId: string,

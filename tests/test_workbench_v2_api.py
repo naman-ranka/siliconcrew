@@ -341,3 +341,91 @@ def test_workbench_snapshot_includes_activity_and_rootdir(client):
     assert "counter.v" in root_names
     # the event log itself is visible in the tree (real structure, no lies)
     assert any(e["name"] == "attempt_events.jsonl" for e in body["rootDir"])
+
+
+# --- Curated tool invocation (/invoke — the Command Surface) -------------------
+
+def test_invoke_unknown_tool_404(client):
+    c, ws = client
+    r = c.post(f"/api/workspace/{SID}/invoke", json={"tool": "rm_rf", "arguments": {}})
+    assert r.status_code == 404
+    assert r.json()["detail"]["error"]["code"] == "unknown_tool"
+
+
+def test_invoke_waveform_reads_real_vcd(client):
+    c, ws = client
+    vcd = (
+        "$timescale 1ns $end\n"
+        "$scope module tb $end\n"
+        "$var wire 1 ! clk $end\n"
+        "$upscope $end\n$enddefinitions $end\n"
+        "#0\n0!\n#5\n1!\n#10\n0!\n"
+    )
+    with open(os.path.join(ws, "dump.vcd"), "w") as f:
+        f.write(vcd)
+
+    r = c.post(f"/api/workspace/{SID}/invoke", json={
+        "tool": "waveform_tool",
+        "arguments": {"vcd_file": "dump.vcd", "signals": ["clk"], "start_time": 0, "end_time": 20},
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["tool"] == "waveform_tool"
+    assert "clk" in str(body["result"])
+
+    # ...and it landed in the unified activity feed as a user event.
+    ev = c.get(f"/api/workspace/{SID}/activity").json()["events"][0]
+    assert ev["tool"] == "waveform_tool" and ev["source"] == "user" and ev["status"] == "ok"
+
+
+def test_invoke_path_containment(client):
+    c, ws = client
+    r = c.post(f"/api/workspace/{SID}/invoke", json={
+        "tool": "waveform_tool",
+        "arguments": {"vcd_file": "../../etc/passwd", "signals": ["clk"]},
+    })
+    assert r.status_code == 404
+    assert r.json()["detail"]["error"]["code"] in ("invalid_path", "not_found")
+
+
+def test_invoke_missing_arg_400(client):
+    c, ws = client
+    r = c.post(f"/api/workspace/{SID}/invoke", json={"tool": "get_synthesis_metrics", "arguments": {}})
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"]["code"] == "missing_arg"
+
+
+def test_invoke_analysis_tool_over_missing_run_is_honest(client):
+    c, ws = client
+    r = c.post(f"/api/workspace/{SID}/invoke", json={
+        "tool": "get_synthesis_metrics", "arguments": {"run_id": "synth_9999"},
+    })
+    # The tool returns a structured miss (not a crash); the endpoint passes it
+    # through and the activity row records the error status.
+    assert r.status_code == 200
+    ev = c.get(f"/api/workspace/{SID}/activity").json()["events"][0]
+    assert ev["tool"] == "get_synthesis_metrics"
+
+
+def test_invoke_signed_in_gate(tmp_path):
+    """Anonymous identities are refused for sign-in-gated tools (hosted trial)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    class Anon:
+        anonymous = True
+        tier = "anonymous"
+
+    base = str(tmp_path)
+
+    def resolve(session_id: str) -> str:
+        ws = os.path.join(base, session_id)
+        os.makedirs(ws, exist_ok=True)
+        return ws
+
+    app = FastAPI()
+    app.include_router(build_actions_router(resolve, get_identity=lambda: Anon()))
+    c = TestClient(app)
+    r = c.post(f"/api/workspace/{SID}/invoke", json={"tool": "save_metrics_tool", "arguments": {"wns_ns": 0.1}})
+    assert r.status_code == 401
+    assert r.json()["detail"]["error"]["code"] == "signin_required"
