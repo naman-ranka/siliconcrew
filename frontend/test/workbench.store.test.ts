@@ -51,7 +51,6 @@ beforeEach(() => {
     currentSession: SESSION as any,
     runs: [],
     selectedRunId: null,
-    consoleEntries: [],
     lintResult: null,
     manifest: null,
     activeArtifactTab: "spec",
@@ -59,36 +58,12 @@ beforeEach(() => {
   });
 });
 
-describe("workbench store: runLint", () => {
-  it("calls the lint endpoint, stores the result, and logs to the console", async () => {
-    (workbenchApi.lint as any).mockResolvedValue({
-      ok: true,
-      status: "failed",
-      warnings: [],
-      errors: [{ file: "decoder.v", line: 12, severity: "error", message: "syntax error" }],
-      byFile: { "decoder.v": [{ line: 12, severity: "error", message: "syntax error" }] },
-      command: "iverilog -t null -g2012 decoder.v",
-      files: ["decoder.v"],
-    });
+// (Tool execution — lint/sim/synth — moved to lib/commands.ts; the old
+// runLint/runSim/runSynth store actions and the console log were removed
+// with the v1 chrome.)
 
-    await useStore.getState().runLint();
-
-    expect(workbenchApi.lint).toHaveBeenCalledWith("s1");
-    const s = useStore.getState();
-    expect(s.lintResult?.status).toBe("failed");
-    expect(s.activeConsole).toBe("lint");
-    const lintEntry = s.consoleEntries.find((e) => e.channel === "lint");
-    expect(lintEntry?.status).toBe("failed");
-    expect(lintEntry?.command).toContain("iverilog");
-    // A fresh lint result raises console attention (auto-expand + pulse cue)
-    // on the lint channel, since lint has no center-artifact surface.
-    expect(s.consoleAttention?.channel).toBe("lint");
-    expect(s.consoleAttention?.tick).toBeGreaterThan(0);
-  });
-});
-
-describe("workbench store: runSim drives the run timeline + waveform", () => {
-  it("records a sim run, selects it, and flips the active artifact to waveform", async () => {
+describe("workbench store: selectRun loads the sim waveform", () => {
+  it("selecting a sim run loads its isolated VCD and shows the waveform tab", async () => {
     const simRun = {
       id: "sim_0001",
       kind: "sim" as const,
@@ -98,19 +73,14 @@ describe("workbench store: runSim drives the run timeline + waveform", () => {
       pinned: false,
       vcdPath: "sim_runs/sim_0001/dump.vcd",
       failure: { type: "test_failed", firstFailureLine: "ERROR", timeNs: 240 },
-      compileCommand: "iverilog ...",
-      simCommand: "vvp ...",
     };
-    (workbenchApi.simulate as any).mockResolvedValue(simRun);
-    (workbenchApi.listRuns as any).mockResolvedValue([simRun]);
+    useStore.setState({ runs: [simRun] as any });
 
-    await useStore.getState().runSim();
+    await useStore.getState().selectRun("sim_0001");
 
-    expect(workbenchApi.simulate).toHaveBeenCalled();
     const s = useStore.getState();
     expect(s.selectedRunId).toBe("sim_0001");
     expect(s.activeArtifactTab).toBe("waveform");
-    // selecting the sim run loaded its isolated VCD by path
     expect(workspaceApi.getWaveform).toHaveBeenCalledWith("s1", "sim_runs/sim_0001/dump.vcd");
     expect(s.selectedWaveform).toBe("sim_runs/sim_0001/dump.vcd");
   });

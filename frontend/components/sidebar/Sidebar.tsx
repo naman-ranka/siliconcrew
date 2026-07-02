@@ -47,12 +47,14 @@ import { cn } from "@/lib/utils";
 import { formatTokens, formatRelativeTime } from "@/lib/utils";
 import { AccountChip } from "@/components/auth/AccountChip";
 import { useAuth } from "@/lib/auth";
-import type { Project, Session } from "@/types";
+import type { ModelInfo, Project, Session } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Model selector — shared between create dialog and inline forms
 // ---------------------------------------------------------------------------
 
+// Fallback catalog, used ONLY until the real /api/models registry loads (and
+// for label lookups on sessions whose model predates the registry).
 const MODELS = [
   { value: "gemini-3.1-flash",        label: "Gemini 3.1 Flash", sub: "Compat alias to Gemini 3 Flash", icon: <Zap  className="h-3 w-3 text-yellow-500" /> },
   { value: "gemini-3-flash-preview",  label: "Gemini 3 Flash",   sub: "Google latest 3-series Flash",   icon: <Zap  className="h-3 w-3 text-yellow-400" /> },
@@ -67,14 +69,40 @@ const MODELS = [
 ];
 const MODEL_LABELS = new Map(MODELS.map((model) => [model.value, model.label]));
 
-function ModelSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+type ModelOption = { value: string; label: string; sub: string; icon: React.ReactNode };
+
+// Map a registry entry to the option shape the dialog renders — fast tier gets
+// the Zap glyph, everything else the Cpu one (same visual language as before).
+function toModelOption(m: ModelInfo): ModelOption {
+  return {
+    value: m.id,
+    label: m.label,
+    sub: m.hint ?? m.provider,
+    icon:
+      m.tier === "fast" ? (
+        <Zap className="h-3 w-3 text-yellow-500" />
+      ) : (
+        <Cpu className="h-3 w-3 text-primary" />
+      ),
+  };
+}
+
+function ModelSelect({
+  value,
+  onChange,
+  options = MODELS,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options?: ModelOption[];
+}) {
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger className="bg-surface-2 border-border">
         <SelectValue placeholder="Select model" />
       </SelectTrigger>
       <SelectContent className="bg-surface-1 border-border">
-        {MODELS.map((m) => (
+        {options.map((m) => (
           <SelectItem key={m.value} value={m.value}>
             <div className="flex items-center gap-2">
               {m.icon}
@@ -104,7 +132,7 @@ interface CreateSessionDialogProps {
 }
 
 function CreateSessionDialog({ open, onOpenChange, preselectedProjectId }: CreateSessionDialogProps) {
-  const { projects, createSession, createProject, loadProjects } = useStore();
+  const { projects, createSession, createProject, loadProjects, models, loadModels } = useStore();
 
   const [name, setName] = useState("");
   const [model, setModel] = useState("gemini-3.1-flash");
@@ -113,16 +141,32 @@ function CreateSessionDialog({ open, onOpenChange, preselectedProjectId }: Creat
   const [newProjectName, setNewProjectName] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // The dialog offers the REAL /api/models catalog; the hardcoded list is a
+  // fallback only while the registry hasn't loaded yet.
+  const modelOptions = useMemo(
+    () => (models.length > 0 ? models.map(toModelOption) : MODELS),
+    [models]
+  );
+
   // Sync preselectedProjectId when dialog opens
   useEffect(() => {
     if (open) {
       loadProjects();
+      loadModels();
       if (preselectedProjectId) {
         setProjectMode("existing");
         setSelectedProjectId(preselectedProjectId);
       }
     }
-  }, [open, preselectedProjectId, loadProjects]);
+  }, [open, preselectedProjectId, loadProjects, loadModels]);
+
+  // If the registry arrives without the currently-selected id, snap to the
+  // catalog's first entry so the Select never shows an unknown value.
+  useEffect(() => {
+    if (modelOptions.length > 0 && !modelOptions.some((m) => m.value === model)) {
+      setModel(modelOptions[0].value);
+    }
+  }, [modelOptions, model]);
 
   const handleCreate = async () => {
     const trimmedName = name.trim();
@@ -236,7 +280,7 @@ function CreateSessionDialog({ open, onOpenChange, preselectedProjectId }: Creat
           {/* Model */}
           <div>
             <label className="text-sm font-medium mb-2 block">Model</label>
-            <ModelSelect value={model} onChange={setModel} />
+            <ModelSelect value={model} onChange={setModel} options={modelOptions} />
           </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}

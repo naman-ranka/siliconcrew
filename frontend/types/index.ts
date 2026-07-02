@@ -223,18 +223,6 @@ export interface Toast {
   detail?: string;
 }
 
-// Console entries surfaced under the artifact viewers (lint/sim/synth).
-export type ConsoleChannel = "lint" | "sim" | "synth";
-export interface ConsoleEntry {
-  channel: ConsoleChannel;
-  status: "running" | "passed" | "failed" | "info";
-  command?: string;
-  summary: string;
-  detail?: string;
-  runId?: string;
-  ts: string;
-}
-
 // Live synthesis (ORFS) job status — drives the stage-progress UI while a
 // remote synth runs. Mirrors the backend job-status payload (snake_case).
 export type SynthStageId =

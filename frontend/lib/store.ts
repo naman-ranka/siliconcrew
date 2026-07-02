@@ -19,8 +19,6 @@ import type {
   RunSummary,
   LintResult,
   FileRole,
-  ConsoleChannel,
-  ConsoleEntry,
   SynthJobStatus,
   Toast,
   SliceStatus,
@@ -288,16 +286,10 @@ interface AppState {
   selectedRunId: string | null;
   runKindFilter: "all" | "sim" | "synth";
   lintResult: LintResult | null;
-  consoleEntries: ConsoleEntry[];
-  activeConsole: ConsoleChannel;
-  // Monotonic counter the Console watches to draw attention to a fresh result
-  // (auto-expand + pulse) — e.g. a lint result that would otherwise be a quiet
-  // one-liner while the center stays on Code. Carries which channel to focus.
-  consoleAttention: { tick: number; channel: ConsoleChannel } | null;
   // Live ORFS synth job status (stages, elapsed, remote label) while a synth
-  // runs; null when no synth is in flight. Drives the stage-progress UI.
+  // runs; null when no synth is in flight. Drives the stage-progress UI
+  // (RunsPane's live stage cell; published by lib/commands' job poll).
   synthJob: SynthJobStatus | null;
-  actionPending: { lint: boolean; sim: boolean; synth: boolean };
   // Section-load flags drive skeleton loaders so a section shows shimmer rows
   // instead of flashing an empty/"No …" state before content lands.
   runsLoading: boolean;
@@ -317,10 +309,6 @@ interface AppState {
   selectRun: (runId: string | null, opts?: { keepTab?: boolean }) => Promise<void>;
   pinRun: (runId: string, pinned: boolean) => Promise<void>;
   setRunKindFilter: (kind: "all" | "sim" | "synth") => void;
-  setActiveConsole: (channel: ConsoleChannel) => void;
-  runLint: () => Promise<void>;
-  runSim: (opts?: { mode?: string; runId?: string }) => Promise<void>;
-  runSynth: () => Promise<void>;
   refreshSynthArtifacts: (runId?: string | null) => Promise<void>;
 
   // --- Workbench v2 data layer (SWR slices) ---
@@ -422,11 +410,7 @@ export const useStore = create<AppState>((set, get) => ({
   selectedRunId: null,
   runKindFilter: "all",
   lintResult: null,
-  consoleEntries: [],
-  activeConsole: "sim",
-  consoleAttention: null,
   synthJob: null,
-  actionPending: { lint: false, sim: false, synth: false },
   runsLoading: false,
   manifestLoading: false,
   reportLoading: false,
@@ -1436,11 +1420,6 @@ export const useStore = create<AppState>((set, get) => ({
     setTimeout(() => {
       if (_uploadNoticeToken === token) useStore.setState({ uploadNotice: null });
     }, 5000);
-    pushConsole(set, get, {
-      channel: get().activeConsole,
-      status: "info",
-      summary: notice,
-    });
     await get().refreshWorkspace();
     return { uploaded: res.uploaded, notShown };
   },
@@ -1448,7 +1427,7 @@ export const useStore = create<AppState>((set, get) => ({
   loadRuns: async () => {
     const { currentSession, runKindFilter } = get();
     if (!currentSession) return;
-    // F5: single-flight so the two synth-time loops (the runSynth job poll and
+    // F5: single-flight so the two synth-time loops (the lib/commands job poll and
     // the useWorkbenchSync active-run poll) never double-pull the run list.
     return singleFlight(`runs:${currentSession.id}:${runKindFilter}`, async () => {
       set({ runsLoading: true });
@@ -1474,8 +1453,6 @@ export const useStore = create<AppState>((set, get) => ({
     void get().loadRuns();
   },
 
-  setActiveConsole: (channel) => set({ activeConsole: channel }),
-
   selectRun: async (runId: string | null, opts?: { keepTab?: boolean }) => {
     set({ selectedRunId: runId });
     if (!runId) return;
@@ -1483,28 +1460,12 @@ export const useStore = create<AppState>((set, get) => ({
     if (!run) return;
 
     if (run.kind === "sim") {
-      set({ activeConsole: "sim" });
-      // Backfill the console from the selected run's stored record so a user
-      // landing on a historical failure sees its command + ERROR immediately
-      // (not "No sim output yet").
-      pushConsole(set, get, {
-        channel: "sim",
-        status: run.status === "running" ? "running" : run.status,
-        runId: run.id,
-        command: [run.compileCommand, run.simCommand].filter(Boolean).join("\n") || undefined,
-        summary:
-          run.status === "passed"
-            ? `${run.id} passed (${run.top})${run.passMarkerFound ? " · TEST PASSED" : ""}`
-            : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}` +
-              (run.failure?.firstFailureLine ? ` — ${run.failure.firstFailureLine.slice(0, 90)}` : ""),
-        detail: [run.failure?.firstFailureLine, run.stdoutTail, run.stderrTail].filter(Boolean).join("\n") || undefined,
-      });
       if (run.vcdPath) {
         await get().selectWaveform(run.vcdPath);
         if (!opts?.keepTab) set({ artifactsVisible: true, activeArtifactTab: "waveform" });
       }
     } else {
-      set({ activeConsole: "synth", selectedSynthesisRunId: runId });
+      set({ selectedSynthesisRunId: runId });
       await get().loadReport(runId);
       if (!opts?.keepTab) set({ artifactsVisible: true, activeArtifactTab: "report" });
     }
@@ -1515,160 +1476,6 @@ export const useStore = create<AppState>((set, get) => ({
     if (!currentSession) return;
     await workbenchApi.pinRun(currentSession.id, runId, pinned);
     set((state) => ({ runs: state.runs.map((r) => (r.id === runId ? { ...r, pinned } : r)) }));
-  },
-
-  runLint: async () => {
-    const { currentSession } = get();
-    if (!currentSession) return;
-    set((s) => ({ activeConsole: "lint", actionPending: { ...s.actionPending, lint: true } }));
-    pushConsole(set, get, { channel: "lint", status: "running", summary: "Linting…" });
-    try {
-      const result = await workbenchApi.lint(currentSession.id);
-      set({ lintResult: result });
-      const n = result.errors.length;
-      pushConsole(set, get, {
-        channel: "lint",
-        status: result.status,
-        command: result.command,
-        summary:
-          result.status === "passed"
-            ? `Lint passed (${result.warnings.length} warning(s))`
-            : `Lint failed — ${n} error(s), ${result.warnings.length} warning(s)`,
-        detail: [...result.errors, ...result.warnings]
-          .map((d) => `${d.file ?? ""}:${d.line ?? "?"} ${d.severity}: ${d.message}`)
-          .join("\n"),
-      });
-      // Lint has no center-artifact surface, so make the result noticeable:
-      // ask the Console to auto-expand + pulse on the Lint channel.
-      bumpConsoleAttention(set, "lint");
-    } catch (e) {
-      pushConsole(set, get, { channel: "lint", status: "failed", summary: friendlyError(e) });
-    } finally {
-      set((s) => ({ actionPending: { ...s.actionPending, lint: false } }));
-    }
-  },
-
-  runSim: async (opts) => {
-    const { currentSession } = get();
-    if (!currentSession) return;
-    set((s) => ({ activeConsole: "sim", actionPending: { ...s.actionPending, sim: true } }));
-    pushConsole(set, get, { channel: "sim", status: "running", summary: "Simulating…" });
-    try {
-      const run = await workbenchApi.simulate(currentSession.id, opts ?? {});
-      await get().loadRuns();
-      pushConsole(set, get, {
-        channel: "sim",
-        status: run.status,
-        command: [run.compileCommand, run.simCommand].filter(Boolean).join("\n"),
-        runId: run.id,
-        summary:
-          run.status === "passed"
-            ? `${run.id} passed (${run.top})${run.passMarkerFound ? " · TEST PASSED" : ""}`
-            : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}` +
-              // surface the human reason inline, not just behind the console chevron
-              (run.failure?.firstFailureLine ? ` — ${run.failure.firstFailureLine.slice(0, 90)}` : ""),
-        detail: [run.failure?.firstFailureLine, run.stdoutTail, run.stderrTail].filter(Boolean).join("\n"),
-      });
-      // Keep the user on the Code tab if they're mid-iteration (edit→re-run),
-      // otherwise reveal the waveform for the fresh run.
-      const onCode = get().activeArtifactTab === "code";
-      await get().selectRun(run.id, { keepTab: onCode });
-      // Human-first titles: lead with the action ("Simulation passed/failed"),
-      // demote the run id into the detail line (a run id reads like a DB key).
-      get().pushToast(
-        run.status === "passed"
-          ? {
-              kind: "success",
-              title: "Simulation passed",
-              detail: [run.id, run.top].filter(Boolean).join(" · ") || undefined,
-            }
-          : {
-              kind: "error",
-              title: `Simulation failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`,
-              detail:
-                [run.id, run.failure?.firstFailureLine].filter(Boolean).join(" — ") || undefined,
-            }
-      );
-    } catch (e) {
-      pushConsole(set, get, { channel: "sim", status: "failed", summary: friendlyError(e) });
-      get().pushToast({ kind: "error", title: "Simulation failed", detail: friendlyError(e) });
-    } finally {
-      set((s) => ({ actionPending: { ...s.actionPending, sim: false } }));
-    }
-  },
-
-  runSynth: async () => {
-    const { currentSession } = get();
-    if (!currentSession) return;
-    set((s) => ({ activeConsole: "synth", actionPending: { ...s.actionPending, synth: true } }));
-    pushConsole(set, get, { channel: "synth", status: "running", summary: "Starting synthesis…" });
-    try {
-      const { jobId, runId } = await workbenchApi.synthesize(currentSession.id);
-      pushConsole(set, get, { channel: "synth", status: "running", runId, summary: `${runId} queued (job ${jobId})` });
-      // Seed the live job status so the stage-progress UI appears immediately
-      // (before the first poll lands).
-      set({ synthJob: { jobId, runId, status: "queued", currentStage: "constraints" } });
-      await get().loadRuns();
-
-      // Poll the job until terminal (bounded), surfacing stage progress.
-      const sid = currentSession.id;
-      const deadline = Date.now() + 20 * 60 * 1000;
-      let interval = 3000;
-      // eslint-disable-next-line no-constant-condition
-      while (Date.now() < deadline) {
-        await sleep(interval);
-        if (get().currentSession?.id !== sid) {
-          set({ synthJob: null });
-          return; // session switched away
-        }
-        let job: Record<string, unknown>;
-        try {
-          job = await workbenchApi.getJob(sid, jobId);
-        } catch {
-          continue;
-        }
-        const state = String(job.status ?? "");
-        const stage = String(job.current_stage ?? job.stage ?? "");
-        // Publish the structured job status for the stage-progress UI.
-        set({ synthJob: toSynthJobStatus(jobId, runId, job) });
-        pushConsole(set, get, { channel: "synth", status: "running", runId, summary: `${runId} ${state}${stage ? ` · ${stage}` : ""}` });
-        if (state === "completed" || state === "failed") {
-          await get().loadRuns();
-          // On failure, surface whatever the job knows (notes + log tail) so the
-          // user sees *why* (e.g. ORFS/Docker unavailable) instead of just "failed".
-          const notes = job.check_notes;
-          const logTail = Array.isArray(job.last_log_lines) ? (job.last_log_lines as string[]).slice(-12).join("\n") : "";
-          const detail =
-            state === "failed"
-              ? [typeof notes === "string" ? notes : "", logTail, job.next_action as string]
-                  .filter(Boolean)
-                  .join("\n")
-              : undefined;
-          pushConsole(set, get, {
-            channel: "synth",
-            status: state === "completed" ? "passed" : "failed",
-            runId,
-            summary: `${runId} ${state}`,
-            detail,
-          });
-          if (state === "completed") {
-            // A successful tape-out must immediately LOOK successful without a
-            // hard reload: refresh the layout/schematic file lists, auto-generate
-            // the report, then select the run (lands on Report with PPA + GDS).
-            await get().refreshSynthArtifacts(runId);
-            await get().selectRun(runId);
-          }
-          set({ synthJob: null });
-          break;
-        }
-        interval = Math.min(interval * 1.5, 30000);
-      }
-    } catch (e) {
-      pushConsole(set, get, { channel: "synth", status: "failed", summary: friendlyError(e) });
-      set({ synthJob: null });
-    } finally {
-      set((s) => ({ actionPending: { ...s.actionPending, synth: false } }));
-    }
   },
 
   // After a synth reaches a passed state, re-pull the artifact file lists and
@@ -2024,31 +1831,9 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-// Translate the backend's terse action errors into plain language + a next step
-// (the #1 quit-point for newcomers, per the first-time-user review).
-function friendlyError(e: unknown): string {
-  const raw = errMsg(e);
-  const r = raw.toLowerCase();
-  if (r.includes("no simtop"))
-    return "No testbench found. Simulation needs a testbench (a *_tb.v that instantiates your design). Add or upload one, then Run Sim.";
-  if (r.includes("no rtl/tb") || (r.includes("no files") && r.includes("simulate")))
-    return "Nothing to simulate yet — add or upload your Verilog (RTL + a testbench) first.";
-  if (r.includes("no rtl files") || r.includes("no_rtl"))
-    return "No RTL to lint yet — add or upload a .v file, then Run Lint.";
-  if (r.includes("no synthtop"))
-    return "No top module for synthesis. Add your RTL (the design's top module), then Run Synth.";
-  if (r.includes("no rtl files to synthesize"))
-    return "Nothing to synthesize yet — add or upload your RTL first.";
-  return raw;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // Normalize the backend job-status payload into the typed SynthJobStatus the
-// stage-progress UI consumes.
-function toSynthJobStatus(jobId: string, runId: string, job: Record<string, unknown>): SynthJobStatus {
+// live-stage UI consumes (exported for lib/commands' job poll).
+export function toSynthJobStatus(jobId: string, runId: string, job: Record<string, unknown>): SynthJobStatus {
   const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
   return {
     jobId,
@@ -2065,45 +1850,3 @@ function toSynthJobStatus(jobId: string, runId: string, job: Record<string, unkn
 
 // Token so a newer upload notice isn't cleared early by an older timeout.
 let _uploadNoticeToken = 0;
-
-// Bump the attention counter so the Console auto-expands + pulses on a fresh
-// result for `channel`. Monotonic tick lets the component fire its effect even
-// when the channel is unchanged between consecutive results.
-let _consoleAttentionTick = 0;
-function bumpConsoleAttention(
-  set: (fn: (s: AppState) => Partial<AppState>) => void,
-  channel: ConsoleChannel
-) {
-  _consoleAttentionTick += 1;
-  set(() => ({ consoleAttention: { tick: _consoleAttentionTick, channel } }));
-}
-
-// Append a console entry, collapsing the most recent "running" entry on the
-// same channel so a finished action replaces its own spinner line.
-function pushConsole(
-  set: (fn: (s: AppState) => Partial<AppState>) => void,
-  get: () => AppState,
-  entry: Omit<ConsoleEntry, "ts">
-) {
-  const full: ConsoleEntry = { ...entry, ts: new Date().toISOString() };
-  set((s) => {
-    const entries = [...s.consoleEntries];
-    const last = entries[entries.length - 1];
-    // Collapse a finished action onto its own spinner line…
-    if (last && last.channel === entry.channel && last.status === "running") {
-      entries[entries.length - 1] = full;
-    } else if (
-      // …and skip exact re-selections (same channel+run+summary) so re-clicking
-      // a historical run doesn't spam the console.
-      last &&
-      last.channel === entry.channel &&
-      last.runId === entry.runId &&
-      last.summary === entry.summary
-    ) {
-      return {};
-    } else {
-      entries.push(full);
-    }
-    return { consoleEntries: entries.slice(-100) };
-  });
-}

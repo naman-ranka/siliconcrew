@@ -10,8 +10,9 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { useStore } from "@/lib/store";
-import { FileTree } from "@/components/workbench/FileTree";
-import { PipelineStepper } from "@/components/workbench/PipelineStepper";
+import { FileExplorer } from "@/components/workbench/FileExplorer";
+import { BottomDock } from "@/components/workbench/BottomDock";
+import type { ActivityEvent } from "@/types";
 
 const SESSION = {
   id: "s1",
@@ -32,7 +33,6 @@ beforeEach(() => {
       files: [
         { name: "decoder.v", role: "rtl", path: "decoder.v" },
         { name: "decoder_tb.v", role: "tb", path: "decoder_tb.v" },
-        { name: "constraints.sdc", role: "sdc", path: "constraints.sdc" },
       ],
       synthTop: "decoder",
       simTop: "decoder_tb",
@@ -40,56 +40,83 @@ beforeEach(() => {
       platform: "sky130hd",
     },
     runs: [],
+    runsLoading: false,
     lintResult: null,
-    report: null,
-    actionPending: { lint: false, sim: false, synth: false },
-    activeArtifactTab: "spec",
+    synthJob: null,
+    // Seed the lazy tree so FileExplorer renders without fetching.
+    dirCache: {
+      "": {
+        status: "ready",
+        entries: [
+          { name: "decoder.v", path: "decoder.v", kind: "file" },
+          { name: "decoder_tb.v", path: "decoder_tb.v", kind: "file" },
+        ],
+        error: null,
+      },
+    },
+    activity: { serverEvents: [], localEvents: [], status: "ready", nextBefore: null, error: null },
   });
 });
 
-describe("FileTree", () => {
-  it("renders manifest files with their role badges + tops", () => {
-    render(<FileTree />);
+describe("FileExplorer", () => {
+  it("renders the workspace tree from the dirCache with manifest role badges", () => {
+    // jsdom reports 0x0 boxes, which makes @tanstack/react-virtual render no
+    // rows — give the scroll viewport a real size so the tree materializes.
+    const hSpy = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+    const wSpy = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(300);
+    render(<FileExplorer />);
+    expect(screen.getByText("Explorer")).toBeInTheDocument();
     expect(screen.getByText("decoder.v")).toBeInTheDocument();
     expect(screen.getByText("decoder_tb.v")).toBeInTheDocument();
+    // Root files carry their manifest roles.
     expect(screen.getByText("RTL")).toBeInTheDocument();
     expect(screen.getByText("TB")).toBeInTheDocument();
-    expect(screen.getByText("SDC")).toBeInTheDocument();
-    // Footer surfaces the synthTop/simTop anchors (label + value rendered in
-    // separate spans for alignment).
-    expect(screen.getByText("synthTop")).toBeInTheDocument();
-    expect(screen.getByText("decoder")).toBeInTheDocument();
-    expect(screen.getByText("simTop")).toBeInTheDocument();
-    expect(screen.getByText("decoder_tb")).toBeInTheDocument();
+    hSpy.mockRestore();
+    wSpy.mockRestore();
   });
 });
 
-describe("PipelineStepper", () => {
-  it("surfaces the spine stages and the failing sim status", () => {
+describe("BottomDock", () => {
+  it("shows Activity/Runs tabs with counts and lists runs on the Runs tab", () => {
+    const ev: ActivityEvent = {
+      id: "ev1",
+      ts: new Date().toISOString(),
+      source: "user",
+      tool: "linter_tool",
+      args: {},
+      status: "ok",
+      resultSummary: "passed",
+      durationMs: 120,
+      runId: null,
+      threadId: null,
+    };
     useStore.setState({
       runs: [
         {
           id: "sim_0001",
           kind: "sim",
           status: "failed",
-          createdAt: null,
+          createdAt: new Date().toISOString(),
           top: "decoder_tb",
           pinned: false,
           failure: { type: "test_failed", timeNs: 240 },
         },
       ] as any,
+      activity: {
+        serverEvents: [ev],
+        localEvents: [],
+        status: "ready",
+        nextBefore: null,
+        error: null,
+      },
     });
-    render(<PipelineStepper />);
-    expect(screen.getByText("Simulate")).toBeInTheDocument();
-    expect(screen.getByText("Synthesize")).toBeInTheDocument();
-    expect(screen.getByText("fail @ 240ns")).toBeInTheDocument();
-  });
 
-  it("the Lint stage triggers the runLint action", () => {
-    const runLint = vi.fn();
-    useStore.setState({ runLint: runLint as any });
-    render(<PipelineStepper />);
-    fireEvent.click(screen.getByRole("button", { name: /Run Lint/ }));
-    expect(runLint).toHaveBeenCalled();
+    render(<BottomDock />);
+    expect(screen.getByRole("button", { name: /Activity/ })).toBeInTheDocument();
+
+    // Switch to the Runs tab — the sim run row shows up with its failure time.
+    fireEvent.click(screen.getByRole("button", { name: /Runs/ }));
+    expect(screen.getByText("sim_0001")).toBeInTheDocument();
+    expect(screen.getByText(/failed @ 240ns/)).toBeInTheDocument();
   });
 });

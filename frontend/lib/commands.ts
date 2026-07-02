@@ -1,5 +1,5 @@
 import { workbenchApi } from "@/lib/api";
-import { useStore } from "@/lib/store";
+import { toSynthJobStatus, useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import type { ActivityEvent, DesignManifest, RunSummary } from "@/types";
 
@@ -225,13 +225,20 @@ const JOB_DEADLINE_MS = 20 * 60 * 1000;
 
 /** Poll an async job to a terminal state, honestly and politely.
  *  Respects the backend's own poll_after_sec hint when present. */
-async function pollJob(sessionId: string, jobId: string): Promise<Record<string, unknown> | null> {
+async function pollJob(
+  sessionId: string,
+  jobId: string,
+  runId: string
+): Promise<Record<string, unknown> | null> {
   const store = useStore.getState;
   const deadline = Date.now() + JOB_DEADLINE_MS;
   let interval = 3000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, interval));
-    if (store().currentSession?.id !== sessionId) return null; // switched away
+    if (store().currentSession?.id !== sessionId) {
+      useStore.setState({ synthJob: null });
+      return null; // switched away
+    }
     let job: Record<string, unknown>;
     try {
       job = await workbenchApi.getJob(sessionId, jobId);
@@ -240,14 +247,20 @@ async function pollJob(sessionId: string, jobId: string): Promise<Record<string,
       continue;
     }
     const state = String(job.status ?? "");
-    if (state === "completed" || state === "failed") return job;
+    if (state === "completed" || state === "failed") {
+      useStore.setState({ synthJob: null });
+      return job;
+    }
+    // Publish the live stage for anything rendering run state (RunsPane shows
+    // the current PD stage next to the RUNNING synth run).
+    useStore.setState({ synthJob: toSynthJobStatus(jobId, runId, job) });
     const hint = Number(job.poll_after_sec);
     interval = Number.isFinite(hint) && hint > 0
       ? Math.min(hint * 1000, 60000)
       : Math.min(interval * 1.5, 30000);
-    // Publish live job progress for anything rendering run state.
     void store().loadRuns();
   }
+  useStore.setState({ synthJob: null });
   return { status: "failed", timeout: true };
 }
 
@@ -346,7 +359,7 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
         store.pushToast({ kind: "info", title: id === "synth" ? "Synthesis dispatched" : "P&R retry dispatched", detail: runId });
         refresh();
 
-        const job = await pollJob(sessionId, jobId);
+        const job = await pollJob(sessionId, jobId, runId);
         if (!job) return; // session switched — stop narrating
         const okDone = String(job.status) === "completed";
         done({

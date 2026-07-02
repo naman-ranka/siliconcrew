@@ -42,6 +42,7 @@ export function RunsPane() {
   const runs = useStore((s) => s.runs);
   const runsLoading = useStore((s) => s.runsLoading);
   const pinRun = useStore((s) => s.pinRun);
+  const synthJob = useStore((s) => s.synthJob);
   const sid = currentSession?.id ?? null;
   const { unreadRunIds, clearUnread } = useSessionUi(sid);
 
@@ -111,6 +112,14 @@ export function RunsPane() {
               ? ` @ ${r.failure.timeNs}ns`
               : ""}
           </span>
+          {r.kind === "synth" &&
+          r.status === "running" &&
+          r.id === synthJob?.runId &&
+          synthJob.currentStage ? (
+            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+              · {synthJob.currentStage}
+            </span>
+          ) : null}
           {r.kind === "synth" && r.status === "passed" && r.ppa?.wnsNs != null ? (
             <span
               title="Worst negative slack"
