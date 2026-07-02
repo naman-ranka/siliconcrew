@@ -105,7 +105,7 @@ export function Workbench() {
           <PanelResizeHandle className="w-1 bg-border hover:bg-primary transition-colors" />
 
           {/* Center — artifact center over the Activity/Runs dock */}
-          <Panel minSize={30}>
+          <Panel defaultSize={55} minSize={30}>
             <div className="flex h-full min-h-0 flex-col">
               <div className="flex-1 min-h-0">
                 <ArtifactCenter />

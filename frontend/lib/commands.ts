@@ -270,10 +270,17 @@ async function pollJob(
  * Activity feed + Runs panel (+ a toast); the artifact center is never
  * auto-switched — completed runs get an unread marker instead.
  */
+// Double-submit guard: a rapid second ⌘L/⌘R while the first is in flight is
+// a no-op. Sync commands hold the guard for their whole call; async ones only
+// through dispatch (queuing a second synth job behind a running one is valid).
+const inFlight = new Set<CommandId>();
+
 export async function runCommand(id: CommandId, values?: CommandValues): Promise<void> {
   const store = useStore.getState();
   const session = store.currentSession;
   if (!session) return;
+  if (inFlight.has(id)) return;
+  inFlight.add(id);
   const sessionId = session.id;
   const ui = useWorkbenchUiStore.getState();
   const cmd = COMMANDS[id];
@@ -340,6 +347,11 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
 
       case "synth":
       case "pnr": {
+        if (id === "pnr" && !vals.runId) {
+          done({ status: "error", resultSummary: "No synth run to retry from" });
+          store.pushToast({ kind: "error", title: "P&R retry needs a source synth run" });
+          break;
+        }
         const dispatch =
           id === "synth"
             ? await workbenchApi.synthesize(sessionId, {
@@ -355,6 +367,7 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
                 maxStage: String(vals.maxStage ?? "finish"),
               });
         const { jobId, runId } = dispatch;
+        inFlight.delete(id); // dispatched — a second job may now be queued
         done({ runId, resultSummary: `${runId} dispatched (job ${jobId})` });
         store.pushToast({ kind: "info", title: id === "synth" ? "Synthesis dispatched" : "P&R retry dispatched", detail: runId });
         refresh();
@@ -388,6 +401,7 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
     done({ status: "error", resultSummary: errText(e) });
     store.pushToast({ kind: "error", title: `${cmd.label} failed`, detail: errText(e) });
   } finally {
+    inFlight.delete(id);
     refresh();
   }
 }

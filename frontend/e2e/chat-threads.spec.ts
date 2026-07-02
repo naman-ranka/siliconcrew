@@ -71,6 +71,21 @@ function installMocks(page: import("@playwright/test").Page) {
     if (p.endsWith("/history")) return json(route, state.histories["demo"]);
 
     // Workspace (must remain identical across chat switches)
+    if (p.endsWith("/workbench") && m === "GET")
+      return json(route, {
+        ok: true, manifest: MANIFEST.manifest, runs: [], files: [], spec: null, code: [],
+        report: null, synthesisRuns: [], activity: [],
+        rootDir: [
+          { name: "alu.v", path: "alu.v", kind: "file", size: 22, modified: "2026-07-01T10:00:00" },
+          { name: "cpu_tb.v", path: "cpu_tb.v", kind: "file", size: 24, modified: "2026-07-01T10:00:00" },
+        ],
+      });
+    if (p.endsWith("/dir") && m === "GET")
+      return json(route, { ok: true, path: "", entries: [
+        { name: "alu.v", path: "alu.v", kind: "file", size: 22, modified: "2026-07-01T10:00:00" },
+        { name: "cpu_tb.v", path: "cpu_tb.v", kind: "file", size: 24, modified: "2026-07-01T10:00:00" },
+      ] });
+    if (p.endsWith("/activity") && m === "GET") return json(route, { ok: true, events: [], nextBefore: null });
     if (p.endsWith("/manifest") && m === "GET") return json(route, MANIFEST);
     if (p.endsWith("/runs") && m === "GET") return json(route, { ok: true, runs: [] });
     if (p.endsWith("/code") && m === "GET")

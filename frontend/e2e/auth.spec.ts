@@ -25,20 +25,32 @@ const MANIFEST = {
   manifest: { sessionId: "demo", files: [{ name: "alu.v", role: "rtl", path: "alu.v" }], synthTop: "alu", simTop: null, clockPeriodNs: 10, platform: "sky130hd" },
 };
 
-/** Mock the action layer and record the Authorization header seen on a gated
- *  request (the unified /runs poll fires on load). */
+/** Mock the action layer and record the Authorization header seen on gated
+ *  requests (the /workbench snapshot fires on load; /lint on user action). */
 function installMocks(page: Page) {
-  const seen: { runsAuth: string | null } = { runsAuth: null };
+  const seen: { snapshotAuth: string | null; lintAuth: string | null } = { snapshotAuth: null, lintAuth: null };
   const json = (route: Route, body: unknown, status = 200) =>
     route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
   page.route("**/api/**", async (route) => {
     const p = new URL(route.request().url()).pathname;
     const m = route.request().method();
-    if (p.endsWith("/runs") && m === "GET") {
-      seen.runsAuth = route.request().headers()["authorization"] ?? null;
-      return json(route, { ok: true, runs: [] });
+    if (p.endsWith("/workbench") && m === "GET") {
+      seen.snapshotAuth = route.request().headers()["authorization"] ?? null;
+      return json(route, {
+        ok: true, manifest: MANIFEST.manifest, runs: [], files: [], spec: null, code: [],
+        report: null, synthesisRuns: [], activity: [],
+        rootDir: [{ name: "alu.v", path: "alu.v", kind: "file", size: 22, modified: "2026-07-01T10:00:00" }],
+      });
     }
+    if (p.endsWith("/lint") && m === "POST") {
+      seen.lintAuth = route.request().headers()["authorization"] ?? null;
+      return json(route, { ok: true, status: "passed", warnings: [], errors: [], byFile: {}, command: "iverilog", files: ["alu.v"] });
+    }
+    if (p.endsWith("/runs") && m === "GET") return json(route, { ok: true, runs: [] });
+    if (p.endsWith("/dir") && m === "GET")
+      return json(route, { ok: true, path: "", entries: [{ name: "alu.v", path: "alu.v", kind: "file", size: 22, modified: "2026-07-01T10:00:00" }] });
+    if (p.endsWith("/activity")) return json(route, { ok: true, events: [], nextBefore: null });
     if (p === "/api/sessions" && m === "GET") return json(route, SESSIONS);
     if (p.endsWith("/manifest")) return json(route, MANIFEST);
     if (p.endsWith("/history")) return json(route, []);
@@ -74,37 +86,40 @@ test.describe("auth — unconfigured (zero-config self-host)", () => {
   test("no sign-in UI and no Authorization header is sent", async ({ page }) => {
     const seen = installMocks(page);
     await page.goto("/workbench");
-    await expect(page.getByTestId("wb-brand")).toBeVisible();
-    await expect(page.locator('[data-stage="synth"]')).toBeVisible();
-    // Zero auth chrome.
+    await expect(page.getByTestId("workbench-v2")).toBeVisible();
+    await expect(page.getByText("alu.v")).toBeVisible();
+    // Zero auth chrome: no standalone sign-in button; the profile menu shows no
+    // sign-in entry when auth is unconfigured.
     await expect(page.getByTestId("signin-button")).toHaveCount(0);
-    await expect(page.getByTestId("account-chip")).toHaveCount(0);
-    // Synth stage is NOT gated to a sign-in prompt — it reads "run synth".
-    await expect(page.locator('[data-stage="synth"]')).not.toContainText(/sign in/i);
-    // And the gated request carried no auth header.
-    await expect.poll(() => seen.runsAuth).toBeNull();
+    await page.getByTestId("profile-menu-button").click();
+    await expect(page.getByTestId("profile-menu")).toBeVisible();
+    await expect(page.getByTestId("profile-menu").getByText(/sign in/i)).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    // And the gated snapshot request carried no auth header.
+    await expect.poll(() => seen.snapshotAuth).toBeNull();
   });
 });
 
 test.describe("auth — configured (Google sign-in)", () => {
   test.skip(!CLIENT_ID, "set NEXT_PUBLIC_GOOGLE_CLIENT_ID to run this path");
 
-  test("sign-in flips to the account chip and a gated request carries the Bearer token", async ({ page }) => {
+  test("sign-in via the profile menu; a gated request carries the Bearer token", async ({ page }) => {
     await mockGis(page);
     const seen = installMocks(page);
     await page.goto("/workbench");
+    await expect(page.getByTestId("workbench-v2")).toBeVisible();
 
-    // Signed-out: the sign-in button shows; synth is gated.
-    await expect(page.getByTestId("signin-button")).toBeVisible();
-    await expect(page.locator('[data-stage="synth"]')).toContainText(/sign in/i);
+    // Signed-out: the profile menu offers Google sign-in (mocked GIS resolves
+    // immediately) and then shows the account identity.
+    await page.getByTestId("profile-menu-button").click();
+    await page.getByTestId("profile-menu").getByText(/sign in with google/i).click();
+    await page.getByTestId("profile-menu-button").click();
+    await expect(page.getByTestId("profile-menu").getByText("dev@siliconcrew.test")).toBeVisible();
+    await page.keyboard.press("Escape");
 
-    // Sign in (mocked GIS resolves immediately) → account chip appears.
-    await page.getByTestId("signin-button").click();
-    await expect(page.getByTestId("account-chip")).toBeVisible();
-    await expect(page.getByTestId("signin-button")).toHaveCount(0);
-
-    // A subsequent gated request carries Authorization: Bearer <token>.
-    await page.locator('[data-stage="synth"]').click(); // now unlocked → triggers a run/poll
-    await expect.poll(() => seen.runsAuth).toMatch(/^Bearer .+/);
+    // A subsequent user action carries Authorization: Bearer <token>.
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.getByRole("option", { name: /^Lint/ }).click();
+    await expect.poll(() => seen.lintAuth).toMatch(/^Bearer .+/);
   });
 });
