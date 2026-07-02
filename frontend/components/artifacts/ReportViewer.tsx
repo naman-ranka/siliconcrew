@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { ReportData } from "@/types";
 
 interface ReportViewerProps {
   // v2 tab model: render EXACTLY this report (bypasses the store's
@@ -57,16 +58,17 @@ export function ReportViewer({ reportOverride, runIdOverride }: ReportViewerProp
   const targetGenRunId = selectedSynthesisRunId ?? passedSynth?.id ?? null;
 
   useEffect(() => {
-    if (currentSession) {
+    if (currentSession && !overridden) {
       loadSynthesisRuns();
       loadReport();
     }
-  }, [currentSession, loadReport, loadSynthesisRuns]);
+  }, [currentSession, loadReport, loadSynthesisRuns, overridden]);
 
   // Auto-generate the report once when a synth has passed but no markdown report
   // exists yet — a successful tape-out should show its summary without a click.
   const autoGenTriedRef = useRef<string | null>(null);
   useEffect(() => {
+    if (overridden) return; // v2: the tab owns its data — never auto-generate
     if (!currentSession || report || reportLoading) return;
     if (!passedSynth || !targetGenRunId) return;
     if (autoGenTriedRef.current === targetGenRunId) return;
@@ -74,7 +76,7 @@ export function ReportViewer({ reportOverride, runIdOverride }: ReportViewerProp
     void generateReport(targetGenRunId).catch(() => {
       /* keep the empty state with its manual Generate button as a fallback */
     });
-  }, [currentSession, report, reportLoading, passedSynth, targetGenRunId, generateReport]);
+  }, [currentSession, report, reportLoading, passedSynth, targetGenRunId, generateReport, overridden]);
 
   const handleDownload = () => {
     if (report) {
@@ -179,7 +181,7 @@ export function ReportViewer({ reportOverride, runIdOverride }: ReportViewerProp
           )}
         </div>
         <div className="flex items-center gap-1">
-          {synthesisRuns.length > 0 && (
+          {!overridden && synthesisRuns.length > 0 && (
             <Select value={selectedSynthesisRunId || synthesisRuns[0]?.run_id} onValueChange={selectSynthesisRun}>
               <SelectTrigger className="h-7 w-[170px] text-xs mr-1">
                 <SelectValue placeholder="Select synthesis run" />
@@ -193,17 +195,19 @@ export function ReportViewer({ reportOverride, runIdOverride }: ReportViewerProp
               </SelectContent>
             </Select>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 hover:bg-surface-2"
-            onClick={() => {
-              loadSynthesisRuns();
-              loadReport(selectedSynthesisRunId);
-            }}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
+          {!overridden && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 hover:bg-surface-2"
+              onClick={() => {
+                loadSynthesisRuns();
+                loadReport(selectedSynthesisRunId);
+              }}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -212,10 +216,12 @@ export function ReportViewer({ reportOverride, runIdOverride }: ReportViewerProp
           >
             <Download className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="outline" size="sm" onClick={handleGenerate} className="ml-1 h-7 text-xs">
-            <FileOutput className="h-3 w-3 mr-1" />
-            Regenerate
-          </Button>
+          {!overridden && (
+            <Button variant="outline" size="sm" onClick={handleGenerate} className="ml-1 h-7 text-xs">
+              <FileOutput className="h-3 w-3 mr-1" />
+              Regenerate
+            </Button>
+          )}
         </div>
       </div>
 

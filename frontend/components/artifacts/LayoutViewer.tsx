@@ -22,7 +22,17 @@ interface FallbackState {
   message?: string;
 }
 
-export function LayoutViewer() {
+interface LayoutViewerProps {
+  // v2 tab model: render EXACTLY this GDS file (bypasses the store's
+  // layoutFiles/selectedLayout plumbing). When absent, behavior is the
+  // original store-driven viewer, unchanged.
+  filename?: string;
+  // v2 tab model: prefer this synth run for the PPA chips. Only used
+  // alongside `filename`.
+  runId?: string;
+}
+
+export function LayoutViewer({ filename: filenameProp, runId: runIdProp }: LayoutViewerProps = {}) {
   const { currentSession, layoutFiles, selectedLayout, selectLayout, runs, selectedSynthesisRunId } = useStore();
   const [svgContent, setSvgContent] = useState<string | null>(null);
   const [cellName, setCellName] = useState<string>("");
@@ -32,20 +42,30 @@ export function LayoutViewer() {
   const [hardError, setHardError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
 
+  // v2: with a filename prop the tab pins its own file + list; otherwise the
+  // original store-driven selection (unchanged).
+  const overridden = filenameProp != null;
+  const effectiveFiles = overridden ? [filenameProp!] : layoutFiles;
+  const effectiveSelected = filenameProp ?? selectedLayout;
+
   // PPA for the success card: prefer the selected synth run, else newest synth.
   const synthRuns = runs.filter((r) => r.kind === "synth");
   const ppaRun =
-    synthRuns.find((r) => r.id === selectedSynthesisRunId) ?? synthRuns[0];
+    synthRuns.find((r) => r.id === (runIdProp ?? selectedSynthesisRunId)) ?? synthRuns[0];
   const ppa = ppaRun?.ppa;
 
   useEffect(() => {
+    if (overridden) {
+      if (currentSession) loadLayout(filenameProp!);
+      return;
+    }
     if (currentSession && selectedLayout) {
       loadLayout(selectedLayout);
     } else if (!selectedLayout && layoutFiles.length > 0) {
       selectLayout(layoutFiles[0]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLayout, currentSession]);
+  }, [selectedLayout, currentSession, filenameProp]);
 
   const loadLayout = async (filename: string) => {
     if (!currentSession) return;
@@ -75,7 +95,7 @@ export function LayoutViewer() {
     }
   };
 
-  if (layoutFiles.length === 0) {
+  if (effectiveFiles.length === 0) {
     return (
       <EmptyState
         icon={<LayoutIcon />}
@@ -88,11 +108,11 @@ export function LayoutViewer() {
     );
   }
 
-  const fileBase = (selectedLayout || layoutFiles[0] || "").split("/").pop() || "layout.gds";
+  const fileBase = (effectiveSelected || effectiveFiles[0] || "").split("/").pop() || "layout.gds";
 
   const handleDownload = async () => {
     if (!currentSession) return;
-    const path = selectedLayout || layoutFiles[0];
+    const path = effectiveSelected || effectiveFiles[0];
     try {
       const { content } = await workspaceApi.getFile(currentSession.id, path);
       // Backend returns the GDS bytes as a latin-1/raw string in JSON; map each
@@ -117,6 +137,11 @@ export function LayoutViewer() {
       {/* Header */}
       <div className="flex items-center gap-2 p-3 border-b border-border bg-surface-1">
         <LayoutIcon className="h-4 w-4 text-muted-foreground" />
+        {overridden ? (
+          <span className="flex-1 min-w-0 h-8 flex items-center px-2 text-xs font-mono text-muted-foreground bg-surface-2 border border-border rounded-md truncate">
+            {fileBase}
+          </span>
+        ) : (
         <Select value={selectedLayout || layoutFiles[0]} onValueChange={selectLayout}>
           <SelectTrigger className="flex-1 h-8 text-xs">
             <SelectValue />
@@ -129,6 +154,7 @@ export function LayoutViewer() {
             ))}
           </SelectContent>
         </Select>
+        )}
         {cellName && (
           <span className="text-xs text-muted-foreground px-2 py-1 bg-surface-2 rounded">{cellName}</span>
         )}
@@ -186,7 +212,7 @@ export function LayoutViewer() {
               variant="outline"
               size="sm"
               className="mt-4"
-              onClick={() => selectedLayout && loadLayout(selectedLayout)}
+              onClick={() => effectiveSelected && loadLayout(effectiveSelected)}
             >
               Retry
             </Button>
