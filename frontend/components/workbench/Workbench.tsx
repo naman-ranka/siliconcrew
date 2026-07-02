@@ -18,6 +18,7 @@ import { ArtifactCenter } from "./ArtifactCenter";
 import { BottomDock } from "./BottomDock";
 import { CommandPalette } from "./CommandPalette";
 import { CommandModal } from "./CommandModal";
+import { CommandSurface } from "./CommandSurface";
 import { QuickOpen } from "./QuickOpen";
 import { Toaster } from "./Toaster";
 
@@ -164,6 +165,7 @@ export function Workbench() {
       {/* Global overlays — mounted once, driven by workbenchUiStore state. */}
       <CommandPalette />
       <CommandModal />
+      <CommandSurface />
       <QuickOpen />
       <FileContextMenu />
       <Toaster />

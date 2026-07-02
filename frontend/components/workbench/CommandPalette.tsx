@@ -6,6 +6,7 @@ import {
   Cpu,
   FileText,
   GitCompareArrows,
+  LayoutGrid,
   ListChecks,
   RotateCcw,
   Search,
@@ -115,6 +116,18 @@ export function CommandPalette() {
         </Command.Empty>
 
         <Command.Group heading="Run" className={groupClass}>
+          <Command.Item
+            value="All commands…"
+            keywords={["browse", "tools", "surface"]}
+            onSelect={() => {
+              close();
+              useWorkbenchUiStore.getState().setCommandSurfaceOpen(true);
+            }}
+            className={itemClass}
+          >
+            <LayoutGrid className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="flex-1 truncate">All commands…</span>
+          </Command.Item>
           {RUN_ORDER.map((id) => {
             if (id === "pnr" && !hasSynthRuns) return null;
             const def = COMMANDS[id];

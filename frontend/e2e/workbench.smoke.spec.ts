@@ -187,6 +187,14 @@ function installMocks(page: Page) {
       const content = CODE[file] ?? "// empty\n";
       return json(route, { filename: file, content, size: content.length, binary: false, tooLarge: false });
     }
+    // ---- curated tool invocation (command surface) ----
+    if (p.endsWith("/invoke") && m === "POST")
+      return json(route, {
+        ok: true,
+        tool: "get_synthesis_metrics",
+        result: { status: "ok", run_id: "synth_0001", metrics: { wns_ns: 0.85 } },
+      });
+
     if (p.endsWith("/layouts")) return json(route, []);
     if (p.endsWith("/schematics")) return json(route, []);
     if (p.endsWith("/spec")) return json(route, { detail: "No spec" }, 404);
@@ -297,4 +305,36 @@ test("quick open (⌘P) opens an artifact by fuzzy name", async ({ page }) => {
   await input.fill("cpu_tb");
   await page.keyboard.press("Enter");
   await expect(page.getByRole("tab", { name: /cpu_tb\.v/ })).toBeVisible();
+});
+
+test("command surface: browse → Metrics → live payload → invoke → inline result", async ({ page }) => {
+  await installMocks(page);
+  await page.goto("/workbench");
+  await expect(page.getByText("alu.v")).toBeVisible();
+
+  // The Metrics run_id param needs a synth run — dispatch Synthesize first,
+  // exactly like the palette flow test does.
+  await openPalette(page);
+  await page.getByRole("option", { name: /^Synthesize/ }).click();
+  await expect(page.getByText(/Synthesis dispatched/)).toBeVisible();
+  const dock = page.getByTestId("bottom-dock");
+  await dock.getByRole("button", { name: /Runs/ }).click();
+  await expect(dock.getByText("synth_0001")).toBeVisible();
+
+  // ⌘K → "All commands…" opens the command surface.
+  await openPalette(page);
+  await page.getByRole("option", { name: /All commands/ }).click();
+  const surface = page.getByTestId("command-surface");
+  await expect(surface).toBeVisible();
+
+  // Left rail → Metrics: the right pane shows the live tool-call payload.
+  await surface.getByRole("button", { name: "Metrics", exact: true }).click();
+  await expect(surface.locator('[aria-label="tool call payload"]')).toContainText(
+    "get_synthesis_metrics"
+  );
+
+  // Invoke → the curated /invoke result renders inline in the result pane.
+  await page.getByTestId("command-surface-invoke").click();
+  await expect(surface.getByText("wns_ns")).toBeVisible();
+  await page.screenshot({ path: "e2e-artifacts/wb2-command-surface.png", fullPage: true });
 });
