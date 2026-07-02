@@ -384,6 +384,16 @@ export const workbenchApi = {
   getJob: (sessionId: string, jobId: string) =>
     actionFetch<{ ok: true; job: Record<string, unknown> }>(`${ws(sessionId)}/jobs/${encodeURIComponent(jobId)}`).then((r) => r.job),
 
+  retryRun: (
+    sessionId: string,
+    runId: string,
+    body: { fromStage: string; maxStage?: string; overrides?: Record<string, unknown> }
+  ) =>
+    actionFetch<{ ok: true; jobId: string; runId: string }>(
+      `${ws(sessionId)}/runs/${encodeURIComponent(runId)}/retry`,
+      { method: "POST", body: JSON.stringify(body) }
+    ),
+
   pinRun: (sessionId: string, runId: string, pinned: boolean) =>
     actionFetch<{ ok: true; runId: string; pinned: boolean }>(`${ws(sessionId)}/runs/${encodeURIComponent(runId)}/pin`, {
       method: "POST",
