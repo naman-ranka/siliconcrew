@@ -17,6 +17,7 @@ import type {
   ActivityEvent,
   DirEntry,
   SmartFile,
+  ToolCatalogEntry,
 } from "@/types";
 import { authHeader, getAuthToken, recoverAuthExpired } from "./authToken";
 
@@ -383,6 +384,13 @@ export const workbenchApi = {
 
   getJob: (sessionId: string, jobId: string) =>
     actionFetch<{ ok: true; job: Record<string, unknown> }>(`${ws(sessionId)}/jobs/${encodeURIComponent(jobId)}`).then((r) => r.job),
+
+  // Introspected tool catalog — every UI-invocable tool with its real JSON
+  // Schema + policy flags, straight from the agent's @tool registry.
+  getToolCatalog: (sessionId: string) =>
+    actionFetch<{ ok: true; tools: ToolCatalogEntry[] }>(`${ws(sessionId)}/tools`).then(
+      (r) => r.tools
+    ),
 
   invokeTool: (sessionId: string, tool: string, args: Record<string, unknown>) =>
     actionFetch<{ ok: true; tool: string; result: unknown }>(`${ws(sessionId)}/invoke`, {

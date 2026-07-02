@@ -53,6 +53,85 @@ const WAVE = (filename: string) => ({
 
 type Dict = Record<string, unknown>;
 
+// Real-shaped subset of the backend's introspected tool catalog (GET /tools) —
+// the Command Surface renders its groups/forms entirely from this.
+const TOOL_CATALOG = [
+  {
+    name: "write_file",
+    description: "Writes content to a file in the workspace.\nArgs:\n    filename: Name of the file (e.g., 'design.v', 'tb.v').\n    content: The text content to write.",
+    category: "essential",
+    argsSchema: {
+      type: "object",
+      properties: {
+        filename: { type: "string" },
+        content: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+      },
+      required: ["filename"],
+    },
+    requiresSignIn: true, async: false, mutates: true,
+  },
+  {
+    name: "waveform_tool",
+    description: "Reads a VCD waveform file to inspect signal values.\nUse this when simulation fails to understand WHY.\nArgs:\n    vcd_file: Name of the .vcd file (e.g., 'dump.vcd').\n    signals: List of signal names to inspect.",
+    category: "verification",
+    argsSchema: {
+      type: "object",
+      properties: {
+        vcd_file: { type: "string" },
+        signals: { type: "array", items: { type: "string" } },
+        start_time: { type: "integer", default: 0 },
+        end_time: { type: "integer", default: 1000 },
+      },
+      required: ["vcd_file", "signals"],
+    },
+    requiresSignIn: false, async: false, mutates: false,
+  },
+  {
+    name: "get_synthesis_metrics",
+    description: "Returns structured synthesis metrics for a run.\nParses standard ORFS outputs (6_finish.rpt + synth_stat.txt) and returns JSON.",
+    category: "synthesis",
+    argsSchema: {
+      type: "object",
+      properties: { run_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null } },
+      required: [],
+    },
+    requiresSignIn: true, async: false, mutates: false,
+  },
+  {
+    name: "search_logs_tool",
+    description: "Searches for a keyword in OpenROAD logs and reports.\nArgs:\n    query: The string to search for.\n    run_id: Optional run ID for deterministic lookup.",
+    category: "synthesis",
+    argsSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        run_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+      },
+      required: ["query"],
+    },
+    requiresSignIn: true, async: false, mutates: false,
+  },
+  {
+    name: "run_xls_flow",
+    description: "Executes the entire high-level XLS synthesis flow:\nDSLX Interpreter -> IR Conversion -> Optimization -> Codegen.\nArgs:\n    dslx_file: Name of the DSLX file (e.g. 'saturating_add.x').\n    top_module: Name of the top-level function or proc.",
+    category: "hls",
+    argsSchema: {
+      type: "object",
+      properties: {
+        dslx_file: { type: "string" },
+        top_module: { type: "string" },
+        generator: { type: "string", default: "combinational" },
+        pipeline_stages: { type: "integer", default: 0 },
+        clock_period_ps: { type: "integer", default: 0 },
+        delay_model: { type: "string", default: "sky130" },
+        use_system_verilog: { type: "boolean", default: false },
+      },
+      required: ["dslx_file", "top_module"],
+    },
+    requiresSignIn: true, async: false, mutates: true,
+  },
+];
+
 function installMocks(page: Page) {
   const state = {
     simCount: 0,
@@ -187,6 +266,10 @@ function installMocks(page: Page) {
       const content = CODE[file] ?? "// empty\n";
       return json(route, { filename: file, content, size: content.length, binary: false, tooLarge: false });
     }
+    // ---- introspected tool catalog (command surface) ----
+    if (p.endsWith("/tools") && m === "GET")
+      return json(route, { ok: true, tools: TOOL_CATALOG });
+
     // ---- curated tool invocation (command surface) ----
     if (p.endsWith("/invoke") && m === "POST")
       return json(route, {
@@ -327,8 +410,9 @@ test("command surface: browse → Metrics → live payload → invoke → inline
   const surface = page.getByTestId("command-surface");
   await expect(surface).toBeVisible();
 
-  // Left rail → Metrics: the right pane shows the live tool-call payload.
-  await surface.getByRole("button", { name: "Metrics", exact: true }).click();
+  // Left rail → the schema-driven catalog's generated label for
+  // get_synthesis_metrics: the right pane shows the live tool-call payload.
+  await surface.getByRole("button", { name: "Get Synthesis Metrics", exact: true }).click();
   await expect(surface.locator('[aria-label="tool call payload"]')).toContainText(
     "get_synthesis_metrics"
   );

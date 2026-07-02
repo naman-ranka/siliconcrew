@@ -298,6 +298,55 @@ export interface SmartFile {
 // `kind:ref` string-key helpers).
 export type ArtifactKind = "code" | "spec" | "wave" | "report" | "layout" | "schematic";
 
+// --- Tool catalog (GET /api/workspace/{sid}/tools) ---------------------------
+// The backend introspects the SAME LangChain @tool registry the agent and MCP
+// clients use (src/api/tool_catalog.py), so these entries are the contract the
+// Command Surface renders from — no hand-written command list.
+
+// A single JSON-Schema property as pydantic emits it. Deliberately loose:
+// only the fields the form-model mapping reads are typed.
+export interface SchemaProperty {
+  type?: "string" | "integer" | "number" | "boolean" | "array" | "object" | "null" | string;
+  enum?: (string | number)[];
+  default?: unknown;
+  items?: { type?: string } & Record<string, unknown>;
+  // pydantic Optional[X] arrives as anyOf: [{type: X}, {type: "null"}].
+  anyOf?: SchemaProperty[];
+  description?: string;
+  minimum?: number;
+  exclusiveMinimum?: number;
+  maximum?: number;
+  multipleOf?: number;
+  [key: string]: unknown;
+}
+
+export interface JsonSchema {
+  type?: string;
+  properties?: Record<string, SchemaProperty>;
+  required?: string[];
+  [key: string]: unknown;
+}
+
+export type ToolCategory =
+  | "essential"
+  | "manifest"
+  | "verification"
+  | "synthesis"
+  | "editing"
+  | "reporting"
+  | "hls";
+
+export interface ToolCatalogEntry {
+  name: string;
+  /** FULL docstring incl. the "Args:" section — display only the part before it. */
+  description: string;
+  category: ToolCategory | string;
+  argsSchema: JsonSchema;
+  requiresSignIn: boolean;
+  async: boolean;
+  mutates: boolean;
+}
+
 // WebSocket message types
 export type WSMessageType =
   | { type: "start" }

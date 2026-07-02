@@ -25,6 +25,7 @@ import type {
   ActivityEvent,
   DirEntry,
   SmartFile,
+  ToolCatalogEntry,
 } from "@/types";
 import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi } from "./api";
 import { generateId } from "./utils";
@@ -339,6 +340,13 @@ interface AppState {
   activity: ActivitySlice;
   loadActivity: (opts?: { more?: boolean }) => Promise<void>;
   appendLocalActivity: (event: ActivityEvent) => void;
+
+  // Introspected tool catalog (GET /tools). PROCESS-GLOBAL on the backend, so
+  // it is NOT cleared on session switch — loaded once per app lifetime; a
+  // populated slice never re-loads. Calling loadToolCatalog again after an
+  // error (the explicit Retry) refetches.
+  toolCatalog: { tools: ToolCatalogEntry[]; status: SliceStatus; error: string | null };
+  loadToolCatalog: () => Promise<void>;
 }
 
 function buildBlocks(
@@ -423,6 +431,7 @@ export const useStore = create<AppState>((set, get) => ({
   fileCache: {},
   artifactCache: {},
   activity: emptyActivity(),
+  toolCatalog: { tools: [], status: "empty", error: null },
 
   pushToast: (t, ttlMs = 5000) => {
     const id = generateId();
@@ -1802,6 +1811,25 @@ export const useStore = create<AppState>((set, get) => ({
         localEvents: upsertActivityEvent(s.activity.localEvents, event),
       },
     }));
+  },
+
+  loadToolCatalog: async () => {
+    const { currentSession, toolCatalog } = get();
+    if (!currentSession) return;
+    // Populated NEVER re-loads (the catalog is process-global on the backend);
+    // "loading" is a synchronous double-call guard alongside the single-flight.
+    if (toolCatalog.status === "ready" || toolCatalog.status === "loading") return;
+    set({ toolCatalog: { tools: toolCatalog.tools, status: "loading", error: null } });
+    await singleFlight("toolCatalog", async () => {
+      try {
+        const tools = await workbenchApi.getToolCatalog(get().currentSession!.id);
+        set({ toolCatalog: { tools, status: "ready", error: null } });
+      } catch (e) {
+        // Includes the 503 tools_unavailable envelope — its message surfaces
+        // in the surface's error state, with the explicit Retry re-calling us.
+        set({ toolCatalog: { tools: [], status: "error", error: errMsg(e) } });
+      }
+    });
   },
 }));
 

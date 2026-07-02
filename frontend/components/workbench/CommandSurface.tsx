@@ -17,11 +17,13 @@ import {
   Gauge,
   GitCompare,
   Info,
+  KeyRound,
   LayoutGrid,
   ListTree,
   Loader2,
   Package,
   PenLine,
+  RefreshCw,
   Search,
   Settings2,
   Terminal,
@@ -39,12 +41,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  SURFACE_COMMANDS,
-  SURFACE_GROUPS,
+  buildSurfaceCommands,
   buildSurfacePayload,
   resolveOptions,
   runSurfaceCommand,
-  surfaceCommand,
   surfaceDefaults,
   type SurfaceCommand,
   type SurfaceCtx,
@@ -57,33 +57,52 @@ import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { cn } from "@/lib/utils";
 
 // The v2 Command Surface — a three-pane command → tool-call explorer. Left: the
-// full curated catalog grouped Build/Verify/Analyze/Author/HLS; center: the
-// param form (manifest supplies files/tops — shown, never asked); right: the
-// LIVE payload that buildSurfacePayload will send, plus invoke + inline result.
+// SCHEMA-DRIVEN catalog (the backend's introspected tool registry) with the
+// four core flow commands pinned first; center: the param form (manifest
+// supplies files/tops — shown, never asked); right: the LIVE payload that
+// buildSurfacePayload will send, plus invoke + inline result.
 
 // ---- icons -------------------------------------------------------------------
 
+// Keyed by command id — the core four keep their short ids; schema-driven
+// commands use their tool name as id. Unknown tools fall back to Terminal.
 const SURFACE_ICONS: Record<string, LucideIcon> = {
   lint: FileText,
   sim: Waves,
   synth: Cpu,
   pnr: CircuitBoard,
-  wave: Activity,
-  cocotb: FlaskConical,
-  sby: CircuitBoard,
-  metrics: Gauge,
-  stage_status: ListTree,
-  stage_report: ClipboardList,
-  drc: Boxes,
-  cts: Activity,
-  congestion: LayoutGrid,
-  compare: GitCompare,
-  search: Search,
-  schematic: CircuitBoard,
-  manifest: Settings2,
-  report: BarChart3,
-  save_metrics: PenLine,
-  xls: Package,
+  waveform_tool: Activity,
+  cocotb_tool: FlaskConical,
+  sby_tool: CircuitBoard,
+  get_synthesis_metrics: Gauge,
+  get_synthesis_job: Gauge,
+  get_stage_status: ListTree,
+  read_stage_report: ClipboardList,
+  get_route_drc_summary: Boxes,
+  get_cts_summary: Activity,
+  get_congestion_summary: LayoutGrid,
+  compare_pd_runs: GitCompare,
+  search_logs_tool: Search,
+  schematic_tool: CircuitBoard,
+  get_manifest: Settings2,
+  update_manifest: Settings2,
+  generate_report_tool: BarChart3,
+  save_metrics_tool: PenLine,
+  write_spec: FileText,
+  read_spec: FileText,
+  write_file: FileText,
+  read_file: FileText,
+  list_files_tool: ListTree,
+  edit_file_tool: PenLine,
+  apply_patch_tool: PenLine,
+  load_yaml_spec_file: FileText,
+  run_xls_flow: Package,
+  run_dslx_interpreter: Package,
+  compile_dslx_to_ir: Package,
+  optimize_xls_ir: Package,
+  codegen_xls: Package,
+  benchmark_xls: Package,
+  experimental_compile_cpp_to_ir: Package,
 };
 
 const iconFor = (id: string): LucideIcon => SURFACE_ICONS[id] ?? Terminal;
@@ -341,6 +360,10 @@ function ParamEditor({
       );
     case "multi": {
       const arr = Array.isArray(value) ? (value as string[]) : [];
+      // No convention/enum options → freeform entry: type + Enter adds a chip.
+      if (options.length === 0) {
+        return <FreeformChips values={arr} label={param.label} onChange={onChange} />;
+      }
       return (
         <div className="flex max-w-[300px] flex-wrap justify-end gap-1">
           {options.map((opt) => {
@@ -370,15 +393,75 @@ function ParamEditor({
   }
 }
 
+// Freeform string-array editor: a text input (Enter adds) + removable chips.
+function FreeformChips({
+  values,
+  label,
+  onChange,
+}: {
+  values: string[];
+  label: string;
+  onChange: (v: unknown) => void;
+}) {
+  const [draft, setDraft] = React.useState("");
+  const add = () => {
+    const v = draft.trim();
+    if (!v) return;
+    if (!values.includes(v)) onChange([...values, v]);
+    setDraft("");
+  };
+  return (
+    <div className="flex max-w-[300px] flex-col items-end gap-1">
+      <Input
+        type="text"
+        value={draft}
+        aria-label={`Add ${label}`}
+        placeholder="type + Enter"
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            add();
+          }
+        }}
+        className="h-7 w-52 font-mono text-[11px]"
+      />
+      {values.length > 0 && (
+        <div className="flex flex-wrap justify-end gap-1">
+          {values.map((v) => (
+            <span
+              key={v}
+              className="inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] text-primary"
+            >
+              {v}
+              <button
+                type="button"
+                aria-label={`Remove ${v}`}
+                onClick={() => onChange(values.filter((o) => o !== v))}
+                className="text-primary/70 transition-colors hover:text-primary"
+              >
+                <X className="h-2.5 w-2.5" aria-hidden />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ParamRow({
   param,
   options,
   value,
+  error,
   onChange,
 }: {
   param: SurfaceParam;
   options: string[];
   value: unknown;
+  /** Server-side field error (400 invalid_arguments) — shown until edited. */
+  error?: string | null;
   onChange: (v: unknown) => void;
 }) {
   const noRuns =
@@ -386,7 +469,14 @@ function ParamRow({
   return (
     <div className="flex items-start justify-between gap-4">
       <div className="flex w-40 shrink-0 items-center gap-1.5 pt-1">
-        <span className="truncate font-mono text-xs text-foreground">{param.label}</span>
+        <span
+          className={cn(
+            "truncate font-mono text-xs",
+            error ? "text-status-fail" : "text-foreground"
+          )}
+        >
+          {param.label}
+        </span>
         <SrcTag source={param.source} />
       </div>
       <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
@@ -394,6 +484,9 @@ function ParamRow({
           <span className="text-[11px] italic text-muted-foreground">No synth runs yet</span>
         ) : (
           <ParamEditor param={param} options={options} value={value} onChange={onChange} />
+        )}
+        {error && (
+          <span className="text-[10px] text-status-fail">{error}</span>
         )}
         {param.hint && !noRuns && (
           <span className="text-[10px] italic text-muted-foreground">{param.hint}</span>
@@ -426,6 +519,9 @@ export function CommandSurface() {
   const currentSession = useStore((s) => s.currentSession);
   const manifest = useStore((s) => s.manifest);
   const runs = useStore((s) => s.runs);
+  const rootDir = useStore((s) => s.dirCache[""]);
+  const toolCatalog = useStore((s) => s.toolCatalog);
+  const loadToolCatalog = useStore((s) => s.loadToolCatalog);
 
   const [selectedId, setSelectedId] = React.useState("synth");
   const [values, setValues] = React.useState<Record<string, Record<string, unknown>>>({});
@@ -434,6 +530,9 @@ export function CommandSurface() {
   const [running, setRunning] = React.useState(false);
   const [results, setResults] = React.useState<Record<string, SurfaceRunResult>>({});
   const [dispatched, setDispatched] = React.useState<Record<string, boolean>>({});
+  // Server-side field errors from the last invoke, keyed cmd.id → field →
+  // message. A field's message clears as soon as the user edits it.
+  const [fieldErrs, setFieldErrs] = React.useState<Record<string, Record<string, string>>>({});
   const rightBodyRef = React.useRef<HTMLDivElement>(null);
   const centerRef = React.useRef<HTMLDivElement>(null);
 
@@ -450,11 +549,37 @@ export function CommandSurface() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, setOpen]);
 
-  const ctx: SurfaceCtx = React.useMemo(() => ({ manifest, runs }), [manifest, runs]);
+  // The introspected catalog loads once per app lifetime (store-guarded).
+  React.useEffect(() => {
+    if (open) void loadToolCatalog();
+  }, [open, loadToolCatalog]);
+
+  const ctx: SurfaceCtx = React.useMemo(
+    () => ({
+      manifest,
+      runs,
+      rootFiles: (rootDir?.entries ?? []).filter((e) => e.kind === "file").map((e) => e.name),
+    }),
+    [manifest, runs, rootDir]
+  );
+
+  // Flow (core four) + the schema-driven groups from the backend catalog.
+  const surfaceGroups = React.useMemo(
+    () => buildSurfaceCommands(toolCatalog.tools, ctx).groups,
+    [toolCatalog.tools, ctx]
+  );
+  const allCommands = React.useMemo(
+    () => surfaceGroups.flatMap((g) => g.commands),
+    [surfaceGroups]
+  );
 
   if (!open || !currentSession) return null;
 
-  const cmd = surfaceCommand(selectedId) ?? SURFACE_COMMANDS[0];
+  const catalogLoading =
+    toolCatalog.status === "loading" || toolCatalog.status === "empty";
+  const catalogError = toolCatalog.status === "error" ? toolCatalog.error : null;
+
+  const cmd = allCommands.find((c) => c.id === selectedId) ?? allCommands[0];
   const Icon = iconFor(cmd.id);
 
   const userVals = values[cmd.id] ?? {};
@@ -471,11 +596,19 @@ export function CommandSurface() {
     if (centerRef.current) centerRef.current.scrollTop = 0;
   };
 
-  const setValue = (key: string, v: unknown) =>
+  const setValue = (key: string, v: unknown) => {
     setValues((prev) => ({
       ...prev,
       [cmd.id]: { ...(prev[cmd.id] ?? {}), [key]: v },
     }));
+    // Editing a field clears its server-side error marker.
+    setFieldErrs((prev) => {
+      const forCmd = prev[cmd.id];
+      if (!forCmd || !(key in forCmd)) return prev;
+      const { [key]: _drop, ...rest } = forCmd;
+      return { ...prev, [cmd.id]: rest };
+    });
+  };
 
   const visible = cmd.params.filter((p) => !p.when || p.when(merged));
   const basic = visible.filter((p) => !p.adv);
@@ -503,6 +636,12 @@ export function CommandSurface() {
         setDispatched((prev) => ({ ...prev, [cmd.id]: true }));
       } else {
         setResults((prev) => ({ ...prev, [cmd.id]: res }));
+        setFieldErrs((prev) => ({
+          ...prev,
+          [cmd.id]: Object.fromEntries(
+            (res.fieldErrors ?? []).map((f) => [f.field, f.message])
+          ),
+        }));
         setResultOpen(true);
       }
     } finally {
@@ -567,17 +706,16 @@ export function CommandSurface() {
 
         {/* ---- Body: left rail · center form · right payload ---- */}
         <div className="flex min-h-0 flex-1">
-          {/* Left rail — grouped command list */}
+          {/* Left rail — grouped command list (Flow pinned; rest schema-driven) */}
           <div className="w-[210px] shrink-0 overflow-y-auto border-r border-border bg-surface-0 py-1.5">
-            {SURFACE_GROUPS.map((group) => {
-              const members = SURFACE_COMMANDS.filter((c) => c.group === group);
-              if (members.length === 0) return null;
+            {surfaceGroups.map((group) => {
+              if (group.commands.length === 0) return null;
               return (
-                <div key={group}>
+                <div key={group.label}>
                   <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                    {group}
+                    {group.label}
                   </div>
-                  {members.map((c) => {
+                  {group.commands.map((c) => {
                     const RowIcon = iconFor(c.id);
                     const selected = c.id === selectedId;
                     return (
@@ -609,6 +747,14 @@ export function CommandSurface() {
                         <span className="min-w-0 flex-1 truncate text-xs text-foreground">
                           {c.label}
                         </span>
+                        {c.requiresSignIn && (
+                          <span title="requires sign-in" className="shrink-0">
+                            <KeyRound
+                              className="h-3 w-3 text-muted-foreground/60"
+                              aria-hidden
+                            />
+                          </span>
+                        )}
                         {c.async && (
                           <span className="shrink-0 rounded border border-status-running/30 px-1 py-px font-mono text-[8px] uppercase text-status-running">
                             async
@@ -620,6 +766,33 @@ export function CommandSurface() {
                 </div>
               );
             })}
+            {/* Introspected-catalog states below the always-available Flow group. */}
+            {catalogLoading && (
+              <div data-testid="command-surface-catalog-loading" className="space-y-2 px-3 py-2">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-5 animate-pulse rounded bg-surface-2"
+                    aria-hidden
+                  />
+                ))}
+              </div>
+            )}
+            {catalogError && (
+              <div className="mx-3 my-2 rounded border border-status-fail/30 bg-status-fail/5 p-2">
+                <p className="text-[11px] leading-snug text-status-fail">{catalogError}</p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="mt-1.5 h-6 gap-1 px-1.5 text-[11px]"
+                  onClick={() => void loadToolCatalog()}
+                >
+                  <RefreshCw className="h-3 w-3" aria-hidden />
+                  Retry
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Center — param form */}
@@ -635,6 +808,15 @@ export function CommandSurface() {
                   <span className="inline-flex items-center gap-1 rounded border border-status-running/30 bg-status-running/10 px-1.5 py-px font-mono text-[10px] uppercase text-status-running">
                     <Cpu className="h-3 w-3" aria-hidden />
                     async
+                  </span>
+                )}
+                {cmd.requiresSignIn && (
+                  <span
+                    title="requires sign-in"
+                    className="inline-flex items-center gap-1 rounded border border-border bg-surface-2 px-1.5 py-px font-mono text-[10px] uppercase text-muted-foreground"
+                  >
+                    <KeyRound className="h-3 w-3" aria-hidden />
+                    sign-in
                   </span>
                 )}
               </div>
@@ -677,6 +859,7 @@ export function CommandSurface() {
                       param={p}
                       options={resolveOptions(p, ctx)}
                       value={merged[p.key]}
+                      error={fieldErrs[cmd.id]?.[p.key]}
                       onChange={(v) => setValue(p.key, v)}
                     />
                   ))}
@@ -696,6 +879,7 @@ export function CommandSurface() {
                         param={p}
                         options={resolveOptions(p, ctx)}
                         value={merged[p.key]}
+                        error={fieldErrs[cmd.id]?.[p.key]}
                         onChange={(v) => setValue(p.key, v)}
                       />
                     ))}

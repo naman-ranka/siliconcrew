@@ -1,21 +1,26 @@
 import { workbenchApi } from "@/lib/api";
 import { runCommand, type CommandId, PD_STAGES, PLATFORMS } from "@/lib/commands";
+import { buildFormModel, shortDescription } from "@/lib/schemaForm";
 import { useStore } from "@/lib/store";
-import type { ActivityEvent, DesignManifest, RunSummary } from "@/types";
+import type { ActivityEvent, DesignManifest, RunSummary, ToolCatalogEntry } from "@/types";
 
-// The Command Surface catalog: EVERY user-invocable tool — not just the four
-// core flow commands — as command → real tool call, with the same contract as
-// ⌘K: the manifest supplies files and targets (shown, never asked); the user
-// supplies only choices. Core flow commands delegate to lib/commands'
-// runCommand (job polling, unread marking); everything else goes through the
-// curated POST /invoke endpoint, so each run lands in the Activity feed with
-// source "user" exactly like an agent call would with source "agent".
+// The Command Surface: EVERY user-invocable tool as command → real tool call.
+// The catalog is NOT hand-written — it renders from the backend's introspected
+// tool registry (GET /tools; the same @tool schemas the agent and MCP clients
+// use), mapped to forms by lib/schemaForm's conventions. Only the four core
+// flow commands stay hand-defined: they mirror REST request bodies (which ARE
+// their contract) and delegate to lib/commands' runCommand for job polling and
+// unread marking. Everything else goes through the curated POST /invoke, so
+// each run lands in the Activity feed with source "user" exactly like an agent
+// call would with source "agent".
 
 export type SurfaceParamSource = "manifest" | "choice" | "run" | "default" | "text";
 
 export interface SurfaceCtx {
   manifest: DesignManifest | null;
   runs: RunSummary[];
+  /** Workspace-root file names (from the dir cache) — file-picking conventions. */
+  rootFiles: string[];
 }
 
 export interface SurfaceParam {
@@ -46,10 +51,12 @@ export interface SurfaceAutoArg {
 export interface SurfaceCommand {
   id: string;
   label: string;
-  group: "Build" | "Verify" | "Analyze" | "Author" | "HLS";
+  group: string;
   tool: string;
   desc: string;
   async?: boolean;
+  requiresSignIn?: boolean;
+  mutates?: boolean;
   /** Delegate execution to the core command engine (polling, unread, toasts). */
   core?: CommandId;
   autoArgs?: SurfaceAutoArg[];
@@ -60,31 +67,19 @@ const filesByRoles = (m: DesignManifest | null, roles: string[]) =>
   (m?.files ?? []).filter((f) => roles.includes(f.role)).map((f) => f.name);
 
 const synthRunIds = (ctx: SurfaceCtx) => ctx.runs.filter((r) => r.kind === "synth").map((r) => r.id);
-const vcdPaths = (ctx: SurfaceCtx) =>
-  ctx.runs.filter((r) => r.kind === "sim" && r.vcdPath).map((r) => r.vcdPath as string);
 const rtlFiles = (ctx: SurfaceCtx) => filesByRoles(ctx.manifest, ["rtl"]);
 
-const runIdParam = (opts?: { key?: string; optional?: boolean; hint?: string }): SurfaceParam => ({
-  key: opts?.key ?? "run_id",
-  label: opts?.key ?? "run_id",
-  editor: "enum",
-  source: "run",
-  options: (ctx: SurfaceCtx) => (opts?.optional ? ["", ...synthRunIds(ctx)] : synthRunIds(ctx)),
-  def: (ctx: SurfaceCtx) => (opts?.optional ? "" : synthRunIds(ctx)[0] ?? ""),
-  optional: opts?.optional,
-  hint: opts?.hint ?? (opts?.optional ? "omit = latest run" : undefined),
-});
+// ---- the core four (hand-defined; REST semantics + job polling) ----------------
 
-export const SURFACE_COMMANDS: SurfaceCommand[] = [
-  // ---- Build (core flow — delegates to runCommand) ----
+export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
   {
-    id: "lint", label: "Lint", group: "Build", tool: "linter_tool", core: "lint",
+    id: "lint", label: "Lint", group: "Flow", tool: "linter_tool", core: "lint",
     desc: "Icarus syntax check. Manifest supplies rtl + include files.",
     autoArgs: [{ key: "verilog_files", describe: (c: SurfaceCtx) => filesByRoles(c.manifest, ["rtl", "include"]).join(", ") || "—" }],
     params: [],
   },
   {
-    id: "sim", label: "Simulate", group: "Build", tool: "run_isolated_simulation", core: "sim",
+    id: "sim", label: "Simulate", group: "Flow", tool: "run_isolated_simulation", core: "sim", mutates: true,
     desc: "Manifest-driven sim in its own sim_runs/sim_NNNN/ dir — own VCD + provenance.",
     autoArgs: [
       { key: "sim_top", describe: (c: SurfaceCtx) => c.manifest?.simTop ?? "—" },
@@ -95,7 +90,7 @@ export const SURFACE_COMMANDS: SurfaceCommand[] = [
     ],
   },
   {
-    id: "synth", label: "Synthesize", group: "Build", tool: "start_synthesis", core: "synth", async: true,
+    id: "synth", label: "Synthesize", group: "Flow", tool: "start_synthesis", core: "synth", async: true, requiresSignIn: true, mutates: true,
     desc: "Async ORFS job → { job_id, run_id } immediately, then honest polling.",
     autoArgs: [
       { key: "verilog_files", describe: (c: SurfaceCtx) => rtlFiles(c).join(", ") || "—" },
@@ -111,149 +106,105 @@ export const SURFACE_COMMANDS: SurfaceCommand[] = [
     ],
   },
   {
-    id: "pnr", label: "Place & Route", group: "Build", tool: "retry_pd", core: "pnr", async: true,
+    id: "pnr", label: "Place & Route", group: "Flow", tool: "retry_pd", core: "pnr", async: true, requiresSignIn: true, mutates: true,
     desc: "Branches a child PD run from an existing run and reruns downstream ORFS stages — first-class lineage.",
     params: [
-      { ...runIdParam({ key: "runId", hint: "parent run to branch from" }), label: "run_id" },
+      {
+        key: "runId", label: "run_id", editor: "enum", source: "run",
+        options: (ctx: SurfaceCtx) => synthRunIds(ctx),
+        def: (ctx: SurfaceCtx) => synthRunIds(ctx)[0] ?? "",
+        hint: "parent run to branch from",
+      },
       { key: "fromStage", label: "start_stage", editor: "enum", options: PD_STAGES, def: "floorplan", source: "choice" },
       { key: "maxStage", label: "max_stage", editor: "enum", options: PD_STAGES, def: "finish", source: "choice" },
     ],
   },
-
-  // ---- Verify ----
-  {
-    id: "wave", label: "Waveform values", group: "Verify", tool: "waveform_tool",
-    desc: "Extract VCD signal values in a time window — debug a failing sim without opening the viewer.",
-    params: [
-      { key: "vcd_file", label: "vcd_file", editor: "enum", source: "choice", options: (c: SurfaceCtx) => vcdPaths(c), def: (c: SurfaceCtx) => vcdPaths(c)[0] ?? "" },
-      { key: "signals", label: "signals", editor: "multi", source: "choice", options: ["clk", "rst", "wr_en", "rd_en", "din", "dout", "full", "empty", "overflow"], def: ["clk", "full", "empty"] },
-      { key: "start_time", label: "start_time", editor: "number", def: 0, min: 0, step: 5, unit: "ns", source: "default", adv: true },
-      { key: "end_time", label: "end_time", editor: "number", def: 1000, min: 0, step: 50, unit: "ns", source: "default", adv: true },
-    ],
-  },
-  {
-    id: "cocotb", label: "cocotb", group: "Verify", tool: "cocotb_tool",
-    desc: "Python testbench in the pinned reference container. Non-termination = FAIL. Sign-in required.",
-    autoArgs: [
-      { key: "verilog_files", describe: (c: SurfaceCtx) => filesByRoles(c.manifest, ["rtl", "tb", "include"]).join(", ") || "—" },
-      { key: "top_module", describe: (c: SurfaceCtx) => c.manifest?.synthTop ?? "—", value: (c: SurfaceCtx) => c.manifest?.synthTop ?? "" },
-    ],
-    params: [{ key: "python_module", label: "python_module", editor: "text", def: "", source: "text", hint: "e.g. verif.test_fifo" }],
-  },
-  {
-    id: "sby", label: "Formal (SBY)", group: "Verify", tool: "sby_tool",
-    desc: "SymbiYosys property proof (smtbmc z3). Sign-in required.",
-    params: [{ key: "sby_file", label: "sby_file", editor: "text", def: "", source: "text", hint: "workspace-relative .sby file" }],
-  },
-
-  // ---- Analyze ----
-  {
-    id: "metrics", label: "Metrics", group: "Analyze", tool: "get_synthesis_metrics",
-    desc: "Structured PPA (WNS/TNS/area/cells/power) from ORFS outputs.",
-    params: [runIdParam()],
-  },
-  {
-    id: "stage_status", label: "Stage status", group: "Analyze", tool: "get_stage_status",
-    desc: "Per-stage statuses + current stage for a run.",
-    params: [runIdParam()],
-  },
-  {
-    id: "stage_report", label: "Stage report", group: "Analyze", tool: "read_stage_report",
-    desc: "Main ORFS artifact for one PD stage.",
-    params: [
-      { key: "stage", label: "stage", editor: "enum", options: PD_STAGES, def: "route", source: "choice" },
-      runIdParam({ optional: true }),
-    ],
-  },
-  {
-    id: "drc", label: "Route DRC", group: "Analyze", tool: "get_route_drc_summary",
-    desc: "Final-route DRC summary (empty report = clean).",
-    params: [runIdParam({ optional: true })],
-  },
-  {
-    id: "cts", label: "CTS", group: "Analyze", tool: "get_cts_summary",
-    desc: "Clock-tree timing, skew, violation counts.",
-    params: [runIdParam({ optional: true })],
-  },
-  {
-    id: "congestion", label: "Congestion", group: "Analyze", tool: "get_congestion_summary",
-    desc: "Global-route per-layer usage + overflow.",
-    params: [runIdParam({ optional: true })],
-  },
-  {
-    id: "compare", label: "Compare PD runs", group: "Analyze", tool: "compare_pd_runs",
-    desc: "Child PD run vs its parent (lineage-aware).",
-    params: [
-      runIdParam({ key: "child_run_id" }),
-      runIdParam({ key: "parent_run_id", optional: true, hint: "omit = infer from lineage" }),
-    ],
-  },
-  {
-    id: "search", label: "Search logs", group: "Analyze", tool: "search_logs_tool",
-    desc: "Keyword grep across OpenROAD logs/reports.",
-    params: [
-      { key: "query", label: "query", editor: "text", def: "slack", source: "text" },
-      runIdParam({ optional: true }),
-    ],
-  },
-  {
-    id: "schematic", label: "Schematic", group: "Analyze", tool: "schematic_tool",
-    desc: "Yosys SVG schematic of a module.",
-    autoArgs: [{ key: "top_module", describe: (c: SurfaceCtx) => c.manifest?.synthTop ?? "—", value: (c: SurfaceCtx) => c.manifest?.synthTop ?? "" }],
-    params: [
-      { key: "verilog_file", label: "verilog_file", editor: "enum", source: "choice", options: (c: SurfaceCtx) => rtlFiles(c), def: (c: SurfaceCtx) => rtlFiles(c)[0] ?? "" },
-    ],
-  },
-
-  // ---- Author ----
-  {
-    id: "manifest", label: "Set tops / clock / platform", group: "Author", tool: "update_manifest",
-    desc: "Upsert manifest fields — UI edits and agent edits write the same object.",
-    params: [
-      { key: "synthTop", label: "synthTop", editor: "text", source: "choice", def: (c: SurfaceCtx) => c.manifest?.synthTop ?? "" },
-      { key: "simTop", label: "simTop", editor: "text", source: "choice", def: (c: SurfaceCtx) => c.manifest?.simTop ?? "" },
-      { key: "clockPeriodNs", label: "clockPeriodNs", editor: "number", def: (c: SurfaceCtx) => c.manifest?.clockPeriodNs ?? 10, min: 0.1, step: 0.1, unit: "ns", source: "choice" },
-      { key: "platform", label: "platform", editor: "enum", options: PLATFORMS, def: (c: SurfaceCtx) => c.manifest?.platform ?? "sky130hd", source: "choice" },
-    ],
-  },
-  {
-    id: "report", label: "Generate report", group: "Author", tool: "generate_report_tool",
-    desc: "Spec-vs-results signoff report.",
-    params: [runIdParam({ optional: true })],
-  },
-  {
-    id: "save_metrics", label: "Save metrics", group: "Author", tool: "save_metrics_tool",
-    desc: "Persist manually-found PPA values for the report. Sign-in required.",
-    params: [
-      { key: "wns_ns", label: "wns_ns", editor: "number", def: "", step: 0.01, unit: "ns", source: "text", optional: true },
-      { key: "area_um2", label: "area_um2", editor: "number", def: "", step: 0.1, unit: "µm²", source: "text", optional: true },
-      { key: "cell_count", label: "cell_count", editor: "number", def: "", step: 1, source: "text", optional: true, adv: true },
-      { key: "power_uw", label: "power_uw", editor: "number", def: "", step: 1, unit: "µW", source: "text", optional: true, adv: true },
-      runIdParam({ optional: true }),
-    ],
-  },
-
-  // ---- HLS ----
-  {
-    id: "xls", label: "XLS flow (DSLX→Verilog)", group: "HLS", tool: "run_xls_flow",
-    desc: "DSLX interpret → IR → optimize → codegen. Sign-in required.",
-    params: [
-      { key: "dslx_file", label: "dslx_file", editor: "text", def: "", source: "text", hint: "e.g. saturating_add.x" },
-      { key: "top_module", label: "top_module", editor: "text", def: "", source: "text" },
-      { key: "generator", label: "generator", editor: "enum", options: ["combinational", "pipeline"], def: "combinational", source: "choice" },
-      { key: "pipeline_stages", label: "pipeline_stages", editor: "number", def: 0, min: 0, step: 1, source: "default", adv: true, when: (v) => v.generator === "pipeline" },
-      { key: "clock_period_ps", label: "clock_period_ps", editor: "number", def: 0, min: 0, step: 50, unit: "ps", source: "default", adv: true },
-      { key: "delay_model", label: "delay_model", editor: "enum", options: ["sky130", "asap7"], def: "sky130", source: "choice", adv: true },
-      { key: "use_system_verilog", label: "use_system_verilog", editor: "bool", def: false, source: "default", adv: true },
-    ],
-  },
 ];
 
-export const SURFACE_GROUPS = ["Build", "Verify", "Analyze", "Author", "HLS"] as const;
+// Catalog entries duplicating a core twin are skipped — the core versions
+// carry the REST + job-polling semantics the plain /invoke path lacks.
+export const CORE_TWIN_TOOLS = new Set([
+  "linter_tool",
+  "run_isolated_simulation",
+  "simulation_tool",
+  "start_synthesis",
+  "retry_pd",
+]);
 
-export function surfaceCommand(id: string): SurfaceCommand | undefined {
-  return SURFACE_COMMANDS.find((c) => c.id === id);
+// ---- schema-driven catalog → surface commands -----------------------------------
+
+const CATEGORY_LABELS: Record<string, string> = {
+  essential: "Essential",
+  manifest: "Manifest",
+  verification: "Verification",
+  synthesis: "Synthesis",
+  editing: "Editing",
+  reporting: "Reporting",
+  hls: "HLS",
+};
+
+function categoryLabel(category: string): string {
+  return (
+    CATEGORY_LABELS[category] ??
+    (category ? category.charAt(0).toUpperCase() + category.slice(1) : "Other")
+  );
 }
+
+/** "search_logs_tool" → "Search Logs"; "get_synthesis_metrics" → "Get Synthesis Metrics". */
+export function prettifyToolName(name: string): string {
+  return name
+    .replace(/_tool$/, "")
+    .split("_")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+export function toolToSurfaceCommand(entry: ToolCatalogEntry, ctx: SurfaceCtx): SurfaceCommand {
+  return {
+    id: entry.name,
+    label: prettifyToolName(entry.name),
+    group: categoryLabel(entry.category),
+    tool: entry.name,
+    desc: shortDescription(entry.description),
+    async: entry.async,
+    requiresSignIn: entry.requiresSignIn,
+    mutates: entry.mutates,
+    params: buildFormModel(entry, ctx),
+  };
+}
+
+export interface SurfaceGroups {
+  groups: { label: string; commands: SurfaceCommand[] }[];
+}
+
+/**
+ * The whole surface: "Flow" (the core four) pinned first, then the backend
+ * catalog's categories in first-seen order with pretty labels.
+ */
+export function buildSurfaceCommands(
+  catalog: ToolCatalogEntry[],
+  ctx: SurfaceCtx
+): SurfaceGroups {
+  const groups: { label: string; commands: SurfaceCommand[] }[] = [
+    { label: "Flow", commands: CORE_SURFACE_COMMANDS },
+  ];
+  const byLabel = new Map<string, SurfaceCommand[]>();
+  for (const entry of catalog) {
+    if (CORE_TWIN_TOOLS.has(entry.name)) continue;
+    const label = categoryLabel(entry.category);
+    let bucket = byLabel.get(label);
+    if (!bucket) {
+      bucket = [];
+      byLabel.set(label, bucket);
+      groups.push({ label, commands: bucket });
+    }
+    bucket.push(toolToSurfaceCommand(entry, ctx));
+  }
+  return { groups };
+}
+
+// ---- value resolution + payload ---------------------------------------------------
 
 export function resolveDef(p: SurfaceParam, ctx: SurfaceCtx): unknown {
   return typeof p.def === "function" ? (p.def as (c: SurfaceCtx) => unknown)(ctx) : p.def;
@@ -310,10 +261,43 @@ function localRunningEvent(tool: string, args: Record<string, unknown>): Activit
   };
 }
 
+export interface SurfaceFieldError {
+  field: string;
+  message: string;
+}
+
 export interface SurfaceRunResult {
   ok: boolean;
   /** Raw tool result (string or structured), for the surface's result pane. */
   result: unknown;
+  /** Per-field messages from a 400 invalid_arguments response, when available. */
+  fieldErrors?: SurfaceFieldError[];
+}
+
+// The api layer's actionFetch throws a plain Error carrying only the message
+// (it does not attach the envelope's details today) — read details defensively
+// so field-level errors light up if it ever starts attaching them.
+function fieldErrorsFrom(e: unknown): SurfaceFieldError[] | undefined {
+  const details = (e as { details?: { fields?: unknown } } | null)?.details;
+  const fields = details?.fields;
+  if (!Array.isArray(fields)) return undefined;
+  const out = fields.filter(
+    (f): f is SurfaceFieldError =>
+      !!f && typeof f === "object" && typeof (f as SurfaceFieldError).field === "string"
+  );
+  return out.length > 0 ? out : undefined;
+}
+
+/** Live ctx for resolution — manifest, runs, and workspace-root file names. */
+function storeCtx(): SurfaceCtx {
+  const store = useStore.getState();
+  return {
+    manifest: store.manifest,
+    runs: store.runs,
+    rootFiles: (store.dirCache[""]?.entries ?? [])
+      .filter((e) => e.kind === "file")
+      .map((e) => e.name),
+  };
 }
 
 /**
@@ -328,7 +312,7 @@ export async function runSurfaceCommand(
   const store = useStore.getState();
   const session = store.currentSession;
   if (!session) return null;
-  const ctx: SurfaceCtx = { manifest: store.manifest, runs: store.runs };
+  const ctx = storeCtx();
 
   if (cmd.core) {
     void runCommand(cmd.core, { ...surfaceDefaults(cmd, ctx), ...vals });
@@ -339,17 +323,35 @@ export async function runSurfaceCommand(
 
   if (cmd.tool === "update_manifest") {
     // Manifest edits use the dedicated PUT (same write path as the agent tool).
+    // The introspected tool takes a single `updates_json` string — parse it to
+    // the updates object PUT /manifest expects; other keys pass through as-is.
+    let updates: Record<string, unknown>;
+    const rawJson = args.updates_json;
+    if (typeof rawJson === "string" && rawJson.trim()) {
+      try {
+        const parsed = JSON.parse(rawJson);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return { ok: false, result: "updates_json must be a JSON object" };
+        }
+        updates = parsed as Record<string, unknown>;
+      } catch {
+        return { ok: false, result: "updates_json is not valid JSON" };
+      }
+    } else {
+      const { updates_json: _drop, ...rest } = args;
+      updates = rest;
+    }
     const ev = localRunningEvent(tool, args);
     store.appendLocalActivity(ev);
     try {
-      const res = await workbenchApi.updateManifest(session.id, args);
+      const res = await workbenchApi.updateManifest(session.id, updates);
       await store.loadManifest?.();
       store.appendLocalActivity({ ...ev, status: "ok", resultSummary: "manifest updated", durationMs: Date.now() - new Date(ev.ts).getTime() });
       return { ok: true, result: res };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       store.appendLocalActivity({ ...ev, status: "error", resultSummary: msg, durationMs: Date.now() - new Date(ev.ts).getTime() });
-      return { ok: false, result: msg };
+      return { ok: false, result: msg, fieldErrors: fieldErrorsFrom(e) };
     }
   }
 
@@ -371,6 +373,6 @@ export async function runSurfaceCommand(
       durationMs: Date.now() - new Date(ev.ts).getTime(),
     });
     void useStore.getState().loadActivity();
-    return { ok: false, result: msg };
+    return { ok: false, result: msg, fieldErrors: fieldErrorsFrom(e) };
   }
 }
