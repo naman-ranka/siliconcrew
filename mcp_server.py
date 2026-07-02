@@ -125,30 +125,10 @@ def _load_architect_prompt() -> tuple[str, str, str]:
 # TOOL AUTO-DISCOVERY HELPERS
 # =============================================================================
 
-# Tool categorization for filtering
-TOOL_CATEGORIES = {
-    "essential": [
-        "write_spec", "read_spec", "write_file", "read_file", 
-        "linter_tool", "simulation_tool", "list_files_tool"
-    ],
-    "verification": [
-        "waveform_tool", "cocotb_tool", "sby_tool"
-    ],
-    "synthesis": [
-        "start_synthesis", "retry_pd", "get_synthesis_job", "wait_for_synthesis", "get_synthesis_metrics", "read_stage_report", "get_route_drc_summary", "get_cts_summary", "get_congestion_summary", "compare_pd_runs", "get_stage_status", "search_logs_tool", "schematic_tool"
-    ],
-    "editing": [
-        "apply_patch_tool", "edit_file_tool", "load_yaml_spec_file"
-    ],
-    "reporting": [
-        "save_metrics_tool", "generate_report_tool"
-    ],
-    "hls": [
-        "run_xls_flow", "run_dslx_interpreter", "compile_dslx_to_ir",
-        "optimize_xls_ir", "codegen_xls", "benchmark_xls",
-        "experimental_compile_cpp_to_ir"
-    ]
-}
+# Tool categorization for filtering — single source of truth shared with the
+# web UI's tool catalog (src/api/tool_catalog.py), so the Command Surface, the
+# agent, and MCP clients all see one taxonomy and one protection policy.
+from src.api.tool_catalog import TOOL_CATEGORIES, PROTECTED_TOOLS as _SHARED_PROTECTED_TOOLS
 
 # Flatten for easy lookup
 ALL_CATEGORIZED_TOOLS = set()
@@ -233,10 +213,10 @@ class RTLDesignMCPServer:
             return new_anonymous("mcp")
 
     # Tools that mutate/persist or are compute-heavy require a signed-in user.
-    _PROTECTED_TOOLS = frozenset(TOOL_CATEGORIES["synthesis"]) | {
-        "write_spec", "write_file", "apply_patch_tool", "edit_file_tool",
-        "save_metrics_tool", "generate_report_tool",
-    }
+    # Shared with the web UI's /invoke gate (src/api/tool_catalog.py) — one
+    # policy, enforced identically for MCP clients and the Command Surface.
+    # (Now also covers cocotb/SBY/HLS: containerized compute is sign-in-gated.)
+    _PROTECTED_TOOLS = _SHARED_PROTECTED_TOOLS
 
     def _current_identity(self):
         """The identity to act as for the in-flight call.

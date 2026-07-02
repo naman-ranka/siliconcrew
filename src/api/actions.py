@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from src.api.activity import read_activity
 from src.api import workspace_fs
-from src.api.invoke import TOOL_REGISTRY, InvokeError, run_registered_tool
+from src.api import tool_catalog
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.utils.session_context import SessionContext, session_scope
 from src.utils.paths import is_within
@@ -696,43 +696,71 @@ def build_actions_router(
             _err("invalid_path", f"Path escapes the workspace: {path}", status=404)
         return _ok({"path": path, "entries": entries})
 
-    # ---- Curated tool invocation (the Command Surface) -----------------------
+    # ---- Tool platform (the Command Surface) ---------------------------------
+    # The catalog and execution both come from the SAME registry the agent and
+    # MCP clients use (src/api/tool_catalog.py introspects the @tool wrappers),
+    # so schemas can never drift between the UI and the backend.
+
+    @router.get("/tools")
+    async def list_tools(session_id: str, identity=Depends(get_identity)):
+        """Every UI-invocable tool with its real JSON Schema + policy flags."""
+        require_owned(session_id, identity)
+        await require_workspace(session_id)
+        try:
+            catalog = await asyncio.to_thread(tool_catalog.build_catalog)
+        except ImportError:
+            _err("tools_unavailable", "The agent tool stack is not installed on this server.", status=503)
+        return _ok({"tools": catalog})
 
     @router.post("/invoke")
     async def invoke_tool(session_id: str, body: InvokeRequest, identity=Depends(get_identity)):
-        """Run one allowlisted tool with user-supplied choices. Fixed registry
-        (src/api/invoke.py) — not a generic RPC. Logged to the per-session
-        event log like every other invocation path (source ui)."""
+        """Run one catalogued tool: schema-validated against the tool's own
+        pydantic model, executed via the SAME wrapper function the agent runs,
+        inside this session's scope. Logged to the per-session event log like
+        every other invocation path (source ui)."""
         uid = require_owned(session_id, identity)
         workspace = await require_workspace(session_id)
 
-        spec = TOOL_REGISTRY.get(body.tool)
-        if spec is None:
+        try:
+            known = await asyncio.to_thread(tool_catalog.is_invocable, body.tool)
+        except ImportError:
+            known = False
+        if not known:
             _err("unknown_tool", f"'{body.tool}' is not an invocable tool.", status=404)
-        if spec.signed_in and getattr(identity, "anonymous", False):
+        flags = tool_catalog.tool_flags(body.tool)
+        if flags["requiresSignIn"] and getattr(identity, "anonymous", False):
             _err("signin_required", f"'{body.tool}' requires signing in.", status=401)
 
         def work():
             call_id = _ui_log_call(workspace, session_id, body.tool, body.arguments or {})
             try:
-                result = run_registered_tool(body.tool, workspace, session_id, body.arguments)
-            except InvokeError as exc:
+                result = tool_catalog.validate_and_execute(body.tool, workspace, body.arguments)
+            except tool_catalog.ToolArgumentError as exc:
                 _ui_log_result(workspace, session_id, body.tool, call_id, str(exc), ok=False)
-                return {"invokeError": exc}
+                return {"argError": exc}
             except Exception as exc:  # the tool itself failed — an honest error result
                 _ui_log_result(workspace, session_id, body.tool, call_id, str(exc), ok=False)
                 return {"error": str(exc)}
-            summary = result if isinstance(result, str) else json.dumps(result)[:2000]
-            # Structured tools signal failure via a status field; strings are
-            # treated as success (the tool would have raised otherwise).
-            ok = not (isinstance(result, dict) and str(result.get("status", "")).lower() in ("error", "fail", "failed"))
-            _ui_log_result(workspace, session_id, body.tool, call_id, summary, ok=ok)
-            return {"result": result}
+            # Wrapper tools return strings (often JSON) — parse structured
+            # payloads back out so the UI gets typed results, not double-encoded
+            # text. Failures are signalled via a status field when structured.
+            parsed = result
+            if isinstance(result, str):
+                text = result.strip()
+                if text.startswith("{") or text.startswith("["):
+                    try:
+                        parsed = json.loads(text)
+                    except ValueError:
+                        parsed = result
+            summary = result if isinstance(result, str) else json.dumps(result)
+            ok = not (isinstance(parsed, dict) and str(parsed.get("status", "")).lower() in ("error", "fail", "failed"))
+            _ui_log_result(workspace, session_id, body.tool, call_id, summary[:2000], ok=ok)
+            return {"result": parsed}
 
-        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=spec.mutates)
-        if "invokeError" in out:
-            exc = out["invokeError"]
-            _err(exc.code, str(exc), status=exc.status)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=flags["mutates"])
+        if "argError" in out:
+            exc = out["argError"]
+            _err("invalid_arguments", str(exc), details={"fields": exc.details}, status=400)
         if "error" in out:
             _err("tool_failed", out["error"], status=502)
         return _ok({"tool": body.tool, "result": out["result"]})

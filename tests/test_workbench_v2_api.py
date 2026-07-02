@@ -343,7 +343,31 @@ def test_workbench_snapshot_includes_activity_and_rootdir(client):
     assert any(e["name"] == "attempt_events.jsonl" for e in body["rootDir"])
 
 
-# --- Curated tool invocation (/invoke — the Command Surface) -------------------
+# --- Schema-driven tool platform (/tools + /invoke) ----------------------------
+# These exercise the introspected registry (LangChain wrappers), so they skip
+# cleanly where the agent stack isn't installed.
+
+pytest.importorskip("langchain_core")
+
+
+def test_tools_catalog_exposes_real_schemas(client):
+    c, ws = client
+    r = c.get(f"/api/workspace/{SID}/tools")
+    assert r.status_code == 200
+    tools = {t["name"]: t for t in r.json()["tools"]}
+    # The catalog is the SAME registry the agent/MCP use — spot-check breadth.
+    for name in ("linter_tool", "waveform_tool", "start_synthesis", "run_xls_flow", "update_manifest"):
+        assert name in tools, name
+    wave = tools["waveform_tool"]
+    props = wave["argsSchema"]["properties"]
+    assert props["signals"]["type"] == "array"
+    assert "vcd_file" in wave["argsSchema"].get("required", [])
+    assert wave["requiresSignIn"] is False and wave["mutates"] is False
+    synth = tools["start_synthesis"]
+    assert synth["async"] is True and synth["requiresSignIn"] is True and synth["mutates"] is True
+    # Blocking poll-loop tool is not surfaced to the UI.
+    assert "wait_for_synthesis" not in tools
+
 
 def test_invoke_unknown_tool_404(client):
     c, ws = client
@@ -352,7 +376,18 @@ def test_invoke_unknown_tool_404(client):
     assert r.json()["detail"]["error"]["code"] == "unknown_tool"
 
 
-def test_invoke_waveform_reads_real_vcd(client):
+def test_invoke_schema_validation_400_with_fields(client):
+    c, ws = client
+    # waveform_tool requires vcd_file + signals — omit both.
+    r = c.post(f"/api/workspace/{SID}/invoke", json={"tool": "waveform_tool", "arguments": {}})
+    assert r.status_code == 400
+    err = r.json()["detail"]["error"]
+    assert err["code"] == "invalid_arguments"
+    fields = {f["field"] for f in err["details"]["fields"]}
+    assert "vcd_file" in fields
+
+
+def test_invoke_waveform_executes_real_wrapper(client):
     c, ws = client
     vcd = (
         "$timescale 1ns $end\n"
@@ -378,33 +413,27 @@ def test_invoke_waveform_reads_real_vcd(client):
     assert ev["tool"] == "waveform_tool" and ev["source"] == "user" and ev["status"] == "ok"
 
 
-def test_invoke_path_containment(client):
+def test_invoke_file_arg_containment(client):
     c, ws = client
     r = c.post(f"/api/workspace/{SID}/invoke", json={
         "tool": "waveform_tool",
         "arguments": {"vcd_file": "../../etc/passwd", "signals": ["clk"]},
     })
-    assert r.status_code == 404
-    assert r.json()["detail"]["error"]["code"] in ("invalid_path", "not_found")
-
-
-def test_invoke_missing_arg_400(client):
-    c, ws = client
-    r = c.post(f"/api/workspace/{SID}/invoke", json={"tool": "get_synthesis_metrics", "arguments": {}})
     assert r.status_code == 400
-    assert r.json()["detail"]["error"]["code"] == "missing_arg"
+    assert r.json()["detail"]["error"]["code"] == "invalid_arguments"
 
 
-def test_invoke_analysis_tool_over_missing_run_is_honest(client):
+def test_invoke_structured_result_parsed_not_double_encoded(client):
     c, ws = client
-    r = c.post(f"/api/workspace/{SID}/invoke", json={
-        "tool": "get_synthesis_metrics", "arguments": {"run_id": "synth_9999"},
-    })
-    # The tool returns a structured miss (not a crash); the endpoint passes it
-    # through and the activity row records the error status.
-    assert r.status_code == 200
-    ev = c.get(f"/api/workspace/{SID}/activity").json()["events"][0]
-    assert ev["tool"] == "get_synthesis_metrics"
+    # get_manifest returns a JSON string from the wrapper; the endpoint returns
+    # the STRUCTURE, so the UI never renders escaped JSON-in-JSON.
+    with open(os.path.join(ws, "counter.v"), "w") as f:
+        f.write(DUT)
+    r = c.post(f"/api/workspace/{SID}/invoke", json={"tool": "get_manifest", "arguments": {}})
+    assert r.status_code == 200, r.text
+    result = r.json()["result"]
+    assert isinstance(result, dict)
+    assert result.get("synthTop") == "counter"
 
 
 def test_invoke_signed_in_gate(tmp_path):
@@ -429,3 +458,13 @@ def test_invoke_signed_in_gate(tmp_path):
     r = c.post(f"/api/workspace/{SID}/invoke", json={"tool": "save_metrics_tool", "arguments": {"wns_ns": 0.1}})
     assert r.status_code == 401
     assert r.json()["detail"]["error"]["code"] == "signin_required"
+
+
+def test_shared_policy_single_source():
+    """mcp_server's protection policy IS the catalog's (no drift)."""
+    from src.api.tool_catalog import PROTECTED_TOOLS, TOOL_CATEGORIES
+    assert "start_synthesis" in PROTECTED_TOOLS
+    assert "update_manifest" in PROTECTED_TOOLS
+    assert "linter_tool" not in PROTECTED_TOOLS
+    flat = {n for names in TOOL_CATEGORIES.values() for n in names}
+    assert "get_manifest" in flat and "run_isolated_simulation" in flat
