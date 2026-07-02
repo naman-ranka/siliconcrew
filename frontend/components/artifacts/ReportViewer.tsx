@@ -19,9 +19,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-export function ReportViewer() {
+interface ReportViewerProps {
+  // v2 tab model: render EXACTLY this report (bypasses the store's
+  // report/selectedSynthesisRunId plumbing and all fetch/generate effects).
+  // When absent, behavior is the original store-driven viewer, unchanged.
+  reportOverride?: ReportData;
+  // v2 tab model: the run the tab is scoped to — anchors the PPA hero when the
+  // report payload carries no run_id. Only used alongside `reportOverride`.
+  runIdOverride?: string;
+}
+
+export function ReportViewer({ reportOverride, runIdOverride }: ReportViewerProps = {}) {
   const {
-    report,
+    report: storeReport,
     loadReport,
     generateReport,
     currentSession,
@@ -33,9 +43,13 @@ export function ReportViewer() {
     selectedRunId,
     reportLoading,
   } = useStore();
+  const overridden = reportOverride != null;
+  const report = reportOverride ?? storeReport;
 
   // PPA hero sources the unified run record (has ppa); prefer the report's run.
-  const ppaRunId = report?.run_id ?? selectedRunId ?? selectedSynthesisRunId;
+  const ppaRunId = overridden
+    ? reportOverride!.run_id ?? runIdOverride
+    : report?.run_id ?? selectedRunId ?? selectedSynthesisRunId;
 
   // The run we'd target for (auto-)generation: the selected synth run, else the
   // newest passed synth run.
