@@ -70,6 +70,8 @@ class ManifestUpdate(BaseModel):
     clockPeriodNs: Optional[float] = None
     platform: Optional[str] = None
     files: Optional[List[Dict[str, Any]]] = None
+    # fnmatch globs (workspace-relative POSIX paths) excluded from the scan.
+    ignore: Optional[List[str]] = None
 
 
 class SimulateRequest(BaseModel):
@@ -87,6 +89,9 @@ class SynthesizeRequest(BaseModel):
     coreMargin: float = 2.0
     runEquiv: bool = False
     constraintsMode: str = "auto"
+    # Last flow stage to execute; "finish" (default) = full RTL->GDS flow,
+    # "synth" = fast synthesis-only PPA estimate. Later stages are "skipped".
+    maxStage: str = "finish"
 
 
 class RetryRequest(BaseModel):
@@ -263,34 +268,45 @@ def _classify_file(name: str) -> str:
     return "unknown"
 
 
-def _snapshot_files(workspace: str, roles: Dict[str, Optional[str]]) -> List[Dict[str, Any]]:
-    """FileInfo[] for the workbench snapshot (same shape as GET /files)."""
+def _snapshot_files(
+    workspace: str,
+    roles: Dict[str, Optional[str]],
+    ignore: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """FileInfo[] for the workbench snapshot (same shape as GET /files).
+
+    Recursive, under the manifest's exclusion policy. ``path`` is the
+    workspace-relative POSIX path (was absolute pre-recursion; no frontend
+    consumer reads FileInfo.path) and ``roles`` is keyed by that same path.
+    """
     import datetime as _dt
 
     out: List[Dict[str, Any]] = []
-    for item in os.listdir(workspace):
-        item_path = os.path.join(workspace, item)
-        if not os.path.isfile(item_path):
+    for rel in manifest_mod.iter_workspace_files(workspace, ignore):
+        full = os.path.join(workspace, rel)
+        try:
+            st = os.stat(full)
+        except OSError:
             continue
-        st = os.stat(item_path)
+        name = os.path.basename(rel)
         out.append({
-            "name": item,
-            "path": item_path,
-            "type": _classify_file(item),
+            "name": name,
+            "path": rel,
+            "type": _classify_file(name),
             "size": st.st_size,
             "modified": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(),
-            "role": roles.get(item),
+            "role": roles.get(rel),
         })
     out.sort(key=lambda f: f["modified"], reverse=True)
     return out
 
 
-def _snapshot_spec(workspace: str) -> Optional[Dict[str, Any]]:
+def _snapshot_spec(workspace: str, ignore: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
     """Latest *_spec.yaml as {filename, content, parsed} — same as GET /spec."""
     import yaml as _yaml
 
     spec_files = sorted(
-        [f for f in os.listdir(workspace) if f.endswith("_spec.yaml")],
+        [f for f in manifest_mod.iter_workspace_files(workspace, ignore) if f.endswith("_spec.yaml")],
         key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
         reverse=True,
     )
@@ -306,19 +322,32 @@ def _snapshot_spec(workspace: str) -> Optional[Dict[str, Any]]:
     return {"filename": spec_files[0], "content": content, "parsed": parsed}
 
 
-def _snapshot_code(workspace: str) -> List[Dict[str, Any]]:
-    """All .v/.sv files as CodeFile[] — same shape as GET /code."""
-    files = sorted(
-        f for f in os.listdir(workspace)
-        if f.endswith((".v", ".sv")) and os.path.isfile(os.path.join(workspace, f))
+def _code_file_rel_paths(workspace: str, manifest: manifest_mod.DesignManifest) -> List[str]:
+    """Relative paths served by GET /code: manifest files with code roles
+    (rtl/tb/include) plus any .v/.sv the exclusion-aware scan found."""
+    rels = {f.path for f in manifest.files if f.role in ("rtl", "tb", "include")}
+    rels.update(
+        rel for rel in manifest_mod.iter_workspace_files(workspace, manifest.ignore)
+        if rel.lower().endswith((".v", ".sv"))
     )
+    return sorted(r for r in rels if os.path.isfile(os.path.join(workspace, r)))
+
+
+def _snapshot_code(workspace: str, manifest: Optional[manifest_mod.DesignManifest] = None) -> List[Dict[str, Any]]:
+    """Code files as CodeFile[] — same shape as GET /code.
+
+    ``filename`` is the workspace-relative POSIX path (equals the basename for
+    root files); the frontend keys code tabs by exactly this value.
+    """
+    if manifest is None:
+        manifest = manifest_mod.read_manifest(workspace)
     out: List[Dict[str, Any]] = []
-    for name in files:
-        with open(os.path.join(workspace, name), "r", errors="ignore") as f:
+    for rel in _code_file_rel_paths(workspace, manifest):
+        with open(os.path.join(workspace, rel), "r", errors="ignore") as f:
             out.append({
-                "filename": name,
+                "filename": rel,
                 "content": f.read(),
-                "language": "systemverilog" if name.endswith(".sv") else "verilog",
+                "language": "systemverilog" if rel.endswith((".sv", ".svh")) else "verilog",
             })
     return out
 
@@ -610,6 +639,7 @@ def build_actions_router(
                 "core_margin": body.coreMargin,
                 "run_equiv": body.runEquiv,
                 "constraints_mode": body.constraintsMode,
+                "max_stage": body.maxStage,
             }
             call_id = _ui_log_call(workspace, session_id, "start_synthesis", resolved)
             result = start_synthesis_job(
@@ -623,6 +653,7 @@ def build_actions_router(
                 core_margin=body.coreMargin,
                 run_equiv=body.runEquiv,
                 constraints_mode=body.constraintsMode,
+                max_stage=body.maxStage,
             )
             dispatched = isinstance(result, dict) and result.get("status") != "rejected"
             _ui_log_result(
@@ -644,6 +675,10 @@ def build_actions_router(
             _err((result.get("error") or {}).get("code", "quota_exceeded"),
                  (result.get("error") or {}).get("message", "Quota exceeded."),
                  details=result.get("error"), status=429)
+        # Validation errors (e.g. an unsupported maxStage) surface as 400.
+        if isinstance(result, dict) and result.get("status") == "error":
+            _err("invalid_request", result.get("message", "Invalid synthesis request."),
+                 details={"supported_stages": result.get("supported_stages")}, status=400)
         return _ok({"jobId": result.get("job_id"), "runId": result.get("run_id"), "raw": result})
 
     # ---- Activity feed (unified per-session tool event log) -----------------
@@ -775,16 +810,16 @@ def build_actions_router(
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
-            roles = {f.name: f.role for f in manifest.files}
+            roles = {f.path: f.role for f in manifest.files}
             runs: List[Dict[str, Any]] = list(list_sim_runs(workspace))
             runs.extend(_synth_to_run(workspace, item) for item in list_synthesis_runs(workspace))
             runs.sort(key=lambda r: r.get("createdAt") or "", reverse=True)
             return {
                 "manifest": manifest.model_dump(),
                 "runs": runs,
-                "files": _snapshot_files(workspace, roles),
-                "spec": _snapshot_spec(workspace),
-                "code": _snapshot_code(workspace),
+                "files": _snapshot_files(workspace, roles, manifest.ignore),
+                "spec": _snapshot_spec(workspace, manifest.ignore),
+                "code": _snapshot_code(workspace, manifest),
                 "report": _snapshot_report(workspace),
                 "synthesisRuns": list(list_synthesis_runs(workspace)),
                 # v2 additions — same shapes as GET /activity and GET /dir, so

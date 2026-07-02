@@ -87,6 +87,64 @@ PD_PREREQ_FILES = {
     "finish": [("5_route.odb", "5_route.odb"), ("5_route.sdc", "5_route.sdc")],
 }
 
+# Per-stage completion markers for runs bounded by max_stage. Each entry lists
+# (scope, filename) candidates; ANY present artifact proves the stage actually
+# completed. Chosen per stage:
+#   synth     -> orfs_reports/synth_stat.txt (yosys writes it right after logic
+#                synthesis) or the 1_synth.odb checkpoint in orfs_results.
+#   floorplan -> orfs_results/2_floorplan.odb checkpoint, else the
+#                2_floorplan_final.rpt report.
+#   place     -> orfs_results/3_place.odb checkpoint.
+#   cts       -> orfs_results/4_cts.odb checkpoint, else 4_cts_final.rpt.
+#   grt       -> orfs_results/5_1_grt.odb checkpoint, else congestion.rpt.
+#   route     -> orfs_results/5_route.odb or 5_route.sdc (matches
+#                _stage_artifacts_indicate_completion: the DRC report alone can
+#                exist for an incomplete route).
+#   finish    -> orfs_reports/6_finish.rpt (the historical full-flow proof).
+_STAGE_COMPLETION_MARKERS: Dict[str, List[tuple]] = {
+    "synth": [("orfs_reports", "synth_stat.txt"), ("orfs_results", "1_synth.odb")],
+    "floorplan": [("orfs_results", "2_floorplan.odb"), ("orfs_reports", "2_floorplan_final.rpt")],
+    "place": [("orfs_results", "3_place.odb")],
+    "cts": [("orfs_results", "4_cts.odb"), ("orfs_reports", "4_cts_final.rpt")],
+    "grt": [("orfs_results", "5_1_grt.odb"), ("orfs_reports", "congestion.rpt")],
+    "route": [("orfs_results", "5_route.odb"), ("orfs_results", "5_route.sdc")],
+    "finish": [("orfs_reports", "6_finish.rpt")],
+}
+
+
+def _run_stage_bound(meta: Dict[str, Any]) -> str:
+    """The last stage a run was asked to execute ("finish" = full flow).
+
+    First runs persist ``max_stage``; PD retries persist ``retry_max_stage``.
+    Unknown/absent values fall back to "finish" (legacy full-flow runs).
+    """
+    bound = str(meta.get("max_stage") or meta.get("retry_max_stage") or "finish").strip().lower()
+    return bound if bound in PD_STAGE_SEQUENCE else "finish"
+
+
+def _next_stage_after(stage: str) -> Optional[str]:
+    try:
+        idx = PD_STAGE_SEQUENCE.index(stage)
+    except ValueError:
+        return None
+    return PD_STAGE_SEQUENCE[idx + 1] if idx + 1 < len(PD_STAGE_SEQUENCE) else None
+
+
+def _find_stage_completion_marker(run_dir: str, stage: str) -> Optional[str]:
+    """Path of the artifact proving ``stage`` completed in this run, else None."""
+    if stage == "constraints":
+        path = os.path.join(run_dir, "constraints.sdc")
+        return path if os.path.exists(path) else None
+    if stage == "finish":
+        # Kept on _find_report_file so full-flow reconciliation semantics (and
+        # their tests) are byte-for-byte unchanged.
+        return _find_report_file(run_dir, "6_finish.rpt")
+    for scope, name in _STAGE_COMPLETION_MARKERS.get(stage, []):
+        found = _find_artifact_file(run_dir, scope, name)
+        if found:
+            return found
+    return None
+
 _JOB_LOCK = threading.Lock()
 _INDEX_LOCK = threading.Lock()
 # Default single-tenant executor (local / self-host). In hosted mode this is
@@ -714,13 +772,23 @@ def _refresh_stage_metadata(run_dir: str, run_meta: Dict[str, Any], terminal_sta
     if downstream_completed and stages["synth"].get("status") != "completed":
         stages["synth"]["status"] = "completed"
 
+    bound = _run_stage_bound(run_meta)
     if terminal_status == "completed":
-        run_meta["current_stage"] = "finish"
+        # A completed run ends at the stage it was bounded to — "finish" for the
+        # full flow, the run's max_stage for a partial (e.g. synth-only) run.
+        run_meta["current_stage"] = bound
     elif terminal_status == "failed":
         failed_stage = run_meta.get("current_stage") or _infer_stage(_collect_log_tail(run_dir))
         run_meta["current_stage"] = failed_stage
         if failed_stage in stages and stages[failed_stage].get("status") != "completed":
             stages[failed_stage]["status"] = "failed"
+
+    # Stages beyond the run's bound were never going to execute: mark them
+    # "skipped" (honest terminal state) instead of leaving them "pending".
+    if terminal_status in {"completed", "failed"} and bound != "finish":
+        for stage in PD_STAGE_SEQUENCE[PD_STAGE_SEQUENCE.index(bound) + 1:]:
+            if stages.get(stage, {}).get("status") in {None, "pending"}:
+                stages[stage]["status"] = "skipped"
 
     run_meta["stages"] = stages
     return run_meta
@@ -967,6 +1035,23 @@ def _stage_range(start_stage: str, max_stage: str) -> List[str]:
     start_idx = PD_RETRYABLE_STAGES.index(start_stage)
     end_idx = PD_RETRYABLE_STAGES.index(max_stage)
     return PD_RETRYABLE_STAGES[start_idx : end_idx + 1]
+
+
+def _first_run_targets(max_stage: str) -> List[str]:
+    """ORFS make targets for a first run bounded at ``max_stage`` (< finish).
+
+    Mirrors the retry path's target-based execution (_run_orfs_targets with the
+    same do-* targets): do-synth builds 1_synth.* from the copied inputs, then
+    each downstream do-<stage> consumes the previous stage's checkpoint,
+    stopping after the target stage. The unbounded first run keeps using the
+    full-flow ``make -B`` command in _run_orfs, unchanged.
+    """
+    targets = ["do-synth"]
+    if max_stage == "synth":
+        return targets
+    end_idx = PD_RETRYABLE_STAGES.index(max_stage)
+    targets.extend(PD_STAGE_TARGETS[stage] for stage in PD_RETRYABLE_STAGES[: end_idx + 1])
+    return targets
 
 
 def _parse_orfs_overrides(orfs_overrides_json: Optional[str]) -> Dict[str, Any]:
@@ -1261,6 +1346,9 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
     run_id = args["run_id"]
     top_module = args["top_module"]
     platform = args["platform"]
+    max_stage = str(args.get("max_stage") or "finish").strip().lower()
+    if max_stage not in PD_STAGE_SEQUENCE:
+        max_stage = "finish"
 
     inputs_dir = _ensure_dir(os.path.join(run_dir, "inputs"))
     copied_inputs = _copy_inputs(args["verilog_files"], inputs_dir)
@@ -1285,6 +1373,8 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         "backend": _configured_orfs_backend(),
         "status": "running",
         "current_stage": "constraints",
+        # Last stage this run will execute ("finish" = full RTL->GDS flow).
+        "max_stage": max_stage,
         "platform": platform,
         "top_module": top_module,
         "input_files": [os.path.basename(x) for x in copied_inputs],
@@ -1326,26 +1416,113 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         return run_meta
 
     run_meta["stages"]["constraints"]["status"] = "completed"
+
+    if max_stage == "constraints":
+        # Constraints-only dry run: validate the SDC guardrail and stop before
+        # any ORFS execution. Everything downstream is honestly "skipped".
+        run_meta["status"] = "completed"
+        run_meta["current_stage"] = "constraints"
+        run_meta["auto_checks"] = asdict(auto_checks)  # signoff/equiv stay "skip"
+        run_meta["check_notes"] = (
+            "Constraints validated; partial flow (max_stage=constraints): ORFS stages skipped."
+        )
+        run_meta["next_action"] = (
+            "Rerun start_synthesis with a later max_stage (e.g. 'synth') to execute the flow."
+        )
+        run_meta["finished_at"] = _now_iso()
+        run_meta["elapsed_sec"] = round(time.time() - start, 2)
+        run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status="completed")
+        _persist_run_meta(run_dir, run_meta)
+        _append_index(workspace, run_id, job_id, "completed")
+        return run_meta
+
     run_meta["current_stage"] = "synth"
     run_meta["stages"]["synth"]["status"] = "running"
     _persist_run_meta(run_dir, run_meta)
 
-    docker_result = _run_orfs(
-        run_dir=run_dir,
-        top_module=top_module,
-        platform=platform,
-        input_files=copied_inputs,
-        clock_period_ns=constraints["clock_period_ns"],
-        utilization=args["utilization"],
-        aspect_ratio=args["aspect_ratio"],
-        core_margin=args["core_margin"],
-        timeout=args["timeout"],
-    )
+    if max_stage == "finish":
+        docker_result = _run_orfs(
+            run_dir=run_dir,
+            top_module=top_module,
+            platform=platform,
+            input_files=copied_inputs,
+            clock_period_ns=constraints["clock_period_ns"],
+            utilization=args["utilization"],
+            aspect_ratio=args["aspect_ratio"],
+            core_margin=args["core_margin"],
+            timeout=args["timeout"],
+        )
+    else:
+        # Bounded first run: reuse the retry path's target-based runner so the
+        # flow stops after max_stage instead of paying the full RTL->GDS flow.
+        docker_result = _run_orfs_targets(
+            run_dir=run_dir,
+            top_module=top_module,
+            platform=platform,
+            input_files=copied_inputs,
+            utilization=args["utilization"],
+            aspect_ratio=args["aspect_ratio"],
+            core_margin=args["core_margin"],
+            targets=_first_run_targets(max_stage),
+            timeout=args["timeout"],
+        )
 
     run_meta["docker_command"] = docker_result.get("command")
     run_meta["docker_success"] = docker_result.get("success", False)
     run_meta["docker_stdout_tail"] = (docker_result.get("stdout") or "")[-1200:]
     run_meta["docker_stderr_tail"] = (docker_result.get("stderr") or "")[-1200:]
+
+    if max_stage != "finish":
+        # Partial-flow finalization: signoff/equiv guardrails need finish
+        # artifacts (6_finish.rpt / 6_final.*), which a bounded run never
+        # produces — record them as skipped instead of failing. The run is
+        # completed exactly when the TARGET stage's completion artifact exists.
+        run_meta["netlist_path"] = _find_netlist(run_dir, top_module)
+        run_meta["auto_checks"] = asdict(auto_checks)  # signoff/equiv stay "skip"
+        if args.get("run_equiv"):
+            run_meta["equiv_note"] = (
+                f"partial flow (max_stage={max_stage}): equivalence check skipped "
+                "(it runs on the finish-stage netlist)"
+            )
+        manifest = _load_stdcell_manifest(workspace, platform)
+        run_meta["stdcell_manifest_version"] = manifest.get("updated_at") if manifest else None
+        run_meta["stdcell_files_used"] = manifest.get("files", []) if manifest else []
+        run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
+
+        target_marker = _find_stage_completion_marker(run_dir, max_stage)
+        if target_marker:
+            run_meta["status"] = "completed"
+            run_meta["current_stage"] = max_stage
+            run_meta["check_notes"] = (
+                f"Partial flow completed through '{max_stage}'; signoff/equiv checks "
+                f"skipped: partial flow (max_stage={max_stage})."
+            )
+            next_stage = _next_stage_after(max_stage)
+            if next_stage in PD_RETRYABLE_STAGES:
+                run_meta["next_action"] = (
+                    f"Continue toward GDS with retry_pd(run_id='{run_id}', "
+                    f"start_stage='{next_stage}')."
+                )
+            else:
+                run_meta["next_action"] = (
+                    "Rerun start_synthesis with a later max_stage to continue the flow."
+                )
+        else:
+            run_meta["status"] = "failed"
+            run_meta["current_stage"] = _infer_stage(_collect_log_tail(run_dir))
+            run_meta["check_notes"] = (
+                f"Partial flow failed: target stage '{max_stage}' produced no "
+                "completion artifact."
+            )
+            run_meta["next_action"] = (
+                "Use search_logs_tool with error/timing queries and fix RTL/constraints."
+            )
+        run_meta["finished_at"] = _now_iso()
+        run_meta["elapsed_sec"] = round(time.time() - start, 2)
+        run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
+        _persist_run_meta(run_dir, run_meta)
+        _append_index(workspace, run_id, job_id, run_meta["status"])
+        return run_meta
 
     signoff = _signoff_guardrail(run_dir, top_module, docker_result)
     auto_checks.signoff = signoff["status"]
@@ -1409,7 +1586,18 @@ def start_synthesis_job(
     timeout: int = SYNTH_HARD_TIMEOUT_SEC,
     run_equiv: bool = False,
     constraints_mode: str = "auto",
+    max_stage: str = "finish",
 ) -> Dict[str, Any]:
+    # Validate the stage bound before reserving quota or touching disk. Same
+    # rejected shape retry_pd_job uses for an unsupported stage.
+    max_stage = (max_stage or "").strip().lower()
+    if max_stage not in PD_STAGE_SEQUENCE:
+        return {
+            "status": "error",
+            "message": f"Unsupported max_stage '{max_stage}'.",
+            "supported_stages": PD_STAGE_SEQUENCE,
+        }
+
     # Quota gate (hosted): reject before doing any work if the user is over a cap
     # (concurrency / runs-per-day / monthly-compute). No-op in self-host.
     reservation, quota_error = _reserve_synth_quota()
@@ -1435,6 +1623,7 @@ def start_synthesis_job(
         "timeout": timeout_sec,
         "run_equiv": run_equiv,
         "constraints_mode": constraints_mode,
+        "max_stage": max_stage,
     }
 
     with _JOB_LOCK:
@@ -1507,7 +1696,20 @@ def retry_pd_job(
     try:
         _validate_retry_prerequisites(parent_run_dir, start_stage)
     except FileNotFoundError as exc:
-        return {"status": "error", "message": str(exc)}
+        message = str(exc)
+        # If the parent was a bounded (partial) run that never reached the
+        # stage feeding this retry, say so instead of only listing filenames.
+        parent_bound = _run_stage_bound(parent_meta)
+        if parent_bound != "finish" and (
+            PD_STAGE_SEQUENCE.index(start_stage) > PD_STAGE_SEQUENCE.index(parent_bound) + 1
+        ):
+            resume_stage = _next_stage_after(parent_bound)
+            message += (
+                f" Parent run '{source_run_id}' was a partial flow "
+                f"(max_stage={parent_bound}) and never ran the stages feeding "
+                f"'{start_stage}'; continue from '{resume_stage}' instead."
+            )
+        return {"status": "error", "message": message}
 
     # A PD retry is a synth run too — same quota gate.
     reservation, quota_error = _reserve_synth_quota()
@@ -1611,6 +1813,20 @@ def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, 
         if status == "failed"
         else f"wait/poll (recommended backoff: {poll_after}s)"
     )
+    bound = _run_stage_bound(meta)
+    if status == "completed" and bound != "finish":
+        # Bounded run finished at its target stage — point at how to continue.
+        next_stage = _next_stage_after(bound)
+        if next_stage in PD_RETRYABLE_STAGES:
+            next_action = (
+                f"Partial flow completed at '{bound}'. Continue toward GDS with "
+                f"retry_pd(run_id='{run_id}', start_stage='{next_stage}')."
+            )
+        else:
+            next_action = (
+                f"Partial flow completed at '{bound}'. Rerun start_synthesis "
+                "with a later max_stage to continue."
+            )
 
     resp = {
         "job_id": job_id,
@@ -1777,25 +1993,33 @@ def _reconcile_stale_status(run_dir: str, meta: Dict[str, Any]) -> Dict[str, Any
     run_meta at "running" even though ORFS finished and its artifacts synced to
     object storage.
 
-    Completion signal: the **finish-stage report** (6_finish.rpt) must exist.
-    That is the only artifact that proves the full ORFS flow reached the finish
-    stage. ``synth_stat.txt`` (area/cell_count) alone is NOT sufficient — it is
-    written right after logic synthesis, so a run that failed later (e.g. before
-    CTS) also has it; keying on it would mis-mark a failed run as completed.
+    Completion signal: the **target stage's completion artifact** must exist.
+    For a full-flow run (max_stage="finish", the default and every legacy run)
+    that is the finish-stage report (6_finish.rpt) — the only artifact that
+    proves the full ORFS flow reached the finish stage. ``synth_stat.txt``
+    (area/cell_count) alone is NOT sufficient there — it is written right after
+    logic synthesis, so a run that failed later (e.g. before CTS) also has it;
+    keying on it would mis-mark a failed run as completed. For a bounded run
+    (max_stage != "finish") the flow never produces 6_finish.rpt, so completion
+    keys on that stage's own marker instead (see _STAGE_COMPLETION_MARKERS,
+    e.g. synth -> synth_stat.txt/1_synth.odb, place -> 3_place.odb).
 
-    Fail-safe: no finish report → status left untouched (never worse than
+    Fail-safe: no completion marker → status left untouched (never worse than
     today; a genuinely-failed run stays non-terminal rather than being falsely
-    marked completed). Mutates and returns ``meta``; persists only on reconcile.
+    marked completed, and an in-flight run polled mid-read is not falsely
+    failed). Mutates and returns ``meta``; persists only on reconcile.
     """
     if meta.get("status") in _TERMINAL_SYNTH_STATES:
         return meta
-    # Only a present finish report proves the flow actually completed.
-    if _find_report_file(run_dir, "6_finish.rpt") is None:
+    # Only the target stage's present completion artifact proves the (possibly
+    # bounded) flow actually completed.
+    if _find_stage_completion_marker(run_dir, _run_stage_bound(meta)) is None:
         return meta  # not demonstrably finished — leave as-is
     meta["status"] = "completed"
     meta["summary_metrics"] = _compute_summary_metrics(run_dir, meta)
     if not meta.get("finished_at"):
         meta["finished_at"] = _now_iso()
+    meta = _refresh_stage_metadata(run_dir, meta, terminal_status="completed")
     try:
         _persist_run_meta(run_dir, meta)
     except Exception:
@@ -2484,6 +2708,7 @@ def get_stage_status(workspace: str, run_id: Optional[str] = None) -> Dict[str, 
     failed = [name for name, item in stages.items() if item.get("status") == "failed"]
     running = [name for name, item in stages.items() if item.get("status") == "running"]
     pending = [name for name, item in stages.items() if item.get("status") == "pending"]
+    skipped = [name for name, item in stages.items() if item.get("status") == "skipped"]
 
     return {
         "status": "ok",
@@ -2492,11 +2717,13 @@ def get_stage_status(workspace: str, run_id: Optional[str] = None) -> Dict[str, 
         "platform": run_meta.get("platform"),
         "run_status": run_meta.get("status"),
         "current_stage": run_meta.get("current_stage"),
+        "max_stage": _run_stage_bound(run_meta),
         "stages": stages,
         "completed_stages": completed,
         "failed_stages": failed,
         "running_stages": running,
         "pending_stages": pending,
+        "skipped_stages": skipped,
         "stage_count": len(stages),
         "elapsed_sec": run_meta.get("elapsed_sec"),
     }
@@ -2691,6 +2918,12 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
         notes.append("6_finish.rpt not found")
     if not stat:
         notes.append("synth_stat.txt not found")
+    bound = _run_stage_bound(run_meta)
+    if bound != "finish":
+        notes.append(
+            f"partial flow (max_stage={bound}): timing/power fields come from the "
+            "finish stage and are expected to be missing"
+        )
 
     return {
         "status": "ok",

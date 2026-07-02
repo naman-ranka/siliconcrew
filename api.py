@@ -1296,44 +1296,53 @@ async def list_workspace_files(session_id: str, _acl: Optional[str] = Depends(ve
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        # Manifest roles annotate the design files (rtl/tb/sdc/include).
+        # Manifest roles annotate the design files (rtl/tb/sdc/include),
+        # keyed by workspace-relative path (nested design files have roles too).
+        ignore: List[str] = []
         try:
             with session_scope(SessionContext(session_id=session_id, workspace=workspace)):
                 manifest = manifest_mod.read_manifest(workspace, session_id)
-            roles = {f.name: f.role for f in manifest.files}
+            roles = {f.path: f.role for f in manifest.files}
+            ignore = manifest.ignore
         except Exception:
             roles = {}
 
+        # Recursive listing under the manifest's exclusion policy (run dirs,
+        # dot-dirs, user ignore globs, depth cap). ``path`` is the
+        # workspace-relative POSIX path — the same key the manifest uses.
         files = []
-        for item in os.listdir(workspace):
-            item_path = os.path.join(workspace, item)
-            if os.path.isfile(item_path):
+        for rel in manifest_mod.iter_workspace_files(workspace, ignore):
+            item_path = os.path.join(workspace, rel)
+            try:
                 stat = os.stat(item_path)
+            except OSError:
+                continue
+            item = os.path.basename(rel)
 
-                # Determine file type
-                ext = os.path.splitext(item)[1].lower()
-                file_type = "unknown"
-                if ext in [".v", ".sv"]:
-                    file_type = "verilog"
-                elif ext == ".yaml":
-                    file_type = "spec" if "_spec" in item else "yaml"
-                elif ext == ".vcd":
-                    file_type = "waveform"
-                elif ext == ".gds":
-                    file_type = "layout"
-                elif ext == ".svg":
-                    file_type = "schematic"
-                elif ext == ".md":
-                    file_type = "report"
+            # Determine file type
+            ext = os.path.splitext(item)[1].lower()
+            file_type = "unknown"
+            if ext in [".v", ".sv"]:
+                file_type = "verilog"
+            elif ext == ".yaml":
+                file_type = "spec" if "_spec" in item else "yaml"
+            elif ext == ".vcd":
+                file_type = "waveform"
+            elif ext == ".gds":
+                file_type = "layout"
+            elif ext == ".svg":
+                file_type = "schematic"
+            elif ext == ".md":
+                file_type = "report"
 
-                files.append(FileInfo(
-                    name=item,
-                    path=item_path,
-                    type=file_type,
-                    size=stat.st_size,
-                    modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                    role=roles.get(item),
-                ))
+            files.append(FileInfo(
+                name=item,
+                path=rel,
+                type=file_type,
+                size=stat.st_size,
+                modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                role=roles.get(rel),
+            ))
 
         return sorted(files, key=lambda f: f.modified, reverse=True)
 
@@ -1348,8 +1357,9 @@ async def get_spec(session_id: str, _acl: Optional[str] = Depends(verify_session
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
 
+        # Recursive under the manifest exclusion policy (nested specs count too).
         spec_files = sorted(
-            [f for f in os.listdir(workspace) if f.endswith("_spec.yaml")],
+            [f for f in manifest_mod.iter_workspace_files(workspace) if f.endswith("_spec.yaml")],
             key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
             reverse=True
         )
@@ -1385,17 +1395,30 @@ async def get_code_files(session_id: str, _acl: Optional[str] = Depends(verify_s
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        files = sorted([
-            f for f in os.listdir(workspace)
-            if f.endswith(('.v', '.sv')) and os.path.isfile(os.path.join(workspace, f))
-        ])
+        # Manifest-driven, recursive: code files = manifest files with code roles
+        # (rtl/tb/include) + any .v/.sv the exclusion-aware scan found. ``filename``
+        # is the workspace-relative POSIX path (the frontend keys code tabs by it).
+        try:
+            with session_scope(SessionContext(session_id=session_id, workspace=workspace)):
+                manifest = manifest_mod.read_manifest(workspace, session_id)
+            rels = {f.path for f in manifest.files if f.role in ("rtl", "tb", "include")}
+            ignore = manifest.ignore
+        except Exception:
+            rels, ignore = set(), []
+        rels.update(
+            rel for rel in manifest_mod.iter_workspace_files(workspace, ignore)
+            if rel.lower().endswith((".v", ".sv"))
+        )
 
         result = []
-        for filename in files:
-            with open(os.path.join(workspace, filename), "r", errors='ignore') as f:
+        for filename in sorted(rels):
+            full = os.path.join(workspace, filename)
+            if not os.path.isfile(full):
+                continue
+            with open(full, "r", errors='ignore') as f:
                 content = f.read()
 
-            lang = "systemverilog" if filename.endswith(".sv") else "verilog"
+            lang = "systemverilog" if filename.endswith((".sv", ".svh")) else "verilog"
             result.append(CodeFile(filename=filename, content=content, language=lang))
 
         return result
@@ -1419,7 +1442,7 @@ async def get_code_file(session_id: str, filename: str, _acl: Optional[str] = De
         with open(file_path, "r", errors='ignore') as f:
             content = f.read()
 
-        lang = "systemverilog" if filename.endswith(".sv") else "verilog"
+        lang = "systemverilog" if filename.endswith((".sv", ".svh")) else "verilog"
         return CodeFile(filename=filename, content=content, language=lang)
 
     return await asyncio.to_thread(work)

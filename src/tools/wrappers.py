@@ -293,9 +293,16 @@ def start_synthesis(
     core_margin: float = 2.0,
     run_equiv: bool = False,
     constraints_mode: str = "auto",
+    max_stage: str = "finish",
 ) -> str:
     """
     Starts synthesis asynchronously and returns quickly with job_id and run_id.
+    By default (max_stage="finish") this runs the FULL RTL->GDS ORFS flow.
+    Set max_stage="synth" for a fast synthesis-only PPA estimate (area/cell
+    count without place-and-route timing/power), or stop after any stage:
+    constraints|synth|floorplan|place|cts|grt|route|finish. Stages after
+    max_stage are recorded as "skipped". Continue a partial run toward GDS
+    later with retry_pd starting from the next stage.
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
@@ -318,6 +325,7 @@ def start_synthesis(
         core_margin=core_margin,
         run_equiv=run_equiv,
         constraints_mode=constraints_mode,
+        max_stage=max_stage,
     )
     return json.dumps(result, indent=2)
 
