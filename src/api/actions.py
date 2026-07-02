@@ -27,11 +27,15 @@ import asyncio
 import json
 import os
 import re
+import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
+from src.api.activity import read_activity
+from src.api import workspace_fs
+from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.utils.session_context import SessionContext, session_scope
 from src.utils.paths import is_within
 from src.platform_engines import auth as _auth_engine
@@ -109,6 +113,40 @@ def _err(code: str, message: str, details: Optional[Dict[str, Any]] = None, stat
         status_code=status,
         detail={"ok": False, "error": {"code": code, "message": message, "details": details or {}}},
     )
+
+
+def _ui_log_call(workspace: str, session_id: str, tool: str, arguments: Dict[str, Any]) -> str:
+    """Record a user-initiated (REST) tool call in the per-session event log.
+
+    Same log the agent (WS) and MCP paths write, so the Activity feed shows
+    every invocation regardless of who drove it. source="ui" → actor "user".
+    Logging must never break the action itself.
+    """
+    call_id = f"ui-{uuid.uuid4().hex[:12]}"
+    try:
+        log_tool_call(workspace, session_id, "ui", tool, arguments, tool_call_id=call_id)
+    except Exception:
+        pass
+    return call_id
+
+
+def _ui_log_result(
+    workspace: str,
+    session_id: str,
+    tool: str,
+    call_id: str,
+    result: Any,
+    ok: bool = True,
+) -> None:
+    try:
+        text = result if isinstance(result, str) else json.dumps(result)
+        log_tool_result(
+            workspace, session_id, "ui", tool, text,
+            status="success" if ok else "error",
+            tool_call_id=call_id,
+        )
+    except Exception:
+        pass
 
 
 _SYNTH_STATUS_MAP = {
@@ -464,20 +502,38 @@ def build_actions_router(
             rel_files = manifest_mod.files_for_stage(manifest, "lint")
             if not rel_files:
                 return {"empty": True}
+            call_id = _ui_log_call(workspace, session_id, "linter_tool", {"verilog_files": rel_files})
             abs_files = [os.path.join(workspace, f) for f in rel_files]
-            return {"empty": False, "result": run_linter(abs_files, cwd=workspace), "files": rel_files}
+            result = run_linter(abs_files, cwd=workspace)
+            warnings, errors, by_file = _parse_lint_output(result.get("stderr", ""))
+            passed = bool(result.get("success"))
+            _ui_log_result(
+                workspace, session_id, "linter_tool", call_id,
+                {"status": "passed" if passed else "failed",
+                 "warnings": len(warnings), "errors": len(errors)},
+                ok=passed,
+            )
+            return {
+                "empty": False,
+                "result": result,
+                "files": rel_files,
+                "warnings": warnings,
+                "errors": errors,
+                "byFile": by_file,
+            }
 
-        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        # mutates=True: lint itself is a read, but it now records itself in the
+        # per-session event log (attempt_events.jsonl), which must persist.
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("empty"):
             _err("no_rtl", "No RTL files in the manifest to lint.", status=400)
 
         result = out["result"]
-        warnings, errors, by_file = _parse_lint_output(result.get("stderr", ""))
         return _ok({
             "status": "passed" if result.get("success") else "failed",
-            "warnings": warnings,
-            "errors": errors,
-            "byFile": by_file,
+            "warnings": out["warnings"],
+            "errors": out["errors"],
+            "byFile": out["byFile"],
             "command": result.get("command", ""),
             "files": out["files"],
         })
@@ -497,6 +553,9 @@ def build_actions_router(
             rel_files = manifest_mod.files_for_stage(manifest, "simulate")
             if not rel_files:
                 return {"error": "no_files"}
+            call_id = _ui_log_call(workspace, session_id, "run_isolated_simulation", {
+                "verilog_files": rel_files, "top_module": top, "mode": body.mode,
+            })
             sim_run = run_sim_isolated(
                 workspace=workspace,
                 verilog_files=rel_files,
@@ -504,6 +563,13 @@ def build_actions_router(
                 mode=body.mode,
                 run_id=body.runId,
                 platform=manifest.platform,
+            )
+            passed = sim_run.get("status") == "passed"
+            _ui_log_result(
+                workspace, session_id, "run_isolated_simulation", call_id,
+                {"run_id": sim_run.get("id"), "status": sim_run.get("status"),
+                 "vcdPath": sim_run.get("vcdPath")},
+                ok=passed,
             )
             return {"simRun": sim_run}
 
@@ -531,17 +597,36 @@ def build_actions_router(
             if not src_files:
                 return {"error": "no_files"}
             abs_files = [os.path.join(workspace, f) for f in src_files]
+            resolved = {
+                "verilog_files": src_files,
+                "top_module": top,
+                "platform": body.platform or manifest.platform,
+                "clock_period_ns": body.clockPeriodNs or manifest.clockPeriodNs,
+                "utilization": body.utilization,
+                "aspect_ratio": body.aspectRatio,
+                "core_margin": body.coreMargin,
+                "run_equiv": body.runEquiv,
+                "constraints_mode": body.constraintsMode,
+            }
+            call_id = _ui_log_call(workspace, session_id, "start_synthesis", resolved)
             result = start_synthesis_job(
                 workspace=workspace,
                 verilog_files=abs_files,
                 top_module=top,
-                platform=body.platform or manifest.platform,
-                clock_period_ns=body.clockPeriodNs or manifest.clockPeriodNs,
+                platform=resolved["platform"],
+                clock_period_ns=resolved["clock_period_ns"],
                 utilization=body.utilization,
                 aspect_ratio=body.aspectRatio,
                 core_margin=body.coreMargin,
                 run_equiv=body.runEquiv,
                 constraints_mode=body.constraintsMode,
+            )
+            dispatched = isinstance(result, dict) and result.get("status") != "rejected"
+            _ui_log_result(
+                workspace, session_id, "start_synthesis", call_id,
+                {"job_id": (result or {}).get("job_id"), "run_id": (result or {}).get("run_id"),
+                 "status": (result or {}).get("status")},
+                ok=dispatched,
             )
             return {"result": result}
 
@@ -557,6 +642,53 @@ def build_actions_router(
                  (result.get("error") or {}).get("message", "Quota exceeded."),
                  details=result.get("error"), status=429)
         return _ok({"jobId": result.get("job_id"), "runId": result.get("run_id"), "raw": result})
+
+    # ---- Activity feed (unified per-session tool event log) -----------------
+
+    @router.get("/activity")
+    async def get_activity(
+        session_id: str,
+        limit: int = Query(default=100, ge=1, le=500),
+        before: Optional[str] = Query(default=None),
+        identity=Depends(get_identity),
+    ):
+        """Newest-first page of every tool invocation in this session — agent
+        (WS), user (these REST actions), and MCP — paired call+result events
+        from attempt_events.jsonl. ``before`` pages older; ``nextBefore`` is
+        null at the end."""
+        uid = require_owned(session_id, identity)
+        workspace = await require_workspace(session_id)
+        page = await run_scoped(session_id, workspace, read_activity, workspace, limit, before, _uid=uid, _id=identity)
+        return _ok(page)
+
+    # ---- Directory tree (lazy, VS Code-web style) ----------------------------
+
+    @router.get("/dir")
+    async def get_dir(
+        session_id: str,
+        path: str = Query(default=""),
+        recursive: Optional[str] = Query(default=None),
+        identity=Depends(get_identity),
+    ):
+        """Immediate children of one directory (default), or — with
+        ``?recursive=paths`` — the flat file-path index for quick-open."""
+        uid = require_owned(session_id, identity)
+        workspace = await require_workspace(session_id)
+
+        if recursive == "paths":
+            out = await run_scoped(session_id, workspace, workspace_fs.walk_paths, workspace, _uid=uid, _id=identity)
+            return _ok(out)
+
+        def work():
+            return workspace_fs.list_dir(workspace, path)
+
+        try:
+            entries = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        except (FileNotFoundError, NotADirectoryError):
+            _err("not_found", f"Directory not found: {path or '.'}", status=404)
+        except ValueError:
+            _err("invalid_path", f"Path escapes the workspace: {path}", status=404)
+        return _ok({"path": path, "entries": entries})
 
     # ---- Workbench snapshot (F4: one hydration, one response) ---------------
 
@@ -583,6 +715,11 @@ def build_actions_router(
                 "code": _snapshot_code(workspace),
                 "report": _snapshot_report(workspace),
                 "synthesisRuns": list(list_synthesis_runs(workspace)),
+                # v2 additions — same shapes as GET /activity and GET /dir, so
+                # the first paint of the Activity dock and file tree costs no
+                # extra round trips.
+                "activity": read_activity(workspace, limit=50)["events"],
+                "rootDir": workspace_fs.list_dir(workspace, ""),
             }
 
         snap = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
@@ -704,13 +841,24 @@ def build_actions_router(
         overrides_json = json.dumps(body.overrides) if body.overrides else ""
 
         def work():
-            return retry_pd_job(
+            call_id = _ui_log_call(workspace, session_id, "retry_pd", {
+                "run_id": run_id, "start_stage": body.fromStage, "max_stage": body.maxStage,
+            })
+            result = retry_pd_job(
                 workspace=workspace,
                 source_run_id=run_id,
                 start_stage=body.fromStage,
                 max_stage=body.maxStage,
                 orfs_overrides_json=overrides_json,
             )
+            dispatched = isinstance(result, dict) and result.get("status") != "rejected"
+            _ui_log_result(
+                workspace, session_id, "retry_pd", call_id,
+                {"job_id": (result or {}).get("job_id"), "run_id": (result or {}).get("run_id"),
+                 "status": (result or {}).get("status")},
+                ok=dispatched,
+            )
+            return result
 
         result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if isinstance(result, dict) and result.get("status") == "rejected":

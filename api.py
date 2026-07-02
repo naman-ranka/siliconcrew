@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 import yaml
 import aiosqlite
@@ -42,6 +43,7 @@ from src.tools.design_report import save_design_report
 from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
 from src.tools import manifest as manifest_mod
 from src.api.actions import build_actions_router
+from src.api import workspace_fs
 
 # Load environment
 load_dotenv()
@@ -1449,7 +1451,11 @@ async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] 
     if not is_within(workspace, vcd_path):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    return await asyncio.to_thread(_parse_vcd_file, vcd_path, filename)
+    parsed = await asyncio.to_thread(_parse_vcd_file, vcd_path, filename)
+    # A terminal run's VCD never changes — let the browser cache the (expensive)
+    # parsed payload forever; loose/root VCDs stay uncached.
+    cache_control = await asyncio.to_thread(workspace_fs.artifact_cache_control, workspace, vcd_path)
+    return JSONResponse(parsed, headers={"Cache-Control": cache_control})
 
 
 def _parse_vcd_file(vcd_path: str, filename: str) -> dict:
@@ -1642,6 +1648,9 @@ async def get_layout_svg(session_id: str, filename: str, _acl: Optional[str] = D
     the viewer shows gracefully rather than failing the request.
     """
     # F6: hydration + the (potentially heavy) gdstk render run off the loop.
+    # A terminal run's GDS never changes — cache the rendered SVG immutably.
+    cache_holder = {"cc": workspace_fs.CACHE_NO_STORE}
+
     def work():
         workspace = _resolve_workspace(session_id)
         gds_path = os.path.join(workspace, filename)
@@ -1649,6 +1658,7 @@ async def get_layout_svg(session_id: str, filename: str, _acl: Optional[str] = D
             raise HTTPException(status_code=403, detail="Access denied")
         if not os.path.exists(gds_path):
             raise HTTPException(status_code=404, detail="Layout not found")
+        cache_holder["cc"] = workspace_fs.artifact_cache_control(workspace, gds_path)
 
         # 1) pre-rendered SVG sidecar
         sidecar = gds_path + ".svg"
@@ -1685,7 +1695,8 @@ async def get_layout_svg(session_id: str, filename: str, _acl: Optional[str] = D
         except Exception as e:
             return {"error": "render_failed", "message": str(e), "cell_name": ""}
 
-    return await asyncio.to_thread(work)
+    payload = await asyncio.to_thread(work)
+    return JSONResponse(payload, headers={"Cache-Control": cache_holder["cc"]})
 
 
 @app.get("/api/workspace/{session_id:path}/schematics")
@@ -1702,25 +1713,44 @@ async def list_schematic_files(session_id: str, _acl: Optional[str] = Depends(ve
 
 
 @app.get("/api/workspace/{session_id:path}/file/{filename:path}")
-async def get_file_content(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)):
-    """Get raw file content."""
-    def work():  # F6: hydration + file read off-thread
+async def get_file_content(
+    session_id: str,
+    filename: str,
+    raw: bool = Query(default=False),
+    _acl: Optional[str] = Depends(verify_session_access),
+):
+    """File content with honest binary/size handling.
+
+    Default: JSON ``{filename, content, size, binary, tooLarge}`` — content is
+    null (never lossy garbage) for binary or oversized files. ``?raw=1``
+    streams the raw bytes as a download (the VCD/GDS/netlist escape hatch).
+    Terminal-run artifacts get immutable cache headers (their bytes can never
+    change); everything else is no-store.
+    """
+    def resolve():  # F6: hydration + stat off-thread
         workspace = _resolve_workspace(session_id)
         file_path = os.path.join(workspace, filename)
 
-        if not os.path.exists(file_path):
+        if not os.path.exists(file_path) or not os.path.isfile(file_path):
             raise HTTPException(status_code=404, detail="File not found")
 
         # Security check - ensure file is within workspace
         if not is_within(workspace, file_path):
             raise HTTPException(status_code=403, detail="Access denied")
 
-        with open(file_path, "r", errors='ignore') as f:
-            content = f.read()
+        return workspace, file_path, workspace_fs.artifact_cache_control(workspace, file_path)
 
-        return {"filename": filename, "content": content}
+    workspace, file_path, cache_control = await asyncio.to_thread(resolve)
 
-    return await asyncio.to_thread(work)
+    if raw:
+        return FileResponse(
+            file_path,
+            filename=os.path.basename(filename),
+            headers={"Cache-Control": cache_control},
+        )
+
+    payload = await asyncio.to_thread(workspace_fs.read_smart_file, workspace, file_path, filename)
+    return JSONResponse(payload, headers={"Cache-Control": cache_control})
 
 
 # =============================================================================
