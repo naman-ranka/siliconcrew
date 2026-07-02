@@ -118,13 +118,16 @@ def read_file(filename: str) -> str:
         return f.read()
 
 @tool
-def linter_tool(verilog_files: list[str] | str) -> str:
+def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
     """
-    Checks syntax using iverilog. Supports single-file or multi-file linting.
+    Lints Verilog files. Supports single-file or multi-file linting.
     Args:
         verilog_files: Filename string or list of filenames (e.g., 'design.v' or ['design.v','tb.v']).
         When linting a testbench, include all dependent RTL files in the same call
         (for example ['seq_detector.v', 'seq_detector_tb.v']) so module references resolve.
+        engine: 'auto' (verilator if installed, else iverilog), 'iverilog'
+        (syntax/elaboration only), or 'verilator' (real lint: latches, width
+        mismatches, unsynthesizable constructs — lint RTL only, not testbenches).
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
@@ -136,12 +139,24 @@ def linter_tool(verilog_files: list[str] | str) -> str:
             return f"Error: File {item} does not exist."
         filepaths.append(fp)
 
-    result = run_linter(filepaths, cwd=workspace)
-    
+    result = run_linter(filepaths, cwd=workspace, engine=engine)
+
+    diags = result.get("diagnostics") or []
+    warnings = [d for d in diags if d["severity"] == "warning"]
+    errors = [d for d in diags if d["severity"] == "error"]
+
+    def _fmt(d):
+        loc = f"{d['file']}:{d['line']}" if d.get("file") else "(general)"
+        code = f" [{d['code']}]" if d.get("code") else ""
+        return f"{loc}: {d['severity']}{code}: {d['message']}"
+
+    if result["success"] and not warnings:
+        return f"Syntax OK. (engine: {result.get('engine')})"
     if result["success"]:
-        return "Syntax OK."
-    else:
-        return f"Syntax Error:\n{result['stderr']}"
+        lines = "\n".join(_fmt(d) for d in warnings)
+        return f"Lint passed with {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
+    lines = "\n".join(_fmt(d) for d in (errors + warnings)) or result["stderr"]
+    return f"Lint FAILED — {len(errors)} error(s), {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
 
 @tool
 def simulation_tool(

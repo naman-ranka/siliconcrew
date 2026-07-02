@@ -108,6 +108,10 @@ class InvokeRequest(BaseModel):
     arguments: Optional[Dict[str, Any]] = None
 
 
+class LintRequest(BaseModel):
+    engine: str = "auto"  # auto | iverilog | verilator
+
+
 # --- Shared helpers ---------------------------------------------------------
 
 def _ok(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -220,33 +224,24 @@ def _synth_to_run(workspace: str, item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _parse_lint_output(stderr: str):
-    """Parse iverilog diagnostics into structured warnings/errors + byFile."""
-    pat = re.compile(
-        r"^(?P<file>[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<sev>error|warning|syntax error)?:?\s*(?P<msg>.*)$"
-    )
+def _split_lint_diagnostics(diagnostics: List[Dict[str, Any]]):
+    """Regroup run_linter's structured diagnostics (the ONE parsing contract —
+    engines are parsed inside src/tools/run_linter.py) into the REST response's
+    warnings/errors/byFile shape."""
     warnings: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
     by_file: Dict[str, List[Dict[str, Any]]] = {}
-    for line in (stderr or "").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        m = pat.match(stripped)
-        if not m:
-            if "error" in stripped.lower():
-                errors.append({"line": None, "severity": "error", "message": stripped})
-            continue
-        sev_raw = (m.group("sev") or "error").lower()
-        severity = "warning" if sev_raw == "warning" else "error"
-        fname = os.path.basename(m.group("file"))
+    for d in diagnostics or []:
         entry = {
-            "line": int(m.group("line")),
-            "severity": severity,
-            "message": m.group("msg").strip() or stripped,
+            "line": d.get("line"),
+            "severity": d.get("severity"),
+            "message": d.get("message"),
+            "code": d.get("code"),
         }
-        by_file.setdefault(fname, []).append(entry)
-        (warnings if severity == "warning" else errors).append({**entry, "file": fname})
+        fname = d.get("file")
+        if fname:
+            by_file.setdefault(fname, []).append(entry)
+        (warnings if d.get("severity") == "warning" else errors).append({**entry, "file": fname})
     return warnings, errors, by_file
 
 
@@ -499,23 +494,24 @@ def build_actions_router(
     # ---- Lint ---------------------------------------------------------------
 
     @router.post("/lint")
-    async def lint_action(session_id: str, identity=Depends(get_identity)):
+    async def lint_action(session_id: str, body: Optional[LintRequest] = None, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
         workspace = await require_workspace(session_id)
+        engine = (body.engine if body else "auto") or "auto"
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
             rel_files = manifest_mod.files_for_stage(manifest, "lint")
             if not rel_files:
                 return {"empty": True}
-            call_id = _ui_log_call(workspace, session_id, "linter_tool", {"verilog_files": rel_files})
+            call_id = _ui_log_call(workspace, session_id, "linter_tool", {"verilog_files": rel_files, "engine": engine})
             abs_files = [os.path.join(workspace, f) for f in rel_files]
-            result = run_linter(abs_files, cwd=workspace)
-            warnings, errors, by_file = _parse_lint_output(result.get("stderr", ""))
+            result = run_linter(abs_files, cwd=workspace, engine=engine)
+            warnings, errors, by_file = _split_lint_diagnostics(result.get("diagnostics") or [])
             passed = bool(result.get("success"))
             _ui_log_result(
                 workspace, session_id, "linter_tool", call_id,
-                {"status": "passed" if passed else "failed",
+                {"status": "passed" if passed else "failed", "engine": result.get("engine"),
                  "warnings": len(warnings), "errors": len(errors)},
                 ok=passed,
             )
@@ -537,6 +533,7 @@ def build_actions_router(
         result = out["result"]
         return _ok({
             "status": "passed" if result.get("success") else "failed",
+            "engine": result.get("engine"),
             "warnings": out["warnings"],
             "errors": out["errors"],
             "byFile": out["byFile"],
