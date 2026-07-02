@@ -259,6 +259,57 @@ export interface SynthJobStatus {
   executionLabel?: string | null;
 }
 
+// --- Workbench v2 data layer (SWR slices, activity feed, file tree) ---------
+
+// Lifecycle of a cached data slice. The SWR iron rule: a populated slice NEVER
+// goes back to "loading" — a refetch is "revalidating" (old data stays visible)
+// and a failed revalidate keeps the data and sets the error.
+export type SliceStatus = "empty" | "loading" | "ready" | "revalidating" | "error";
+
+export interface Slice<T> {
+  data: T | null;
+  status: SliceStatus;
+  error: string | null;
+}
+
+// One tool invocation in the unified per-session activity feed
+// (GET /api/workspace/{sid}/activity — agent WS, user REST, and MCP sources).
+export interface ActivityEvent {
+  id: string;
+  ts: string;
+  source: "agent" | "user" | "mcp";
+  tool: string;
+  args: Record<string, unknown>;
+  status: "ok" | "error" | "running";
+  resultSummary: string;
+  durationMs: number | null;
+  runId: string | null;
+  threadId: string | null;
+}
+
+// One entry of the lazy directory listing (GET /api/workspace/{sid}/dir).
+export interface DirEntry {
+  name: string;
+  path: string;
+  kind: "dir" | "file";
+  size?: number;
+  modified?: string;
+}
+
+// Honest file payload (GET /api/workspace/{sid}/file/{path}) — content is null
+// (never lossy garbage) for binary or oversized files; `?raw=1` downloads.
+export interface SmartFile {
+  filename: string;
+  content: string | null;
+  size: number;
+  binary: boolean;
+  tooLarge: boolean;
+}
+
+// Artifact tab/key kinds for the v2 workbench (see lib/artifactKeys.ts for the
+// `kind:ref` string-key helpers).
+export type ArtifactKind = "code" | "spec" | "wave" | "report" | "layout" | "schematic";
+
 // WebSocket message types
 export type WSMessageType =
   | { type: "start" }

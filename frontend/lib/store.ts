@@ -23,9 +23,15 @@ import type {
   ConsoleEntry,
   SynthJobStatus,
   Toast,
+  SliceStatus,
+  ActivityEvent,
+  DirEntry,
+  SmartFile,
 } from "@/types";
 import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi } from "./api";
 import { generateId } from "./utils";
+import { makeArtifactKey, type ArtifactKey } from "./artifactKeys";
+import { isDuplicateOfServer, mergeActivity, upsertActivityEvent } from "./activityMerge";
 
 // F4/F5: store-level single-flight for the workspace hydrate + workbench load,
 // keyed by session id. Every trigger — mount, selectSession, chat-complete,
@@ -60,6 +66,112 @@ function newestArtifactTab(files: FileInfo[]): ArtifactTab | null {
     if (!best || ts > best.ts) best = { tab, ts };
   }
   return best?.tab ?? null;
+}
+
+// --- Workbench v2 SWR slices -------------------------------------------------
+// The iron rule for every slice below: a populated slice NEVER goes back to
+// "loading" — a refetch is "revalidating" (old data stays visible) and a failed
+// revalidate keeps the data and sets the error.
+
+export interface DirSlice {
+  status: SliceStatus;
+  entries: DirEntry[];
+  error: string | null;
+}
+
+export interface FileSlice {
+  status: SliceStatus;
+  file: SmartFile | null;
+  modified: string | null;
+  error: string | null;
+  // LRU bookkeeping (monotonic access stamp; see lruTick()).
+  lastAccess: number;
+}
+
+export interface ArtifactSlice {
+  status: SliceStatus;
+  data: unknown;
+  // terminal artifacts (from passed/failed runs) can never change → cached
+  // forever, never refetched.
+  terminal: boolean;
+  error: string | null;
+  lastAccess: number;
+}
+
+export interface ActivitySlice {
+  // Durable log pages from GET /activity (newest-first).
+  serverEvents: ActivityEvent[];
+  // Synthetic live events from WS tool frames (id "ws:<tool_call_id>").
+  // Merged/deduped at read time via selectActivity().
+  localEvents: ActivityEvent[];
+  status: SliceStatus;
+  nextBefore: string | null;
+  error: string | null;
+}
+
+const FILE_CACHE_CAP = 30;
+const ARTIFACT_CACHE_CAP = 12;
+
+// Monotonic access stamp for LRU eviction — strictly increasing (Date.now()
+// ties within a millisecond would make eviction order nondeterministic).
+let _lruCounter = 0;
+function lruTick(): number {
+  return ++_lruCounter;
+}
+
+// Evict least-recently-used entries beyond `cap` (in-flight entries are safe).
+function evictLru<T extends { lastAccess: number; status: SliceStatus }>(
+  cache: Record<string, T>,
+  cap: number
+): Record<string, T> {
+  const keys = Object.keys(cache);
+  if (keys.length <= cap) return cache;
+  const next = { ...cache };
+  const evictable = keys
+    .filter((k) => next[k].status !== "loading" && next[k].status !== "revalidating")
+    .sort((a, b) => next[a].lastAccess - next[b].lastAccess);
+  let excess = keys.length - cap;
+  for (const k of evictable) {
+    if (excess <= 0) break;
+    delete next[k];
+    excess -= 1;
+  }
+  return next;
+}
+
+const emptyActivity = (): ActivitySlice => ({
+  serverEvents: [],
+  localEvents: [],
+  status: "empty",
+  nextBefore: null,
+  error: null,
+});
+
+// Local start clocks for WS tool calls → durationMs on the synthetic events.
+const _wsToolStart = new Map<string, number>();
+
+// Which dirCache prefixes a completed WS tool invalidates ("" = root only).
+const TOOL_DIR_INVALIDATION: Record<string, string[]> = {
+  write_spec: [""],
+  write_file: [""],
+  edit_file_tool: [""],
+  apply_patch_tool: [""],
+  generate_report_tool: [""],
+  simulation_tool: ["", "sim_runs"],
+  run_isolated_simulation: ["", "sim_runs"],
+  start_synthesis: ["", "synth_runs"],
+  retry_pd: ["", "synth_runs"],
+};
+
+// Debounced activity refresh after WS tool results — a burst of tool frames
+// coalesces into ONE GET /activity (limit 50).
+let _activityRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleActivityRefresh(get: () => AppState): void {
+  if (_activityRefreshTimer) return;
+  _activityRefreshTimer = setTimeout(() => {
+    _activityRefreshTimer = null;
+    void get().loadActivity();
+  }, 1200);
 }
 
 interface AppState {
@@ -210,6 +322,35 @@ interface AppState {
   runSim: (opts?: { mode?: string; runId?: string }) => Promise<void>;
   runSynth: () => Promise<void>;
   refreshSynthArtifacts: (runId?: string | null) => Promise<void>;
+
+  // --- Workbench v2 data layer (SWR slices) ---
+  // Lazy directory tree: key "" = workspace root. Single-flight per path.
+  dirCache: Record<string, DirSlice>;
+  loadDir: (path: string, opts?: { revalidate?: boolean }) => Promise<void>;
+  // Refetch every cached dir whose path matches a prefix ("" matches root
+  // only), keeping old entries visible (status "revalidating").
+  invalidateDirs: (prefixes: string[]) => void;
+
+  // Smart file cache (LRU cap 30). Cache hit iff the caller's `modified` stamp
+  // matches the cached one and both are non-null (null = always stale).
+  fileCache: Record<string, FileSlice>;
+  loadFile: (path: string, opts?: { modified?: string | null }) => Promise<void>;
+
+  // Generic artifact cache (LRU cap 12), keyed by lib/artifactKeys.ts keys.
+  // terminal+ready → cached forever; non-terminal → revalidate on each call.
+  artifactCache: Record<ArtifactKey, ArtifactSlice>;
+  loadArtifact: (
+    key: ArtifactKey,
+    loader: () => Promise<unknown>,
+    opts: { terminal: boolean }
+  ) => Promise<void>;
+  loadWaveformArtifact: (runId: string, vcdPath: string) => Promise<void>;
+  loadReportArtifact: (runId: string) => Promise<void>;
+
+  // Unified activity feed (server pages + live WS events; see selectActivity).
+  activity: ActivitySlice;
+  loadActivity: (opts?: { more?: boolean }) => Promise<void>;
+  appendLocalActivity: (event: ActivityEvent) => void;
 }
 
 function buildBlocks(
@@ -292,6 +433,12 @@ export const useStore = create<AppState>((set, get) => ({
   codeLoading: false,
   uploadNotice: null,
   toasts: [],
+
+  // Workbench v2 data-layer state
+  dirCache: {},
+  fileCache: {},
+  artifactCache: {},
+  activity: emptyActivity(),
 
   pushToast: (t, ttlMs = 5000) => {
     const id = generateId();
@@ -381,6 +528,11 @@ export const useStore = create<AppState>((set, get) => ({
         selectedSynthesisRunId: null,
         report: null,
         artifactsVisible: false,
+        // v2 caches are per-session — never leak across a switch.
+        dirCache: {},
+        fileCache: {},
+        artifactCache: {},
+        activity: emptyActivity(),
       }));
       // Materialize the session's default thread ("Chat 1") for the switcher.
       await get().loadThreads();
@@ -435,6 +587,11 @@ export const useStore = create<AppState>((set, get) => ({
       selectedSynthesisRunId: null,
       report: null,
       files: [],
+      // v2 caches are per-session — never leak across a switch.
+      dirCache: {},
+      fileCache: {},
+      artifactCache: {},
+      activity: emptyActivity(),
     });
 
     if (session) {
@@ -581,6 +738,22 @@ export const useStore = create<AppState>((set, get) => ({
               blocks: [...(msg.blocks ?? []), newToolBlock],
             },
           });
+          // Live activity: surface the tool immediately as a synthetic running
+          // event (the server log page catches up on the debounced refresh).
+          const tc = data.tool as ToolCall;
+          _wsToolStart.set(tc.id, Date.now());
+          get().appendLocalActivity({
+            id: `ws:${tc.id}`,
+            ts: new Date().toISOString(),
+            source: "agent",
+            tool: tc.name,
+            args: tc.args ?? {},
+            status: "running",
+            resultSummary: "",
+            durationMs: null,
+            runId: null,
+            threadId,
+          });
           break;
         }
 
@@ -606,6 +779,33 @@ export const useStore = create<AppState>((set, get) => ({
           const toolCall = msg.tool_calls?.find((tc) => tc.id === data.tool_call_id);
           if (toolCall && ["write_spec", "write_file", "edit_file_tool", "generate_report_tool"].includes(toolCall.name)) {
             get().refreshWorkspace();
+          }
+          // Live activity: upgrade the synthetic running event to ok/error with
+          // a local-clock duration; keep the original (call-time) timestamp.
+          const startedAt = _wsToolStart.get(data.tool_call_id);
+          _wsToolStart.delete(data.tool_call_id);
+          const prevLocal = get().activity.localEvents.find(
+            (e) => e.id === `ws:${data.tool_call_id}`
+          );
+          const resultStatus = String(data.status ?? "").toLowerCase();
+          get().appendLocalActivity({
+            id: `ws:${data.tool_call_id}`,
+            ts: prevLocal?.ts ?? new Date().toISOString(),
+            source: "agent",
+            tool: toolCall?.name ?? prevLocal?.tool ?? "unknown",
+            args: toolCall?.args ?? prevLocal?.args ?? {},
+            status: ["error", "fail", "failed"].includes(resultStatus) ? "error" : "ok",
+            resultSummary: typeof data.content === "string" ? data.content.slice(0, 200) : "",
+            durationMs: startedAt != null ? Date.now() - startedAt : null,
+            runId: null,
+            threadId,
+          });
+          // Reconcile with the durable log soon (one debounced GET /activity per
+          // burst of tool frames) and refetch the dirs this tool may have changed.
+          scheduleActivityRefresh(get);
+          if (toolCall) {
+            const dirPrefixes = TOOL_DIR_INVALIDATION[toolCall.name];
+            if (dirPrefixes) get().invalidateDirs(dirPrefixes);
           }
           break;
         }
@@ -1147,6 +1347,32 @@ export const useStore = create<AppState>((set, get) => ({
           waveformFiles: files.filter((f) => f.type === "waveform").map((f) => f.name),
           layoutFiles: files.filter((f) => f.type === "layout").map((f) => f.name),
           schematicFiles: files.filter((f) => f.type === "schematic").map((f) => f.name),
+          // v2: seed the file-tree root + activity feed from the snapshot so
+          // their first paint costs no extra round trips.
+          ...(snap.rootDir
+            ? {
+                dirCache: {
+                  ...state.dirCache,
+                  "": { status: "ready" as SliceStatus, entries: snap.rootDir, error: null },
+                },
+              }
+            : {}),
+          ...(snap.activity
+            ? {
+                activity: {
+                  ...state.activity,
+                  serverEvents: snap.activity,
+                  status: "ready" as SliceStatus,
+                  error: null,
+                  // Snapshot carries the newest 50 — if full, older pages may
+                  // exist past the last event id.
+                  nextBefore:
+                    snap.activity.length >= 50
+                      ? snap.activity[snap.activity.length - 1]?.id ?? null
+                      : null,
+                },
+              }
+            : {}),
         }));
         // Reveal the artifacts panel on the newest artifact (initial-load UX).
         const hasContent =
@@ -1476,7 +1702,323 @@ export const useStore = create<AppState>((set, get) => ({
       /* best-effort refresh */
     }
   },
+
+  // ====================== Workbench v2 data layer ======================
+
+  loadDir: async (path, opts) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    const cached = get().dirCache[path];
+    const populated =
+      !!cached && (cached.status === "ready" || cached.status === "revalidating");
+    // Ready and not asked to revalidate → serve the cache, no fetch.
+    if (populated && !opts?.revalidate) return;
+    // SWR iron rule: populated → "revalidating" (entries stay visible),
+    // never back to "loading".
+    set((s) => ({
+      dirCache: {
+        ...s.dirCache,
+        [path]: {
+          status: populated ? "revalidating" : "loading",
+          entries: cached?.entries ?? [],
+          error: null,
+        },
+      },
+    }));
+    await singleFlight(`dir:${sid}:${path}`, async () => {
+      try {
+        const res = await workspaceApi.getDir(sid, path);
+        if (get().currentSession?.id !== sid) return;
+        set((s) => ({
+          dirCache: {
+            ...s.dirCache,
+            [path]: { status: "ready", entries: res.entries, error: null },
+          },
+        }));
+      } catch (e) {
+        if (get().currentSession?.id !== sid) return;
+        // Failed revalidate keeps the old entries visible + records the error.
+        set((s) => ({
+          dirCache: {
+            ...s.dirCache,
+            [path]: {
+              status: "error",
+              entries: s.dirCache[path]?.entries ?? [],
+              error: errMsg(e),
+            },
+          },
+        }));
+      }
+    });
+  },
+
+  invalidateDirs: (prefixes) => {
+    const matches = (path: string, prefix: string): boolean =>
+      prefix === "" ? path === "" : path === prefix || path.startsWith(`${prefix}/`);
+    for (const path of Object.keys(get().dirCache)) {
+      if (prefixes.some((p) => matches(path, p))) {
+        void get().loadDir(path, { revalidate: true });
+      }
+    }
+  },
+
+  loadFile: async (path, opts) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    const cached = get().fileCache[path];
+    const wanted = opts?.modified ?? null;
+    // Cache hit only when both modified stamps agree AND are non-null — a null
+    // stamp means we can't prove freshness, so it's always stale.
+    if (cached?.file && wanted !== null && cached.modified === wanted) {
+      set((s) => ({
+        fileCache: {
+          ...s.fileCache,
+          [path]: { ...s.fileCache[path], lastAccess: lruTick() },
+        },
+      }));
+      return;
+    }
+    const populated = !!cached?.file;
+    set((s) => ({
+      fileCache: {
+        ...s.fileCache,
+        [path]: {
+          status: populated ? "revalidating" : "loading",
+          file: cached?.file ?? null,
+          modified: cached?.modified ?? null,
+          error: null,
+          lastAccess: lruTick(),
+        },
+      },
+    }));
+    await singleFlight(`file:${sid}:${path}`, async () => {
+      try {
+        const file = await workspaceApi.getFileSmart(sid, path);
+        if (get().currentSession?.id !== sid) return;
+        set((s) => ({
+          fileCache: evictLru(
+            {
+              ...s.fileCache,
+              [path]: {
+                status: "ready",
+                file,
+                modified: wanted,
+                error: null,
+                lastAccess: lruTick(),
+              },
+            },
+            FILE_CACHE_CAP
+          ),
+        }));
+      } catch (e) {
+        if (get().currentSession?.id !== sid) return;
+        set((s) => {
+          const prev = s.fileCache[path];
+          return {
+            fileCache: {
+              ...s.fileCache,
+              [path]: {
+                status: "error",
+                file: prev?.file ?? null, // keep stale content visible
+                modified: prev?.modified ?? null,
+                error: errMsg(e),
+                lastAccess: lruTick(),
+              },
+            },
+          };
+        });
+      }
+    });
+  },
+
+  loadArtifact: async (key, loader, opts) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    const cached = get().artifactCache[key];
+    // Terminal + ready → immutable, never refetch (just bump LRU recency).
+    if (cached && cached.terminal && cached.status === "ready") {
+      set((s) => ({
+        artifactCache: {
+          ...s.artifactCache,
+          [key]: { ...s.artifactCache[key], lastAccess: lruTick() },
+        },
+      }));
+      return;
+    }
+    const populated = cached != null && cached.data != null;
+    set((s) => ({
+      artifactCache: {
+        ...s.artifactCache,
+        [key]: {
+          status: populated ? "revalidating" : "loading",
+          data: cached?.data ?? null,
+          terminal: opts.terminal,
+          error: null,
+          lastAccess: lruTick(),
+        },
+      },
+    }));
+    await singleFlight(`artifact:${sid}:${key}`, async () => {
+      try {
+        const data = await loader();
+        if (get().currentSession?.id !== sid) return;
+        set((s) => ({
+          artifactCache: evictLru(
+            {
+              ...s.artifactCache,
+              [key]: {
+                status: "ready",
+                data,
+                terminal: opts.terminal,
+                error: null,
+                lastAccess: lruTick(),
+              },
+            },
+            ARTIFACT_CACHE_CAP
+          ),
+        }));
+      } catch (e) {
+        if (get().currentSession?.id !== sid) return;
+        set((s) => {
+          const prev = s.artifactCache[key];
+          return {
+            artifactCache: {
+              ...s.artifactCache,
+              [key]: {
+                status: "error",
+                data: prev?.data ?? null, // keep stale data visible
+                terminal: opts.terminal,
+                error: errMsg(e),
+                lastAccess: lruTick(),
+              },
+            },
+          };
+        });
+      }
+    });
+  },
+
+  loadWaveformArtifact: async (runId, vcdPath) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    const run = get().runs.find((r) => r.id === runId);
+    const terminal = run?.status === "passed" || run?.status === "failed";
+    await get().loadArtifact(
+      makeArtifactKey("wave", runId),
+      () => workspaceApi.getWaveform(sid, vcdPath),
+      { terminal }
+    );
+  },
+
+  loadReportArtifact: async (runId) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    const run = get().runs.find((r) => r.id === runId);
+    const terminal = run?.status === "passed" || run?.status === "failed";
+    await get().loadArtifact(
+      makeArtifactKey("report", runId),
+      () => workspaceApi.getReport(sid, runId),
+      { terminal }
+    );
+  },
+
+  loadActivity: async (opts) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    const more = opts?.more === true;
+    const before = more ? get().activity.nextBefore : null;
+    if (more && !before) return; // log exhausted
+    const populated =
+      get().activity.serverEvents.length > 0 || get().activity.status === "ready";
+    set((s) => ({
+      activity: { ...s.activity, status: populated ? "revalidating" : "loading" },
+    }));
+    await singleFlight(`activity:${sid}:${before ?? "head"}`, async () => {
+      try {
+        const res = await workbenchApi.getActivity(sid, {
+          limit: 50,
+          before: before ?? undefined,
+        });
+        if (get().currentSession?.id !== sid) return;
+        set((s) => {
+          let serverEvents: ActivityEvent[];
+          let nextBefore: string | null;
+          if (more) {
+            const known = new Set(s.activity.serverEvents.map((e) => e.id));
+            serverEvents = [
+              ...s.activity.serverEvents,
+              ...res.events.filter((e) => !known.has(e.id)),
+            ];
+            nextBefore = res.nextBefore;
+          } else {
+            // Head refresh: fresh page wins; retain older, already-paged events
+            // past the page boundary so "load more" state isn't lost.
+            const pageIds = new Set(res.events.map((e) => e.id));
+            const olderRetained = s.activity.serverEvents.filter((e) => !pageIds.has(e.id));
+            serverEvents = [...res.events, ...olderRetained];
+            nextBefore = olderRetained.length > 0 ? s.activity.nextBefore : res.nextBefore;
+          }
+          // Prune local events the server log now covers (bounds memory).
+          const localEvents = s.activity.localEvents.filter(
+            (l) => !serverEvents.some((sv) => isDuplicateOfServer(l, sv))
+          );
+          return {
+            activity: {
+              serverEvents,
+              localEvents,
+              status: "ready",
+              nextBefore,
+              error: null,
+            },
+          };
+        });
+      } catch (e) {
+        if (get().currentSession?.id !== sid) return;
+        // Failed (re)fetch keeps whatever events we have + records the error.
+        set((s) => ({
+          activity: { ...s.activity, status: "error", error: errMsg(e) },
+        }));
+      }
+    });
+  },
+
+  appendLocalActivity: (event) => {
+    set((s) => ({
+      activity: {
+        ...s.activity,
+        localEvents: upsertActivityEvent(s.activity.localEvents, event),
+      },
+    }));
+  },
 }));
+
+// Memoized merged Activity view (server pages + live WS events, newest-first,
+// deduped). Reference-stable while neither input list changes, so components
+// can use it directly as a zustand selector without re-render churn.
+let _activityMemo: {
+  server: ActivityEvent[];
+  local: ActivityEvent[];
+  merged: ActivityEvent[];
+} | null = null;
+export function selectActivity(state: Pick<AppState, "activity">): ActivityEvent[] {
+  const { serverEvents, localEvents } = state.activity;
+  if (
+    _activityMemo &&
+    _activityMemo.server === serverEvents &&
+    _activityMemo.local === localEvents
+  ) {
+    return _activityMemo.merged;
+  }
+  const merged = mergeActivity(serverEvents, localEvents);
+  _activityMemo = { server: serverEvents, local: localEvents, merged };
+  return merged;
+}
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);

@@ -14,6 +14,9 @@ import type {
   RunSummary,
   LintResult,
   PpaDiff,
+  ActivityEvent,
+  DirEntry,
+  SmartFile,
 } from "@/types";
 import { authHeader, getAuthToken, recoverAuthExpired } from "./authToken";
 
@@ -231,6 +234,50 @@ export const workspaceApi = {
     apiFetch<{ filename: string; content: string }>(
       `/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(filename)}`
     ),
+
+  // --- Workbench v2: lazy file tree + honest file payloads -------------------
+
+  // Immediate children of one directory ("" = workspace root). Dirs first,
+  // dotfiles/__pycache__ excluded; 404 on missing/traversal. { ok } envelope.
+  getDir: (sessionId: string, path: string = "") =>
+    actionFetch<{ ok: true; path: string; entries: DirEntry[] }>(
+      `/api/workspace/${encodeSessionId(sessionId)}/dir${path ? `?path=${encodeURIComponent(path)}` : ""}`
+    ),
+
+  // Flat recursive file-path index for quick-open (⌘P).
+  getDirPaths: (sessionId: string) =>
+    actionFetch<{ ok: true; paths: string[]; truncated: boolean }>(
+      `/api/workspace/${encodeSessionId(sessionId)}/dir?recursive=paths`
+    ),
+
+  // Honest file payload — content is null for binary/oversized files (plain
+  // endpoint, NOT the { ok } envelope).
+  getFileSmart: (sessionId: string, path: string) =>
+    apiFetch<SmartFile>(
+      `/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(path)}`
+    ),
+
+  // Raw-bytes escape hatch (?raw=1): fetch with the auth header, then trigger a
+  // programmatic download. Browser-only (no-op during SSR).
+  downloadRawFile: async (sessionId: string, path: string): Promise<void> => {
+    if (typeof window === "undefined") return;
+    const response = await fetchWithAuthRecovery(() =>
+      fetch(
+        `${getApiBase()}/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(path)}?raw=1`,
+        { headers: { ...authHeader() } }
+      )
+    );
+    if (!response.ok) throw new Error(`Download failed (HTTP ${response.status})`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = path.split("/").pop() || path;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };
 
 // Workbench action layer — manifest, IDE-first buttons, unified runs.
@@ -313,7 +360,23 @@ export const workbenchApi = {
       code: CodeFile[];
       report: ReportData | null;
       synthesisRuns: SynthesisRun[];
+      // v2 additions (same shapes as GET /activity and GET /dir) so the first
+      // paint of the Activity dock + file tree costs no extra round trips.
+      activity?: ActivityEvent[];
+      rootDir?: DirEntry[];
     }>(`${ws(sessionId)}/workbench`),
+
+  // Newest-first page of the unified tool-event log (agent WS, user REST, MCP).
+  // `before` = last event id of the previous page; nextBefore is null at the end.
+  getActivity: (sessionId: string, opts: { limit?: number; before?: string | null } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.limit != null) params.set("limit", String(opts.limit));
+    if (opts.before) params.set("before", opts.before);
+    const qs = params.toString();
+    return actionFetch<{ ok: true; events: ActivityEvent[]; nextBefore: string | null }>(
+      `${ws(sessionId)}/activity${qs ? `?${qs}` : ""}`
+    );
+  },
 
   getRun: (sessionId: string, runId: string) =>
     actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/runs/${encodeURIComponent(runId)}`).then((r) => r.run),
