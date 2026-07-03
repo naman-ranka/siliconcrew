@@ -941,7 +941,8 @@ async def get_chat_history(session_id: str, identity: Identity = Depends(get_ide
 
 @app.get("/api/sessions/{session_id:path}/threads", response_model=List[ThreadResponse])
 async def list_threads(session_id: str, identity: Identity = Depends(get_identity)):
-    """List this session's chat threads (newest active first). Ensures Chat 1."""
+    """List this session's chat threads (newest active first). READ-ONLY:
+    browsing never materializes rows — "Chat 1" is seeded at creation."""
     uid = _require_owned(session_id, identity)
     return [_thread_to_response(t) for t in session_manager.list_threads(session_id, user_id=uid)]
 
@@ -1001,6 +1002,12 @@ async def get_session(session_id: str, identity: Identity = Depends(get_identity
 async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: Identity = Depends(get_identity)):
     """Rename a thread and/or set its model (owner-checked)."""
     uid = _require_owned(session_id, identity)
+    # A PATCH is a deliberate act on the chat (unlike browsing), so the
+    # DEFAULT thread only (tid == session_id) may materialize here — legacy
+    # sessions predate creation-time seeding and would otherwise have no
+    # row to rename / set a model on until their first WS message.
+    if tid == session_id:
+        session_manager.ensure_default_thread(session_id, user_id=uid)
     if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
         raise HTTPException(status_code=404, detail="Thread not found")
     if data.title is not None:
@@ -1140,9 +1147,14 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
             # Resolve the chat thread for this turn (per-message override → the
             # connection default → Chat 1). The workspace stays bound to
-            # session_id; only the conversation checkpoint key varies.
-            thread_id = data.get("thread_id") or conn_thread_id or session_id
-            session_manager.ensure_thread(thread_id, session_id, user_id=uid)
+            # session_id; only the conversation checkpoint key varies. The id
+            # is VALIDATED, never trusted: only the default ("Chat 1") is
+            # lazily materialized — a stale/crafted id must not create rows.
+            requested_tid = data.get("thread_id") or conn_thread_id or session_id
+            thread_id = session_manager.resolve_ws_thread(requested_tid, session_id, user_id=uid)
+            if thread_id is None:
+                await websocket.send_json({"type": "error", "error": "Unknown chat thread"})
+                continue
             # Bump activity + auto-title an untitled thread from the first message.
             session_manager.touch_thread(thread_id, user_id=uid, auto_title_from=message)
 

@@ -28,8 +28,10 @@ def test_default_thread_is_session_id_chat_one(mgr):
     assert threads[0]["title"] == "Chat 1"
 
 
-def test_legacy_session_exposes_history_as_chat_one(tmp_path):
-    """A session that predates chat_threads gets a Chat 1 row on first list."""
+def test_legacy_session_materializes_chat_one_on_ws_turn_not_on_list(tmp_path):
+    """A session that predates chat_threads: LISTING is read-only (browsing
+    never mutates); the Chat 1 row materializes on the first WS turn via
+    resolve_ws_thread (the one legit lazy-materialization point)."""
     store = SqliteMetadataStore(str(tmp_path / "state.db"))
     store.init_schema()
     now = datetime.datetime.now()
@@ -38,9 +40,35 @@ def test_legacy_session_exposes_history_as_chat_one(tmp_path):
                          metadata_store=store)
     import os
     os.makedirs(os.path.join(mgr.base_dir, "legacy"), exist_ok=True)
+
+    assert mgr.list_threads("legacy", user_id="alice") == []  # read-only
+
+    assert mgr.resolve_ws_thread("legacy", "legacy", user_id="alice") == "legacy"
     threads = mgr.list_threads("legacy", user_id="alice")
     assert [t["id"] for t in threads] == ["legacy"]
     assert threads[0]["title"] == "Chat 1"
+
+
+def test_resolve_ws_thread_rejects_unknown_and_foreign_ids(mgr):
+    """The WS never materializes arbitrary client-supplied thread ids."""
+    mgr.create_session("mine", user_id="alice")
+    mgr.create_session("other", user_id="alice")
+    t_other = mgr.create_thread("other", user_id="alice")
+
+    # Default id (== session_id) is always legal.
+    assert mgr.resolve_ws_thread("mine", "mine", user_id="alice") == "mine"
+    # Falsy id falls back to the default.
+    assert mgr.resolve_ws_thread(None, "mine", user_id="alice") == "mine"
+    # A known thread of the SAME session passes through.
+    t2 = mgr.create_thread("mine", user_id="alice")
+    assert mgr.resolve_ws_thread(t2["id"], "mine", user_id="alice") == t2["id"]
+    # Unknown id → rejected, and no row was created.
+    assert mgr.resolve_ws_thread("deadbeef", "mine", user_id="alice") is None
+    assert "deadbeef" not in {t["id"] for t in mgr.list_threads("mine", user_id="alice")}
+    # A real thread of ANOTHER session → rejected (cross-session id).
+    assert mgr.resolve_ws_thread(t_other["id"], "mine", user_id="alice") is None
+    # Another TENANT's default id → rejected for the wrong owner.
+    assert mgr.resolve_ws_thread(t_other["id"], "other", user_id="mallory") is None
 
 
 # --- CRUD -------------------------------------------------------------------
@@ -127,3 +155,40 @@ def test_self_host_unscoped_threads(mgr):
     t = mgr.create_thread("local", user_id=None)
     ids = {x["id"] for x in mgr.list_threads("local", user_id=None)}
     assert {"local", t["id"]} <= ids
+
+
+# --- delete cascade (Wave 8 F1) ----------------------------------------------
+
+
+def test_delete_session_cascades_threads_and_checkpoints(mgr):
+    """Deleting a session removes its chat rows AND every chat's LangGraph
+    checkpoints (keyed by thread_id: each UUID + the legacy session id) —
+    while other sessions' rows stay untouched."""
+    import sqlite3
+
+    mgr.create_session("gone", user_id="alice")
+    t2 = mgr.create_thread("gone", user_id="alice")
+    mgr.create_session("keep", user_id="alice")
+
+    # Simulate LangGraph's lazily-created checkpoint table with rows for the
+    # doomed session's chats and the surviving one.
+    with sqlite3.connect(mgr.db_path) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS checkpoints (thread_id TEXT, blob TEXT)")
+        for tid in ("gone", t2["id"], "keep"):
+            conn.execute("INSERT INTO checkpoints VALUES (?, 'x')", (tid,))
+        conn.commit()
+
+    mgr.delete_session("gone", user_id="alice")
+
+    assert mgr.list_threads("gone", user_id="alice") == []
+    assert {t["id"] for t in mgr.list_threads("keep", user_id="alice")} == {"keep"}
+    with sqlite3.connect(mgr.db_path) as conn:
+        left = {r[0] for r in conn.execute("SELECT thread_id FROM checkpoints")}
+    assert left == {"keep"}
+
+
+def test_delete_session_wrong_tenant_leaves_everything(mgr):
+    mgr.create_session("hers", user_id="alice")
+    with pytest.raises(PermissionError):
+        mgr.delete_session("hers", user_id="mallory")
+    assert {t["id"] for t in mgr.list_threads("hers", user_id="alice")} == {"hers"}

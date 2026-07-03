@@ -98,15 +98,14 @@ def test_manager_rename_project_keeps_slug_and_sessions(sm):
     assert sm.get_session_metadata(sid)["project_id"] == "MyProject"
 
 
-def test_manager_count_threads_by_session_never_ensures(sm):
+def test_manager_thread_list_is_read_only_and_creation_seeds_chat_one(sm):
     sid = sm.create_session("quiet")
-    # A fresh session has NO thread rows: the default "Chat 1" row is only
-    # created on the first thread list / WS connect. The count must report the
-    # honest table contents (0) rather than ensure-creating rows as a side
-    # effect of listing sessions.
-    assert sm.count_threads_by_session().get(sid, 0) == 0
-    sm.list_threads(sid)  # ensures the default Chat 1 row (id == session_id)
+    # Wave 8: "Chat 1" is seeded at CREATION (count 1 from birth) and listing
+    # is read-only — browsing (drawer/quick-switch/nav rail) never mutates.
     assert sm.count_threads_by_session()[sid] == 1
+    sm.list_threads(sid)
+    sm.list_threads(sid)
+    assert sm.count_threads_by_session()[sid] == 1  # no ensure side effects
 
 
 # ---------------------------------------------------------------------------
@@ -202,13 +201,13 @@ def test_api_rename_missing_project_404(client, sm):
     assert r.status_code == 404
 
 
-def test_api_thread_count_fresh_session_is_zero(client, sm):
+def test_api_thread_count_fresh_session_is_one(client, sm):
     sid = sm.create_session("fresh")
     items = {s["id"]: s for s in client.get("/api/sessions").json()}
-    # Honest count: the default "Chat 1" thread row (id == session_id) is only
-    # created on the first thread list / WS connect — the session list must
-    # NOT ensure it. Fresh session ⇒ 0 rows ⇒ 0 ("no chats yet" in the UI).
-    assert items[sid]["thread_count"] == 0
+    # Honest count: creation seeds the default "Chat 1" row (Wave 8), so a
+    # fresh session reports 1 — and the session list still never ensures
+    # anything itself (it just COUNTs the table).
+    assert items[sid]["thread_count"] == 1
 
 
 def test_api_thread_count_reflects_created_threads(client, sm):

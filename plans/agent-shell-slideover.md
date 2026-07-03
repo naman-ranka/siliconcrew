@@ -1,6 +1,6 @@
 # Wave 8 — Agent Shell v2 (slide-over) + IDE breadcrumb trim + review fixes
 
-Status: DRAFT (pending 2nd-agent review)
+Status: ACCEPTED with amendments (2nd-agent review folded in below)
 Prototype: `651657f9-workbenchslideover.html` (user-approved direction)
 
 ## User decisions (locked)
@@ -180,6 +180,62 @@ totals `#tokens · $cost` when > 0 (real data; parity with the hidden header).
   selectors that excluded `breadcrumb-chat`.
 - Gates: `tsc` clean · vitest green · Playwright (PW_EXECUTABLE) · `next
   build` · pytest suite.
+
+## Amendments from the 2nd-agent review
+
+1. **F3 — the WS ensures per MESSAGE, not per connect** (api.py:1144). So a
+   session opened but never messaged would show 0 chats forever once the
+   list stops ensuring. Resolution: seed the default "Chat 1" row
+   (`ensure_default_thread`) in BOTH `create_session` and `ensure_session`
+   (the MCP materialization path). Legacy rows (pre-seeding dev DBs) still
+   materialize on first WS message; additionally, thread PATCH (rename /
+   model-set) may materialize the DEFAULT id only (`tid == session_id`) —
+   a deliberate user action, unlike browsing. Frontend
+   `setActiveThreadModel` targets `session_id` when `activeThreadId` is
+   null (fixes the silent no-op; update stale comments store.ts:553/1033).
+   Consequence: fresh sessions honestly report `thread_count == 1`.
+2. **F1 ordering** — inside one transaction: delete the session row FIRST
+   (capture rowcount, owner-gated), then `chat_threads`, then (SQLite)
+   checkpoint rows for every collected thread id + the legacy session id.
+   Gate children on `rowcount or user_id is None` (self-host cleanup of
+   orphans). Keep the per-table try/except (checkpoint tables appear only
+   after LangGraph first writes). The store-level owner gate is
+   defense-in-depth — `SessionManager.delete_session` already raises
+   PermissionError for non-owners.
+3. **PG checkpoint cleanup lives in SessionManager.delete_session**, not
+   the PG store: collect thread ids via `store.list_threads` BEFORE the
+   store delete; if the store has no `_CHECKPOINT_TABLES` (PG), best-effort
+   delete those ids from the local sqlite state DB (`self.db_path`).
+   Cloud-instance locality accepted (documented best-effort).
+4. **Esc design** (double-handling): the panel's window listener runs at
+   bubble phase and ignores `e.defaultPrevented`; our popovers
+   (ThreadSwitcher, ModelPicker, ProfileMenu, NavRail, CreateSessionModal)
+   add `e.preventDefault()` when they consume Esc. Store-driven overlays
+   (QuickOpen via cmdk closes on document-level Esc before us): the panel
+   keeps a one-tick "overlay was open" ref so the same keypress never
+   falls through. NavRail ignores Esc while its CreateSessionModal is open
+   (rail owns that flag).
+5. **CreateSessionModal** gets `defaultStartIn?: ViewMode` — the rail
+   passes "agent" so creating from the agent shell doesn't bounce to IDE.
+6. **`artifactsWide` uses the optional-field pattern** (`shell?:`), NOT a
+   new `emptySessionUi` member (exact-shape tests + persisted-state shape).
+7. **F2 frontend fallback** only fires when the thread list actually
+   loaded (`threadsLoading === false && !chatError`); Workbench gains
+   `useRouter` for `replaceThreadUrl`.
+8. **Test updates the tracks imply** (enumerated, not "keep passing"):
+   pytest `test_chat_threads.py` (legacy list-ensure test → new semantics),
+   `test_session_rename_and_thread_count.py` (fresh count is now 1; list
+   no longer ensures), WS fixtures `test_chat_byok.py` /
+   `test_chat_heartbeat.py` (stub the new resolve path); vitest
+   `agentShell.test.tsx` (rewrite for the new shell; collapsed panel is
+   width-0 + `data-open`, not unmounted), `breadcrumb.test.tsx`,
+   `useWorkbenchShortcuts.test.ts` (agent ⌘O → rail);
+   `workbenchUiStore.test.ts` untouched thanks to (6). e2e selector
+   inventory: workbench.smoke.spec.ts:632-668 agent-view block rewritten;
+   chat-threads.spec.ts:110 drops the `:not([data-testid=…])` guard.
+9. REST list endpoint docstring (api.py:944) updated with F3; hosted
+   object-storage blob leak on delete is pre-existing and out of scope
+   (F1 tests are local-mode).
 
 ## Deferred (documented, not in this wave)
 - Model picker relocation to the header (it stays in the composer — the

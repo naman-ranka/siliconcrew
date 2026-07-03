@@ -312,15 +312,36 @@ class SqliteMetadataStore:
     def delete_session(self, session_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn:
-            conn.execute(
+            # Chat ids first — the cascade below needs them for the checkpoint
+            # tables (keyed by thread_id, no FK anywhere: manual cascade).
+            thread_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM chat_threads WHERE session_id = ?", (session_id,)
+                )
+            ]
+            cur = conn.execute(
                 f"DELETE FROM session_metadata WHERE session_id = ?{owner}",
                 (session_id, *oparams),
             )
-            for table in self._CHECKPOINT_TABLES:
-                try:
-                    conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (session_id,))
-                except sqlite3.OperationalError:
-                    pass
+            # Cascade only when the owner-gated session delete matched (defense
+            # in depth on top of SessionManager's PermissionError); self-host
+            # (user_id=None) also sweeps orphans with no session row.
+            if cur.rowcount or user_id is None:
+                conn.execute(
+                    "DELETE FROM chat_threads WHERE session_id = ?", (session_id,)
+                )
+                # Every chat's checkpoints + the legacy default (thread_id ==
+                # session_id). The tables appear only after LangGraph's first
+                # write, hence the per-table tolerance.
+                for table in self._CHECKPOINT_TABLES:
+                    try:
+                        for tid in {session_id, *thread_ids}:
+                            conn.execute(
+                                f"DELETE FROM {table} WHERE thread_id = ?", (tid,)
+                            )
+                    except sqlite3.OperationalError:
+                        pass
             conn.commit()
 
     # -- chat threads --
@@ -642,6 +663,11 @@ class PostgresMetadataStore:
         owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(f"DELETE FROM session_metadata WHERE session_id = %s{owner}", (session_id, *oparams))
+            # Same manual cascade as SQLite (no FK). Checkpoints are NOT here:
+            # they live in the local sqlite state DB even in Postgres mode —
+            # SessionManager.delete_session does that best-effort cleanup.
+            if cur.rowcount or user_id is None:
+                cur.execute("DELETE FROM chat_threads WHERE session_id = %s", (session_id,))
             conn.commit()
 
     # -- chat threads --

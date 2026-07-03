@@ -144,6 +144,10 @@ class SessionManager:
 
         os.makedirs(path)
         self._upsert_session_metadata(session_id, tag, model_name, project_id, user_id=user_id)
+        # Seed the default chat at birth: listing threads is read-only (never
+        # materializes), so every session must honestly own its "Chat 1" row
+        # from creation.
+        self.ensure_default_thread(session_id, user_id=user_id)
         return session_id
 
     def ensure_session(self, tag, model_name="gemini-3-flash-preview", user_id=None):
@@ -152,6 +156,9 @@ class SessionManager:
         path = self._session_path(session_id)
         os.makedirs(path, exist_ok=True)
         self._upsert_session_metadata(session_id, tag, model_name, user_id=user_id)
+        # Same seeding as create_session — MCP-materialized sessions must not
+        # look chat-less to a read-only thread list.
+        self.ensure_default_thread(session_id, user_id=user_id)
         return session_id
 
     def get_session_metadata(self, session_id, user_id=None):
@@ -195,15 +202,49 @@ class SessionManager:
         )
 
     def delete_session(self, session_id, user_id=None):
-        """Deletes a session directory and its metadata (tenant-scoped)."""
+        """Deletes a session directory, its metadata, chats and checkpoints
+        (tenant-scoped)."""
         # Guard the filesystem delete behind the ownership check so a tenant
         # cannot rmtree another tenant's workspace by guessing the id.
         if user_id is not None and not self.owns_session(session_id, user_id):
             raise PermissionError(f"Session '{session_id}' not found for this user.")
+        # Chat ids BEFORE the store cascades them away — conversation
+        # checkpoints are keyed by thread_id in the LOCAL sqlite state DB.
+        try:
+            thread_ids = [t["id"] for t in self._store.list_threads(session_id, user_id=user_id)]
+        except Exception:
+            thread_ids = []
         session_path = os.path.join(self.base_dir, session_id)
         if os.path.exists(session_path):
             shutil.rmtree(session_path)
         self._store.delete_session(session_id, user_id=user_id)
+        # The SQLite store purges checkpoints itself (same file). A Postgres
+        # metadata store can't reach them — best-effort local cleanup here
+        # (on multi-instance deployments this only cleans the serving
+        # instance's state DB; accepted as best-effort).
+        if not hasattr(self._store, "_CHECKPOINT_TABLES"):
+            self._purge_local_checkpoints({session_id, *thread_ids})
+
+    def _purge_local_checkpoints(self, thread_ids):
+        """Best-effort delete of LangGraph checkpoint rows in the local state DB."""
+        import sqlite3
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+        except Exception:
+            return
+        try:
+            for table in ("checkpoints", "checkpoint_writes", "checkpoint_blobs"):
+                try:
+                    for tid in thread_ids:
+                        conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (tid,))
+                except sqlite3.OperationalError:
+                    pass  # table appears only after LangGraph's first write
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            conn.close()
 
     def clear_all_sessions(self):
         """Deletes all workspace folders and the database."""
@@ -243,11 +284,23 @@ class SessionManager:
         self._store.ensure_thread(session_id, session_id, user_id, "Chat 1", None, now)
         return self._store.get_thread(session_id, user_id=user_id)
 
-    def ensure_thread(self, thread_id, session_id, user_id=None, model=None) -> None:
-        """Idempotently ensure a thread row exists (used by the WS on connect)."""
-        now = datetime.datetime.now()
-        title = "Chat 1" if thread_id == session_id else "New chat"
-        self._store.ensure_thread(thread_id, session_id, user_id, title, model, now)
+    def resolve_ws_thread(self, thread_id, session_id, user_id=None) -> str | None:
+        """Validate a client-supplied chat id for a WebSocket turn.
+
+        The default id (== session_id) is always legal and lazily materialized
+        ("Chat 1"; legacy sessions predate creation-time seeding). Any OTHER id
+        must already exist AND belong to this session (owner-scoped) — the WS
+        never materializes arbitrary client-supplied ids (a stale or crafted
+        thread id must not create rows). Returns the id to chat under, or
+        None when the id is unknown/foreign.
+        """
+        if not thread_id or thread_id == session_id:
+            self.ensure_default_thread(session_id, user_id=user_id)
+            return session_id
+        row = self._store.get_thread(thread_id, user_id=user_id)
+        if row and row.get("session_id") == session_id:
+            return thread_id
+        return None
 
     def _last_used_model(self, session_id, user_id=None) -> str | None:
         """The creator's last-used model: newest thread with a model, else the
@@ -277,7 +330,10 @@ class SessionManager:
         return self._store.get_thread(thread_id, user_id=user_id)
 
     def list_threads(self, session_id, user_id=None) -> list[dict]:
-        self.ensure_default_thread(session_id, user_id=user_id)
+        """READ-ONLY thread list — browsing (drawer, quick-switch, nav rail)
+        must never mutate a session. The default "Chat 1" row is seeded at
+        session creation; legacy sessions materialize theirs on the first WS
+        message (resolve_ws_thread) or a deliberate default-thread PATCH."""
         return self._store.list_threads(session_id, user_id=user_id)
 
     def get_thread(self, thread_id, user_id=None) -> dict | None:
@@ -290,9 +346,10 @@ class SessionManager:
     def count_threads_by_session(self, user_id=None) -> dict[str, int]:
         """{session_id: thread-row count} in ONE grouped query, for session lists.
 
-        Counts what's in the table honestly: a fresh session has 0 until its
-        default "Chat 1" row is created (on first thread list / WS connect).
-        Never ensures threads and never touches/hydrates workspaces.
+        Counts what's in the table honestly: sessions created after Wave 8 are
+        seeded with "Chat 1" at birth (count 1); legacy sessions show 0 until
+        their default thread materializes on first WS message. Never ensures
+        threads and never touches/hydrates workspaces.
         """
         return self._store.count_threads_by_session(user_id=user_id)
 
