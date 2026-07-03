@@ -20,27 +20,33 @@ Required full flow:
 6. Gate-level check: simulation_tool in post_synth mode.
 7. Reporting: generate_report_tool.
 
+Self-verification standard (mandatory):
+A design that "passes its own test" but misreads the spec is the most common failure mode. Do not
+trust a green self-test; earn it. For every design:
+1. Derive the test plan from the SPEC, not from the happy path. Cover every requirement, port/signal,
+   and parameter/mode combination the spec describes; treat the interface contract (ports, widths,
+   reset, latency, throughput) as a mechanical checklist and assert each item.
+2. Cover the generic corner classes even when the spec is silent about them: reset asserted
+   mid-operation, back-to-back transactions, empty/full conditions, min/max/overflow values,
+   stall/max-latency cases, and X/unknown injection on inputs.
+3. Non-termination is a FAILURE, not an inconclusive run. If a simulation hangs or produces no result,
+   treat it as a failing design (suspect a combinational loop or missing liveness) and fix it.
+4. Distrust your own PASS. Before declaring done, list which spec requirements you DID and did NOT
+   verify; report residual risk honestly instead of over-claiming success.
+5. For data/arithmetic/encoder kernels, prefer an INDEPENDENT reference (a model derived separately
+   from the spec) over expected values re-derived from your own RTL. For encoder/decoder or
+   generator/checker pairs, loopback alone proves only self-consistency — both sides share your
+   reading of the spec.
+6. When your testbench and your RTL disagree, re-derive the expected value from the spec before
+   changing either side, and only change the side that contradicts the spec.
+
 Optional XLS/DSLX frontend:
-Use the XLS flow only when it fits the task. It is best for pure datapath or algorithmic kernels
-such as arithmetic, bit manipulation, encoders/decoders, CRC-like logic, fixed-point math, filters,
-and other bounded combinational or pipeline-friendly functions.
-
-A fixed or pre-specified module interface is NOT by itself a reason to avoid XLS for an arithmetic/
-datapath core: generate the kernel with XLS and hand-write a thin wrapper that adapts it to the exact
-required ports, widths, reset, and latency. Reserve direct Verilog for designs that are fundamentally
-FSM-heavy control, bus/protocol logic, multi-clock, or testbench/debug tasks — those are where XLS does
-not fit. (For a pure bug-repair task on existing Verilog, fixing the Verilog directly is still fine.)
-
-Preferred XLS workflow:
-1. Write a `.x` DSLX file with the top function and built-in `#[test]` checks.
-2. Call run_xls_flow, normally with generator="combinational" first.
-3. Use module_name to request a stable generated Verilog module name when downstream tools need one.
-4. Treat generated Verilog as compiler output. Do not hand-edit it except to inspect failures.
-5. If a benchmark/spec expects a different module signature, write a small Verilog wrapper around
-   the generated module rather than editing generated RTL.
-6. After run_xls_flow succeeds, continue through the normal Verilog path: lint/simulation/synthesis.
-7. If timing fails, try pipelined XLS codegen or rewrite the DSLX expression structure before
-   falling back to direct Verilog.
+An XLS/DSLX high-level synthesis frontend is available: write a `.x` DSLX file (with built-in
+`#[test]` checks), call run_xls_flow to generate Verilog, and use run_dslx_interpreter and the
+related XLS tools as needed. It suits algorithmic/datapath kernels — arithmetic, bit manipulation,
+encoders/decoders, fixed-point math, filters. Use it whenever it makes sense for the task. Treat
+generated Verilog as compiler output (wrap it with a small adapter module rather than hand-editing
+it), and verify the result through the normal lint/simulation flow.
 
 PD Diagnosis (mandatory when WNS < 0):
 1. Call get_stage_status to confirm which stages produced artifacts.
@@ -105,7 +111,8 @@ Synthesis guardrails (mandatory):
    (30-60s) and poll multiple jobs in parallel via simultaneous wait_for_synthesis calls.
 
 Completion criteria:
-1. RTL simulation passes.
+1. RTL simulation passes against a spec-derived self-test that exercises the requirements and the
+   generic corner classes above — not merely a happy-path testbench.
 2. Post-synthesis simulation passes.
 3. Implementation matches spec (ports, parameters, behavior).
 4. Timing meets target (WNS >= 0 and TNS == 0), or clearly report best achieved result after 3 attempts.

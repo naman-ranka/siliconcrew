@@ -171,8 +171,8 @@ ASU-Spec2Tapeout-ICLAD25-Hackathon/
 # Paper (not ready for public repo)
 paper/
 
-# Docs (internal, excluded from repo)
-docs/
+# Docs: curated guides are tracked; internal pre-planning notes are excluded
+docs/internal/
 
 # Local Codex automation (system-only)
 codex-automate/

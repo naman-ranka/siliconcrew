@@ -809,27 +809,37 @@ def generate_report_tool(run_id: str = None) -> str:
 @tool
 def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
     """
-    Runs a constrained random verification test using Cocotb (Python).
-    Use this ONLY when the user explicitly asks for "Cocotb", "Python testbench", or "Randomized testing".
+    Run a cocotb (Python) testbench against your RTL in the CVDP reference container.
+
+    This is the trustworthy way to verify a design against a cocotb testbench: it runs in the SAME
+    pinned simulator image used for grading, so a PASS here predicts the real verdict. A run that does
+    not terminate is reported as a TIMEOUT — treat it as a FAILURE (combinational loop, missing clock,
+    or unbounded test), not an inconclusive result.
+
     Args:
-        verilog_files: List of Verilog source files.
-        top_module: Name of the top-level Verilog module.
-        python_module: Name of the Python test file (without .py extension).
+        verilog_files: DUT + dependency Verilog/SV sources (workspace-relative).
+        top_module: Top-level HDL module name.
+        python_module: cocotb test module importable from the workspace (e.g. "verif.test_dut").
     """
     workspace = get_workspace_path()
-    
-    # Ensure all files exist
+
     abs_files = [os.path.join(workspace, f) for f in verilog_files]
-    for f in abs_files:
-        if not os.path.exists(f):
-             return f"Error: File {f} does not exist."
-             
-    result = run_cocotb(abs_files, top_module, python_module, cwd=workspace)
-    
-    if result["success"]:
-        return "Cocotb Test PASSED. ✅"
-    else:
-        return f"Cocotb Test FAILED. ❌\nError: {result['stderr']}"
+    missing = [f for f in abs_files if not os.path.exists(f)]
+    if missing:
+        return "Error: source file(s) not found: " + ", ".join(missing)
+
+    r = run_cocotb(abs_files, top_module, python_module, cwd=workspace)
+    status = r.get("status")
+    tail = ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()[-1200:]
+
+    if status == "PASS":
+        return f"Cocotb Test PASSED ✅  ({r['passed']} testcase(s)) — verified in the reference container."
+    if status == "TIMEOUT":
+        return ("Cocotb Test DID NOT TERMINATE ⏱️ — treat this as a FAILURE (likely a combinational "
+                f"loop, missing clock, or unbounded test). Output tail:\n{tail}")
+    if status == "FAIL":
+        return f"Cocotb Test FAILED ❌  ({r['failed']} failing testcase(s)).\nOutput tail:\n{tail}"
+    return f"Cocotb Test ERROR ⚠️ (build/collection failure — no test ran).\nOutput tail:\n{tail}"
 
 @tool
 def sby_tool(sby_file: str) -> str:
@@ -846,13 +856,20 @@ def sby_tool(sby_file: str) -> str:
         return f"Error: File {sby_file} does not exist."
         
     result = run_sby(abs_file, cwd=workspace)
-    
-    status_icon = "❓"
-    if result["status"] == "PASS": status_icon = "✅"
-    elif result["status"] == "FAIL": status_icon = "❌"
-    elif result["status"] == "ERROR": status_icon = "⚠️"
-    
-    return f"SBY Run Finished. Status: {result['status']} {status_icon}\nOutput:\n{result['stdout'][-500:]}"
+    status = result["status"]
+    tail = ((result.get("stdout") or "") + "\n" + (result.get("stderr") or "")).strip()[-600:]
+
+    if status == "PASS":
+        return f"SBY Formal PASSED ✅ — property proven.\nOutput:\n{tail}"
+    if status == "FAIL":
+        return f"SBY Formal FAILED ❌ — property violated (counterexample found).\nOutput:\n{tail}"
+    if status == "TIMEOUT":
+        return ("SBY DID NOT FINISH ⏱️ within the time budget — the proof is inconclusive (deepen "
+                f"incrementally or simplify the property). Output:\n{tail}")
+    if status == "ERROR" and "rc=16" in tail:
+        return ("SBY could not run ⚠️ — no formal solver is available in this environment, so the proof "
+                f"engine errored. Rely on simulation/cocotb for now.\nOutput:\n{tail}")
+    return f"SBY Run finished. Status: {status} ⚠️\nOutput:\n{tail}"
 
 @tool
 def list_files_tool() -> str:
