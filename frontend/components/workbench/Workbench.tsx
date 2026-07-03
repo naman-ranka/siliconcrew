@@ -12,6 +12,7 @@ import { useWorkbenchShortcuts } from "@/hooks/useWorkbenchShortcuts";
 import { Button } from "@/components/ui/button";
 import { ChatArea } from "@/components/chat/ChatArea";
 import { SettingsModal } from "@/components/settings/SettingsModal";
+import { AgentShell } from "./AgentShell";
 import { TopBar } from "./TopBar";
 import { FileExplorer } from "./FileExplorer";
 import { FileContextMenu } from "./FileContextMenu";
@@ -29,8 +30,8 @@ export interface WorkbenchProps {
   sessionId: string;
   /** Thread id from the `?chat=` param, if any. */
   threadId?: string | null;
-  /** `?view=` posture. S4: only "ide" exists — "agent" renders the IDE shell
-   * until the agent-first shell lands; accepted now so deep links are stable. */
+  /** `?view=` posture (S4): "agent" mounts the prompt+view AgentShell,
+   * "ide" (default) the full IDE layout. Same stores either way. */
   view?: "agent" | "ide";
 }
 
@@ -46,7 +47,7 @@ export interface WorkbenchProps {
  * Selection is URL-driven (S1): the store follows the sessionId/threadId
  * props, never the other way — refresh, share, and back/forward just work.
  */
-export function Workbench({ sessionId, threadId = null }: WorkbenchProps) {
+export function Workbench({ sessionId, threadId = null, view = "ide" }: WorkbenchProps) {
   const { currentSession, selectSessionById, selectThread, loadWorkbench, workspaceError } =
     useStore();
   const { status: authStatus } = useAuth();
@@ -62,7 +63,9 @@ export function Workbench({ sessionId, threadId = null }: WorkbenchProps) {
   // Keep the workbench fresh w.r.t. changes made by other clients (e.g. the
   // user's AI app via MCP): revalidate on focus + poll while a run is active.
   useWorkbenchSync();
-  useWorkbenchShortcuts();
+  // Agent posture claims only ⌘P/⌘O (viewing); the IDE gets the full set —
+  // ⌘K/⌘L/⌘R/⌘Y/⌘E/⌘J must NOT fire in the agent shell (revision 3).
+  useWorkbenchShortcuts(view === "agent" ? "agent" : "ide");
 
   // Store follows the URL: session + thread from props, re-run on back/forward
   // (prop changes). Compares before dispatching so URL-sync writes from the
@@ -113,6 +116,46 @@ export function Workbench({ sessionId, threadId = null }: WorkbenchProps) {
     );
   }
 
+  // Workspace-load failure — surfaced (in BOTH shells) so a transient or
+  // unavailable workspace never silently reads as an empty new session.
+  const workspaceErrorBanner = workspaceError ? (
+    <div
+      role="alert"
+      className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-status-fail/30 bg-status-fail/10 text-status-fail"
+    >
+      <span className="flex-1 truncate">{workspaceError}</span>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-6 px-2 text-xs text-status-fail hover:bg-status-fail/15"
+        onClick={() => void loadWorkbench()}
+      >
+        Retry
+      </Button>
+    </div>
+  ) : null;
+
+  if (view === "agent") {
+    // Agent-first shell (S4) — prompt + view ONLY (revision 3): QuickOpen
+    // (⌘P, viewing) and QuickSwitch (⌘O) stay; CommandPalette, CommandModal,
+    // CommandSurface and the file context menu do NOT mount here.
+    return (
+      <main
+        data-testid="workbench-agent"
+        className="h-screen w-screen overflow-hidden flex flex-col bg-surface-0"
+      >
+        {workspaceErrorBanner}
+        <AgentShell />
+
+        {/* Shared overlays only — no command invocation surfaces. */}
+        <QuickOpen />
+        <QuickSwitch />
+        <Toaster />
+        <SettingsModal />
+      </main>
+    );
+  }
+
   return (
     <main
       data-testid="workbench-v2"
@@ -120,24 +163,7 @@ export function Workbench({ sessionId, threadId = null }: WorkbenchProps) {
     >
       <TopBar />
 
-      {/* Workspace-load failure — surfaced so a transient/unavailable workspace
-          never silently reads as an empty new session. */}
-      {workspaceError && (
-        <div
-          role="alert"
-          className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-status-fail/30 bg-status-fail/10 text-status-fail"
-        >
-          <span className="flex-1 truncate">{workspaceError}</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs text-status-fail hover:bg-status-fail/15"
-            onClick={() => void loadWorkbench()}
-          >
-            Retry
-          </Button>
-        </div>
-      )}
+      {workspaceErrorBanner}
 
       {/* Content row */}
       <div className="flex flex-1 min-h-0">

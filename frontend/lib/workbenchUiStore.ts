@@ -16,10 +16,11 @@ export interface SessionUiState {
   dockTab: "activity" | "runs";
   dockCollapsed: boolean;
   chatOpen: boolean;
+  /** Agent-shell right panel (ArtifactCenter wrapper) open/collapsed (S4). */
+  artifactsOpen: boolean;
   /** Preferred shell posture ("Open in Chat" vs "Open in IDE") — a viewing
-   * preference, so it lives client-side. Absent = never chosen; the launcher
-   * defaults to "ide" until the agent shell ships (S4: flip default to
-   * stored-shell ?? "agent"). */
+   * preference, so it lives client-side. Absent = never chosen; "ide" stays
+   * the fallback everywhere ("Open in Chat" opens the agent shell, S4). */
   shell?: "agent" | "ide";
 }
 
@@ -32,6 +33,7 @@ export function emptySessionUi(): SessionUiState {
     dockTab: "activity",
     dockCollapsed: false,
     chatOpen: true,
+    artifactsOpen: true,
   };
 }
 
@@ -77,6 +79,7 @@ interface WorkbenchUiState {
   setDockTab: (sessionId: string, tab: "activity" | "runs") => void;
   setDockCollapsed: (sessionId: string, collapsed: boolean) => void;
   setChatOpen: (sessionId: string, open: boolean) => void;
+  setArtifactsOpen: (sessionId: string, open: boolean) => void;
   setShell: (sessionId: string, shell: "agent" | "ide") => void;
   setLastSessionId: (sessionId: string | null) => void;
   setPaletteOpen: (open: boolean) => void;
@@ -184,6 +187,10 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
           updateSession(sessionId, (ui) => ({ ...ui, chatOpen: open }));
         },
 
+        setArtifactsOpen: (sessionId, open) => {
+          updateSession(sessionId, (ui) => ({ ...ui, artifactsOpen: open }));
+        },
+
         setShell: (sessionId, shell) => {
           updateSession(sessionId, (ui) => ({ ...ui, shell }));
         },
@@ -226,6 +233,8 @@ export function useSessionUi(sessionId: string | null | undefined) {
     const ui = session ?? emptySessionUi();
     return {
       ...ui,
+      // Migration default: sessions persisted before S4 lack artifactsOpen.
+      artifactsOpen: ui.artifactsOpen ?? true,
       openTab: (key: string) => (sid ? a.openTab(sid, key) : undefined),
       closeTab: (key: string) => (sid ? a.closeTab(sid, key) : undefined),
       setActiveTab: (key: string | null) => (sid ? a.setActiveTab(sid, key) : undefined),
@@ -236,6 +245,7 @@ export function useSessionUi(sessionId: string | null | undefined) {
       setDockCollapsed: (collapsed: boolean) =>
         sid ? a.setDockCollapsed(sid, collapsed) : undefined,
       setChatOpen: (open: boolean) => (sid ? a.setChatOpen(sid, open) : undefined),
+      setArtifactsOpen: (open: boolean) => (sid ? a.setArtifactsOpen(sid, open) : undefined),
     };
   }, [session, sessionId]);
 }

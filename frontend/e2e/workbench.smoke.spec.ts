@@ -610,7 +610,7 @@ test("quick switch (⌘O): current session, detail pane, empty state, esc closes
   await expect(row).toBeVisible();
   await expect(row.getByText("current")).toBeVisible();
 
-  // Detail pane: shell buttons (stored default = IDE until S4) and the
+  // Detail pane: shell buttons (stored default = IDE) and the
   // jump-to-chat list, hydrated lazily (debounced threadsApi.list).
   const detail = qs.getByTestId("qs-detail");
   await expect(detail.getByRole("button", { name: "Open in IDE" })).toBeVisible();
@@ -623,6 +623,48 @@ test("quick switch (⌘O): current session, detail pane, empty state, esc closes
 
   await page.keyboard.press("Escape");
   await expect(qs).toHaveCount(0);
+});
+
+// S4: the agent-first shell (`?view=agent`) — prompt + view only (revision 3):
+// chat center, runs/files sidebar, the SAME ArtifactCenter in a right panel,
+// NO command palette (⌘K falls through), and the mode toggle routes back to
+// the IDE posture with the dock intact.
+test("agent shell: chat + artifacts + sidebar, no ⌘K palette, file→tab, toggle → IDE", async ({ page }) => {
+  await installMocks(page);
+  await page.goto("/w/demo?view=agent");
+
+  await expect(page.getByTestId("workbench-agent")).toBeVisible();
+  // Center: the conversation (composer enabled for the selected session).
+  await expect(page.getByPlaceholder("Describe your RTL design requirements...")).toBeVisible();
+
+  // Right: the artifacts panel with its slim header.
+  const panel = page.getByTestId("agent-artifacts-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("Artifacts")).toBeVisible();
+  await expect(panel.getByText(/Nothing opens on its own/)).toBeVisible();
+
+  // Left sidebar: session block + Runs + Files (manifest design files).
+  const sidebar = page.getByTestId("agent-sidebar");
+  await expect(sidebar.getByTestId("agent-runs-section")).toBeVisible();
+  await expect(sidebar.getByTestId("agent-files-section")).toBeVisible();
+  await expect(page.getByTestId("agent-file-alu.v")).toBeVisible();
+  await expect(page.getByTestId("agent-file-cpu_tb.v")).toBeVisible();
+
+  // ⌘K must NOT open a palette here (prompt + view only).
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByPlaceholder("Run a command…")).toHaveCount(0);
+
+  // Sidebar file click → a code tab opens in the artifacts panel.
+  await page.getByTestId("agent-file-alu.v").click();
+  await expect(panel.getByRole("tab", { name: /alu\.v/ })).toBeVisible();
+  await expect(panel.getByText(/real content/)).toBeVisible({ timeout: 15_000 });
+  await page.screenshot({ path: "e2e-artifacts/wb2-agent-shell.png", fullPage: true });
+
+  // Mode toggle → ?view=ide with the full IDE chrome (dock) — same session.
+  await page.getByTestId("mode-toggle-ide").click();
+  await page.waitForURL((u) => u.searchParams.get("view") === "ide");
+  await expect(page.getByTestId("workbench-v2")).toBeVisible();
+  await expect(page.getByTestId("bottom-dock")).toBeVisible();
 });
 
 test("command surface: browse → Metrics → live payload → invoke → inline result", async ({ page }) => {

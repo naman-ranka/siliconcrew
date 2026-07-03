@@ -232,7 +232,7 @@ function ThreadRow({ thread, onClick }: { thread: ChatThread; onClick: () => voi
   );
 }
 
-/** Split open button: primary opens the stored shell (default IDE until S4);
+/** Split open button: primary opens the stored shell (fallback: IDE);
  * the chevron picks the other and persists the choice. */
 function OpenSplit({
   sessionId,
@@ -243,7 +243,8 @@ function OpenSplit({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  // S4: flip default to stored-shell ?? "agent" once the agent shell ships.
+  // S4 resolved: both shells are real; "ide" stays the unstored-preference
+  // fallback ("Open in Chat" opens the agent shell when chosen/stored).
   const shell = useWorkbenchUiStore((s) => s.perSession[sessionId]?.shell) ?? "ide";
 
   useEffect(() => {

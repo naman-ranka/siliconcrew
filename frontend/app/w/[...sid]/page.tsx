@@ -11,8 +11,7 @@ import type { ViewMode } from "@/lib/nav";
  * Catch-all segment because session ids may contain `/` (project-scoped ids):
  * sessionId = the decoded segments re-joined with `/`. Query params:
  *   chat — thread id to open
- *   view — "agent" | "ide" (S4: only "ide" is real; "agent" renders the IDE
- *          shell until the agent-first shell lands)
+ *   view — "agent" (prompt+view AgentShell, S4) | "ide" (default)
  *
  * This page is a thin parser — Workbench itself follows the props.
  */
@@ -37,8 +36,8 @@ function WorkbenchRoute() {
 
   const chat = search?.get("chat") ?? null;
   const viewParam = search?.get("view");
-  // S4: treat "agent" as "ide" for now — the agent-first shell doesn't exist
-  // yet; the param is parsed so deep links stay stable when it does.
+  // Anything that isn't explicitly "agent" (absent, "ide", garbage) is the
+  // IDE — the honest default posture.
   const view: ViewMode = viewParam === "agent" ? "agent" : "ide";
 
   return <Workbench sessionId={sessionId} threadId={chat} view={view} />;

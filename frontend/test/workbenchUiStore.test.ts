@@ -94,7 +94,15 @@ describe("workbenchUiStore: per-session isolation", () => {
       dockTab: "activity",
       dockCollapsed: false,
       chatOpen: true,
+      artifactsOpen: true,
     });
+  });
+
+  it("setArtifactsOpen toggles the agent-shell panel per session (S4)", () => {
+    useWorkbenchUiStore.getState().setArtifactsOpen("s1", false);
+    expect(useWorkbenchUiStore.getState().perSession["s1"].artifactsOpen).toBe(false);
+    useWorkbenchUiStore.getState().setArtifactsOpen("s1", true);
+    expect(useWorkbenchUiStore.getState().perSession["s1"].artifactsOpen).toBe(true);
   });
 });
 

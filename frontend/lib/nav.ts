@@ -14,7 +14,7 @@ export type ViewMode = "agent" | "ide";
 export interface SessionUrlOpts {
   /** Thread id for the `?chat=` param. */
   chat?: string | null;
-  /** Shell posture for the `?view=` param. S4: only "ide" is real today. */
+  /** Shell posture for the `?view=` param ("agent" | "ide", both real, S4). */
   view?: ViewMode | null;
 }
 

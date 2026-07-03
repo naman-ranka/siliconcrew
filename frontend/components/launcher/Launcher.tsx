@@ -125,7 +125,8 @@ export function Launcher() {
   const open = (sessionId: string, opts?: { chat?: string | null; view?: ViewMode }) => {
     const ui = useWorkbenchUiStore.getState();
     if (opts?.view) ui.setShell(sessionId, opts.view);
-    // S4: flip the fallback to stored-shell ?? "agent" once the agent shell ships.
+    // S4 resolved: "Open in Chat" genuinely opens the agent shell now; "ide"
+    // stays the fallback when no shell preference is stored.
     const view = opts?.view ?? ui.perSession[sessionId]?.shell ?? "ide";
     openSession(router, sessionId, { chat: opts?.chat ?? null, view });
   };

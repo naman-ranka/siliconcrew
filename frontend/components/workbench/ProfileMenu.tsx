@@ -35,7 +35,15 @@ export function initialsFor(name?: string | null, email?: string | null): string
  * when OAuth isn't configured (self-host) the sign-in/out affordances vanish
  * but the utility items remain.
  */
-export function ProfileMenu({ onConnectMcp }: { onConnectMcp: () => void }) {
+export function ProfileMenu({
+  onConnectMcp,
+  placement = "bottom-end",
+}: {
+  onConnectMcp: () => void;
+  /** Dropdown anchor: "bottom-end" (top bar) or "top-start" (agent-shell
+   * sidebar footer — opens upward so it never leaves the viewport). */
+  placement?: "bottom-end" | "top-start";
+}) {
   const { enabled, status, user, signIn, signOut } = useAuth();
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const [open, setOpen] = useState(false);
@@ -90,7 +98,12 @@ export function ProfileMenu({ onConnectMcp }: { onConnectMcp: () => void }) {
           role="menu"
           aria-label="Account"
           data-testid="profile-menu"
-          className="absolute right-0 z-50 mt-1 w-64 rounded-md border border-border bg-popover p-1 text-xs shadow-e2 animate-in fade-in-0 zoom-in-95 slide-in-from-top-1 motion-reduce:animate-none"
+          className={cn(
+            "absolute z-50 w-64 rounded-md border border-border bg-popover p-1 text-xs shadow-e2 animate-in fade-in-0 zoom-in-95 motion-reduce:animate-none",
+            placement === "top-start"
+              ? "bottom-full left-0 mb-1 slide-in-from-bottom-1"
+              : "right-0 mt-1 slide-in-from-top-1"
+          )}
         >
           {/* Header — identity (or the invitation to have one). */}
           {enabled && (

@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { IconTooltip } from "@/components/ui/tooltip";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { Breadcrumb } from "./Breadcrumb";
+import { ModeToggle } from "./ModeToggle";
 import { ThemeToggle } from "./ThemeToggle";
 import { LivePill } from "./LivePill";
 import { ProfileMenu, REPO_URL } from "./ProfileMenu";
@@ -45,6 +46,9 @@ export function TopBar() {
 
       {/* Right cluster */}
       <div className="ml-auto flex items-center gap-1">
+        {/* Agent ↔ IDE posture switch (S5-3) — same session, same tabs. */}
+        <ModeToggle mode="ide" className="mr-1" />
+
         <Button
           variant="ghost"
           size="sm"

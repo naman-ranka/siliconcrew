@@ -15,7 +15,13 @@ const API_KEY_NOTICE_DISMISSED = "sc-apikey-notice-dismissed";
 // you can add" — we turn these into an actionable CTA, not a dead error.
 const KEY_ERROR_CODES = new Set(["no_key", "hosted_tier_exhausted"]);
 
-export function ChatArea() {
+export function ChatArea({
+  tailSlot,
+}: {
+  /** Rendered between the messages and the composer — the agent shell injects
+   * its inline manual-action cards here (S5-2); the IDE rail passes nothing. */
+  tailSlot?: React.ReactNode;
+}) {
   const { currentSession, chatError, chatErrorCode } = useStore();
   // The API-key note competes with toasts as a second notification channel, so
   // make its dismissal sticky (localStorage) — once waved off it stays gone.
@@ -159,6 +165,8 @@ export function ChatArea() {
 
       {/* Messages */}
       <MessageList />
+
+      {tailSlot}
 
       {/* Input */}
       <ChatInput />

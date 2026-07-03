@@ -36,8 +36,8 @@ export function CreateSessionModal({ presetGroup, onClose }: CreateSessionModalP
   const { projects, createSession, createProject, loadProjects, loadModels } = useStore();
 
   const [name, setName] = useState("");
-  // S4: flip the default to "agent" once the agent-first shell ships — until
-  // then IDE is the honest default (view=agent renders the IDE shell today).
+  // S4 resolved: both shells are real; IDE stays the default pre-selection
+  // (the stored per-session shell preference takes over after first open).
   const [startIn, setStartIn] = useState<ViewMode>("ide");
   const [showGroup, setShowGroup] = useState(!!presetGroup);
   const [group, setGroup] = useState(presetGroup ?? "");

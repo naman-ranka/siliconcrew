@@ -62,7 +62,13 @@ function ArtifactBody({ artifactKey }: { artifactKey: string }) {
  * tab's viewer stays MOUNTED (non-active ones are display:none), so switching
  * tabs is instant: no VCD re-parse, no Monaco re-boot, no report refetch.
  */
-export function ArtifactCenter() {
+export function ArtifactCenter({
+  emptyHint = "Open a file from the tree, or an artifact from a run. Press ⌘P to quick-open anything.",
+}: {
+  /** Empty-state guidance — the default speaks IDE (file tree); the agent
+   * shell passes prompt-posture copy (tool cards + ⌘P). */
+  emptyHint?: string;
+}) {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
   const { openTabs, activeTab, closeTab, setActiveTab } = useSessionUi(sessionId);
   const flashKey = useWorkbenchUiStore((s) => s.flashKey);
@@ -84,8 +90,7 @@ export function ArtifactCenter() {
         </div>
         <p className="text-sm font-medium text-foreground">Nothing open</p>
         <p className="text-xs text-muted-foreground mt-1 max-w-[300px] text-center">
-          Open a file from the tree, or an artifact from a run. Press ⌘P to
-          quick-open anything.
+          {emptyHint}
         </p>
       </div>
     );

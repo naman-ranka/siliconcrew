@@ -1,16 +1,27 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
+  ArrowRight,
+  BarChart3,
   ChevronDown,
   ChevronRight,
   Check,
+  CircuitBoard,
+  Code2,
+  FileText,
+  Layers,
   X,
   Loader2,
   Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { ToolCall, ToolResult } from "@/types";
+import { useStore } from "@/lib/store";
+import { parseArtifactKey } from "@/lib/artifactKeys";
+import { openArtifact } from "@/lib/openArtifact";
+import { artifactKeyForToolCall } from "@/lib/toolArtifacts";
+import type { ArtifactKind, ToolCall, ToolResult } from "@/types";
 
 interface ToolCallCardProps {
   toolCall: ToolCall;
@@ -35,6 +46,46 @@ const toolLabelMap: Record<string, string> = {
   get_synthesis_metrics: "Collecting Synthesis Metrics",
   generate_report_tool: "Generating Report",
 };
+
+const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }>> = {
+  code: Code2,
+  spec: FileText,
+  wave: Activity,
+  report: BarChart3,
+  layout: Layers,
+  schematic: CircuitBoard,
+};
+
+const KIND_OPEN_LABEL: Record<ArtifactKind, string> = {
+  code: "file",
+  spec: "spec",
+  wave: "waveform",
+  report: "report",
+  layout: "layout",
+  schematic: "schematic",
+};
+
+/** "Open <kind> →" — a tool call whose result maps to an artifact gets a
+ *  one-click route into the SINGLE open-artifact model (both shells): the
+ *  IDE opens a center tab; the agent shell's panel wrapper auto-expands. */
+export function OpenArtifactButton({ artifactKey }: { artifactKey: string }) {
+  const sessionId = useStore((s) => s.currentSession?.id ?? null);
+  const parsed = parseArtifactKey(artifactKey);
+  if (!parsed || !sessionId) return null;
+  const Icon = KIND_ICON[parsed.kind];
+  return (
+    <button
+      type="button"
+      data-testid="tool-open-artifact"
+      onClick={() => openArtifact(sessionId, artifactKey)}
+      className="mt-1.5 ml-5 inline-flex h-6 items-center gap-1.5 rounded bg-surface-2 px-2 text-[11px] text-foreground/80 transition-colors hover:bg-surface-3"
+    >
+      <Icon className="h-3 w-3 text-primary" aria-hidden />
+      Open {KIND_OPEN_LABEL[parsed.kind]}
+      <ArrowRight className="h-3 w-3 text-muted-foreground/50" aria-hidden />
+    </button>
+  );
+}
 
 export function ToolCallCard({ toolCall, result, isRunning }: ToolCallCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -72,6 +123,13 @@ export function ToolCallCard({ toolCall, result, isRunning }: ToolCallCardProps)
   };
 
   const summary = getToolSummary();
+  // Artifact routing (S5): only a FINISHED call maps — the result often
+  // carries the run id, and "Open" mid-run would open a half-truth.
+  const openKey = useMemo(
+    () =>
+      result ? artifactKeyForToolCall(toolCall.name, toolCall.args, result.content) : null,
+    [toolCall, result]
+  );
   const isSuccess = ["success", "passed", "test_passed"].includes(normalizedStatus);
   const isError =
     normalizedStatus.includes("fail") ||
@@ -145,6 +203,8 @@ export function ToolCallCard({ toolCall, result, isRunning }: ToolCallCardProps)
           )}
         </div>
       )}
+
+      {openKey && <OpenArtifactButton artifactKey={openKey} />}
     </div>
   );
 }
