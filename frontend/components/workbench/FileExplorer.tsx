@@ -117,10 +117,12 @@ function HeaderButton({
  */
 function NewFileRow({ prefix }: { prefix: string }) {
   const setNewFilePrefix = useWorkbenchUiStore((s) => s.setNewFilePrefix);
+  const newFileKind = useWorkbenchUiStore((s) => s.newFileKind);
   const currentSession = useStore((s) => s.currentSession);
   const saveCodeFile = useStore((s) => s.saveCodeFile);
   const invalidateDirs = useStore((s) => s.invalidateDirs);
   const pushToast = useStore((s) => s.pushToast);
+  const isFolder = newFileKind === "folder";
 
   const [value, setValue] = useState(prefix ? `${prefix}/` : "");
   const [error, setError] = useState<string | null>(null);
@@ -134,7 +136,7 @@ function NewFileRow({ prefix }: { prefix: string }) {
 
   const submit = async () => {
     if (busy) return;
-    const path = value.trim();
+    const path = value.trim().replace(/\/+$/, "");
     const err = validateNewFilePath(path);
     if (err) {
       setError(err);
@@ -142,10 +144,19 @@ function NewFileRow({ prefix }: { prefix: string }) {
     }
     setBusy(true);
     try {
-      await saveCodeFile(path, "");
-      invalidateDirs(dirPrefixesForPath(path));
-      if (currentSession) openArtifact(currentSession.id, `code:${path}`);
-      pushToast({ kind: "success", title: "File created", detail: path });
+      if (isFolder) {
+        // Folders exist through their first file (git-style; the workspace
+        // tarball has no empty dirs). `.gitkeep` is the standard marker — and
+        // dotfiles are hidden in the tree, so the user just sees the folder.
+        await saveCodeFile(`${path}/.gitkeep`, "");
+        invalidateDirs(dirPrefixesForPath(`${path}/.gitkeep`));
+        pushToast({ kind: "success", title: "Folder created", detail: path });
+      } else {
+        await saveCodeFile(path, "");
+        invalidateDirs(dirPrefixesForPath(path));
+        if (currentSession) openArtifact(currentSession.id, `code:${path}`);
+        pushToast({ kind: "success", title: "File created", detail: path });
+      }
       close();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -164,8 +175,8 @@ function NewFileRow({ prefix }: { prefix: string }) {
         <input
           ref={inputRef}
           type="text"
-          aria-label="New file path"
-          placeholder="path/to/file.v"
+          aria-label={isFolder ? "New folder path" : "New file path"}
+          placeholder={isFolder ? "path/to/folder" : "path/to/file.v"}
           value={value}
           disabled={busy}
           onChange={(e) => {
@@ -375,6 +386,11 @@ export function FileExplorer() {
         aria-label="Workspace files"
         tabIndex={0}
         onKeyDown={onKeyDown}
+        onContextMenu={(e) => {
+          // Empty-space right-click (rows stopPropagation) → workspace menu.
+          e.preventDefault();
+          setContextMenu({ x: e.clientX, y: e.clientY, path: "", kind: "empty" });
+        }}
         className="thin-scrollbar relative flex-1 overflow-y-auto overflow-x-hidden py-1 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/40"
       >
         {rootLoading ? (
@@ -448,6 +464,7 @@ export function FileExplorer() {
                   }}
                   onContextMenu={(e) => {
                     e.preventDefault();
+                    e.stopPropagation(); // keep the body's empty-space menu from overriding
                     setFocusedIndex(vi.index);
                     setContextMenu({
                       x: e.clientX,

@@ -6,8 +6,10 @@ import {
   Download,
   ExternalLink,
   FilePlus2,
+  FolderPlus,
   Link as LinkIcon,
   Play,
+  RefreshCw,
   SearchCheck,
   Settings2,
 } from "lucide-react";
@@ -75,6 +77,7 @@ function Menu({ menu }: { menu: ContextMenuState }) {
   const currentSession = useStore((s) => s.currentSession);
   const manifest = useStore((s) => s.manifest);
   const pushToast = useStore((s) => s.pushToast);
+  const invalidateDirs = useStore((s) => s.invalidateDirs);
 
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x: menu.x, y: menu.y });
@@ -120,7 +123,8 @@ function Menu({ menu }: { menu: ContextMenuState }) {
 
   const path = menu.path;
   const isDir = menu.kind === "dir";
-  const basename = path.split("/").pop() || path;
+  const isEmpty = menu.kind === "empty";
+  const basename = isEmpty ? "workspace" : path.split("/").pop() || path;
   const isVerilog = !isDir && /\.(v|sv)$/i.test(basename);
   const isSynthTop = isVerilog && isSynthTopFile(basename, manifest);
   const sessionId = currentSession?.id ?? null;
@@ -170,15 +174,51 @@ function Menu({ menu }: { menu: ContextMenuState }) {
         {basename}
       </div>
 
-      {isDir ? (
+      {isEmpty ? (
         <>
           <MenuItem
             onSelect={() => {
-              setNewFilePrefix(path);
+              setNewFilePrefix("", "file");
+              close();
+            }}
+            icon={<FilePlus2 className="h-3.5 w-3.5" />}
+            label="New file…"
+          />
+          <MenuItem
+            onSelect={() => {
+              setNewFilePrefix("", "folder");
+              close();
+            }}
+            icon={<FolderPlus className="h-3.5 w-3.5" />}
+            label="New folder…"
+          />
+          <Separator />
+          <MenuItem
+            onSelect={() => {
+              invalidateDirs([""]);
+              close();
+            }}
+            icon={<RefreshCw className="h-3.5 w-3.5" />}
+            label="Refresh"
+          />
+        </>
+      ) : isDir ? (
+        <>
+          <MenuItem
+            onSelect={() => {
+              setNewFilePrefix(path, "file");
               close();
             }}
             icon={<FilePlus2 className="h-3.5 w-3.5" />}
             label="New file in folder"
+          />
+          <MenuItem
+            onSelect={() => {
+              setNewFilePrefix(path, "folder");
+              close();
+            }}
+            icon={<FolderPlus className="h-3.5 w-3.5" />}
+            label="New folder in folder"
           />
           <MenuItem onSelect={doCopyPath} icon={<LinkIcon className="h-3.5 w-3.5" />} label="Copy path" />
         </>

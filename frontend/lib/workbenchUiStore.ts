@@ -35,7 +35,7 @@ export interface ContextMenuState {
   y: number;
   path: string;
   /** Row kind — dir rows get the (smaller) folder menu. Default: "file". */
-  kind?: "file" | "dir";
+  kind?: "file" | "dir" | "empty";
 }
 
 interface WorkbenchUiState {
@@ -53,6 +53,8 @@ interface WorkbenchUiState {
   // FileExplorer "New file" inline input: null = closed; "" = root; a dir
   // path pre-fills the input with `<dir>/`.
   newFilePrefix: string | null;
+  /** What the inline creator makes: a file, or a folder (via its .gitkeep). */
+  newFileKind: "file" | "folder";
 
   // Actions
   openTab: (sessionId: string, key: string) => void;
@@ -69,7 +71,7 @@ interface WorkbenchUiState {
   setCommandModal: (id: string | null) => void;
   setCommandSurfaceOpen: (open: boolean) => void;
   setContextMenu: (menu: ContextMenuState | null) => void;
-  setNewFilePrefix: (prefix: string | null) => void;
+  setNewFilePrefix: (prefix: string | null, kind?: "file" | "folder") => void;
   clearFlash: () => void;
 }
 
@@ -98,6 +100,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         flashKey: null,
         contextMenu: null,
         newFilePrefix: null,
+        newFileKind: "file",
 
         openTab: (sessionId, key) => {
           updateSession(sessionId, (ui) => ({
@@ -170,7 +173,8 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         setQuickOpenOpen: (open) => set({ quickOpenOpen: open }),
         setCommandModal: (id) => set({ commandModal: id }),
         setContextMenu: (menu) => set({ contextMenu: menu }),
-        setNewFilePrefix: (prefix) => set({ newFilePrefix: prefix }),
+        setNewFilePrefix: (prefix, kind) =>
+          set({ newFilePrefix: prefix, newFileKind: prefix == null ? "file" : kind ?? "file" }),
         clearFlash: () => set({ flashKey: null }),
       };
     },
