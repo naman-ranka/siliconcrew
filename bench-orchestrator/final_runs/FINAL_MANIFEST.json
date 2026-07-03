@@ -7,9 +7,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-64b66b_codec_0001__auto__claude-claudesonnet5__20260630-235352__r01",
     "snapshot": "bench-orchestrator/final_runs/64b66b_codec_0001",
-    "turns": 69,
-    "tok_in": 117,
-    "tok_out": 110077,
+    "turns": 118,
+    "tok_in": 233,
+    "tok_out": 1290,
+    "tok_cache": 10250246,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 8,
@@ -21,12 +22,7 @@
       "mcp__rtl-codex__cocotb_tool": 4,
       "mcp__rtl-codex__sby_tool": 8
     },
-    "duration": null,
-    "duration_ms": 1363702,
-    "duration_min": 22.7,
-    "tok_cache_read": 5400502,
-    "tok_cache_creation": 267313,
-    "cost_usd": 7.615597749999999
+    "duration": null
   },
   {
     "problem": "AES_encryption_decryption_0003",
@@ -36,9 +32,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-aes_encryption_decryption_0003__auto__claude-claudesonnet5__20260702-080049__r01",
     "snapshot": "bench-orchestrator/final_runs/AES_encryption_decryption_0003",
-    "turns": 97,
-    "tok_in": 181,
-    "tok_out": 173552,
+    "turns": 171,
+    "tok_in": 339,
+    "tok_out": 1641,
+    "tok_cache": 15207416,
     "tools": {
       "Read": 11,
       "Bash": 4,
@@ -56,12 +53,7 @@
       "mcp__rtl-codex__edit_file_tool": 5,
       "mcp__rtl-codex__sby_tool": 5
     },
-    "duration": null,
-    "duration_ms": 2379080,
-    "duration_min": 39.7,
-    "tok_cache_read": 8196620,
-    "tok_cache_creation": 428051,
-    "cost_usd": 12.325548499999995
+    "duration": null
   },
   {
     "problem": "AES_encryption_decryption_0005",
@@ -71,9 +63,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-aes_encryption_decryption_0005__auto__claude-claudesonnet5__20260702-080049__r01",
     "snapshot": "bench-orchestrator/final_runs/AES_encryption_decryption_0005",
-    "turns": null,
+    "turns": 308,
     "tok_in": 613,
     "tok_out": 3567,
+    "tok_cache": 30459857,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 24,
@@ -92,9 +85,7 @@
       "Bash": 17,
       "mcp__rtl-codex__sby_tool": 9
     },
-    "duration": null,
-    "cost_usd": null,
-    "metrics_note": "no terminal result line (killed/timeout)"
+    "duration": null
   },
   {
     "problem": "AES_encryption_decryption_0009",
@@ -104,9 +95,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-aes_encryption_decryption_0009__auto__claude-claudesonnet5__20260702-080049__r01",
     "snapshot": "bench-orchestrator/final_runs/AES_encryption_decryption_0009",
-    "turns": 29,
-    "tok_in": 53,
-    "tok_out": 57598,
+    "turns": 48,
+    "tok_in": 93,
+    "tok_out": 643,
+    "tok_cache": 4130576,
     "tools": {
       "Read": 4,
       "Bash": 1,
@@ -121,12 +113,7 @@
       "mcp__rtl-codex__sby_tool": 2,
       "Write": 2
     },
-    "duration": null,
-    "duration_ms": 680700,
-    "duration_min": 11.3,
-    "tok_cache_read": 2446423,
-    "tok_cache_creation": 125024,
-    "cost_usd": 3.444826500000001
+    "duration": null
   },
   {
     "problem": "AES_encryption_decryption_0012",
@@ -136,9 +123,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-aes_encryption_decryption_0012__auto__claude-claudesonnet5__20260702-080049__r01",
     "snapshot": "bench-orchestrator/final_runs/AES_encryption_decryption_0012",
-    "turns": 86,
-    "tok_in": 155,
-    "tok_out": 152421,
+    "turns": 152,
+    "tok_in": 301,
+    "tok_out": 1661,
+    "tok_cache": 16427287,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 6,
@@ -155,12 +143,7 @@
       "Grep": 1,
       "mcp__rtl-codex__sby_tool": 9
     },
-    "duration": null,
-    "duration_ms": 2145982,
-    "duration_min": 35.8,
-    "tok_cache_read": 8735488,
-    "tok_cache_creation": 367990,
-    "cost_usd": 11.043771
+    "duration": null
   },
   {
     "problem": "AES_encryption_decryption_0018",
@@ -170,9 +153,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-aes_encryption_decryption_0018__auto__claude-claudesonnet5__20260702-080049__r01",
     "snapshot": "bench-orchestrator/final_runs/AES_encryption_decryption_0018",
-    "turns": 75,
-    "tok_in": 149,
-    "tok_out": 60570,
+    "turns": 136,
+    "tok_in": 270,
+    "tok_out": 1443,
+    "tok_cache": 11855636,
     "tools": {
       "Read": 10,
       "Bash": 14,
@@ -188,12 +172,7 @@
       "mcp__rtl-codex__cocotb_tool": 6,
       "mcp__rtl-codex__sby_tool": 4
     },
-    "duration": null,
-    "duration_ms": 736272,
-    "duration_min": 12.3,
-    "tok_cache_read": 6621285,
-    "tok_cache_creation": 165390,
-    "cost_usd": 5.859324999999999
+    "duration": null
   },
   {
     "problem": "DES_0001",
@@ -203,9 +182,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-des_0001__auto__claude-claudesonnet5__20260702-080049__r01",
     "snapshot": "bench-orchestrator/final_runs/DES_0001",
-    "turns": 88,
-    "tok_in": 113,
-    "tok_out": 110683,
+    "turns": 133,
+    "tok_in": 263,
+    "tok_out": 1177,
+    "tok_cache": 11189747,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 11,
@@ -223,12 +203,7 @@
       "mcp__rtl-codex__sby_tool": 3,
       "Skill": 1
     },
-    "duration": null,
-    "duration_ms": 1350017,
-    "duration_min": 22.5,
-    "tok_cache_read": 4904124,
-    "tok_cache_creation": 250987,
-    "cost_usd": 7.38154575
+    "duration": null
   },
   {
     "problem": "DES_0003",
@@ -238,9 +213,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-des_0003__auto__claude-claudesonnet5__20260701-022341__r01",
     "snapshot": "bench-orchestrator/final_runs/DES_0003",
-    "turns": 71,
-    "tok_in": 73,
-    "tok_out": 100519,
+    "turns": 102,
+    "tok_in": 201,
+    "tok_out": 708,
+    "tok_cache": 8331811,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 18,
@@ -256,12 +232,7 @@
       "Edit": 4,
       "mcp__rtl-codex__simulation_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1160628,
-    "duration_min": 19.3,
-    "tok_cache_read": 3796574,
-    "tok_cache_creation": 270917,
-    "cost_usd": 6.578
+    "duration": null
   },
   {
     "problem": "DES_0005",
@@ -271,9 +242,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-des_0005__auto__claude-claudesonnet5__20260701-022341__r01",
     "snapshot": "bench-orchestrator/final_runs/DES_0005",
-    "turns": 64,
-    "tok_in": 69,
-    "tok_out": 78221,
+    "turns": 97,
+    "tok_in": 191,
+    "tok_out": 502,
+    "tok_cache": 8189808,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 13,
@@ -287,12 +259,7 @@
       "Write": 2,
       "mcp__rtl-codex__cocotb_tool": 1
     },
-    "duration": null,
-    "duration_ms": 694336,
-    "duration_min": 11.6,
-    "tok_cache_read": 3128339,
-    "tok_cache_creation": 232061,
-    "cost_usd": 4.97042075
+    "duration": null
   },
   {
     "problem": "DES_0007",
@@ -302,9 +269,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-des_0007__auto__claude-claudesonnet5__20260630-235352__r01",
     "snapshot": "bench-orchestrator/final_runs/DES_0007",
-    "turns": 198,
-    "tok_in": 351,
-    "tok_out": 359631,
+    "turns": 341,
+    "tok_in": 679,
+    "tok_out": 3625,
+    "tok_cache": 33409585,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 33,
@@ -327,12 +295,7 @@
       "mcp__rtl-codex__run_isolated_simulation": 1,
       "mcp__rtl-codex__generate_report_tool": 1
     },
-    "duration": null,
-    "duration_ms": 5223628,
-    "duration_min": 87.1,
-    "tok_cache_read": 18000813,
-    "tok_cache_creation": 617910,
-    "cost_usd": 23.500075
+    "duration": null
   },
   {
     "problem": "Min_Hamming_Distance_Finder_0001",
@@ -342,9 +305,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-min_hamming_distance_finder_0001__auto__claude-claudesonnet5__20260701-022341__r01",
     "snapshot": "bench-orchestrator/final_runs/Min_Hamming_Distance_Finder_0001",
-    "turns": 25,
-    "tok_in": 31,
-    "tok_out": 22683,
+    "turns": 38,
+    "tok_in": 73,
+    "tok_out": 522,
+    "tok_cache": 1556158,
     "tools": {
       "Read": 1,
       "Bash": 1,
@@ -355,12 +319,7 @@
       "mcp__rtl-codex__cocotb_tool": 1,
       "mcp__rtl-codex__simulation_tool": 3
     },
-    "duration": null,
-    "duration_ms": 209200,
-    "duration_min": 3.5,
-    "tok_cache_read": 735040,
-    "tok_cache_creation": 76456,
-    "cost_usd": 1.4125999999999999
+    "duration": null
   },
   {
     "problem": "PCIe_endpoint_0001",
@@ -370,9 +329,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-pcie_endpoint_0001__auto__claude-claudesonnet5__20260702-003121__r01",
     "snapshot": "bench-orchestrator/final_runs/PCIe_endpoint_0001",
-    "turns": 32,
-    "tok_in": 61,
-    "tok_out": 68380,
+    "turns": 55,
+    "tok_in": 107,
+    "tok_out": 686,
+    "tok_cache": 4220081,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 1,
@@ -387,12 +347,7 @@
       "mcp__rtl-codex__sby_tool": 1,
       "mcp__rtl-codex__list_files_tool": 1
     },
-    "duration": null,
-    "duration_ms": 623885,
-    "duration_min": 10.4,
-    "tok_cache_read": 2524552,
-    "tok_cache_creation": 166359,
-    "cost_usd": 4.011824749999999
+    "duration": null
   },
   {
     "problem": "arithmetic_progression_generator_0001",
@@ -402,9 +357,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-arithmetic_progression_generator_0001__auto__claude-claudesonnet5__20260702-003122__r01",
     "snapshot": "bench-orchestrator/final_runs/arithmetic_progression_generator_0001",
-    "turns": 61,
-    "tok_in": 57,
-    "tok_out": 47863,
+    "turns": 84,
+    "tok_in": 165,
+    "tok_out": 712,
+    "tok_cache": 6582298,
     "tools": {
       "Read": 1,
       "Bash": 1,
@@ -419,12 +375,7 @@
       "mcp__rtl-codex__cocotb_tool": 6,
       "mcp__rtl-codex__sby_tool": 4
     },
-    "duration": null,
-    "duration_ms": 524319,
-    "duration_min": 8.7,
-    "tok_cache_read": 2277790,
-    "tok_cache_creation": 145016,
-    "cost_usd": 3.2421050000000005
+    "duration": null
   },
   {
     "problem": "async_fifo_compute_ram_application_0001",
@@ -434,9 +385,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-async_fifo_compute_ram_application_0001__auto__claude-claudesonnet5__20260701-022341__r01",
     "snapshot": "bench-orchestrator/final_runs/async_fifo_compute_ram_application_0001",
-    "turns": 121,
-    "tok_in": 221,
-    "tok_out": 267129,
+    "turns": 225,
+    "tok_in": 445,
+    "tok_out": 2197,
+    "tok_cache": 22250084,
     "tools": {
       "Read": 23,
       "Bash": 3,
@@ -453,12 +405,7 @@
       "Grep": 4,
       "mcp__rtl-codex__sby_tool": 2
     },
-    "duration": null,
-    "duration_ms": 3476270,
-    "duration_min": 57.9,
-    "tok_cache_read": 11073199,
-    "tok_cache_creation": 506108,
-    "cost_usd": 17.16450274999999
+    "duration": null
   },
   {
     "problem": "async_fifo_compute_ram_application_0006",
@@ -468,9 +415,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-async_fifo_compute_ram_application_0006__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/async_fifo_compute_ram_application_0006",
-    "turns": 69,
-    "tok_in": 103,
-    "tok_out": 89311,
+    "turns": 112,
+    "tok_in": 221,
+    "tok_out": 1037,
+    "tok_cache": 9800283,
     "tools": {
       "Read": 10,
       "ToolSearch": 12,
@@ -487,12 +435,7 @@
       "mcp__rtl-codex__list_files_tool": 2,
       "Glob": 1
     },
-    "duration": null,
-    "duration_ms": 1419477,
-    "duration_min": 23.7,
-    "tok_cache_read": 5076119,
-    "tok_cache_creation": 263674,
-    "cost_usd": 6.953818249999997
+    "duration": null
   },
   {
     "problem": "async_filo_0001",
@@ -502,9 +445,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-async_filo_0001__auto__claude-claudesonnet5__20260701-052604__r01",
     "snapshot": "bench-orchestrator/final_runs/async_filo_0001",
-    "turns": 19,
-    "tok_in": 25,
-    "tok_out": 41255,
+    "turns": 32,
+    "tok_in": 59,
+    "tok_out": 257,
+    "tok_cache": 1417817,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 2,
@@ -515,12 +459,7 @@
       "ToolSearch": 3,
       "mcp__rtl-codex__linter_tool": 1
     },
-    "duration": null,
-    "duration_ms": 447350,
-    "duration_min": 7.5,
-    "tok_cache_read": 587327,
-    "tok_cache_creation": 104798,
-    "cost_usd": 1.9801509999999998
+    "duration": null
   },
   {
     "problem": "axi4lite_to_pcie_config_0003",
@@ -530,9 +469,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-axi4lite_to_pcie_config_0003__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/axi4lite_to_pcie_config_0003",
-    "turns": 161,
-    "tok_in": 313,
-    "tok_out": 233980,
+    "turns": 263,
+    "tok_in": 523,
+    "tok_out": 43326,
+    "tok_cache": 29171360,
     "tools": {
       "Read": 28,
       "ToolSearch": 9,
@@ -550,12 +490,7 @@
       "mcp__rtl-codex__waveform_tool": 1,
       "Grep": 3
     },
-    "duration": null,
-    "duration_ms": 4451818,
-    "duration_min": 74.2,
-    "tok_cache_read": 17826945,
-    "tok_cache_creation": 474411,
-    "cost_usd": 19.19293725000001
+    "duration": null
   },
   {
     "problem": "axis_broadcaster_0001",
@@ -565,9 +500,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-axis_broadcaster_0001__auto__claude-claudesonnet5__20260701-081916__r01",
     "snapshot": "bench-orchestrator/final_runs/axis_broadcaster_0001",
-    "turns": 67,
-    "tok_in": 125,
-    "tok_out": 108329,
+    "turns": 110,
+    "tok_in": 217,
+    "tok_out": 1423,
+    "tok_cache": 10438891,
     "tools": {
       "Read": 8,
       "Bash": 1,
@@ -585,12 +521,7 @@
       "Write": 1,
       "mcp__rtl-codex__simulation_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1747633,
-    "duration_min": 29.1,
-    "tok_cache_read": 6262337,
-    "tok_cache_creation": 263045,
-    "cost_usd": 8.006629499999997
+    "duration": null
   },
   {
     "problem": "axis_to_uart_0001",
@@ -600,9 +531,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-axis_to_uart_0001__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/axis_to_uart_0001",
-    "turns": 122,
-    "tok_in": 239,
-    "tok_out": 174825,
+    "turns": 207,
+    "tok_in": 411,
+    "tok_out": 3236,
+    "tok_cache": 21200646,
     "tools": {
       "Read": 25,
       "Bash": 3,
@@ -616,12 +548,7 @@
       "Write": 2,
       "mcp__rtl-codex__sby_tool": 16
     },
-    "duration": null,
-    "duration_ms": 2305237,
-    "duration_min": 38.4,
-    "tok_cache_read": 12607816,
-    "tok_cache_creation": 318485,
-    "cost_usd": 13.225185000000003
+    "duration": null
   },
   {
     "problem": "axis_to_uart_0004",
@@ -631,9 +558,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-axis_to_uart_0004__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/axis_to_uart_0004",
-    "turns": 96,
-    "tok_in": 177,
-    "tok_out": 75393,
+    "turns": 153,
+    "tok_in": 303,
+    "tok_out": 2283,
+    "tok_cache": 14455899,
     "tools": {
       "Read": 7,
       "mcp__rtl-codex__create_session_tool": 1,
@@ -649,12 +577,7 @@
       "Edit": 14,
       "mcp__rtl-codex__sby_tool": 21
     },
-    "duration": null,
-    "duration_ms": 2852711,
-    "duration_min": 47.5,
-    "tok_cache_read": 8646744,
-    "tok_cache_creation": 183323,
-    "cost_usd": 7.35485075
+    "duration": null
   },
   {
     "problem": "barrel_shifter_0001",
@@ -664,9 +587,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-barrel_shifter_0001__auto__claude-claudesonnet5__20260701-081916__r01",
     "snapshot": "bench-orchestrator/final_runs/barrel_shifter_0001",
-    "turns": 15,
-    "tok_in": 21,
-    "tok_out": 7031,
+    "turns": 23,
+    "tok_in": 43,
+    "tok_out": 277,
+    "tok_cache": 695065,
     "tools": {
       "Read": 1,
       "Bash": 1,
@@ -677,12 +601,7 @@
       "mcp__rtl-codex__cocotb_tool": 1,
       "mcp__rtl-codex__simulation_tool": 1
     },
-    "duration": null,
-    "duration_ms": 90580,
-    "duration_min": 1.5,
-    "tok_cache_read": 344395,
-    "tok_cache_creation": 44857,
-    "cost_usd": 0.62843375
+    "duration": null
   },
   {
     "problem": "barrel_shifter_0002",
@@ -692,9 +611,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-barrel_shifter_0002__auto__claude-claudesonnet5__20260630-235352__r01",
     "snapshot": "bench-orchestrator/final_runs/barrel_shifter_0002",
-    "turns": 17,
-    "tok_in": 25,
-    "tok_out": 10072,
+    "turns": 28,
+    "tok_in": 53,
+    "tok_out": 338,
+    "tok_cache": 911080,
     "tools": {
       "Read": 1,
       "Bash": 2,
@@ -705,12 +625,7 @@
       "mcp__rtl-codex__linter_tool": 1,
       "mcp__rtl-codex__cocotb_tool": 1
     },
-    "duration": null,
-    "duration_ms": 123588,
-    "duration_min": 2.1,
-    "tok_cache_read": 436756,
-    "tok_cache_creation": 46136,
-    "cost_usd": 0.758653
+    "duration": null
   },
   {
     "problem": "bcd_adder_0004",
@@ -720,9 +635,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-bcd_adder_0004__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/bcd_adder_0004",
-    "turns": 20,
-    "tok_in": 29,
-    "tok_out": 23516,
+    "turns": 34,
+    "tok_in": 65,
+    "tok_out": 196,
+    "tok_cache": 1664689,
     "tools": {
       "Read": 1,
       "Bash": 1,
@@ -735,12 +651,7 @@
       "mcp__rtl-codex__linter_tool": 1,
       "mcp__rtl-codex__cocotb_tool": 1
     },
-    "duration": null,
-    "duration_ms": 258200,
-    "duration_min": 4.3,
-    "tok_cache_read": 744730,
-    "tok_cache_creation": 69465,
-    "cost_usd": 1.3945662500000002
+    "duration": null
   },
   {
     "problem": "binary_search_tree_algorithms_0001",
@@ -750,9 +661,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-binary_search_tree_algorithms_0001__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/binary_search_tree_algorithms_0001",
-    "turns": 117,
-    "tok_in": 219,
-    "tok_out": 211100,
+    "turns": 194,
+    "tok_in": 385,
+    "tok_out": 2713,
+    "tok_cache": 19553518,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 8,
@@ -770,12 +682,7 @@
       "mcp__rtl-codex__waveform_tool": 2,
       "mcp__rtl-codex__read_file": 1
     },
-    "duration": null,
-    "duration_ms": 3630992,
-    "duration_min": 60.5,
-    "tok_cache_read": 11258259,
-    "tok_cache_creation": 457729,
-    "cost_usd": 14.906524000000003
+    "duration": null
   },
   {
     "problem": "binary_search_tree_algorithms_0014",
@@ -785,9 +692,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-binary_search_tree_algorithms_0014__auto__claude-claudesonnet5__20260630-235352__r01",
     "snapshot": "bench-orchestrator/final_runs/binary_search_tree_algorithms_0014",
-    "turns": 71,
-    "tok_in": 133,
-    "tok_out": 122105,
+    "turns": 128,
+    "tok_in": 253,
+    "tok_out": 1411,
+    "tok_cache": 12443976,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 6,
@@ -802,12 +710,7 @@
       "Edit": 7,
       "mcp__rtl-codex__sby_tool": 10
     },
-    "duration": null,
-    "duration_ms": 2274706,
-    "duration_min": 37.9,
-    "tok_cache_read": 6674099,
-    "tok_cache_creation": 285700,
-    "cost_usd": 8.924439249999999
+    "duration": null
   },
   {
     "problem": "binary_to_gray_0003",
@@ -817,9 +720,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-binary_to_gray_0003__auto__claude-claudesonnet5__20260701-081916__r01",
     "snapshot": "bench-orchestrator/final_runs/binary_to_gray_0003",
-    "turns": 15,
-    "tok_in": 19,
-    "tok_out": 7035,
+    "turns": 25,
+    "tok_in": 47,
+    "tok_out": 62,
+    "tok_cache": 837095,
     "tools": {
       "Bash": 2,
       "ToolSearch": 2,
@@ -829,12 +733,7 @@
       "mcp__rtl-codex__cocotb_tool": 1,
       "mcp__rtl-codex__simulation_tool": 1
     },
-    "duration": null,
-    "duration_ms": 85937,
-    "duration_min": 1.4,
-    "tok_cache_read": 334279,
-    "tok_cache_creation": 46835,
-    "cost_usd": 0.6358282499999999
+    "duration": null
   },
   {
     "problem": "byte_enable_ram_0002",
@@ -844,9 +743,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-byte_enable_ram_0002__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/byte_enable_ram_0002",
-    "turns": 53,
-    "tok_in": 103,
-    "tok_out": 75392,
+    "turns": 90,
+    "tok_in": 178,
+    "tok_out": 1128,
+    "tok_cache": 8132849,
     "tools": {
       "Read": 7,
       "mcp__rtl-codex__create_session_tool": 1,
@@ -859,12 +759,7 @@
       "mcp__rtl-codex__cocotb_tool": 9,
       "mcp__rtl-codex__simulation_tool": 3
     },
-    "duration": null,
-    "duration_ms": 889593,
-    "duration_min": 14.8,
-    "tok_cache_read": 4756216,
-    "tok_cache_creation": 165809,
-    "cost_usd": 5.299729249999998
+    "duration": null
   },
   {
     "problem": "cache_controller_0001",
@@ -872,27 +767,28 @@
     "cid": "cid003",
     "verdict": "FAIL",
     "leak_status": "CLEAN",
-    "source_run_dir": "bench-orchestrator/runs/cvdp-cache_controller_0001__auto__claude-claudesonnet5__20260630-235352__r01",
+    "source_run_dir": "bench-orchestrator/runs/cvdp-cache_controller_0001__auto__claude-claudesonnet5__20260703-111319__r01",
     "snapshot": "bench-orchestrator/final_runs/cache_controller_0001",
-    "turns": 19,
-    "tok_in": 33,
-    "tok_out": 21611,
+    "turns": 209,
+    "tok_in": 415,
+    "tok_out": 2830,
+    "tok_cache": 19208674,
     "tools": {
-      "Read": 1,
-      "Bash": 1,
-      "ToolSearch": 4,
+      "Read": 16,
+      "Bash": 3,
       "mcp__rtl-codex__create_session_tool": 1,
-      "mcp__rtl-codex__write_file": 5,
-      "TodoWrite": 2,
+      "mcp__rtl-codex__write_file": 14,
+      "ToolSearch": 6,
+      "Edit": 29,
       "mcp__rtl-codex__linter_tool": 1,
-      "mcp__rtl-codex__cocotb_tool": 3
+      "mcp__rtl-codex__cocotb_tool": 8,
+      "Write": 9,
+      "mcp__rtl-codex__sby_tool": 23,
+      "mcp__rtl-codex__list_files_tool": 4,
+      "mcp__rtl-codex__read_file": 4,
+      "Glob": 3
     },
-    "duration": null,
-    "duration_ms": 225125,
-    "duration_min": 3.8,
-    "tok_cache_read": 705164,
-    "tok_cache_creation": 69192,
-    "cost_usd": 1.325472
+    "duration": null
   },
   {
     "problem": "caesar_cipher_0001",
@@ -902,9 +798,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-caesar_cipher_0001__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/caesar_cipher_0001",
-    "turns": 23,
-    "tok_in": 39,
-    "tok_out": 11620,
+    "turns": 38,
+    "tok_in": 73,
+    "tok_out": 350,
+    "tok_cache": 1573993,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 2,
@@ -916,12 +813,7 @@
       "Edit": 2,
       "mcp__rtl-codex__linter_tool": 1
     },
-    "duration": null,
-    "duration_ms": 134533,
-    "duration_min": 2.2,
-    "tok_cache_read": 877373,
-    "tok_cache_creation": 60957,
-    "cost_usd": 1.11036275
+    "duration": null
   },
   {
     "problem": "cellular_automata_0002",
@@ -931,9 +823,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-cellular_automata_0002__auto__claude-claudesonnet5__20260701-081916__r01",
     "snapshot": "bench-orchestrator/final_runs/cellular_automata_0002",
-    "turns": 91,
-    "tok_in": 173,
-    "tok_out": 99811,
+    "turns": 150,
+    "tok_in": 297,
+    "tok_out": 2224,
+    "tok_cache": 13742875,
     "tools": {
       "Read": 18,
       "Bash": 1,
@@ -947,12 +840,7 @@
       "mcp__rtl-codex__sby_tool": 6,
       "mcp__rtl-codex__get_current_session": 1
     },
-    "duration": null,
-    "duration_ms": 1347330,
-    "duration_min": 22.5,
-    "tok_cache_read": 8327612,
-    "tok_cache_creation": 226926,
-    "cost_usd": 8.580058249999999
+    "duration": null
   },
   {
     "problem": "cic_decimator_0001",
@@ -962,9 +850,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-cic_decimator_0001__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/cic_decimator_0001",
-    "turns": 33,
-    "tok_in": 63,
-    "tok_out": 53993,
+    "turns": 57,
+    "tok_in": 111,
+    "tok_out": 611,
+    "tok_cache": 3784300,
     "tools": {
       "Read": 1,
       "Bash": 1,
@@ -980,12 +869,7 @@
       "Edit": 1,
       "mcp__rtl-codex__waveform_tool": 1
     },
-    "duration": null,
-    "duration_ms": 584088,
-    "duration_min": 9.7,
-    "tok_cache_read": 2229800,
-    "tok_cache_creation": 104482,
-    "cost_usd": 3.1180524999999997
+    "duration": null
   },
   {
     "problem": "cipher_0001",
@@ -995,9 +879,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-cipher_0001__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/cipher_0001",
-    "turns": 1,
-    "tok_in": 0,
-    "tok_out": 0,
+    "turns": 248,
+    "tok_in": 491,
+    "tok_out": 3375,
+    "tok_cache": 21090342,
     "tools": {
       "Read": 24,
       "Bash": 12,
@@ -1018,12 +903,7 @@
       "TaskStop": 1,
       "mcp__rtl-codex__search_logs_tool": 1
     },
-    "duration": null,
-    "duration_ms": 929,
-    "duration_min": 0.0,
-    "tok_cache_read": 0,
-    "tok_cache_creation": 0,
-    "cost_usd": 11.514046750000002
+    "duration": null
   },
   {
     "problem": "cont_adder_0001",
@@ -1033,9 +913,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-cont_adder_0001__auto__claude-claudesonnet5__20260701-081916__r01",
     "snapshot": "bench-orchestrator/final_runs/cont_adder_0001",
-    "turns": 70,
-    "tok_in": 109,
-    "tok_out": 85543,
+    "turns": 110,
+    "tok_in": 217,
+    "tok_out": 1555,
+    "tok_cache": 9458272,
     "tools": {
       "Read": 12,
       "mcp__rtl-codex__create_session_tool": 1,
@@ -1049,12 +930,7 @@
       "Edit": 10,
       "mcp__rtl-codex__sby_tool": 5
     },
-    "duration": null,
-    "duration_ms": 1058637,
-    "duration_min": 17.6,
-    "tok_cache_read": 4911343,
-    "tok_cache_creation": 176914,
-    "cost_usd": 5.7005040000000005
+    "duration": null
   },
   {
     "problem": "csr_using_apb_interface_0001",
@@ -1064,9 +940,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-csr_using_apb_interface_0001__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/csr_using_apb_interface_0001",
-    "turns": 82,
-    "tok_in": 155,
-    "tok_out": 99383,
+    "turns": 137,
+    "tok_in": 271,
+    "tok_out": 1602,
+    "tok_cache": 12678272,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 9,
@@ -1083,12 +960,7 @@
       "mcp__rtl-codex__simulation_tool": 3,
       "mcp__rtl-codex__linter_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1310024,
-    "duration_min": 21.8,
-    "tok_cache_read": 7569167,
-    "tok_cache_creation": 168273,
-    "cost_usd": 7.32163975
+    "duration": null
   },
   {
     "problem": "custom_fifo_0004",
@@ -1098,9 +970,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-custom_fifo_0004__auto__claude-claudesonnet5__20260702-080048__r01",
     "snapshot": "bench-orchestrator/final_runs/custom_fifo_0004",
-    "turns": 83,
-    "tok_in": 159,
-    "tok_out": 90732,
+    "turns": 134,
+    "tok_in": 265,
+    "tok_out": 2139,
+    "tok_cache": 14884865,
     "tools": {
       "Read": 10,
       "Bash": 6,
@@ -1114,12 +987,7 @@
       "mcp__rtl-codex__sby_tool": 11,
       "Write": 11
     },
-    "duration": null,
-    "duration_ms": 1840907,
-    "duration_min": 30.7,
-    "tok_cache_read": 9257774,
-    "tok_cache_creation": 176313,
-    "cost_usd": 8.00701525
+    "duration": null
   },
   {
     "problem": "digital_stopwatch_0001",
@@ -1129,9 +997,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-digital_stopwatch_0001__auto__claude-claudesonnet5__20260702-080232__r01",
     "snapshot": "bench-orchestrator/final_runs/digital_stopwatch_0001",
-    "turns": 41,
-    "tok_in": 71,
-    "tok_out": 69233,
+    "turns": 70,
+    "tok_in": 137,
+    "tok_out": 654,
+    "tok_cache": 5211757,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 5,
@@ -1148,12 +1017,7 @@
       "mcp__rtl-codex__sby_tool": 1,
       "mcp__rtl-codex__simulation_tool": 1
     },
-    "duration": null,
-    "duration_ms": 865534,
-    "duration_min": 14.4,
-    "tok_cache_read": 2841620,
-    "tok_cache_creation": 129867,
-    "cost_usd": 3.9636587500000005
+    "duration": null
   },
   {
     "problem": "direct_map_cache_0001",
@@ -1163,9 +1027,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-direct_map_cache_0001__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/direct_map_cache_0001",
-    "turns": 169,
-    "tok_in": 331,
-    "tok_out": 147085,
+    "turns": 279,
+    "tok_in": 555,
+    "tok_out": 4667,
+    "tok_cache": 29102413,
     "tools": {
       "ToolSearch": 9,
       "Read": 23,
@@ -1183,12 +1048,7 @@
       "mcp__rtl-codex__waveform_tool": 1,
       "Bash": 1
     },
-    "duration": null,
-    "duration_ms": 4165782,
-    "duration_min": 69.4,
-    "tok_cache_read": 17900077,
-    "tok_cache_creation": 292019,
-    "cost_usd": 15.008343999999997
+    "duration": null
   },
   {
     "problem": "direct_map_cache_0003",
@@ -1198,9 +1058,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-direct_map_cache_0003__auto__claude-claudesonnet5__20260702-080048__r01",
     "snapshot": "bench-orchestrator/final_runs/direct_map_cache_0003",
-    "turns": 118,
-    "tok_in": 229,
-    "tok_out": 156023,
+    "turns": 202,
+    "tok_in": 401,
+    "tok_out": 3086,
+    "tok_cache": 20868107,
     "tools": {
       "Read": 3,
       "Bash": 3,
@@ -1215,12 +1076,7 @@
       "Write": 1,
       "mcp__rtl-codex__sby_tool": 13
     },
-    "duration": null,
-    "duration_ms": 2809986,
-    "duration_min": 46.8,
-    "tok_cache_read": 12209995,
-    "tok_cache_creation": 342835,
-    "cost_usd": 12.66427075
+    "duration": null
   },
   {
     "problem": "dma_xfer_engine_0001",
@@ -1230,9 +1086,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-dma_xfer_engine_0001__auto__claude-claudesonnet5__20260701-081916__r01",
     "snapshot": "bench-orchestrator/final_runs/dma_xfer_engine_0001",
-    "turns": 77,
-    "tok_in": 173,
-    "tok_out": 76189,
+    "turns": 135,
+    "tok_in": 327,
+    "tok_out": 1349,
+    "tok_cache": 12985297,
     "tools": {
       "Read": 3,
       "Bash": 1,
@@ -1250,12 +1107,7 @@
       "mcp__rtl-codex__list_files_tool": 2,
       "mcp__rtl-codex__waveform_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1732059,
-    "duration_min": 28.9,
-    "tok_cache_read": 7101902,
-    "tok_cache_creation": 166077,
-    "cost_usd": 6.494522250000001
+    "duration": null
   },
   {
     "problem": "door_lock_0001",
@@ -1265,9 +1117,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-door_lock_0001__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/door_lock_0001",
-    "turns": 5,
-    "tok_in": 10,
-    "tok_out": 1975,
+    "turns": 117,
+    "tok_in": 231,
+    "tok_out": 796,
+    "tok_cache": 10885657,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 8,
@@ -1282,12 +1135,7 @@
       "Bash": 4,
       "Write": 2
     },
-    "duration": null,
-    "duration_ms": 41642,
-    "duration_min": 0.7,
-    "tok_cache_read": 754329,
-    "tok_cache_creation": 6479,
-    "cost_usd": 8.372468999999999
+    "duration": null
   },
   {
     "problem": "dual_port_memory_0001",
@@ -1297,9 +1145,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-dual_port_memory_0001__auto__claude-claudesonnet5__20260702-080048__r01",
     "snapshot": "bench-orchestrator/final_runs/dual_port_memory_0001",
-    "turns": 74,
-    "tok_in": 121,
-    "tok_out": 80417,
+    "turns": 119,
+    "tok_in": 235,
+    "tok_out": 1516,
+    "tok_cache": 10010201,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 9,
@@ -1316,12 +1165,7 @@
       "mcp__rtl-codex__waveform_tool": 2,
       "Write": 8
     },
-    "duration": null,
-    "duration_ms": 1020832,
-    "duration_min": 17.0,
-    "tok_cache_read": 5260628,
-    "tok_cache_creation": 144872,
-    "cost_usd": 5.546794
+    "duration": null
   },
   {
     "problem": "dual_port_memory_0004",
@@ -1331,9 +1175,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-dual_port_memory_0004__auto__claude-claudesonnet5__20260701-081916__r01",
     "snapshot": "bench-orchestrator/final_runs/dual_port_memory_0004",
-    "turns": 66,
-    "tok_in": 117,
-    "tok_out": 83729,
+    "turns": 108,
+    "tok_in": 213,
+    "tok_out": 1256,
+    "tok_cache": 9502036,
     "tools": {
       "Read": 7,
       "Bash": 1,
@@ -1349,12 +1194,7 @@
       "mcp__rtl-codex__sby_tool": 9,
       "mcp__rtl-codex__list_files_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1064589,
-    "duration_min": 17.7,
-    "tok_cache_read": 5577427,
-    "tok_cache_creation": 161526,
-    "cost_usd": 5.892061000000002
+    "duration": null
   },
   {
     "problem": "dynamic_equalizer_0001",
@@ -1364,9 +1204,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-dynamic_equalizer_0001__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/dynamic_equalizer_0001",
-    "turns": 45,
-    "tok_in": 65,
-    "tok_out": 106976,
+    "turns": 75,
+    "tok_in": 147,
+    "tok_out": 657,
+    "tok_cache": 6215314,
     "tools": {
       "Read": 3,
       "mcp__rtl-codex__create_session_tool": 1,
@@ -1380,12 +1221,7 @@
       "mcp__rtl-codex__cocotb_tool": 6,
       "mcp__rtl-codex__list_files_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1042439,
-    "duration_min": 17.4,
-    "tok_cache_read": 3093878,
-    "tok_cache_creation": 176037,
-    "cost_usd": 5.321895250000001
+    "duration": null
   },
   {
     "problem": "dynamic_equalizer_0004",
@@ -1395,9 +1231,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-dynamic_equalizer_0004__auto__claude-claudesonnet5__20260702-080233__r01",
     "snapshot": "bench-orchestrator/final_runs/dynamic_equalizer_0004",
-    "turns": 39,
-    "tok_in": 63,
-    "tok_out": 65308,
+    "turns": 65,
+    "tok_in": 127,
+    "tok_out": 721,
+    "tok_cache": 5576791,
     "tools": {
       "Read": 5,
       "Bash": 1,
@@ -1412,12 +1249,7 @@
       "mcp__rtl-codex__cocotb_tool": 4,
       "Edit": 6
     },
-    "duration": null,
-    "duration_ms": 701612,
-    "duration_min": 11.7,
-    "tok_cache_read": 2855156,
-    "tok_cache_creation": 146247,
-    "cost_usd": 3.9746367499999993
+    "duration": null
   },
   {
     "problem": "dynamic_equalizer_0008",
@@ -1427,9 +1259,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-dynamic_equalizer_0008__auto__claude-claudesonnet5__20260701-081916__r01",
     "snapshot": "bench-orchestrator/final_runs/dynamic_equalizer_0008",
-    "turns": 45,
-    "tok_in": 69,
-    "tok_out": 73150,
+    "turns": 103,
+    "tok_in": 198,
+    "tok_out": 777,
+    "tok_cache": 7807878,
     "tools": {
       "Read": 9,
       "ToolSearch": 2,
@@ -1444,12 +1277,7 @@
       "mcp__rtl-codex__cocotb_tool": 4,
       "mcp__rtl-codex__sby_tool": 1
     },
-    "duration": null,
-    "duration_ms": 954895,
-    "duration_min": 15.9,
-    "tok_cache_read": 3463307,
-    "tok_cache_creation": 143890,
-    "cost_usd": 4.616756499999999
+    "duration": null
   },
   {
     "problem": "elevator_control_0004",
@@ -1459,9 +1287,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-elevator_control_0004__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/elevator_control_0004",
-    "turns": 44,
-    "tok_in": 81,
-    "tok_out": 63570,
+    "turns": 76,
+    "tok_in": 149,
+    "tok_out": 824,
+    "tok_cache": 5958809,
     "tools": {
       "Read": 11,
       "Bash": 2,
@@ -1475,12 +1304,7 @@
       "Edit": 9,
       "mcp__rtl-codex__sby_tool": 4
     },
-    "duration": null,
-    "duration_ms": 704365,
-    "duration_min": 11.7,
-    "tok_cache_read": 3458689,
-    "tok_cache_creation": 140797,
-    "cost_usd": 4.19898075
+    "duration": null
   },
   {
     "problem": "ethernet_mii_0004",
@@ -1490,9 +1314,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-ethernet_mii_0004__auto__claude-claudesonnet5__20260702-080233__r01",
     "snapshot": "bench-orchestrator/final_runs/ethernet_mii_0004",
-    "turns": 101,
-    "tok_in": 189,
-    "tok_out": 142630,
+    "turns": 173,
+    "tok_in": 343,
+    "tok_out": 2051,
+    "tok_cache": 15918739,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 13,
@@ -1508,12 +1333,7 @@
       "Grep": 3,
       "mcp__rtl-codex__get_current_session": 1
     },
-    "duration": null,
-    "duration_ms": 2718720,
-    "duration_min": 45.3,
-    "tok_cache_read": 8974051,
-    "tok_cache_creation": 313536,
-    "cost_usd": 10.447117250000002
+    "duration": null
   },
   {
     "problem": "ethernet_mii_0006",
@@ -1521,26 +1341,26 @@
     "cid": "cid003",
     "verdict": "FAIL",
     "leak_status": "CLEAN",
-    "source_run_dir": "bench-orchestrator/runs/cvdp-ethernet_mii_0006__auto__claude-claudesonnet5__20260701-081916__r01",
+    "source_run_dir": "bench-orchestrator/runs/cvdp-ethernet_mii_0006__auto__claude-claudesonnet5__20260703-111319__r01",
     "snapshot": "bench-orchestrator/final_runs/ethernet_mii_0006",
-    "turns": 14,
-    "tok_in": 23,
-    "tok_out": 43104,
+    "turns": 90,
+    "tok_in": 177,
+    "tok_out": 1090,
+    "tok_cache": 8321258,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
-      "Read": 2,
-      "Bash": 2,
-      "mcp__rtl-codex__list_files_tool": 1,
-      "mcp__rtl-codex__write_file": 3,
-      "ToolSearch": 2,
-      "TodoWrite": 2
+      "Read": 7,
+      "Bash": 1,
+      "mcp__rtl-codex__write_file": 7,
+      "ToolSearch": 6,
+      "TodoWrite": 5,
+      "mcp__rtl-codex__linter_tool": 2,
+      "Edit": 14,
+      "mcp__rtl-codex__cocotb_tool": 4,
+      "Write": 2,
+      "mcp__rtl-codex__sby_tool": 1
     },
-    "duration": null,
-    "duration_ms": 439851,
-    "duration_min": 7.3,
-    "tok_cache_read": 706060,
-    "tok_cache_creation": 149706,
-    "cost_usd": 2.3664074999999998
+    "duration": null
   },
   {
     "problem": "event_scheduler_0001",
@@ -1550,9 +1370,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-event_scheduler_0001__auto__claude-claudesonnet5__20260701-081915__r01",
     "snapshot": "bench-orchestrator/final_runs/event_scheduler_0001",
-    "turns": 11,
-    "tok_in": 11,
-    "tok_out": 21041,
+    "turns": 18,
+    "tok_in": 31,
+    "tok_out": 192,
+    "tok_cache": 491944,
     "tools": {
       "Read": 1,
       "Bash": 1,
@@ -1560,12 +1381,7 @@
       "mcp__rtl-codex__write_file": 6,
       "ToolSearch": 1
     },
-    "duration": null,
-    "duration_ms": 196537,
-    "duration_min": 3.3,
-    "tok_cache_read": 167579,
-    "tok_cache_creation": 51143,
-    "cost_usd": 0.9295132500000001
+    "duration": null
   },
   {
     "problem": "event_scheduler_0004",
@@ -1575,9 +1391,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-event_scheduler_0004__auto__claude-claudesonnet5__20260702-080500__r01",
     "snapshot": "bench-orchestrator/final_runs/event_scheduler_0004",
-    "turns": 114,
-    "tok_in": 209,
-    "tok_out": 89090,
+    "turns": 181,
+    "tok_in": 359,
+    "tok_out": 2747,
+    "tok_cache": 18539451,
     "tools": {
       "Read": 10,
       "Bash": 1,
@@ -1592,24 +1409,20 @@
       "Write": 19,
       "mcp__rtl-codex__list_files_tool": 1
     },
-    "duration": null,
-    "duration_ms": 3040946,
-    "duration_min": 50.7,
-    "tok_cache_read": 11265085,
-    "tok_cache_creation": 224384,
-    "cost_usd": 9.806866750000001
+    "duration": null
   },
   {
     "problem": "event_storing_0001",
     "difficulty": "hard",
     "cid": "cid005",
-    "verdict": "FAIL",
+    "verdict": "PASS",
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-event_storing_0001__auto__claude-claudesonnet5__20260702-003121__r01",
     "snapshot": "bench-orchestrator/final_runs/event_storing_0001",
-    "turns": 72,
-    "tok_in": 137,
-    "tok_out": 72047,
+    "turns": 119,
+    "tok_in": 235,
+    "tok_out": 1563,
+    "tok_cache": 11291313,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 11,
@@ -1624,12 +1437,7 @@
       "mcp__rtl-codex__sby_tool": 11,
       "mcp__rtl-codex__simulation_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1343783,
-    "duration_min": 22.4,
-    "tok_cache_read": 6796251,
-    "tok_cache_creation": 144134,
-    "cost_usd": 6.100823
+    "duration": null
   },
   {
     "problem": "fixed_arbiter_0010",
@@ -1639,9 +1447,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-fixed_arbiter_0010__auto__claude-claudesonnet5__20260702-003122__r01",
     "snapshot": "bench-orchestrator/final_runs/fixed_arbiter_0010",
-    "turns": 32,
-    "tok_in": 98,
-    "tok_out": 24936,
+    "turns": 55,
+    "tok_in": 185,
+    "tok_out": 558,
+    "tok_cache": 3136477,
     "tools": {
       "Read": 3,
       "ToolSearch": 2,
@@ -1654,12 +1463,7 @@
       "mcp__rtl-codex__simulation_tool": 1,
       "mcp__rtl-codex__sby_tool": 2
     },
-    "duration": null,
-    "duration_ms": 273957,
-    "duration_min": 4.6,
-    "tok_cache_read": 1809631,
-    "tok_cache_creation": 86900,
-    "cost_usd": 2.0718305
+    "duration": null
   },
   {
     "problem": "gcd_0007",
@@ -1669,9 +1473,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-gcd_0007__auto__claude-claudesonnet5__20260701-022341__r01",
     "snapshot": "bench-orchestrator/final_runs/gcd_0007",
-    "turns": 103,
-    "tok_in": 171,
-    "tok_out": 71321,
+    "turns": 162,
+    "tok_in": 321,
+    "tok_out": 2471,
+    "tok_cache": 17822683,
     "tools": {
       "ToolSearch": 4,
       "Read": 19,
@@ -1685,12 +1490,7 @@
       "mcp__rtl-codex__read_file": 4,
       "mcp__rtl-codex__sby_tool": 11
     },
-    "duration": null,
-    "duration_ms": 1743060,
-    "duration_min": 29.1,
-    "tok_cache_read": 9734186,
-    "tok_cache_creation": 239056,
-    "cost_usd": 8.658759249999997
+    "duration": null
   },
   {
     "problem": "hdbn_codec_0001",
@@ -1700,9 +1500,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-hdbn_codec_0001__auto__claude-claudesonnet5__20260702-003122__r01",
     "snapshot": "bench-orchestrator/final_runs/hdbn_codec_0001",
-    "turns": 214,
-    "tok_in": 421,
-    "tok_out": 313498,
+    "turns": 362,
+    "tok_in": 722,
+    "tok_out": 4649,
+    "tok_cache": 37711097,
     "tools": {
       "Read": 42,
       "mcp__rtl-codex__create_session_tool": 1,
@@ -1719,12 +1520,7 @@
       "mcp__rtl-codex__waveform_tool": 2,
       "Glob": 2
     },
-    "duration": null,
-    "duration_ms": 5028309,
-    "duration_min": 83.8,
-    "tok_cache_read": 22230064,
-    "tok_cache_creation": 642906,
-    "cost_usd": 24.587410250000005
+    "duration": null
   },
   {
     "problem": "jpeg_runlength_enc_0001",
@@ -1734,9 +1530,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-jpeg_runlength_enc_0001__auto__claude-claudesonnet5__20260702-003121__r01",
     "snapshot": "bench-orchestrator/final_runs/jpeg_runlength_enc_0001",
-    "turns": 59,
-    "tok_in": 107,
-    "tok_out": 97484,
+    "turns": 102,
+    "tok_in": 201,
+    "tok_out": 1280,
+    "tok_cache": 11394920,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 2,
@@ -1753,12 +1550,7 @@
       "mcp__rtl-codex__sby_tool": 11,
       "mcp__rtl-codex__read_file": 1
     },
-    "duration": null,
-    "duration_ms": 2125373,
-    "duration_min": 35.4,
-    "tok_cache_read": 6161729,
-    "tok_cache_creation": 201491,
-    "cost_usd": 7.236625
+    "duration": null
   },
   {
     "problem": "lfsr_0001",
@@ -1768,9 +1560,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-lfsr_0001__auto__claude-claudesonnet5__20260702-003122__r01",
     "snapshot": "bench-orchestrator/final_runs/lfsr_0001",
-    "turns": 65,
-    "tok_in": 119,
-    "tok_out": 47913,
+    "turns": 108,
+    "tok_in": 213,
+    "tok_out": 1235,
+    "tok_cache": 6223740,
     "tools": {
       "Read": 6,
       "Bash": 2,
@@ -1785,12 +1578,7 @@
       "mcp__rtl-codex__waveform_tool": 1,
       "Write": 4
     },
-    "duration": null,
-    "duration_ms": 617006,
-    "duration_min": 10.3,
-    "tok_cache_read": 3618320,
-    "tok_cache_creation": 102846,
-    "cost_usd": 3.650367499999999
+    "duration": null
   },
   {
     "problem": "lfsr_0005",
@@ -1800,9 +1588,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-lfsr_0005__auto__claude-claudesonnet5__20260702-003122__r01",
     "snapshot": "bench-orchestrator/final_runs/lfsr_0005",
-    "turns": 65,
-    "tok_in": 125,
-    "tok_out": 61754,
+    "turns": 120,
+    "tok_in": 237,
+    "tok_out": 1191,
+    "tok_cache": 10317189,
     "tools": {
       "Read": 3,
       "Bash": 23,
@@ -1819,12 +1608,7 @@
       "mcp__rtl-codex__sby_tool": 4,
       "Edit": 4
     },
-    "duration": null,
-    "duration_ms": 916396,
-    "duration_min": 15.3,
-    "tok_cache_read": 5550315,
-    "tok_cache_creation": 116942,
-    "cost_usd": 5.050520000000001
+    "duration": null
   },
   {
     "problem": "low_power_channel_0001",
@@ -1834,9 +1618,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-low_power_channel_0001__auto__claude-claudesonnet5__20260702-003121__r01",
     "snapshot": "bench-orchestrator/final_runs/low_power_channel_0001",
-    "turns": 94,
-    "tok_in": 161,
-    "tok_out": 153540,
+    "turns": 156,
+    "tok_in": 309,
+    "tok_out": 2228,
+    "tok_cache": 12498351,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 2,
@@ -1851,12 +1636,7 @@
       "mcp__rtl-codex__read_file": 9,
       "mcp__rtl-codex__simulation_tool": 2
     },
-    "duration": null,
-    "duration_ms": 1727369,
-    "duration_min": 28.8,
-    "tok_cache_read": 6752700,
-    "tok_cache_creation": 281658,
-    "cost_usd": 9.424392250000002
+    "duration": null
   },
   {
     "problem": "monte_carlo_0006",
@@ -1866,9 +1646,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-monte_carlo_0006__auto__claude-claudesonnet5__20260702-003122__r01",
     "snapshot": "bench-orchestrator/final_runs/monte_carlo_0006",
-    "turns": 72,
-    "tok_in": 141,
-    "tok_out": 94299,
+    "turns": 122,
+    "tok_in": 242,
+    "tok_out": 1449,
+    "tok_cache": 13394333,
     "tools": {
       "Read": 7,
       "Bash": 11,
@@ -1884,12 +1665,7 @@
       "Grep": 1,
       "mcp__rtl-codex__sby_tool": 4
     },
-    "duration": null,
-    "duration_ms": 1291081,
-    "duration_min": 21.5,
-    "tok_cache_read": 7995871,
-    "tok_cache_creation": 253570,
-    "cost_usd": 8.4902615
+    "duration": null
   },
   {
     "problem": "multiplexer_0001",
@@ -1899,9 +1675,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-multiplexer_0001__auto__claude-claudesonnet5__20260702-003122__r01",
     "snapshot": "bench-orchestrator/final_runs/multiplexer_0001",
-    "turns": 52,
-    "tok_in": 73,
-    "tok_out": 49860,
+    "turns": 80,
+    "tok_in": 157,
+    "tok_out": 880,
+    "tok_cache": 5202599,
     "tools": {
       "Read": 3,
       "Bash": 1,
@@ -1917,12 +1694,7 @@
       "Edit": 3,
       "Write": 1
     },
-    "duration": null,
-    "duration_ms": 550568,
-    "duration_min": 9.2,
-    "tok_cache_read": 2547416,
-    "tok_cache_creation": 111367,
-    "cost_usd": 3.2166167500000005
+    "duration": null
   },
   {
     "problem": "nbit_swizzling_0001",
@@ -1932,9 +1704,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-nbit_swizzling_0001__auto__claude-claudesonnet5__20260702-003121__r01",
     "snapshot": "bench-orchestrator/final_runs/nbit_swizzling_0001",
-    "turns": 28,
-    "tok_in": 39,
-    "tok_out": 20110,
+    "turns": 42,
+    "tok_in": 81,
+    "tok_out": 559,
+    "tok_cache": 1856322,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 1,
@@ -1945,12 +1718,7 @@
       "mcp__rtl-codex__linter_tool": 1,
       "mcp__rtl-codex__cocotb_tool": 4
     },
-    "duration": null,
-    "duration_ms": 217403,
-    "duration_min": 3.6,
-    "tok_cache_read": 896947,
-    "tok_cache_creation": 68200,
-    "cost_usd": 1.3776685
+    "duration": null
   },
   {
     "problem": "nmea_gps_0008",
@@ -1960,9 +1728,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-nmea_gps_0008__auto__claude-claudesonnet5__20260702-003122__r01",
     "snapshot": "bench-orchestrator/final_runs/nmea_gps_0008",
-    "turns": 76,
-    "tok_in": 139,
-    "tok_out": 110767,
+    "turns": 128,
+    "tok_in": 253,
+    "tok_out": 1667,
+    "tok_cache": 11845047,
     "tools": {
       "Read": 9,
       "Bash": 4,
@@ -1978,12 +1747,7 @@
       "mcp__rtl-codex__list_files_tool": 2,
       "mcp__rtl-codex__sby_tool": 6
     },
-    "duration": null,
-    "duration_ms": 1627851,
-    "duration_min": 27.1,
-    "tok_cache_read": 6655680,
-    "tok_cache_creation": 240873,
-    "cost_usd": 8.122523500000002
+    "duration": null
   },
   {
     "problem": "phase_rotation_0010",
@@ -1991,28 +1755,25 @@
     "cid": "cid005",
     "verdict": "FAIL",
     "leak_status": "CLEAN",
-    "source_run_dir": "bench-orchestrator/runs/cvdp-phase_rotation_0010__auto__claude-claudesonnet5__20260702-003122__r01",
+    "source_run_dir": "bench-orchestrator/runs/cvdp-phase_rotation_0010__auto__claude-claudesonnet5__20260703-111321__r01",
     "snapshot": "bench-orchestrator/final_runs/phase_rotation_0010",
-    "turns": 36,
-    "tok_in": 1088,
-    "tok_out": 56139,
+    "turns": 63,
+    "tok_in": 3228,
+    "tok_out": 258,
+    "tok_cache": 3303099,
     "tools": {
-      "Bash": 8,
-      "Read": 14,
-      "ToolSearch": 1,
+      "Bash": 7,
+      "Read": 13,
+      "Grep": 3,
       "mcp__rtl-codex__create_session_tool": 1,
-      "mcp__rtl-codex__write_file": 5,
+      "mcp__rtl-codex__list_files_tool": 2,
+      "Write": 4,
       "mcp__rtl-codex__linter_tool": 1,
-      "mcp__rtl-codex__list_files_tool": 1,
-      "mcp__rtl-codex__cocotb_tool": 3,
-      "Edit": 1
+      "ToolSearch": 1,
+      "mcp__rtl-codex__cocotb_tool": 1,
+      "mcp__rtl-codex__search_logs_tool": 1
     },
-    "duration": null,
-    "duration_ms": 642457,
-    "duration_min": 10.7,
-    "tok_cache_read": 1820364,
-    "tok_cache_creation": 161983,
-    "cost_usd": 3.3314907500000004
+    "duration": null
   },
   {
     "problem": "phase_rotation_0013",
@@ -2022,9 +1783,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-phase_rotation_0013__auto__claude-claudesonnet5__20260702-003121__r01",
     "snapshot": "bench-orchestrator/final_runs/phase_rotation_0013",
-    "turns": 45,
-    "tok_in": 79,
-    "tok_out": 59607,
+    "turns": 75,
+    "tok_in": 147,
+    "tok_out": 1133,
+    "tok_cache": 5657268,
     "tools": {
       "Read": 5,
       "Bash": 1,
@@ -2039,12 +1801,7 @@
       "mcp__rtl-codex__waveform_tool": 1,
       "mcp__rtl-codex__list_files_tool": 1
     },
-    "duration": null,
-    "duration_ms": 659527,
-    "duration_min": 11.0,
-    "tok_cache_read": 3194074,
-    "tok_cache_creation": 131491,
-    "cost_usd": 3.9094257499999996
+    "duration": null
   },
   {
     "problem": "phase_rotation_0015",
@@ -2054,9 +1811,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-phase_rotation_0015__auto__claude-claudesonnet5__20260702-003122__r01",
     "snapshot": "bench-orchestrator/final_runs/phase_rotation_0015",
-    "turns": 50,
-    "tok_in": 93,
-    "tok_out": 70769,
+    "turns": 87,
+    "tok_in": 171,
+    "tok_out": 868,
+    "tok_cache": 7566392,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 3,
@@ -2073,12 +1831,7 @@
       "mcp__rtl-codex__read_file": 3,
       "mcp__rtl-codex__sby_tool": 1
     },
-    "duration": null,
-    "duration_ms": 695006,
-    "duration_min": 11.6,
-    "tok_cache_read": 4207235,
-    "tok_cache_creation": 165933,
-    "cost_usd": 4.910388749999998
+    "duration": null
   },
   {
     "problem": "phase_rotation_0019",
@@ -2088,9 +1841,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-phase_rotation_0019__auto__claude-claudesonnet5__20260702-231000__r01",
     "snapshot": "bench-orchestrator/final_runs/phase_rotation_0019",
-    "turns": 75,
-    "tok_in": 147,
-    "tok_out": 81371,
+    "turns": 137,
+    "tok_in": 271,
+    "tok_out": 1061,
+    "tok_cache": 14658702,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 4,
       "Read": 6,
@@ -2107,12 +1861,7 @@
       "mcp__rtl-codex__linter_tool": 4,
       "mcp__rtl-codex__cocotb_tool": 3
     },
-    "duration": null,
-    "duration_ms": 942231,
-    "duration_min": 15.7,
-    "tok_cache_read": 8035235,
-    "tok_cache_creation": 234251,
-    "cost_usd": 7.516696249999999
+    "duration": null
   },
   {
     "problem": "phase_rotation_0028",
@@ -2122,9 +1871,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-phase_rotation_0028__auto__claude-claudesonnet5__20260702-003121__r01",
     "snapshot": "bench-orchestrator/final_runs/phase_rotation_0028",
-    "turns": 61,
-    "tok_in": 89,
-    "tok_out": 116725,
+    "turns": 97,
+    "tok_in": 191,
+    "tok_out": 820,
+    "tok_cache": 7506951,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 4,
@@ -2138,12 +1888,7 @@
       "mcp__rtl-codex__cocotb_tool": 3,
       "mcp__rtl-codex__sby_tool": 5
     },
-    "duration": null,
-    "duration_ms": 1431852,
-    "duration_min": 23.9,
-    "tok_cache_read": 3939411,
-    "tok_cache_creation": 272817,
-    "cost_usd": 7.223815500000004
+    "duration": null
   },
   {
     "problem": "phase_rotation_0031",
@@ -2153,9 +1898,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-phase_rotation_0031__auto__claude-claudesonnet5__20260702-003122__r01",
     "snapshot": "bench-orchestrator/final_runs/phase_rotation_0031",
-    "turns": 123,
-    "tok_in": 219,
-    "tok_out": 190196,
+    "turns": 217,
+    "tok_in": 429,
+    "tok_out": 2014,
+    "tok_cache": 20622892,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 19,
@@ -2174,12 +1920,7 @@
       "Grep": 3,
       "mcp__rtl-codex__sby_tool": 12
     },
-    "duration": null,
-    "duration_ms": 3266470,
-    "duration_min": 54.4,
-    "tok_cache_read": 10755580,
-    "tok_cache_creation": 443610,
-    "cost_usd": 13.990912750000001
+    "duration": null
   },
   {
     "problem": "phase_rotation_0038",
@@ -2189,9 +1930,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-phase_rotation_0038__auto__claude-claudesonnet5__20260703-041758__r01",
     "snapshot": "bench-orchestrator/final_runs/phase_rotation_0038",
-    "turns": 44,
-    "tok_in": 81,
-    "tok_out": 76919,
+    "turns": 73,
+    "tok_in": 143,
+    "tok_out": 925,
+    "tok_cache": 6321711,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 4,
@@ -2206,12 +1948,7 @@
       "Write": 2,
       "mcp__rtl-codex__list_files_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1266456,
-    "duration_min": 21.1,
-    "tok_cache_read": 3739602,
-    "tok_cache_creation": 127754,
-    "cost_usd": 4.623617500000001
+    "duration": null
   },
   {
     "problem": "poly_decimator_0001",
@@ -2219,31 +1956,32 @@
     "cid": "cid005",
     "verdict": "FAIL",
     "leak_status": "CLEAN",
-    "source_run_dir": "bench-orchestrator/runs/cvdp-poly_decimator_0001__auto__claude-claudesonnet5__20260702-003121__r01",
+    "source_run_dir": "bench-orchestrator/runs/cvdp-poly_decimator_0001__auto__claude-claudesonnet5__20260703-111321__r01",
     "snapshot": "bench-orchestrator/final_runs/poly_decimator_0001",
-    "turns": 105,
-    "tok_in": 169,
-    "tok_out": 172744,
+    "turns": 354,
+    "tok_in": 705,
+    "tok_out": 3776,
+    "tok_cache": 34446035,
     "tools": {
-      "Read": 28,
-      "Bash": 1,
+      "Read": 30,
+      "Bash": 4,
+      "ToolSearch": 11,
       "mcp__rtl-codex__create_session_tool": 1,
-      "mcp__rtl-codex__write_file": 26,
-      "ToolSearch": 5,
-      "TodoWrite": 3,
-      "mcp__rtl-codex__linter_tool": 2,
-      "Edit": 20,
-      "mcp__rtl-codex__cocotb_tool": 10,
-      "Grep": 3,
-      "mcp__rtl-codex__get_current_session": 1,
-      "Write": 2
+      "mcp__rtl-codex__write_file": 14,
+      "TodoWrite": 6,
+      "mcp__rtl-codex__linter_tool": 3,
+      "Edit": 49,
+      "mcp__rtl-codex__cocotb_tool": 44,
+      "mcp__rtl-codex__list_files_tool": 7,
+      "mcp__rtl-codex__get_current_session": 2,
+      "Write": 10,
+      "mcp__rtl-codex__read_file": 4,
+      "mcp__rtl-codex__sby_tool": 4,
+      "mcp__rtl-codex__read_spec": 1,
+      "mcp__rtl-codex__get_manifest": 1,
+      "mcp__rtl-codex__generate_report_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1953201,
-    "duration_min": 32.6,
-    "tok_cache_read": 9266181,
-    "tok_cache_creation": 348419,
-    "cost_usd": 11.707559250000001
+    "duration": null
   },
   {
     "problem": "prbs_0001",
@@ -2253,9 +1991,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-prbs_0001__auto__claude-claudesonnet5__20260702-231000__r01",
     "snapshot": "bench-orchestrator/final_runs/prbs_0001",
-    "turns": 120,
-    "tok_in": 233,
-    "tok_out": 145082,
+    "turns": 214,
+    "tok_in": 426,
+    "tok_out": 2303,
+    "tok_cache": 19947789,
     "tools": {
       "Read": 20,
       "mcp__rtl-codex__create_session_tool": 1,
@@ -2272,12 +2011,7 @@
       "mcp__rtl-codex__list_files_tool": 1,
       "Bash": 1
     },
-    "duration": null,
-    "duration_ms": 1781590,
-    "duration_min": 29.7,
-    "tok_cache_read": 11064481,
-    "tok_cache_creation": 306794,
-    "cost_usd": 11.521767000000002
+    "duration": null
   },
   {
     "problem": "programmable_fsm_dynamic_state_encoding_0001",
@@ -2287,9 +2021,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-programmable_fsm_dynamic_state_encoding_0001__auto__claude-claudesonnet5__20260702-231002__r01",
     "snapshot": "bench-orchestrator/final_runs/programmable_fsm_dynamic_state_encoding_0001",
-    "turns": 60,
-    "tok_in": 109,
-    "tok_out": 83904,
+    "turns": 100,
+    "tok_in": 197,
+    "tok_out": 1154,
+    "tok_cache": 8848197,
     "tools": {
       "Read": 3,
       "Bash": 1,
@@ -2304,12 +2039,7 @@
       "mcp__rtl-codex__sby_tool": 6,
       "mcp__rtl-codex__list_files_tool": 1
     },
-    "duration": null,
-    "duration_ms": 992095,
-    "duration_min": 16.5,
-    "tok_cache_read": 5093901,
-    "tok_cache_creation": 173008,
-    "cost_usd": 5.7263955
+    "duration": null
   },
   {
     "problem": "queue_0001",
@@ -2319,9 +2049,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-queue_0001__auto__claude-claudesonnet5__20260702-231000__r01",
     "snapshot": "bench-orchestrator/final_runs/queue_0001",
-    "turns": 67,
-    "tok_in": 129,
-    "tok_out": 79190,
+    "turns": 111,
+    "tok_in": 219,
+    "tok_out": 1622,
+    "tok_cache": 11169341,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 2,
@@ -2337,12 +2068,7 @@
       "mcp__rtl-codex__list_files_tool": 1,
       "mcp__rtl-codex__waveform_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1460377,
-    "duration_min": 24.3,
-    "tok_cache_read": 6780076,
-    "tok_cache_creation": 212096,
-    "cost_usd": 7.238555500000001
+    "duration": null
   },
   {
     "problem": "rc5_0001",
@@ -2352,9 +2078,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-rc5_0001__auto__claude-claudesonnet5__20260702-231002__r01",
     "snapshot": "bench-orchestrator/final_runs/rc5_0001",
-    "turns": 65,
-    "tok_in": 113,
-    "tok_out": 86027,
+    "turns": 112,
+    "tok_in": 221,
+    "tok_out": 1118,
+    "tok_cache": 10722013,
     "tools": {
       "Read": 12,
       "Bash": 4,
@@ -2371,12 +2098,7 @@
       "mcp__rtl-codex__read_file": 2,
       "mcp__rtl-codex__waveform_tool": 2
     },
-    "duration": null,
-    "duration_ms": 1108708,
-    "duration_min": 18.5,
-    "tok_cache_read": 5750597,
-    "tok_cache_creation": 156834,
-    "cost_usd": 6.006751
+    "duration": null
   },
   {
     "problem": "rgb_color_space_conversion_0001",
@@ -2386,9 +2108,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-rgb_color_space_conversion_0001__auto__claude-claudesonnet5__20260702-231000__r01",
     "snapshot": "bench-orchestrator/final_runs/rgb_color_space_conversion_0001",
-    "turns": 85,
-    "tok_in": 165,
-    "tok_out": 158620,
+    "turns": 148,
+    "tok_in": 293,
+    "tok_out": 1721,
+    "tok_cache": 13613109,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 11,
@@ -2403,12 +2126,7 @@
       "Edit": 15,
       "mcp__rtl-codex__sby_tool": 11
     },
-    "duration": null,
-    "duration_ms": 2700423,
-    "duration_min": 45.0,
-    "tok_cache_read": 7797602,
-    "tok_cache_creation": 335633,
-    "cost_usd": 10.439487500000004
+    "duration": null
   },
   {
     "problem": "rgb_color_space_conversion_0004",
@@ -2418,9 +2136,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-rgb_color_space_conversion_0004__auto__claude-claudesonnet5__20260702-231002__r01",
     "snapshot": "bench-orchestrator/final_runs/rgb_color_space_conversion_0004",
-    "turns": 77,
-    "tok_in": 147,
-    "tok_out": 113591,
+    "turns": 139,
+    "tok_in": 275,
+    "tok_out": 1773,
+    "tok_cache": 12626236,
     "tools": {
       "Read": 10,
       "Bash": 4,
@@ -2436,12 +2155,7 @@
       "mcp__rtl-codex__sby_tool": 5,
       "mcp__rtl-codex__list_files_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1638331,
-    "duration_min": 27.3,
-    "tok_cache_read": 6858164,
-    "tok_cache_creation": 270928,
-    "cost_usd": 8.517795
+    "duration": null
   },
   {
     "problem": "secure_apb_history_shift_register_0001",
@@ -2451,9 +2165,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-secure_apb_history_shift_register_0001__auto__claude-claudesonnet5__20260702-231000__r01",
     "snapshot": "bench-orchestrator/final_runs/secure_apb_history_shift_register_0001",
-    "turns": 84,
-    "tok_in": 157,
-    "tok_out": 149093,
+    "turns": 141,
+    "tok_in": 279,
+    "tok_out": 1619,
+    "tok_cache": 13340210,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 16,
@@ -2468,12 +2183,7 @@
       "Edit": 19,
       "mcp__rtl-codex__sby_tool": 4
     },
-    "duration": null,
-    "duration_ms": 1870557,
-    "duration_min": 31.2,
-    "tok_cache_read": 7723109,
-    "tok_cache_creation": 289613,
-    "cost_usd": 9.954296499999995
+    "duration": null
   },
   {
     "problem": "sigma_delta_audio_0001",
@@ -2483,9 +2193,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-sigma_delta_audio_0001__auto__claude-claudesonnet5__20260702-231002__r01",
     "snapshot": "bench-orchestrator/final_runs/sigma_delta_audio_0001",
-    "turns": 102,
-    "tok_in": 1335,
-    "tok_out": 114967,
+    "turns": 170,
+    "tok_in": 2613,
+    "tok_out": 2127,
+    "tok_cache": 16534826,
     "tools": {
       "Read": 10,
       "Bash": 4,
@@ -2503,12 +2214,7 @@
       "mcp__rtl-codex__waveform_tool": 2,
       "Write": 7
     },
-    "duration": null,
-    "duration_ms": 1518080,
-    "duration_min": 25.3,
-    "tok_cache_read": 9967228,
-    "tok_cache_creation": 246937,
-    "cost_usd": 9.941956749999996
+    "duration": null
   },
   {
     "problem": "signed_comparator_0001",
@@ -2518,9 +2224,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-signed_comparator_0001__auto__claude-claudesonnet5__20260702-231000__r01",
     "snapshot": "bench-orchestrator/final_runs/signed_comparator_0001",
-    "turns": 40,
-    "tok_in": 59,
-    "tok_out": 41421,
+    "turns": 65,
+    "tok_in": 127,
+    "tok_out": 729,
+    "tok_cache": 4177935,
     "tools": {
       "Read": 3,
       "ToolSearch": 4,
@@ -2534,12 +2241,7 @@
       "mcp__rtl-codex__sby_tool": 1,
       "mcp__rtl-codex__simulation_tool": 1
     },
-    "duration": null,
-    "duration_ms": 420948,
-    "duration_min": 7.0,
-    "tok_cache_read": 1992143,
-    "tok_cache_creation": 101081,
-    "cost_usd": 2.66364775
+    "duration": null
   },
   {
     "problem": "sorter_0009",
@@ -2549,9 +2251,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-sorter_0009__auto__claude-claudesonnet5__20260702-231002__r01",
     "snapshot": "bench-orchestrator/final_runs/sorter_0009",
-    "turns": 57,
-    "tok_in": 111,
-    "tok_out": 101101,
+    "turns": 97,
+    "tok_in": 191,
+    "tok_out": 1463,
+    "tok_cache": 10284679,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 1,
@@ -2564,12 +2267,7 @@
       "mcp__rtl-codex__sby_tool": 9,
       "mcp__rtl-codex__read_file": 1
     },
-    "duration": null,
-    "duration_ms": 1911403,
-    "duration_min": 31.9,
-    "tok_cache_read": 6286184,
-    "tok_cache_creation": 191507,
-    "cost_usd": 6.868090750000001
+    "duration": null
   },
   {
     "problem": "sorter_0016",
@@ -2579,9 +2277,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-sorter_0016__auto__claude-claudesonnet5__20260702-231000__r01",
     "snapshot": "bench-orchestrator/final_runs/sorter_0016",
-    "turns": 164,
-    "tok_in": 317,
-    "tok_out": 173422,
+    "turns": 279,
+    "tok_in": 555,
+    "tok_out": 4218,
+    "tok_cache": 28409511,
     "tools": {
       "Read": 8,
       "Bash": 2,
@@ -2597,12 +2296,7 @@
       "mcp__rtl-codex__list_files_tool": 1,
       "mcp__rtl-codex__sby_tool": 38
     },
-    "duration": null,
-    "duration_ms": 4839643,
-    "duration_min": 80.7,
-    "tok_cache_read": 16412953,
-    "tok_cache_creation": 372677,
-    "cost_usd": 15.897272749999997
+    "duration": null
   },
   {
     "problem": "sorter_0026",
@@ -2612,9 +2306,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-sorter_0026__auto__claude-claudesonnet5__20260702-231002__r01",
     "snapshot": "bench-orchestrator/final_runs/sorter_0026",
-    "turns": 110,
-    "tok_in": 173,
-    "tok_out": 134370,
+    "turns": 166,
+    "tok_in": 329,
+    "tok_out": 2515,
+    "tok_cache": 11825302,
     "tools": {
       "Read": 2,
       "Bash": 2,
@@ -2629,12 +2324,7 @@
       "mcp__rtl-codex__sby_tool": 22,
       "mcp__rtl-codex__list_files_tool": 1
     },
-    "duration": null,
-    "duration_ms": 2932696,
-    "duration_min": 48.9,
-    "tok_cache_read": 6403123,
-    "tok_cache_creation": 264000,
-    "cost_usd": 8.638069750000001
+    "duration": null
   },
   {
     "problem": "spi_complex_mult_0002",
@@ -2644,9 +2334,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-spi_complex_mult_0002__auto__claude-claudesonnet5__20260702-231000__r01",
     "snapshot": "bench-orchestrator/final_runs/spi_complex_mult_0002",
-    "turns": 65,
-    "tok_in": 113,
-    "tok_out": 101105,
+    "turns": 106,
+    "tok_in": 209,
+    "tok_out": 1307,
+    "tok_cache": 9061342,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 8,
@@ -2661,12 +2352,7 @@
       "mcp__rtl-codex__read_file": 2,
       "mcp__rtl-codex__sby_tool": 8
     },
-    "duration": null,
-    "duration_ms": 1290278,
-    "duration_min": 21.5,
-    "tok_cache_read": 4883380,
-    "tok_cache_creation": 208622,
-    "cost_usd": 6.8081119999999995
+    "duration": null
   },
   {
     "problem": "swizzler_0001",
@@ -2676,9 +2362,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-swizzler_0001__auto__claude-claudesonnet5__20260702-231002__r01",
     "snapshot": "bench-orchestrator/final_runs/swizzler_0001",
-    "turns": 55,
-    "tok_in": 63,
-    "tok_out": 47108,
+    "turns": 80,
+    "tok_in": 157,
+    "tok_out": 857,
+    "tok_cache": 5358918,
     "tools": {
       "Read": 4,
       "Bash": 1,
@@ -2692,12 +2379,7 @@
       "Edit": 3,
       "mcp__rtl-codex__sby_tool": 5
     },
-    "duration": null,
-    "duration_ms": 908256,
-    "duration_min": 15.1,
-    "tok_cache_read": 2169782,
-    "tok_cache_creation": 110484,
-    "cost_usd": 2.953431
+    "duration": null
   },
   {
     "problem": "swizzler_0005",
@@ -2707,9 +2389,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-swizzler_0005__auto__claude-claudesonnet5__20260702-231000__r01",
     "snapshot": "bench-orchestrator/final_runs/swizzler_0005",
-    "turns": 65,
-    "tok_in": 105,
-    "tok_out": 120661,
+    "turns": 110,
+    "tok_in": 217,
+    "tok_out": 1289,
+    "tok_cache": 9149566,
     "tools": {
       "Read": 4,
       "ToolSearch": 4,
@@ -2724,12 +2407,7 @@
       "mcp__rtl-codex__list_files_tool": 1,
       "mcp__rtl-codex__read_file": 1
     },
-    "duration": null,
-    "duration_ms": 1399432,
-    "duration_min": 23.3,
-    "tok_cache_read": 4471005,
-    "tok_cache_creation": 218535,
-    "cost_usd": 7.178589000000002
+    "duration": null
   },
   {
     "problem": "sync_serial_communication_0001",
@@ -2739,9 +2417,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-sync_serial_communication_0001__auto__claude-claudesonnet5__20260702-231002__r01",
     "snapshot": "bench-orchestrator/final_runs/sync_serial_communication_0001",
-    "turns": 127,
-    "tok_in": 241,
-    "tok_out": 163998,
+    "turns": 210,
+    "tok_in": 415,
+    "tok_out": 3197,
+    "tok_cache": 19977759,
     "tools": {
       "Read": 7,
       "Bash": 1,
@@ -2756,37 +2435,36 @@
       "Edit": 27,
       "mcp__rtl-codex__sby_tool": 31
     },
-    "duration": null,
-    "duration_ms": 3614707,
-    "duration_min": 60.2,
-    "tok_cache_read": 11646443,
-    "tok_cache_creation": 302588,
-    "cost_usd": 12.359245749999998
+    "duration": null
   },
   {
     "problem": "systolic_array_0001",
     "difficulty": "medium",
     "cid": "cid005",
-    "verdict": "FAIL",
+    "verdict": "PASS",
     "leak_status": "CLEAN",
-    "source_run_dir": "bench-orchestrator/runs/cvdp-systolic_array_0001__auto__claude-claudesonnet5__20260702-231000__r01",
+    "source_run_dir": "bench-orchestrator/runs/cvdp-systolic_array_0001__auto__claude-claudesonnet5__20260703-111319__r01",
     "snapshot": "bench-orchestrator/final_runs/systolic_array_0001",
-    "turns": 7,
-    "tok_in": 7,
-    "tok_out": 14883,
+    "turns": 230,
+    "tok_in": 457,
+    "tok_out": 3073,
+    "tok_cache": 20306944,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
-      "Read": 1,
-      "ToolSearch": 1,
-      "mcp__rtl-codex__list_files_tool": 1,
-      "mcp__rtl-codex__write_file": 2
+      "Read": 21,
+      "mcp__rtl-codex__list_files_tool": 4,
+      "mcp__rtl-codex__write_file": 9,
+      "ToolSearch": 11,
+      "TodoWrite": 7,
+      "mcp__rtl-codex__linter_tool": 1,
+      "mcp__rtl-codex__simulation_tool": 3,
+      "mcp__rtl-codex__cocotb_tool": 2,
+      "Edit": 36,
+      "mcp__rtl-codex__sby_tool": 30,
+      "mcp__rtl-codex__waveform_tool": 1,
+      "Write": 6
     },
-    "duration": null,
-    "duration_ms": 136526,
-    "duration_min": 2.3,
-    "tok_cache_read": 125755,
-    "tok_cache_creation": 30594,
-    "cost_usd": 0.6262000000000001
+    "duration": null
   },
   {
     "problem": "thermostat_secure_0001",
@@ -2796,9 +2474,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-thermostat_secure_0001__auto__claude-claudesonnet5__20260703-041759__r01",
     "snapshot": "bench-orchestrator/final_runs/thermostat_secure_0001",
-    "turns": 102,
-    "tok_in": 197,
-    "tok_out": 235730,
+    "turns": 179,
+    "tok_in": 355,
+    "tok_out": 2104,
+    "tok_cache": 15395315,
     "tools": {
       "Read": 2,
       "Bash": 2,
@@ -2817,12 +2496,7 @@
       "mcp__rtl-codex__edit_file_tool": 2,
       "mcp__rtl-codex__read_spec": 1
     },
-    "duration": null,
-    "duration_ms": 2726838,
-    "duration_min": 45.4,
-    "tok_cache_read": 8799341,
-    "tok_cache_creation": 395117,
-    "cost_usd": 13.722237000000003
+    "duration": null
   },
   {
     "problem": "traffic_light_controller_0001",
@@ -2832,9 +2506,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-traffic_light_controller_0001__auto__claude-claudesonnet5__20260703-041758__r01",
     "snapshot": "bench-orchestrator/final_runs/traffic_light_controller_0001",
-    "turns": 131,
-    "tok_in": 241,
-    "tok_out": 143400,
+    "turns": 216,
+    "tok_in": 429,
+    "tok_out": 3183,
+    "tok_cache": 20400876,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 15,
@@ -2851,12 +2526,7 @@
       "mcp__rtl-codex__waveform_tool": 3,
       "Glob": 1
     },
-    "duration": null,
-    "duration_ms": 1865160,
-    "duration_min": 31.1,
-    "tok_cache_read": 11521773,
-    "tok_cache_creation": 304747,
-    "cost_usd": 11.812980499999995
+    "duration": null
   },
   {
     "problem": "ttc_lite_0001",
@@ -2866,9 +2536,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-ttc_lite_0001__auto__claude-claudesonnet5__20260703-041759__r01",
     "snapshot": "bench-orchestrator/final_runs/ttc_lite_0001",
-    "turns": 69,
-    "tok_in": 133,
-    "tok_out": 143017,
+    "turns": 120,
+    "tok_in": 237,
+    "tok_out": 1707,
+    "tok_cache": 10353730,
     "tools": {
       "Read": 1,
       "ToolSearch": 4,
@@ -2884,12 +2555,7 @@
       "TodoWrite": 3,
       "mcp__rtl-codex__simulation_tool": 3
     },
-    "duration": null,
-    "duration_ms": 1636994,
-    "duration_min": 27.3,
-    "tok_cache_read": 6000487,
-    "tok_cache_creation": 250061,
-    "cost_usd": 8.653608499999999
+    "duration": null
   },
   {
     "problem": "universal_shift_reg_0001",
@@ -2899,9 +2565,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-universal_shift_reg_0001__auto__claude-claudesonnet5__20260703-041758__r01",
     "snapshot": "bench-orchestrator/final_runs/universal_shift_reg_0001",
-    "turns": 76,
-    "tok_in": 143,
-    "tok_out": 84265,
+    "turns": 116,
+    "tok_in": 229,
+    "tok_out": 1971,
+    "tok_cache": 10668264,
     "tools": {
       "mcp__rtl-codex__create_session_tool": 1,
       "Read": 3,
@@ -2916,12 +2583,7 @@
       "mcp__rtl-codex__list_files_tool": 1,
       "mcp__rtl-codex__read_file": 1
     },
-    "duration": null,
-    "duration_ms": 1002526,
-    "duration_min": 16.7,
-    "tok_cache_read": 6949706,
-    "tok_cache_creation": 162556,
-    "cost_usd": 6.598168
+    "duration": null
   },
   {
     "problem": "universal_shift_reg_0003",
@@ -2931,9 +2593,10 @@
     "leak_status": "CLEAN",
     "source_run_dir": "bench-orchestrator/runs/cvdp-universal_shift_reg_0003__auto__claude-claudesonnet5__20260703-041759__r01",
     "snapshot": "bench-orchestrator/final_runs/universal_shift_reg_0003",
-    "turns": 81,
-    "tok_in": 149,
-    "tok_out": 115167,
+    "turns": 136,
+    "tok_in": 269,
+    "tok_out": 1832,
+    "tok_cache": 13144623,
     "tools": {
       "Read": 8,
       "Bash": 1,
@@ -2949,11 +2612,6 @@
       "mcp__rtl-codex__list_files_tool": 2,
       "mcp__rtl-codex__sby_tool": 1
     },
-    "duration": null,
-    "duration_ms": 1382768,
-    "duration_min": 23.0,
-    "tok_cache_read": 7732090,
-    "tok_cache_creation": 273038,
-    "cost_usd": 8.985332749999996
+    "duration": null
   }
 ]
