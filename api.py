@@ -80,6 +80,11 @@ class ProjectCreate(BaseModel):
     name: str
 
 
+class ProjectPatch(BaseModel):
+    # Rename only. The project id/slug is immutable (sessions reference it).
+    name: str
+
+
 class ProjectResponse(BaseModel):
     id: str
     name: str
@@ -93,7 +98,14 @@ class SessionCreate(BaseModel):
 
 
 class SessionPatch(BaseModel):
-    project_id: Optional[str] = None  # None = remove from project
+    # Both fields optional; a PATCH must provide at least one (else 400).
+    # ``name`` is a DISPLAY-ONLY rename: the session id and its workspace
+    # directory never change (files/runs/threads all stay keyed by session_id).
+    name: Optional[str] = None
+    # project_id: None = remove from project. Only applied when the field is
+    # actually present in the payload (model_fields_set), so a pure rename
+    # never clears the project assignment.
+    project_id: Optional[str] = None
 
 
 class SessionResponse(BaseModel):
@@ -105,6 +117,10 @@ class SessionResponse(BaseModel):
     updated_at: Optional[str] = None
     total_tokens: int = 0
     total_cost: float = 0.0
+    # Honest COUNT of chat_threads rows for this session. A fresh session shows
+    # 0 until its default "Chat 1" row is created (first thread list / connect);
+    # the UI treats 0 as "no chats yet". Never triggers workspace hydration.
+    thread_count: int = 0
 
 
 class MessageResponse(BaseModel):
@@ -589,6 +605,11 @@ async def list_sessions(identity: Identity = Depends(get_identity)):
     """List the caller's sessions (tenant-scoped in hosted mode)."""
     uid = _uid(identity)
     sessions = session_manager.get_all_sessions(user_id=uid)
+    # ONE grouped COUNT over chat_threads for the whole list (not a per-session
+    # query, and no workspace hydration). Honest row count: a fresh session's
+    # default "Chat 1" row doesn't exist until the first thread list/connect,
+    # so it reports 0 ("no chats yet").
+    thread_counts = session_manager.count_threads_by_session(user_id=uid)
     result = []
 
     for session_id in sessions:
@@ -601,7 +622,8 @@ async def list_sessions(identity: Identity = Depends(get_identity)):
             created_at=str(meta.get("created_at")) if meta else None,
             updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
             total_tokens=meta.get("total_tokens", 0) if meta else 0,
-            total_cost=meta.get("total_cost", 0.0) if meta else 0.0
+            total_cost=meta.get("total_cost", 0.0) if meta else 0.0,
+            thread_count=thread_counts.get(session_id, 0),
         ))
 
     return result
@@ -673,35 +695,6 @@ async def create_trial_session(data: SessionCreate, identity: Identity = Depends
 # and 404. Keep specific GET sub-routes ABOVE the catch-all. See get_session below.
 
 
-@app.delete("/api/sessions/{session_id:path}")
-async def delete_session(session_id: str, identity: Identity = Depends(require_signed_in)):
-    """Delete a session (owner only)."""
-    uid = _require_owned(session_id, identity)
-    session_manager.delete_session(session_id, user_id=uid)
-    return {"status": "deleted", "session_id": session_id}
-
-
-@app.patch("/api/sessions/{session_id:path}", response_model=SessionResponse)
-async def patch_session(session_id: str, data: SessionPatch, identity: Identity = Depends(require_signed_in)):
-    """Move a session to a different project (owner only)."""
-    uid = _require_owned(session_id, identity)
-    try:
-        session_manager.move_session_to_project(session_id, data.project_id, user_id=uid)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    meta = session_manager.get_session_metadata(session_id, user_id=uid)
-    return SessionResponse(
-        id=session_id,
-        name=meta.get("session_name"),
-        model_name=meta.get("model_name"),
-        project_id=meta.get("project_id"),
-        created_at=str(meta.get("created_at")),
-        updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
-        total_tokens=meta.get("total_tokens", 0),
-        total_cost=meta.get("total_cost", 0.0),
-    )
-
-
 # =============================================================================
 # PROJECT ENDPOINTS
 # =============================================================================
@@ -721,6 +714,24 @@ async def create_project(data: ProjectCreate, identity: Identity = Depends(requi
         return ProjectResponse(id=project["id"], name=project["name"], created_at=str(project["created_at"]))
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.patch("/api/projects/{project_id}", response_model=ProjectResponse)
+async def rename_project(project_id: str, data: ProjectPatch, identity: Identity = Depends(require_signed_in)):
+    """Rename a project (owner only; requires sign-in like create/delete).
+
+    The project id/slug is immutable — only the display name changes; sessions
+    keep their project_id unchanged.
+    """
+    uid = _uid(identity)
+    if not session_manager.get_project(project_id, user_id=uid):
+        raise HTTPException(status_code=404, detail="Project not found")
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="'name' must be a non-empty string.")
+    session_manager.rename_project(project_id, name, user_id=uid)
+    p = session_manager.get_project(project_id, user_id=uid)
+    return ProjectResponse(id=p["id"], name=p["name"], created_at=str(p.get("created_at") or ""))
 
 
 @app.delete("/api/projects/{project_id}")
@@ -981,7 +992,8 @@ async def get_session(session_id: str, identity: Identity = Depends(get_identity
         created_at=str(meta.get("created_at")),
         updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
         total_tokens=meta.get("total_tokens", 0),
-        total_cost=meta.get("total_cost", 0.0)
+        total_cost=meta.get("total_cost", 0.0),
+        thread_count=session_manager.count_threads(session_id, user_id=uid),
     )
 
 
@@ -1006,6 +1018,58 @@ async def delete_thread(session_id: str, tid: str, identity: Identity = Depends(
         raise HTTPException(status_code=404, detail="Thread not found")
     session_manager.delete_thread(tid, user_id=uid)
     return {"status": "deleted", "thread_id": tid}
+
+
+# NOTE: session-level DELETE/PATCH use the greedy `{session_id:path}` converter
+# and MUST be registered AFTER every /threads sub-route above — otherwise
+# `PATCH /api/sessions/<sid>/threads/<tid>` binds session_id="<sid>/threads/<tid>"
+# and 404s (this shadowing silently broke thread rename/model-set over REST).
+@app.delete("/api/sessions/{session_id:path}")
+async def delete_session(session_id: str, identity: Identity = Depends(require_signed_in)):
+    """Delete a session (owner only)."""
+    uid = _require_owned(session_id, identity)
+    session_manager.delete_session(session_id, user_id=uid)
+    return {"status": "deleted", "session_id": session_id}
+
+
+@app.patch("/api/sessions/{session_id:path}", response_model=SessionResponse)
+async def patch_session(session_id: str, data: SessionPatch, identity: Identity = Depends(require_signed_in)):
+    """Rename a session and/or move it to a different project (owner only).
+
+    Rename is DISPLAY-ONLY: the session id and its workspace directory never
+    change — files, runs, threads, and checkpoints all stay keyed by the
+    original session_id. At least one of ``name``/``project_id`` is required.
+    """
+    uid = _require_owned(session_id, identity)
+    # model_fields_set distinguishes "field absent" from "explicit null":
+    # {"project_id": null} means remove-from-project; {} is an empty patch.
+    provided = data.model_fields_set & {"name", "project_id"}
+    if not provided:
+        raise HTTPException(status_code=400,
+                            detail="Provide at least one of 'name' or 'project_id'.")
+    if "name" in provided:
+        name = (data.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="'name' must be a non-empty string.")
+        session_manager.rename_session(session_id, name, user_id=uid)
+    if "project_id" in provided:
+        try:
+            session_manager.move_session_to_project(session_id, data.project_id, user_id=uid)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    meta = session_manager.get_session_metadata(session_id, user_id=uid)
+    return SessionResponse(
+        id=session_id,
+        name=meta.get("session_name"),
+        model_name=meta.get("model_name"),
+        project_id=meta.get("project_id"),
+        created_at=str(meta.get("created_at")),
+        updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
+        total_tokens=meta.get("total_tokens", 0),
+        total_cost=meta.get("total_cost", 0.0),
+        thread_count=session_manager.count_threads(session_id, user_id=uid),
+    )
+
 
 
 # Keepalive cadence for the chat stream. LangGraph emits nothing during a long

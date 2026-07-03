@@ -52,6 +52,12 @@ class SessionManager:
         """Delete a project and unassign its sessions (sessions are NOT deleted)."""
         self._store.delete_project(project_id, user_id=user_id)
 
+    def rename_project(self, project_id: str, name: str, user_id: str | None = None):
+        """Rename a project's display name. The id/slug is immutable — sessions
+        keep their ``project_id`` (and any ``<slug>/…`` paths) unchanged.
+        Tenant-scoped: a non-owner's rename is a no-op."""
+        self._store.rename_project(project_id, name, user_id=user_id)
+
     # -------------------------------------------------------------------------
     # Session methods
     # -------------------------------------------------------------------------
@@ -171,6 +177,16 @@ class SessionManager:
             raise ValueError(f"Project '{project_id}' not found.")
         self._store.move_session(session_id, project_id, user_id=user_id)
 
+    def rename_session(self, session_id: str, name: str, user_id=None):
+        """Rename a session's DISPLAY name only.
+
+        The session id and the workspace directory it names never change —
+        renaming never moves files and never re-keys checkpoints or threads
+        (they are all keyed by session_id). Tenant-scoped like
+        move_session_to_project: a non-owner's rename is a no-op.
+        """
+        self._store.rename_session(session_id, name, user_id=user_id)
+
     def update_session_stats(self, session_id, input_t, output_t, cached_t, cost, user_id=None):
         """Updates token stats and bumps updated_at for a session."""
         self._store.update_stats(
@@ -266,6 +282,19 @@ class SessionManager:
 
     def get_thread(self, thread_id, user_id=None) -> dict | None:
         return self._store.get_thread(thread_id, user_id=user_id)
+
+    def count_threads(self, session_id, user_id=None) -> int:
+        """Honest thread-row count for one session (no ensure, no hydration)."""
+        return self._store.count_threads(session_id, user_id=user_id)
+
+    def count_threads_by_session(self, user_id=None) -> dict[str, int]:
+        """{session_id: thread-row count} in ONE grouped query, for session lists.
+
+        Counts what's in the table honestly: a fresh session has 0 until its
+        default "Chat 1" row is created (on first thread list / WS connect).
+        Never ensures threads and never touches/hydrates workspaces.
+        """
+        return self._store.count_threads_by_session(user_id=user_id)
 
     def rename_thread(self, thread_id, title, user_id=None):
         self._store.update_thread(thread_id, user_id=user_id, title=title)

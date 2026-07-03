@@ -38,6 +38,7 @@ class MetadataStore(Protocol):
     def create_project(self, slug: str, name: str, created_at: Any, user_id: Optional[str] = None) -> None: ...
     def get_project(self, project_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
     def get_all_projects(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
+    def rename_project(self, project_id: str, name: str, user_id: Optional[str] = None) -> None: ...
     def delete_project(self, project_id: str, user_id: Optional[str] = None) -> None: ...
     # sessions
     def upsert_session(self, session_id: str, user_id: Optional[str], session_name: str,
@@ -45,6 +46,8 @@ class MetadataStore(Protocol):
     def get_session(self, session_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
     def get_all_session_rows(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
     def move_session(self, session_id: str, project_id: Optional[str], user_id: Optional[str] = None) -> None: ...
+    # Display-only rename: session_id (the primary key = workspace dir) never changes.
+    def rename_session(self, session_id: str, name: str, user_id: Optional[str] = None) -> None: ...
     def update_stats(self, session_id: str, input_t: int, output_t: int, cached_t: int,
                      total_t: int, cost: float, now: Any, user_id: Optional[str] = None) -> None: ...
     def delete_session(self, session_id: str, user_id: Optional[str] = None) -> None: ...
@@ -56,6 +59,8 @@ class MetadataStore(Protocol):
     def get_thread(self, thread_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
     def list_threads(self, session_id: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
     def count_threads(self, session_id: str, user_id: Optional[str] = None) -> int: ...
+    # One grouped COUNT for the whole session list ({session_id: rows}) — no N+1.
+    def count_threads_by_session(self, user_id: Optional[str] = None) -> Dict[str, int]: ...
     def update_thread(self, thread_id: str, user_id: Optional[str] = None, *,
                       title: Optional[str] = None, model: Optional[str] = None,
                       last_active: Any = None) -> None: ...
@@ -204,6 +209,19 @@ class SqliteMetadataStore:
             rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
+    def rename_project(self, project_id, name, user_id=None):
+        """Rename a project's display name (the id/slug is immutable).
+
+        Tenant-scoped like move_session: a non-owner's rename is a no-op.
+        """
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE projects SET name = ? WHERE id = ?{owner}",
+                (name, project_id, *oparams),
+            )
+            conn.commit()
+
     def delete_project(self, project_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn:
@@ -261,6 +279,19 @@ class SqliteMetadataStore:
             conn.execute(
                 f"UPDATE session_metadata SET project_id = ? WHERE session_id = ?{owner}",
                 (project_id, session_id, *oparams),
+            )
+            conn.commit()
+
+    def rename_session(self, session_id, name, user_id=None):
+        """DISPLAY-ONLY rename: updates ``session_name``. The session_id (primary
+        key, and thus the workspace directory it names) never changes.
+        Tenant-scoped like move_session: a non-owner's rename is a no-op.
+        """
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE session_metadata SET session_name = ? WHERE session_id = ?{owner}",
+                (name, session_id, *oparams),
             )
             conn.commit()
 
@@ -341,6 +372,22 @@ class SqliteMetadataStore:
                 (session_id, *oparams),
             ).fetchone()
         return int(row[0]) if row else 0
+
+    def count_threads_by_session(self, user_id=None):
+        """{session_id: thread-row count} in ONE grouped query (session-list use).
+
+        Sessions with no thread rows simply aren't in the dict (callers default
+        to 0) — a fresh session has no rows until its default thread is created.
+        """
+        sql = "SELECT session_id, COUNT(*) FROM chat_threads"
+        params: list = []
+        if user_id is not None:
+            sql += " WHERE user_id = ?"
+            params.append(user_id)
+        sql += " GROUP BY session_id"
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return {r[0]: int(r[1]) for r in rows}
 
     def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None):
         sets, params = [], []
@@ -511,6 +558,16 @@ class PostgresMetadataStore:
             return self._all("SELECT * FROM projects WHERE user_id = %s ORDER BY name ASC", (user_id,))
         return self._all("SELECT * FROM projects ORDER BY name ASC")
 
+    def rename_project(self, project_id, name, user_id=None):
+        """Postgres parity for :meth:`SqliteMetadataStore.rename_project`."""
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE projects SET name = %s WHERE id = %s{owner}",
+                (name, project_id, *oparams),
+            )
+            conn.commit()
+
     def delete_project(self, project_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn, conn.cursor() as cur:
@@ -553,6 +610,17 @@ class PostgresMetadataStore:
             cur.execute(
                 f"UPDATE session_metadata SET project_id = %s WHERE session_id = %s{owner}",
                 (project_id, session_id, *oparams),
+            )
+            conn.commit()
+
+    def rename_session(self, session_id, name, user_id=None):
+        """Postgres parity for :meth:`SqliteMetadataStore.rename_session` —
+        DISPLAY-ONLY: the session_id/workspace directory never changes."""
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE session_metadata SET session_name = %s WHERE session_id = %s{owner}",
+                (name, session_id, *oparams),
             )
             conn.commit()
 
@@ -614,6 +682,19 @@ class PostgresMetadataStore:
             cur.execute(f"SELECT COUNT(*) FROM chat_threads WHERE session_id = %s{owner}", (session_id, *oparams))
             row = cur.fetchone()
         return int(row[0]) if row else 0
+
+    def count_threads_by_session(self, user_id=None):
+        """Postgres parity for :meth:`SqliteMetadataStore.count_threads_by_session`."""
+        sql = "SELECT session_id, COUNT(*) FROM chat_threads"
+        params: tuple = ()
+        if user_id is not None:
+            sql += " WHERE user_id = %s"
+            params = (user_id,)
+        sql += " GROUP BY session_id"
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return {r[0]: int(r[1]) for r in rows}
 
     def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None):
         sets, params = [], []
