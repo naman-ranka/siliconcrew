@@ -11,9 +11,146 @@ import { test, expect, Route, Page } from "@playwright/test";
  * and the open-artifact tab model.
  */
 
-test("app loads (smoke)", async ({ page }) => {
+// ---- Launcher (S2) ----------------------------------------------------------
+// `/` is the Launcher: recency-first cards (name · thread count · updated ·
+// group tag), search, the lazy thread drawer (manifest + threads fetched only
+// for the selected card) and the create modal → /w/{id}.
+
+const LAUNCHER_SESSIONS = [
+  {
+    id: "sync_fifo", name: "sync_fifo", model_name: "claude-sonnet-4-6", project_id: "g1",
+    created_at: "2026-07-01T10:00:00Z", updated_at: "2026-07-03T09:00:00Z",
+    total_tokens: 48213, total_cost: 0.82, thread_count: 3,
+  },
+  {
+    id: "uart_tx", name: "uart_tx", model_name: "gemini-3-flash-preview", project_id: null,
+    created_at: "2026-06-30T10:00:00Z", updated_at: "2026-07-02T10:00:00Z",
+    total_tokens: 22100, total_cost: 0.31, thread_count: 2,
+  },
+];
+
+const NEW_SESSION = {
+  id: "new_block", name: "new_block", model_name: "gemini-3-flash-preview", project_id: null,
+  created_at: "2026-07-03T10:00:00Z", updated_at: "2026-07-03T10:00:00Z",
+  total_tokens: 0, total_cost: 0, thread_count: 1,
+};
+
+function installLauncherMocks(page: Page) {
+  const json = (route: Route, body: unknown, status = 200) =>
+    route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+
+  return page.route("**/api/**", async (route) => {
+    const url = new URL(route.request().url());
+    const p = url.pathname;
+    const m = route.request().method();
+
+    if (p === "/api/sessions" && m === "GET") return json(route, LAUNCHER_SESSIONS);
+    if (p === "/api/sessions" && m === "POST") return json(route, NEW_SESSION);
+    if (p === "/api/projects" && m === "GET")
+      return json(route, [{ id: "g1", name: "asu_hackathon", created_at: null }]);
+    if (p === "/api/models" && m === "GET")
+      return json(route, {
+        default: "gemini-3-flash-preview",
+        models: [
+          { id: "gemini-3-flash-preview", label: "Gemini 3 Flash", provider: "google", tier: "fast", hint: "", available: true },
+        ],
+      });
+
+    // Drawer hydration (lazy, selected session only): threads + manifest.
+    if (p === "/api/sessions/sync_fifo/threads" && m === "GET")
+      return json(route, [
+        { id: "t1", session_id: "sync_fifo", title: "FIFO signoff", model: null, created_at: "2026-07-01T10:00:00Z", last_active: "2026-07-03T09:00:00Z" },
+        { id: "t2", session_id: "sync_fifo", title: "Debug overflow assert", model: null, created_at: "2026-07-01T11:00:00Z", last_active: "2026-07-03T08:30:00Z" },
+        { id: "t3", session_id: "sync_fifo", title: "Timing exploration", model: null, created_at: "2026-07-01T12:00:00Z", last_active: "2026-07-02T18:00:00Z" },
+      ]);
+    if (p.endsWith("/threads") && m === "GET") return json(route, []);
+    if (p.endsWith("/threads") && m === "POST")
+      return json(route, { id: "t-new", session_id: "sync_fifo", title: null, model: null, created_at: null, last_active: null });
+    if (p.endsWith("/manifest") && m === "GET")
+      return json(route, {
+        ok: true,
+        manifest: {
+          sessionId: "sync_fifo",
+          files: [
+            { name: "sync_fifo.v", role: "rtl", path: "sync_fifo.v" },
+            { name: "fifo_mem.v", role: "rtl", path: "fifo_mem.v" },
+            { name: "spec.yaml", role: "spec", path: "spec.yaml" },
+            { name: "constraints.sdc", role: "sdc", path: "constraints.sdc" },
+          ],
+          synthTop: "sync_fifo", simTop: null, clockPeriodNs: 10, platform: "sky130hd",
+          testbenches: [], ignore: [],
+        },
+      });
+
+    // Post-create boot of /w/new_block (only the shape matters here).
+    if (p === "/api/sessions/new_block" && m === "GET") return json(route, NEW_SESSION);
+    if (p.endsWith("/workbench") && m === "GET")
+      return json(route, { ok: true, manifest: null, runs: [], files: [], spec: null, code: [], report: null, synthesisRuns: [] });
+    if (p.endsWith("/history")) return json(route, []);
+
+    return json(route, []);
+  });
+}
+
+test("launcher boot: cards render, search filters, drawer hydrates, modal opens", async ({ page }) => {
+  await installLauncherMocks(page);
   await page.goto("/");
-  await expect(page.locator("body")).toBeVisible();
+
+  // Cards lead with recency truth: mono name + thread count (no run verdicts,
+  // no file chips at this level — revision 1).
+  const fifo = page.getByTestId("session-card-sync_fifo");
+  const uart = page.getByTestId("session-card-uart_tx");
+  await expect(fifo).toBeVisible();
+  await expect(fifo.getByTitle("3 chats")).toBeVisible();
+  await expect(uart.getByTitle("2 chats")).toBeVisible();
+  // Recent view shows the group tag.
+  await expect(fifo.getByText("asu_hackathon")).toBeVisible();
+
+  // Search filters by name.
+  const search = page.getByPlaceholder("Search workspaces…");
+  await search.fill("uart");
+  await expect(fifo).toHaveCount(0);
+  await expect(uart).toBeVisible();
+  await search.fill("");
+  await expect(fifo).toBeVisible();
+
+  // Card click → drawer with the ONE lazy hydration: manifest (file count +
+  // chips) and the chats list.
+  await fifo.click();
+  const drawer = page.getByTestId("thread-drawer");
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByText("4 files")).toBeVisible();
+  await expect(drawer.getByText("3 chats")).toBeVisible();
+  await expect(drawer.getByText("sync_fifo.v")).toBeVisible(); // file chip
+  await expect(drawer.getByText("+1")).toBeVisible(); // 4 files → 3 chips + overflow
+  await expect(drawer.getByText("FIFO signoff")).toBeVisible();
+  await expect(drawer.getByRole("button", { name: /Open in IDE/ })).toBeVisible();
+  await page.screenshot({ path: "e2e-artifacts/launcher-drawer.png", fullPage: true });
+
+  // "New session" opens the create modal with the live slug preview.
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.getByPlaceholder("Workspace name — e.g. sync_fifo")).toBeVisible();
+  await expect(page.getByText("untitled")).toBeVisible(); // workspace/untitled/ preview
+});
+
+test("launcher create flow: modal → POST /api/sessions → lands on /w/{id}", async ({ page }) => {
+  await installLauncherMocks(page);
+  await page.goto("/");
+  await expect(page.getByTestId("session-card-sync_fifo")).toBeVisible();
+
+  await page.getByRole("button", { name: "New session" }).click();
+  await page.getByPlaceholder("Workspace name — e.g. sync_fifo").fill("New Block");
+  // Live slug preview follows the name.
+  await expect(page.getByText("new_block")).toBeVisible();
+
+  const [req] = await Promise.all([
+    page.waitForRequest((r) => r.url().includes("/api/sessions") && r.method() === "POST"),
+    page.getByRole("button", { name: /Create session/ }).click(),
+  ]);
+  expect(req.postDataJSON()).toMatchObject({ name: "new_block" });
+
+  await page.waitForURL((u) => u.pathname === "/w/new_block");
+  expect(new URL(page.url()).pathname).toBe("/w/new_block");
 });
 
 // S1: /workbench is a redirect shim. With no lastSessionId persisted (fresh

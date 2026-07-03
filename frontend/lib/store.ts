@@ -180,6 +180,8 @@ interface AppState {
   createProject: (name: string) => Promise<Project>;
   deleteProject: (projectId: string) => Promise<void>;
   moveSession: (sessionId: string, projectId: string | null) => Promise<void>;
+  renameSession: (sessionId: string, name: string) => Promise<void>;
+  renameProject: (projectId: string, name: string) => Promise<void>;
 
   // Session state
   sessions: Session[];
@@ -205,14 +207,14 @@ interface AppState {
   // Model registry (the picker). The active thread's model is what the WS uses.
   models: ModelInfo[];
   modelsLoaded: boolean;
+  // The registry's declared default model id — the launcher's create modal
+  // uses it (a new workspace has no model picker; model is a per-chat choice).
+  defaultModel: string | null;
 
   // WebSocket
   ws: WebSocket | null;
   wsSessionId: string | null;
   wsThreadId: string | null;
-
-  // Sidebar state
-  sidebarCollapsed: boolean;
 
   // Artifacts panel state
   artifactsVisible: boolean;
@@ -245,7 +247,7 @@ interface AppState {
 
   // Actions
   loadSessions: () => Promise<void>;
-  createSession: (name: string, model: string, projectId?: string | null) => Promise<void>;
+  createSession: (name: string, model: string, projectId?: string | null) => Promise<Session>;
   deleteSession: (sessionId: string) => Promise<void>;
   selectSession: (session: Session | null) => Promise<void>;
   /** URL-driven selection (S1): resolve a session id → Session (via the list,
@@ -269,7 +271,6 @@ interface AppState {
   loadModels: () => Promise<void>;
   setActiveThreadModel: (modelId: string) => Promise<void>;
 
-  toggleSidebar: () => void;
   toggleArtifacts: () => void;
   setArtifactTab: (tab: ArtifactTab) => void;
 
@@ -391,12 +392,11 @@ export const useStore = create<AppState>((set, get) => ({
 
   models: [],
   modelsLoaded: false,
+  defaultModel: null,
 
   ws: null,
   wsSessionId: null,
   wsThreadId: null,
-
-  sidebarCollapsed: false,
 
   artifactsVisible: false,
   activeArtifactTab: "spec",
@@ -478,9 +478,25 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   moveSession: async (sessionId: string, projectId: string | null) => {
-    const updated = await sessionsApi.patch(sessionId, projectId);
+    const updated = await sessionsApi.patch(sessionId, { project_id: projectId });
     set((state) => ({
       sessions: state.sessions.map((s) => (s.id === sessionId ? updated : s)),
+    }));
+  },
+
+  renameSession: async (sessionId: string, name: string) => {
+    const updated = await sessionsApi.patch(sessionId, { name });
+    set((state) => ({
+      sessions: state.sessions.map((s) => (s.id === sessionId ? updated : s)),
+      currentSession:
+        state.currentSession?.id === sessionId ? updated : state.currentSession,
+    }));
+  },
+
+  renameProject: async (projectId: string, name: string) => {
+    const updated = await projectsApi.rename(projectId, name);
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === projectId ? updated : p)),
     }));
   },
 
@@ -534,6 +550,7 @@ export const useStore = create<AppState>((set, get) => ({
       }));
       // Materialize the session's default thread ("Chat 1") for the switcher.
       await get().loadThreads();
+      return session;
     } catch (error) {
       throw error;
     }
@@ -1012,7 +1029,11 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const data = await modelsApi.list();
       // Be defensive about the response shape so the picker never crashes.
-      set({ models: Array.isArray(data?.models) ? data.models : [], modelsLoaded: true });
+      set({
+        models: Array.isArray(data?.models) ? data.models : [],
+        defaultModel: typeof data?.default === "string" ? data.default : null,
+        modelsLoaded: true,
+      });
     } catch {
       set({ models: [], modelsLoaded: true });
     }
@@ -1040,10 +1061,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   // UI actions
-  toggleSidebar: () => {
-    set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed }));
-  },
-
   toggleArtifacts: () => {
     set((state) => ({ artifactsVisible: !state.artifactsVisible }));
   },

@@ -76,6 +76,13 @@ export const projectsApi = {
       body: JSON.stringify({ name }),
     }),
 
+  // S0: rename a project (UI calls these "groups" — pure relabel, same entity).
+  rename: (projectId: string, name: string) =>
+    apiFetch<Project>(`/api/projects/${encodeURIComponent(projectId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
+
   delete: (projectId: string) =>
     apiFetch<{ status: string }>(`/api/projects/${encodeURIComponent(projectId)}`, {
       method: "DELETE",
@@ -94,10 +101,12 @@ export const sessionsApi = {
 
   get: (sessionId: string) => apiFetch<Session>(`/api/sessions/${encodeSessionId(sessionId)}`),
 
-  patch: (sessionId: string, projectId: string | null) =>
+  // S0: PATCH accepts `name` (display-only rename — the workspace dir/id never
+  // changes) and/or `project_id` (explicit null removes from the group).
+  patch: (sessionId: string, body: { name?: string; project_id?: string | null }) =>
     apiFetch<Session>(`/api/sessions/${encodeSessionId(sessionId)}`, {
       method: "PATCH",
-      body: JSON.stringify({ project_id: projectId }),
+      body: JSON.stringify(body),
     }),
 
   delete: (sessionId: string) =>

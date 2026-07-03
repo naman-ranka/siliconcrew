@@ -15,6 +15,9 @@ export interface Session {
   updated_at: string | null;
   total_tokens: number;
   total_cost: number;
+  // S0: cheap COUNT over the threads table, included in the session list so
+  // launcher cards can show a chat count without hydrating any workspace.
+  thread_count?: number;
 }
 
 // Model registry (the picker). `available` is per-request: false when the

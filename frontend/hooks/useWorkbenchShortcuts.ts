@@ -5,8 +5,8 @@ import { useStore } from "@/lib/store";
 import { emptySessionUi, useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { runCommand } from "@/lib/commands";
 
-// Workbench v2 global shortcuts (the `/` route keeps its own
-// hooks/useKeyboardShortcuts.ts — this hook is mounted only by Workbench):
+// Workbench v2 global shortcuts (mounted only by Workbench — the `/` Launcher
+// has no global shortcuts):
 //   ⌘K command palette · ⌘P quick-open · ⌘J toggle dock
 //   ⌘L lint · ⌘R simulate · ⌘Y synthesize · ⌘E retry-P&R modal
 // ⌘K/⌘P/⌘J work even while typing (they are navigation, not text editing);
