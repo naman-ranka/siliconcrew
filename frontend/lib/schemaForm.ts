@@ -77,6 +77,11 @@ export function paramSourceFor(
   return "text";
 }
 
+/** Distinct testbench top modules from the manifest's derived list. */
+function testbenchModules(ctx: SurfaceCtx): string[] {
+  return Array.from(new Set((ctx.manifest?.testbenches ?? []).map((t) => t.module)));
+}
+
 /**
  * Live workspace choices for conventional keys; null when no convention
  * applies (the field falls back to its schema enum or free input).
@@ -96,6 +101,15 @@ export function conventionOptions(key: string, ctx: SurfaceCtx): string[] | null
   if (key === "dslx_file") return ctx.rootFiles.filter((f) => f.endsWith(".x"));
   if (key === "filename" || key === "file_path" || key === "spec_file") {
     return [...ctx.rootFiles];
+  }
+  if (key === "sim_top" || key === "toplevel") return testbenchModules(ctx);
+  if (key === "top_module") {
+    // Synth top first (the common answer), then every known testbench top.
+    return Array.from(
+      new Set(
+        [ctx.manifest?.synthTop, ...testbenchModules(ctx)].filter((m): m is string => !!m)
+      )
+    );
   }
   return null;
 }
@@ -196,13 +210,16 @@ export function buildFormModel(entry: ToolCatalogEntry, ctx: SurfaceCtx): Surfac
     const hasConv = conv != null;
 
     let editor = editorFor(key, prop);
-    // A plain string with live workspace choices (run ids, vcd paths, files)
-    // upgrades from free text to a picker.
-    if (editor === "text" && hasConv) editor = "enum";
+    // A plain string with live workspace choices upgrades from free text to a
+    // suggesting combobox — free entry stays allowed (the workspace scan can
+    // miss things). run_id-family keys are the exception: runs ARE a closed
+    // set, so they keep the honest closed picker.
+    if (editor === "text" && hasConv) editor = RUN_ID_KEYS.has(key) ? "enum" : "combo";
 
     const enumOptions = Array.isArray(prop.enum) ? prop.enum.map(String) : undefined;
     let options: string[] | undefined = hasConv ? conv : enumOptions;
-    // Optional single-choice fields keep an explicit "(omit)" entry.
+    // Optional single-choice fields keep an explicit "(omit)" entry (combos
+    // don't need one — clearing the text omits the field).
     if (editor === "enum" && options && !required && !options.includes("")) {
       options = ["", ...options];
     }

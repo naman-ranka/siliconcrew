@@ -5,6 +5,7 @@ import {
   Cpu,
   Download,
   ExternalLink,
+  FilePlus2,
   Link as LinkIcon,
   Play,
   SearchCheck,
@@ -70,6 +71,7 @@ export function FileContextMenu() {
 function Menu({ menu }: { menu: ContextMenuState }) {
   const setContextMenu = useWorkbenchUiStore((s) => s.setContextMenu);
   const setCommandModal = useWorkbenchUiStore((s) => s.setCommandModal);
+  const setNewFilePrefix = useWorkbenchUiStore((s) => s.setNewFilePrefix);
   const currentSession = useStore((s) => s.currentSession);
   const manifest = useStore((s) => s.manifest);
   const pushToast = useStore((s) => s.pushToast);
@@ -117,8 +119,9 @@ function Menu({ menu }: { menu: ContextMenuState }) {
   }, []);
 
   const path = menu.path;
+  const isDir = menu.kind === "dir";
   const basename = path.split("/").pop() || path;
-  const isVerilog = /\.(v|sv)$/i.test(basename);
+  const isVerilog = !isDir && /\.(v|sv)$/i.test(basename);
   const isSynthTop = isVerilog && isSynthTopFile(basename, manifest);
   const sessionId = currentSession?.id ?? null;
 
@@ -167,9 +170,25 @@ function Menu({ menu }: { menu: ContextMenuState }) {
         {basename}
       </div>
 
-      <MenuItem onSelect={doOpen} icon={<ExternalLink className="h-3.5 w-3.5" />} label="Open" />
-      <MenuItem onSelect={doCopyPath} icon={<LinkIcon className="h-3.5 w-3.5" />} label="Copy path" />
-      <MenuItem onSelect={doDownload} icon={<Download className="h-3.5 w-3.5" />} label="Download" />
+      {isDir ? (
+        <>
+          <MenuItem
+            onSelect={() => {
+              setNewFilePrefix(path);
+              close();
+            }}
+            icon={<FilePlus2 className="h-3.5 w-3.5" />}
+            label="New file in folder"
+          />
+          <MenuItem onSelect={doCopyPath} icon={<LinkIcon className="h-3.5 w-3.5" />} label="Copy path" />
+        </>
+      ) : (
+        <>
+          <MenuItem onSelect={doOpen} icon={<ExternalLink className="h-3.5 w-3.5" />} label="Open" />
+          <MenuItem onSelect={doCopyPath} icon={<LinkIcon className="h-3.5 w-3.5" />} label="Copy path" />
+          <MenuItem onSelect={doDownload} icon={<Download className="h-3.5 w-3.5" />} label="Download" />
+        </>
+      )}
 
       {isVerilog && (
         <>

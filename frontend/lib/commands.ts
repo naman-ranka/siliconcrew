@@ -25,15 +25,33 @@ export const PLATFORMS = ["sky130hd", "sky130hs", "nangate45", "asap7", "gf180",
 // non-retryable prep stages — retries restart from a physical-design stage).
 export const PD_STAGES = ["floorplan", "place", "cts", "grt", "route", "finish"] as const;
 
+// Full stage bound for start_synthesis' maxStage — "synth" is the fast
+// synthesis-only PPA estimate; "finish" is the full RTL→GDS flow.
+export const SYNTH_STAGES = ["synth", "floorplan", "place", "cts", "grt", "route", "finish"] as const;
+
+// Lint engines (POST /lint body) — auto resolves server-side to verilator
+// when installed, else iverilog.
+export const LINT_ENGINES = ["auto", "iverilog", "verilator"] as const;
+
+/** Testbench-module choices for the sim combobox: the manifest's derived
+ *  `testbenches` list, falling back to the single simTop on legacy manifests. */
+export function testbenchChoices(manifest: DesignManifest | null): string[] {
+  const modules = Array.from(new Set((manifest?.testbenches ?? []).map((t) => t.module)));
+  if (modules.length > 0) return modules;
+  return manifest?.simTop ? [manifest.simTop] : [];
+}
+
 export interface CommandParam {
   key: string;
   label: string;
-  type: "enum" | "number" | "boolean" | "text";
+  /** "combo" = text input with filtered suggestions; free entry always allowed. */
+  type: "enum" | "number" | "boolean" | "text" | "combo";
   options?: readonly string[];
   unit?: string;
   step?: number;
   min?: number;
   advanced?: boolean;
+  hint?: string;
   /** Where the default comes from — drives the source badge in the modal. */
   source: "manifest" | "choice" | "run" | "default";
 }
@@ -56,10 +74,12 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
     id: "lint",
     label: "Lint",
     tool: "linter_tool",
-    description: "Syntax-check the design sources (rtl + includes from the manifest).",
+    description: "Lint the design sources (rtl + includes from the manifest).",
     async: false,
     shortcut: "L",
-    params: [],
+    params: [
+      { key: "engine", label: "Engine", type: "enum", options: LINT_ENGINES, source: "choice" },
+    ],
   },
   sim: {
     id: "sim",
@@ -70,6 +90,9 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
     shortcut: "R",
     params: [
       { key: "mode", label: "Mode", type: "enum", options: ["rtl", "post_synth"], source: "choice" },
+      // Options resolve live from manifest.testbenches (see CommandModal's
+      // optionsFor) — free entry stays allowed for modules the scan missed.
+      { key: "simTop", label: "Testbench", type: "combo", source: "manifest", hint: "which testbench to run" },
     ],
   },
   synth: {
@@ -81,6 +104,7 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
     shortcut: "Y",
     params: [
       { key: "platform", label: "Platform", type: "enum", options: PLATFORMS, source: "manifest" },
+      { key: "maxStage", label: "Max stage", type: "enum", options: SYNTH_STAGES, source: "choice", hint: "“synth” = fast synthesis-only estimate" },
       { key: "clockPeriodNs", label: "Clock period", type: "number", unit: "ns", step: 0.1, min: 0.1, source: "manifest" },
       { key: "utilization", label: "Utilization", type: "number", unit: "%", step: 1, min: 1, advanced: true, source: "default" },
       { key: "aspectRatio", label: "Aspect ratio", type: "number", step: 0.1, min: 0.1, advanced: true, source: "default" },
@@ -117,12 +141,13 @@ export function defaultValues(
 ): CommandValues {
   switch (id) {
     case "lint":
-      return {};
+      return { engine: "auto" };
     case "sim":
-      return { mode: "rtl" };
+      return { mode: "rtl", simTop: ctx.manifest?.simTop ?? "" };
     case "synth":
       return {
         platform: ctx.manifest?.platform ?? "sky130hd",
+        maxStage: "finish",
         clockPeriodNs: ctx.manifest?.clockPeriodNs ?? 10,
         utilization: 5,
         aspectRatio: 1.0,
@@ -167,7 +192,8 @@ export function manifestFacts(
       return [{ label: "files", value: files(STAGE_ROLES.lint).join(", ") || "—" }];
     case "sim":
       return [
-        { label: "sim top", value: m.simTop ?? "—" },
+        { label: "default tb", value: m.simTop || "—" },
+        { label: "testbenches", value: `${testbenchChoices(m).length} available` },
         { label: "files", value: files(STAGE_ROLES.sim).join(", ") || "—" },
       ];
     case "synth":
@@ -303,17 +329,21 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
   try {
     switch (id) {
       case "lint": {
-        const result = await workbenchApi.lint(sessionId);
+        const result = await workbenchApi.lint(sessionId, {
+          engine: String(vals.engine ?? "auto"),
+        });
         const nErr = result.errors.length;
         const nWarn = result.warnings.length;
+        // Auto resolves server-side — name the engine that actually ran.
+        const engineTag = result.engine ? ` (${result.engine})` : "";
         done({
           status: result.status === "passed" ? "ok" : "error",
-          resultSummary: `${result.status} · ${nErr} error(s), ${nWarn} warning(s)`,
+          resultSummary: `${result.status}${engineTag} · ${nErr} error(s), ${nWarn} warning(s)`,
         });
         store.pushToast(
           result.status === "passed"
-            ? { kind: nWarn ? "info" : "success", title: `Lint passed${nWarn ? ` · ${nWarn} warning(s)` : ""}` }
-            : { kind: "error", title: `Lint failed · ${nErr} error(s)` }
+            ? { kind: nWarn ? "info" : "success", title: `Lint passed${engineTag}${nWarn ? ` · ${nWarn} warning(s)` : ""}` }
+            : { kind: "error", title: `Lint failed${engineTag} · ${nErr} error(s)` }
         );
         // Keep the structured diagnostics available to the feed/editor.
         useStore.setState({ lintResult: result });
@@ -321,8 +351,11 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
       }
 
       case "sim": {
+        const simTop = String(vals.simTop ?? "").trim();
         const run = await workbenchApi.simulate(sessionId, {
           mode: String(vals.mode ?? "rtl"),
+          // Empty = let the backend fall back to the manifest's default TB.
+          ...(simTop ? { simTop } : {}),
         });
         done({
           status: run.status === "passed" ? "ok" : "error",
@@ -356,6 +389,7 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
           id === "synth"
             ? await workbenchApi.synthesize(sessionId, {
                 platform: vals.platform,
+                maxStage: String(vals.maxStage ?? "finish"),
                 clockPeriodNs: vals.clockPeriodNs,
                 utilization: vals.utilization,
                 aspectRatio: vals.aspectRatio,

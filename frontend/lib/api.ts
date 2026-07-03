@@ -331,8 +331,13 @@ export const workbenchApi = {
       { method: "PUT", body: JSON.stringify({ content }) }
     ),
 
-  lint: (sessionId: string) =>
-    actionFetch<LintResult & { ok: true }>(`${ws(sessionId)}/lint`, { method: "POST" }),
+  lint: (sessionId: string, body?: { engine?: string }) =>
+    actionFetch<LintResult & { ok: true }>(`${ws(sessionId)}/lint`, {
+      method: "POST",
+      // Body is optional on the backend too — omit it entirely for the
+      // no-arg call so legacy servers keep working.
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    }),
 
   simulate: (sessionId: string, body: { simTop?: string; mode?: string; runId?: string } = {}) =>
     actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/simulate`, {

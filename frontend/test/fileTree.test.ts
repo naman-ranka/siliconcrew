@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  dirPrefixesForPath,
   flattenTree,
   runIdForDirEntry,
   moduleNameForFile,
   isSynthTopFile,
   isSimTopFile,
+  validateNewFilePath,
   type DirSliceLike,
 } from "@/lib/fileTree";
 import type { DesignManifest, DirEntry } from "@/types";
@@ -153,5 +155,39 @@ describe("top-module heuristics", () => {
     expect(isSimTopFile("tb_counter.sv", manifest)).toBe(true);
     expect(isSimTopFile("counter.v", manifest)).toBe(false);
     expect(isSimTopFile("tb_counter.sv", null)).toBe(false);
+  });
+});
+
+describe("validateNewFilePath", () => {
+  it("accepts plain and nested workspace-relative paths", () => {
+    expect(validateNewFilePath("alu.v")).toBeNull();
+    expect(validateNewFilePath("rtl/core/alu.v")).toBeNull();
+    expect(validateNewFilePath("  spec.md  ")).toBeNull(); // trimmed
+  });
+
+  it("rejects empty input", () => {
+    expect(validateNewFilePath("")).not.toBeNull();
+    expect(validateNewFilePath("   ")).not.toBeNull();
+  });
+
+  it("rejects a leading slash", () => {
+    expect(validateNewFilePath("/etc/passwd")).not.toBeNull();
+  });
+
+  it("rejects '..' / '.' / empty segments", () => {
+    expect(validateNewFilePath("../escape.v")).not.toBeNull();
+    expect(validateNewFilePath("rtl/../escape.v")).not.toBeNull();
+    expect(validateNewFilePath("rtl/./alu.v")).not.toBeNull();
+    expect(validateNewFilePath("rtl//alu.v")).not.toBeNull();
+    expect(validateNewFilePath("rtl/")).not.toBeNull(); // trailing slash = empty segment
+  });
+});
+
+describe("dirPrefixesForPath", () => {
+  it("root file → just the root", () => {
+    expect(dirPrefixesForPath("alu.v")).toEqual([""]);
+  });
+  it("nested file → root plus every ancestor dir", () => {
+    expect(dirPrefixesForPath("rtl/core/alu.v")).toEqual(["", "rtl", "rtl/core"]);
   });
 });

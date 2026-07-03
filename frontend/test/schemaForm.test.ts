@@ -43,11 +43,16 @@ const CTX: SurfaceCtx = {
       { name: "alu.v", role: "rtl", path: "alu.v" },
       { name: "top.v", role: "rtl", path: "top.v" },
       { name: "tb.v", role: "tb", path: "tb.v" },
+      { name: "tb2.v", role: "tb", path: "sub/tb2.v" },
     ],
     synthTop: "alu",
     simTop: "tb",
     clockPeriodNs: 12.5,
     platform: "asap7",
+    testbenches: [
+      { file: "tb.v", module: "tb" },
+      { file: "sub/tb2.v", module: "tb2" },
+    ],
   },
   runs: [
     synthRun("synth_0002"),
@@ -147,6 +152,21 @@ describe("conventionOptions", () => {
     for (const key of ["filename", "file_path", "spec_file"]) {
       expect(conventionOptions(key, CTX)).toEqual(CTX.rootFiles);
     }
+  });
+  it("sim_top / toplevel → the manifest's derived testbench modules", () => {
+    expect(conventionOptions("sim_top", CTX)).toEqual(["tb", "tb2"]);
+    expect(conventionOptions("toplevel", CTX)).toEqual(["tb", "tb2"]);
+    expect(conventionOptions("sim_top", EMPTY_CTX)).toEqual([]);
+  });
+  it("top_module → synthTop first, then testbench modules, deduped", () => {
+    expect(conventionOptions("top_module", CTX)).toEqual(["alu", "tb", "tb2"]);
+    // synthTop that is also a TB module appears once.
+    const ctx: SurfaceCtx = {
+      ...CTX,
+      manifest: { ...CTX.manifest!, synthTop: "tb" },
+    };
+    expect(conventionOptions("top_module", ctx)).toEqual(["tb", "tb2"]);
+    expect(conventionOptions("top_module", EMPTY_CTX)).toEqual([]);
   });
   it("returns null when no convention applies (falls back to enum/free input)", () => {
     expect(conventionOptions("query", CTX)).toBeNull();
@@ -306,15 +326,46 @@ const METRICS_ENTRY: ToolCatalogEntry = {
 };
 
 describe("buildFormModel", () => {
-  it("waveform_tool: required vcd_file upgrades to a picker with the newest vcd as default", () => {
+  it("waveform_tool: required vcd_file upgrades to a combobox with the newest vcd as default", () => {
     const params = buildFormModel(WAVEFORM_ENTRY, CTX);
     const vcd = params.find((p) => p.key === "vcd_file")!;
-    expect(vcd.editor).toBe("enum"); // text → picker, live workspace choices
+    expect(vcd.editor).toBe("combo"); // text → suggestions, free entry allowed
     expect(vcd.options).toEqual(["sim_runs/sim_0002/dump.vcd", "sim_runs/sim_0001/dump.vcd"]);
     expect(vcd.def).toBe("sim_runs/sim_0002/dump.vcd");
     expect(vcd.optional).toBe(false);
     expect(vcd.adv).toBe(false);
     expect(vcd.source).toBe("choice");
+  });
+
+  it("plain string fields with workspace choices map to combo (free entry stays honest)", () => {
+    const entry: ToolCatalogEntry = {
+      ...METRICS_ENTRY,
+      name: "t_combo",
+      argsSchema: {
+        type: "object",
+        properties: {
+          filename: { type: "string" },
+          sim_top: { type: "string" },
+          top_module: { type: "string" },
+        },
+        required: ["filename"],
+      },
+    };
+    const params = buildFormModel(entry, CTX);
+    const byKey = Object.fromEntries(params.map((p) => [p.key, p]));
+    expect(byKey.filename.editor).toBe("combo");
+    expect(byKey.sim_top.editor).toBe("combo");
+    expect(byKey.sim_top.options).toEqual(["tb", "tb2"]);
+    expect(byKey.sim_top.def).toBe("tb"); // manifest simTop backs the default
+    expect(byKey.top_module.editor).toBe("combo");
+    expect(byKey.top_module.options).toEqual(["alu", "tb", "tb2"]);
+    // Combos never get the "(omit)" sentinel entry — clearing the text omits.
+    expect(byKey.sim_top.options).not.toContain("");
+  });
+
+  it("run_id-family fields KEEP the closed enum (runs are a closed set)", () => {
+    const [runId] = buildFormModel(METRICS_ENTRY, CTX);
+    expect(runId.editor).toBe("enum");
   });
 
   it("waveform_tool: required signals is a freeform multi (no options), default []", () => {

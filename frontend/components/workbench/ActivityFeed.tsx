@@ -313,6 +313,11 @@ export function ActivityFeed() {
                                 {d.line != null ? `:${d.line}` : ""}
                               </button>
                             ) : null}
+                            {d.code ? (
+                              <span className="mt-px inline-flex shrink-0 items-center rounded border border-border bg-surface-2 px-1 font-mono text-[9px] leading-3 text-muted-foreground">
+                                {d.code}
+                              </span>
+                            ) : null}
                             <span className="text-muted-foreground">{d.message}</span>
                           </div>
                         ))}

@@ -54,6 +54,7 @@ import {
 } from "@/lib/commandSurface";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
+import { ComboInput } from "@/components/workbench/ComboInput";
 import { cn } from "@/lib/utils";
 
 // The v2 Command Surface — a three-pane command → tool-call explorer. Left: the
@@ -356,6 +357,16 @@ function ParamEditor({
           value={String(value ?? "")}
           onChange={(e) => onChange(e.target.value)}
           className="h-7 w-52 font-mono text-[11px]"
+        />
+      );
+    case "combo":
+      return (
+        <ComboInput
+          value={String(value ?? "")}
+          onChange={(v) => onChange(v)}
+          suggestions={options}
+          ariaLabel={param.label}
+          className="w-52"
         />
       );
     case "multi": {

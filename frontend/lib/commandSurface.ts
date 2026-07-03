@@ -1,5 +1,13 @@
 import { workbenchApi } from "@/lib/api";
-import { runCommand, type CommandId, PD_STAGES, PLATFORMS } from "@/lib/commands";
+import {
+  runCommand,
+  testbenchChoices,
+  type CommandId,
+  LINT_ENGINES,
+  PD_STAGES,
+  PLATFORMS,
+  SYNTH_STAGES,
+} from "@/lib/commands";
 import { buildFormModel, shortDescription } from "@/lib/schemaForm";
 import { useStore } from "@/lib/store";
 import type { ActivityEvent, DesignManifest, RunSummary, ToolCatalogEntry } from "@/types";
@@ -26,7 +34,9 @@ export interface SurfaceCtx {
 export interface SurfaceParam {
   key: string;
   label: string;
-  editor: "enum" | "number" | "bool" | "text" | "multi";
+  /** "combo" = text input with filtered suggestions (resolveOptions); free
+   *  entry always allowed — the "search ≻ suggest ≻ type anything" editor. */
+  editor: "enum" | "number" | "bool" | "text" | "multi" | "combo";
   source: SurfaceParamSource;
   options?: readonly string[] | ((ctx: SurfaceCtx) => string[]);
   def: unknown | ((ctx: SurfaceCtx) => unknown);
@@ -74,19 +84,27 @@ const rtlFiles = (ctx: SurfaceCtx) => filesByRoles(ctx.manifest, ["rtl"]);
 export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
   {
     id: "lint", label: "Lint", group: "Flow", tool: "linter_tool", core: "lint",
-    desc: "Icarus syntax check. Manifest supplies rtl + include files.",
+    desc: "Lint/syntax check (iverilog or verilator). Manifest supplies rtl + include files.",
     autoArgs: [{ key: "verilog_files", describe: (c: SurfaceCtx) => filesByRoles(c.manifest, ["rtl", "include"]).join(", ") || "—" }],
-    params: [],
+    params: [
+      { key: "engine", label: "engine", editor: "enum", options: LINT_ENGINES, def: "auto", source: "choice" },
+    ],
   },
   {
     id: "sim", label: "Simulate", group: "Flow", tool: "run_isolated_simulation", core: "sim", mutates: true,
     desc: "Manifest-driven sim in its own sim_runs/sim_NNNN/ dir — own VCD + provenance.",
     autoArgs: [
-      { key: "sim_top", describe: (c: SurfaceCtx) => c.manifest?.simTop ?? "—" },
       { key: "reads (files)", describe: (c: SurfaceCtx) => filesByRoles(c.manifest, ["rtl", "tb", "include"]).join(", ") || "—" },
     ],
     params: [
       { key: "mode", label: "mode", editor: "enum", options: ["rtl", "post_synth"], def: "rtl", source: "choice" },
+      {
+        key: "simTop", label: "sim_top", editor: "combo", source: "manifest",
+        options: (c: SurfaceCtx) => testbenchChoices(c.manifest),
+        def: (c: SurfaceCtx) => c.manifest?.simTop ?? "",
+        optional: true, // empty → backend falls back to the manifest default
+        hint: "which testbench to run",
+      },
     ],
   },
   {
@@ -98,6 +116,7 @@ export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
     ],
     params: [
       { key: "platform", label: "platform", editor: "enum", options: PLATFORMS, def: (c: SurfaceCtx) => c.manifest?.platform ?? "sky130hd", source: "manifest" },
+      { key: "maxStage", label: "max_stage", editor: "enum", options: SYNTH_STAGES, def: "finish", source: "choice", hint: "“synth” = fast synthesis-only estimate" },
       { key: "clockPeriodNs", label: "clock_period_ns", editor: "number", def: (c: SurfaceCtx) => c.manifest?.clockPeriodNs ?? 10, min: 0.1, step: 0.1, unit: "ns", source: "manifest" },
       { key: "utilization", label: "utilization", editor: "number", def: 5, min: 1, max: 100, step: 1, unit: "%", source: "default", adv: true },
       { key: "aspectRatio", label: "aspect_ratio", editor: "number", def: 1.0, min: 0.1, step: 0.1, source: "default", adv: true },

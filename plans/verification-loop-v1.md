@@ -1,6 +1,6 @@
 # Verification Loop v1 — Implementation Plan
 
-Status: PROPOSED (awaiting review). Branch: `claude/siliconc-workbench-v2-ilsd83`.
+Status: IMPLEMENTED (items 1-6; review corrections applied).  Branch: `claude/siliconc-workbench-v2-ilsd83`.
 
 ## Intent
 

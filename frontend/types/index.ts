@@ -146,6 +146,11 @@ export interface DesignManifest {
   simTop: string;
   clockPeriodNs: number;
   platform: string;
+  /** Derived by the backend on each reconcile: every role=tb file with its
+   *  top module — the enumerable "which testbench?" choices. */
+  testbenches?: { file: string; module: string }[];
+  /** User-maintained fnmatch globs (workspace-relative) excluded from scans. */
+  ignore?: string[];
 }
 
 // --- Unified run model ------------------------------------------------------
@@ -198,6 +203,8 @@ export interface LintDiag {
   line: number | null;
   severity: "error" | "warning";
   message: string;
+  /** Engine diagnostic code when the engine emits one (verilator: WIDTH, LATCH…). */
+  code?: string | null;
 }
 
 export interface LintResult {
@@ -207,6 +214,8 @@ export interface LintResult {
   byFile: Record<string, LintDiag[]>;
   command: string;
   files: string[];
+  /** Engine that actually ran (auto resolves to iverilog or verilator). */
+  engine?: string | null;
 }
 
 export interface PpaDiff {

@@ -29,6 +29,8 @@ const MANIFEST = {
   simTop: "cpu_tb",
   clockPeriodNs: 10,
   platform: "sky130hd",
+  testbenches: [{ file: "cpu_tb.v", module: "cpu_tb" }],
+  ignore: [],
 };
 
 const CODE: Record<string, string> = {
@@ -165,6 +167,15 @@ function installMocks(page: Page) {
   const json = (route: Route, body: unknown, status = 200) =>
     route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
+  // Optional JSON request body (POST /lint, /simulate now carry one).
+  const bodyOf = (route: Route): Dict => {
+    try {
+      return (route.request().postDataJSON() as Dict) ?? {};
+    } catch {
+      return {};
+    }
+  };
+
   return page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const p = url.pathname;
@@ -214,17 +225,29 @@ function installMocks(page: Page) {
 
     // ---- actions ----
     if (p.endsWith("/lint") && m === "POST") {
-      serverEvent("linter_tool", "ok", "passed · 0 error(s), 0 warning(s)");
-      return json(route, { ok: true, status: "passed", warnings: [], errors: [], byFile: {}, command: "iverilog -t null -g2012 alu.v", files: ["alu.v"] });
+      // Body is optional ({ engine } when present); auto resolves server-side.
+      const requested = String(bodyOf(route).engine ?? "auto");
+      const engine = requested === "auto" ? "iverilog" : requested;
+      const warnings = [
+        { file: "alu.v", line: 1, severity: "warning", message: "operator width mismatch", code: "WIDTH" },
+      ];
+      serverEvent("linter_tool", "ok", `passed (${engine}) · 0 error(s), 1 warning(s)`);
+      return json(route, {
+        ok: true, status: "passed", engine,
+        warnings, errors: [], byFile: { "alu.v": warnings },
+        command: `${engine} alu.v`, files: ["alu.v"],
+      });
     }
 
     if (p.endsWith("/simulate") && m === "POST") {
       state.simCount += 1;
       const fail = state.simCount === 1;
       const id = `sim_000${state.simCount}`;
+      // Echo the chosen testbench back as the run's top (backend behavior).
+      const top = String(bodyOf(route).simTop ?? "") || "cpu_tb";
       const run = {
         id, kind: "sim", status: fail ? "failed" : "passed",
-        createdAt: new Date().toISOString(), top: "cpu_tb", pinned: false, parentRunId: null,
+        createdAt: new Date().toISOString(), top, pinned: false, parentRunId: null,
         mode: "rtl", vcdPath: `sim_runs/${id}/dump.vcd`, passMarkerFound: !fail,
         failure: fail ? { type: "test_failed", firstFailureLine: "t=240ns ERROR result=0xBB expected 0xAA", timeNs: 240 } : null,
       };
@@ -315,10 +338,11 @@ test("palette flow: lint → sim (fail) → waveform → synth → report", asyn
   await page.goto("/workbench");
   await expect(page.getByText("alu.v")).toBeVisible();
 
-  // ⌘K → Lint (manifest defaults, no modal)
+  // ⌘K → Lint (manifest defaults, no modal). The toast names the engine the
+  // backend resolved (auto → iverilog in the mock).
   await openPalette(page);
   await page.getByRole("option", { name: /^Lint/ }).click();
-  await expect(page.getByText(/Lint passed/)).toBeVisible();
+  await expect(page.getByText(/Lint passed \(iverilog\)/)).toBeVisible();
   // The activity feed shows the user-initiated call.
   await expect(page.getByTestId("bottom-dock").getByText("linter_tool").first()).toBeVisible();
   await page.screenshot({ path: "e2e-artifacts/wb2-lint.png", fullPage: true });
@@ -355,6 +379,40 @@ test("palette flow: lint → sim (fail) → waveform → synth → report", asyn
   // No auto-switching happened along the way: the report tab was opened by us,
   // and the waveform tab is still there.
   await expect(page.getByText("Waveform · sim_0001")).toBeVisible();
+});
+
+test("sim options: TB combobox suggests manifest testbenches; POST carries simTop", async ({ page }) => {
+  await installMocks(page);
+  await page.goto("/workbench");
+  await expect(page.getByText("alu.v")).toBeVisible();
+
+  // ⌘K → gear on Simulate opens the param modal instead of running.
+  await openPalette(page);
+  await page.getByRole("button", { name: "Simulate options" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("run_isolated_simulation")).toBeVisible();
+
+  // The TB combo defaults to the manifest simTop and suggests the manifest's
+  // derived testbench modules on focus.
+  const combo = dialog.getByRole("combobox", { name: "Testbench" });
+  await expect(combo).toHaveValue("cpu_tb");
+  await combo.fill("");
+  await combo.click();
+  await expect(dialog.getByRole("option", { name: "cpu_tb" })).toBeVisible();
+  await dialog.getByRole("option", { name: "cpu_tb" }).click();
+  await expect(combo).toHaveValue("cpu_tb");
+
+  // Run → the POST /simulate body carries the chosen testbench.
+  const [req] = await Promise.all([
+    page.waitForRequest((r) => r.url().includes("/simulate") && r.method() === "POST"),
+    dialog.getByRole("button", { name: /^Run/ }).click(),
+  ]);
+  expect(req.postDataJSON()).toMatchObject({ simTop: "cpu_tb", mode: "rtl" });
+
+  // The mock echoes simTop into run.top; the run lands in the Runs panel.
+  const dock = page.getByTestId("bottom-dock");
+  await dock.getByRole("button", { name: /Runs/ }).click();
+  await expect(dock.getByText("sim_0001")).toBeVisible();
 });
 
 test("file tree → code tab: open, focus-if-open, close", async ({ page }) => {

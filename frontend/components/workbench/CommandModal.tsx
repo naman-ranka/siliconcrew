@@ -24,11 +24,13 @@ import {
   manifestFacts,
   runCommand,
   synthRunChoices,
+  testbenchChoices,
   type CommandDef,
   type CommandId,
   type CommandParam,
   type CommandValues,
 } from "@/lib/commands";
+import { ComboInput } from "@/components/workbench/ComboInput";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { cn } from "@/lib/utils";
@@ -209,6 +211,16 @@ function ParamEditor({
           className="h-7 font-mono text-[11px]"
         />
       );
+    case "combo":
+      return (
+        <ComboInput
+          value={String(value ?? "")}
+          onChange={(v) => onChange(v)}
+          suggestions={[...options]}
+          ariaLabel={param.label}
+          className="w-52"
+        />
+      );
   }
 }
 
@@ -233,7 +245,12 @@ function ParamRow({
       {noRuns ? (
         <span className="text-[11px] italic text-muted-foreground">No synth runs yet</span>
       ) : (
-        <ParamEditor param={param} options={options} value={value} onChange={onChange} />
+        <div className="flex flex-col items-end gap-0.5">
+          <ParamEditor param={param} options={options} value={value} onChange={onChange} />
+          {param.hint && (
+            <span className="text-[10px] italic text-muted-foreground">{param.hint}</span>
+          )}
+        </div>
       )}
     </div>
   );
@@ -255,9 +272,14 @@ function CommandForm({ id, def }: { id: CommandId; def: CommandDef }) {
   const basic = def.params.filter((p) => !p.advanced);
   const advanced = def.params.filter((p) => p.advanced);
 
-  // The pnr runId param ships with empty options — populated here from live runs.
-  const optionsFor = (p: CommandParam): readonly string[] =>
-    p.key === "runId" && p.source === "run" ? synthRunChoices(runs) : p.options ?? [];
+  // Params whose options resolve from live state: the pnr runId ships with
+  // empty options (populated from runs); the sim TB combo suggests the
+  // manifest's derived testbench modules.
+  const optionsFor = (p: CommandParam): readonly string[] => {
+    if (p.key === "runId" && p.source === "run") return synthRunChoices(runs);
+    if (p.key === "simTop") return testbenchChoices(manifest);
+    return p.options ?? [];
+  };
 
   const missingRun =
     def.params.some((p) => p.source === "run") &&

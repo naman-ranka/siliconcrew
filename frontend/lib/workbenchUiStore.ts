@@ -34,6 +34,8 @@ export interface ContextMenuState {
   x: number;
   y: number;
   path: string;
+  /** Row kind — dir rows get the (smaller) folder menu. Default: "file". */
+  kind?: "file" | "dir";
 }
 
 interface WorkbenchUiState {
@@ -48,6 +50,9 @@ interface WorkbenchUiState {
   // Tab key to flash (attention pulse) — set by openTab, cleared by clearFlash.
   flashKey: string | null;
   contextMenu: ContextMenuState | null;
+  // FileExplorer "New file" inline input: null = closed; "" = root; a dir
+  // path pre-fills the input with `<dir>/`.
+  newFilePrefix: string | null;
 
   // Actions
   openTab: (sessionId: string, key: string) => void;
@@ -64,6 +69,7 @@ interface WorkbenchUiState {
   setCommandModal: (id: string | null) => void;
   setCommandSurfaceOpen: (open: boolean) => void;
   setContextMenu: (menu: ContextMenuState | null) => void;
+  setNewFilePrefix: (prefix: string | null) => void;
   clearFlash: () => void;
 }
 
@@ -91,6 +97,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         commandModal: null,
         flashKey: null,
         contextMenu: null,
+        newFilePrefix: null,
 
         openTab: (sessionId, key) => {
           updateSession(sessionId, (ui) => ({
@@ -163,6 +170,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         setQuickOpenOpen: (open) => set({ quickOpenOpen: open }),
         setCommandModal: (id) => set({ commandModal: id }),
         setContextMenu: (menu) => set({ contextMenu: menu }),
+        setNewFilePrefix: (prefix) => set({ newFilePrefix: prefix }),
         clearFlash: () => set({ flashKey: null }),
       };
     },

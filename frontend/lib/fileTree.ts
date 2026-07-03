@@ -99,3 +99,30 @@ export function isSimTopFile(name: string, manifest: DesignManifest | null): boo
   const f = manifest.files.find((x) => x.name === name);
   return !!f && f.role === "tb" && moduleNameForFile(name) === manifest.simTop;
 }
+
+/**
+ * Validate a "New file" path (workspace-relative; slashes create folders
+ * implicitly, git-style). Returns a human-readable error, or null when valid.
+ */
+export function validateNewFilePath(path: string): string | null {
+  const p = path.trim();
+  if (!p) return "Enter a file name";
+  if (p.startsWith("/")) return "Use a workspace-relative path (no leading /)";
+  if (p.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) {
+    return "Path must not contain empty, “.” or “..” segments";
+  }
+  return null;
+}
+
+/** Dir-cache prefixes to invalidate after creating `path`: the root plus every
+ *  ancestor dir ("rtl/core/alu.v" → ["", "rtl", "rtl/core"]). */
+export function dirPrefixesForPath(path: string): string[] {
+  const out = [""];
+  const parts = path.split("/").slice(0, -1);
+  let acc = "";
+  for (const part of parts) {
+    acc = acc ? `${acc}/${part}` : part;
+    out.push(acc);
+  }
+  return out;
+}

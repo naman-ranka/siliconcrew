@@ -18,6 +18,7 @@ import {
   FolderOpen,
   Layers,
   Loader2,
+  Plus,
   RefreshCw,
 } from "lucide-react";
 
@@ -26,10 +27,12 @@ import { useSessionUi } from "@/lib/workbenchUiStore";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { openArtifact, artifactKeyForFile } from "@/lib/openArtifact";
 import {
+  dirPrefixesForPath,
   flattenTree,
   isSimTopFile,
   isSynthTopFile,
   runIdForDirEntry,
+  validateNewFilePath,
   type FlatNode,
 } from "@/lib/fileTree";
 import { statusDotClass } from "./runStatus";
@@ -106,10 +109,101 @@ function HeaderButton({
 }
 
 /**
+ * Inline "New file" row (header + button / dir context menu → this). The path
+ * may contain slashes (`rtl/alu.v`) — folders exist implicitly with their
+ * first file, git-style. Creates via the SAME save path the CodeViewer uses
+ * (store.saveCodeFile → PUT /code/{path}), then refreshes the affected dir
+ * slices and opens the new file in a code tab.
+ */
+function NewFileRow({ prefix }: { prefix: string }) {
+  const setNewFilePrefix = useWorkbenchUiStore((s) => s.setNewFilePrefix);
+  const currentSession = useStore((s) => s.currentSession);
+  const saveCodeFile = useStore((s) => s.saveCodeFile);
+  const invalidateDirs = useStore((s) => s.invalidateDirs);
+  const pushToast = useStore((s) => s.pushToast);
+
+  const [value, setValue] = useState(prefix ? `${prefix}/` : "");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const close = () => setNewFilePrefix(null);
+
+  const submit = async () => {
+    if (busy) return;
+    const path = value.trim();
+    const err = validateNewFilePath(path);
+    if (err) {
+      setError(err);
+      return;
+    }
+    setBusy(true);
+    try {
+      await saveCodeFile(path, "");
+      invalidateDirs(dirPrefixesForPath(path));
+      if (currentSession) openArtifact(currentSession.id, `code:${path}`);
+      pushToast({ kind: "success", title: "File created", detail: path });
+      close();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border-b border-border px-2 py-1.5">
+      <div className="flex items-center gap-1.5">
+        {busy ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden />
+        ) : (
+          <FileIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        )}
+        <input
+          ref={inputRef}
+          type="text"
+          aria-label="New file path"
+          placeholder="path/to/file.v"
+          value={value}
+          disabled={busy}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setError(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void submit();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              close();
+            }
+          }}
+          onBlur={() => {
+            // Abandoning an untouched (or in-flight) input closes it quietly.
+            if (!busy && value.trim() === (prefix ? `${prefix}/` : "")) close();
+          }}
+          className={cn(
+            "h-6 w-full min-w-0 rounded border bg-surface-2 px-1.5 font-mono text-xs outline-none",
+            "placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-primary/60",
+            error ? "border-status-fail/60" : "border-border"
+          )}
+        />
+      </div>
+      {error && <div className="mt-0.5 pl-5 text-[10px] text-status-fail">{error}</div>}
+    </div>
+  );
+}
+
+/**
  * v2 FileExplorer — the left-rail workspace tree. Lazy dirs via the store's
  * SWR dirCache, virtualized rows (@tanstack/react-virtual), manifest role
  * badges + top-module markers on root files, run-status dots on run dirs,
- * right-click context menu, and full keyboard navigation.
+ * right-click context menu, "New file" (header + / folder right-click), and
+ * full keyboard navigation.
  */
 export function FileExplorer() {
   const currentSession = useStore((s) => s.currentSession);
@@ -119,6 +213,8 @@ export function FileExplorer() {
   const loadDir = useStore((s) => s.loadDir);
   const invalidateDirs = useStore((s) => s.invalidateDirs);
   const setContextMenu = useWorkbenchUiStore((s) => s.setContextMenu);
+  const newFilePrefix = useWorkbenchUiStore((s) => s.newFilePrefix);
+  const setNewFilePrefix = useWorkbenchUiStore((s) => s.setNewFilePrefix);
 
   const sessionId = currentSession?.id ?? null;
   const { expandedDirs, activeTab, toggleDir } = useSessionUi(sessionId);
@@ -249,6 +345,13 @@ export function FileExplorer() {
           Explorer
         </span>
         <div className="flex items-center gap-0.5">
+          <HeaderButton
+            label="New file"
+            onClick={() => setNewFilePrefix("")}
+            disabled={!sessionId}
+          >
+            <Plus className="h-3 w-3" />
+          </HeaderButton>
           <HeaderButton label="Refresh" onClick={refresh} disabled={!sessionId}>
             <RefreshCw className="h-3 w-3" />
           </HeaderButton>
@@ -261,6 +364,9 @@ export function FileExplorer() {
           </HeaderButton>
         </div>
       </div>
+
+      {/* Inline "New file" input — keyed so a new prefix resets the draft. */}
+      {newFilePrefix != null && <NewFileRow key={newFilePrefix} prefix={newFilePrefix} />}
 
       {/* Body */}
       <div
@@ -340,15 +446,16 @@ export function FileExplorer() {
                     if (isDir) toggleNode(node);
                     else openNode(node);
                   }}
-                  onContextMenu={
-                    !isDir
-                      ? (e) => {
-                          e.preventDefault();
-                          setFocusedIndex(vi.index);
-                          setContextMenu({ x: e.clientX, y: e.clientY, path: entry.path });
-                        }
-                      : undefined
-                  }
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setFocusedIndex(vi.index);
+                    setContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      path: entry.path,
+                      kind: isDir ? "dir" : "file",
+                    });
+                  }}
                 >
                   {/* Left accent for the active file. */}
                   {active && (
