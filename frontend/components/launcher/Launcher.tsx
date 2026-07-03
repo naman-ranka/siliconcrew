@@ -143,14 +143,19 @@ export function Launcher() {
 
   // Drag-to-group: optimistic move, reverted on server failure.
   const moveToGroup = async (sessionId: string, projectId: string | null) => {
-    const prev = useStore.getState().sessions;
-    useStore.setState({
-      sessions: prev.map((s) => (s.id === sessionId ? { ...s, project_id: projectId } : s)),
-    });
+    // Revert scope: ONLY the moved session's project_id — restoring the whole
+    // snapshot would clobber concurrent renames/moves that landed meanwhile.
+    const prevProject =
+      useStore.getState().sessions.find((s) => s.id === sessionId)?.project_id ?? null;
+    const apply = (pid: string | null) =>
+      useStore.setState((st) => ({
+        sessions: st.sessions.map((s) => (s.id === sessionId ? { ...s, project_id: pid } : s)),
+      }));
+    apply(projectId);
     try {
       await sessionsApi.patch(sessionId, { project_id: projectId });
     } catch {
-      useStore.setState({ sessions: prev });
+      apply(prevProject);
     }
   };
 

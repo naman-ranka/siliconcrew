@@ -65,7 +65,7 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
   useWorkbenchSync();
   // Agent posture claims only ⌘P/⌘O (viewing); the IDE gets the full set —
   // ⌘K/⌘L/⌘R/⌘Y/⌘E/⌘J must NOT fire in the agent shell (revision 3).
-  useWorkbenchShortcuts(view === "agent" ? "agent" : "ide");
+  useWorkbenchShortcuts(view === "agent" ? "agent" : "ide", !notFound);
 
   // Store follows the URL: session + thread from props, re-run on back/forward
   // (prop changes). Compares before dispatching so URL-sync writes from the

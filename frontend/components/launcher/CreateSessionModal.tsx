@@ -68,14 +68,38 @@ export function CreateSessionModal({ presetGroup, onClose }: CreateSessionModalP
     setBusy(true);
     setError(null);
     try {
-      // Resolve the group: match an existing project by name, else create it.
+      // Resolve the group: match an existing project by display name OR by
+      // slug/id (renames change the name but never the immutable slug-id, so
+      // "Demo" must still match a group whose id is `Demo` even after it was
+      // renamed to "Prod"). On a 409 (created elsewhere / stale list), reload
+      // and re-match instead of failing the whole session creation.
       let projectId: string | null = null;
       const groupName = group.trim();
       if (groupName) {
-        const existing = projects.find(
-          (p) => p.name.toLowerCase() === groupName.toLowerCase()
-        );
-        projectId = existing ? existing.id : (await createProject(groupName)).id;
+        const wanted = groupName.toLowerCase();
+        const wantedSlug = slugify(groupName).toLowerCase();
+        const match = (list: typeof projects) =>
+          list.find(
+            (p) =>
+              p.name.toLowerCase() === wanted || p.id.toLowerCase() === wantedSlug
+          );
+        const existing = match(projects);
+        if (existing) {
+          projectId = existing.id;
+        } else {
+          try {
+            projectId = (await createProject(groupName)).id;
+          } catch (err) {
+            if ((err as { status?: number }).status === 409) {
+              await useStore.getState().loadProjects();
+              const found = match(useStore.getState().projects);
+              if (!found) throw err;
+              projectId = found.id;
+            } else {
+              throw err;
+            }
+          }
+        }
       }
       // Model: the real catalog default (loaded above); sessionsApi falls back
       // to its own default when the registry hasn't landed.

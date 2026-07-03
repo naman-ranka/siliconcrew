@@ -121,8 +121,10 @@ export function artifactKeyForToolCall(
 export function artifactKeyForActivity(
   event: Pick<ActivityEvent, "tool" | "args" | "resultSummary" | "runId">
 ): ArtifactKey | null {
+  // Structured runId FIRST: the regex takes the first match, and a summary
+  // like "regressed vs synth_0001" must not beat the event's own run id.
   const hint = event.runId
-    ? `${event.resultSummary ?? ""} ${event.runId}`
+    ? `${event.runId} ${event.resultSummary ?? ""}`
     : event.resultSummary;
   return artifactKeyForToolCall(event.tool, event.args ?? {}, hint);
 }

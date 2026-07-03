@@ -61,14 +61,16 @@ function humanSize(bytes: number): string {
  * cache, renders binary/oversized files honestly, and edits root source files
  * through the same `saveCodeFile` path the v1 CodeViewer uses.
  */
-export function CodeArtifact({ path }: { path: string }) {
+export function CodeArtifact({ path, forceReadOnly = false }: { path: string; forceReadOnly?: boolean }) {
   const currentSession = useStore((s) => s.currentSession);
   const slice = useStore((s) => s.fileCache[path]);
   const loadFile = useStore((s) => s.loadFile);
   const saveCodeFile = useStore((s) => s.saveCodeFile);
   const pushToast = useStore((s) => s.pushToast);
 
-  const readOnly = READ_ONLY_PAT.test(path);
+  // Build outputs are always read-only; the agent posture (prompt + view
+  // only) forces read-only for EVERY file — editing is IDE-posture power.
+  const readOnly = forceReadOnly || READ_ONLY_PAT.test(path);
   const sessionId = currentSession?.id ?? null;
 
   useEffect(() => {

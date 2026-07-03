@@ -28,8 +28,15 @@ function isEditable(target: EventTarget | null): boolean {
   return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
 }
 
-export function useWorkbenchShortcuts(scope: "ide" | "agent" = "ide"): void {
+export function useWorkbenchShortcuts(
+  scope: "ide" | "agent" = "ide",
+  enabled: boolean = true
+): void {
   useEffect(() => {
+    // Disabled on the session-not-found branch: its tree mounts none of the
+    // overlays, so a keypress would flip store state that pops a stale
+    // overlay on the NEXT session. No listeners at all is the honest state.
+    if (!enabled) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       // Plain mod-combos only: ⌘⇧P (print), ⌘⇧R (hard reload), ⌥-combos etc.

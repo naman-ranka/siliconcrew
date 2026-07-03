@@ -31,6 +31,8 @@ import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi,
 import { generateId } from "./utils";
 import { makeArtifactKey, type ArtifactKey } from "./artifactKeys";
 import { isDuplicateOfServer, mergeActivity, upsertActivityEvent } from "./activityMerge";
+// UI-chrome store (react/zustand only - no import cycle): pruned on session delete.
+import { useWorkbenchUiStore } from "./workbenchUiStore";
 
 // F4/F5: store-level single-flight for the workspace hydrate + workbench load,
 // keyed by session id. Every trigger — mount, selectSession, chat-complete,
@@ -559,6 +561,17 @@ export const useStore = create<AppState>((set, get) => ({
   deleteSession: async (sessionId: string) => {
     try {
       await sessionsApi.delete(sessionId);
+      // Prune the persisted per-session UI chrome (tabs/tree/dock) and the
+      // /workbench-shim redirect target — otherwise localStorage grows without
+      // bound and the shim keeps redirecting to a 404 for the dead session.
+      useWorkbenchUiStore.setState((u) => {
+        const perSession = { ...u.perSession };
+        delete perSession[sessionId];
+        return {
+          perSession,
+          lastSessionId: u.lastSessionId === sessionId ? null : u.lastSessionId,
+        };
+      });
       set((state) => {
         const newSessions = state.sessions.filter((s) => s.id !== sessionId);
         const newCurrentSession =
@@ -649,11 +662,14 @@ export const useStore = create<AppState>((set, get) => ({
   loadChatHistory: async () => {
     const { currentSession, activeThreadId } = get();
     if (!currentSession) return;
+    const sid = currentSession.id;
 
     try {
       const history = activeThreadId
-        ? await chatApi.getThreadHistory(currentSession.id, activeThreadId)
-        : await chatApi.getHistory(currentSession.id);
+        ? await chatApi.getThreadHistory(sid, activeThreadId)
+        : await chatApi.getHistory(sid);
+      // Stale-response guard: session switched while fetching (see loadThreads).
+      if (get().currentSession?.id !== sid) return;
       const messages: Message[] = history.map((msg) => ({
         id: generateId(),
         role: msg.role as "user" | "assistant",
@@ -956,14 +972,20 @@ export const useStore = create<AppState>((set, get) => ({
   loadThreads: async () => {
     const { currentSession } = get();
     if (!currentSession) return;
+    const sid = currentSession.id;
     set({ threadsLoading: true });
     try {
-      const threads = await threadsApi.list(currentSession.id);
+      const threads = await threadsApi.list(sid);
+      // Session switched mid-flight (rapid back/forward across /w/A → /w/B):
+      // dropping the stale result is the only honest move — the new session's
+      // own loadThreads is already running. Same guard loadWorkbench uses.
+      if (get().currentSession?.id !== sid) return;
       const cur = get().activeThreadId;
       // Keep the active thread if it still exists; else land on newest-active.
       const active = cur && threads.some((t) => t.id === cur) ? cur : threads[0]?.id ?? null;
       set({ threads, activeThreadId: active, threadsLoading: false });
     } catch (error) {
+      if (get().currentSession?.id !== sid) return;
       set({
         threadsLoading: false,
         chatError: error instanceof Error ? error.message : "Failed to load chats",

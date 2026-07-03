@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { openArtifact } from "@/lib/openArtifact";
 import { useStore } from "@/lib/store";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -73,7 +74,6 @@ function ThinkingContent({ content }: { content: string }) {
 }
 
 function MarkdownContent({ content }: { content: string }) {
-  const { setArtifactTab, toggleArtifacts } = useStore();
 
   return (
     <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-surface-2 prose-pre:border prose-pre:border-border">
@@ -119,13 +119,36 @@ function MarkdownContent({ content }: { content: string }) {
           },
           a({ href, children }) {
             if (href?.startsWith("#artifact:")) {
+              // Legacy agent links carry a viewer NAME (spec/code/waveform/
+              // report/layout), not an artifact key — resolve to the best real
+              // artifact via the same openArtifact abstraction every surface
+              // uses. Unresolvable (no runs yet, unknown name) => quiet no-op.
               const tab = href.replace("#artifact:", "");
               return (
                 <button
                   className="text-primary hover:underline font-medium"
                   onClick={() => {
-                    setArtifactTab(tab as any);
-                    toggleArtifacts();
+                    const st = useStore.getState();
+                    const sid = st.currentSession?.id;
+                    if (!sid) return;
+                    const latest = (kind: "sim" | "synth") =>
+                      st.runs.find((r) => r.kind === kind)?.id ?? null;
+                    let key: string | null = null;
+                    if (tab === "spec") key = "spec";
+                    else if (tab === "code") {
+                      const first = st.manifest?.files.find((f) => f.role === "rtl");
+                      key = first ? `code:${first.path}` : null;
+                    } else if (tab === "waveform" || tab === "wave") {
+                      const id = latest("sim");
+                      key = id ? `wave:${id}` : null;
+                    } else if (tab === "report") {
+                      const id = latest("synth");
+                      key = id ? `report:${id}` : null;
+                    } else if (tab === "layout") {
+                      const id = latest("synth");
+                      key = id ? `layout:${id}` : null;
+                    }
+                    if (key) openArtifact(sid, key);
                   }}
                 >
                   {children}

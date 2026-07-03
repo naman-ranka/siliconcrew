@@ -314,7 +314,7 @@ function ArtifactsPanel({ onCollapse }: { onCollapse: () => void }) {
         </div>
       </div>
       <div className="flex-1 min-h-0">
-        <ArtifactCenter emptyHint="Click Open on a tool card, or press ⌘P. Nothing opens on its own." />
+        <ArtifactCenter readOnly emptyHint="Click Open on a tool card, or press ⌘P. Nothing opens on its own." />
       </div>
     </div>
   );
@@ -328,16 +328,19 @@ export function AgentShell() {
   // openArtifact must reveal the panel: every openTab() sets flashKey and/or
   // moves activeTab — a CHANGE in either (never the mount snapshot) expands a
   // collapsed panel. Collapsing never re-triggers (values are unchanged).
-  const prevOpenRef = useRef<{ flash: string | null; active: string | null } | null>(null);
+  const prevOpenRef = useRef<{ sid: string | null; flash: string | null; active: string | null } | null>(null);
   useEffect(() => {
     const prev = prevOpenRef.current;
-    prevOpenRef.current = { flash: flashKey, active: activeTab };
-    if (!prev) return; // mount snapshot — never auto-open on load
+    prevOpenRef.current = { sid, flash: flashKey, active: activeTab };
+    // Mount snapshot AND session-switch snapshot: switching sessions changes
+    // activeTab (per-session UI) — that must never override a deliberate
+    // collapse stored for the incoming session.
+    if (!prev || prev.sid !== sid) return;
     const flashed = flashKey !== null && flashKey !== prev.flash;
     const switched = activeTab !== null && activeTab !== prev.active;
     if (flashed || switched) setArtifactsOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flashKey, activeTab]);
+  }, [sid, flashKey, activeTab]);
 
   return (
     <div className="flex flex-1 min-h-0" data-testid="agent-shell">
@@ -369,7 +372,7 @@ export function AgentShell() {
           )}
         </div>
 
-        <ChatArea tailSlot={<InlineActionsTail />} />
+        <ChatArea tailSlot={<InlineActionsTail key={sid ?? "none"} />} />
       </div>
 
       {artifactsOpen && <ArtifactsPanel onCollapse={() => setArtifactsOpen(false)} />}

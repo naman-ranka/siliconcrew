@@ -36,14 +36,14 @@ const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }
 // Route one open tab to its wrapper viewer. Wrappers load their own data via
 // the store caches on mount — that (plus keep-alive below) is what makes
 // revisiting a tab free.
-function ArtifactBody({ artifactKey }: { artifactKey: string }) {
+function ArtifactBody({ artifactKey, readOnly }: { artifactKey: string; readOnly: boolean }) {
   const parsed = parseArtifactKey(artifactKey);
   if (!parsed) {
     return <ViewerEmpty icon={<Layers />} title="Unknown artifact" detail={artifactKey} />;
   }
   switch (parsed.kind) {
     case "code":
-      return <CodeArtifact path={parsed.ref ?? ""} />;
+      return <CodeArtifact path={parsed.ref ?? ""} forceReadOnly={readOnly} />;
     case "spec":
       return <SpecArtifact />;
     case "wave":
@@ -63,8 +63,11 @@ function ArtifactBody({ artifactKey }: { artifactKey: string }) {
  * tabs is instant: no VCD re-parse, no Monaco re-boot, no report refetch.
  */
 export function ArtifactCenter({
+  readOnly = false,
   emptyHint = "Open a file from the tree, or an artifact from a run. Press ⌘P to quick-open anything.",
 }: {
+  /** Agent posture is prompt + view only — forces the code viewer read-only. */
+  readOnly?: boolean;
   /** Empty-state guidance — the default speaks IDE (file tree); the agent
    * shell passes prompt-posture copy (tool cards + ⌘P). */
   emptyHint?: string;
@@ -168,7 +171,7 @@ export function ArtifactCenter({
             className={cn("h-full min-h-0", key !== activeTab && "hidden")}
             data-testid={`artifact-panel-${key}`}
           >
-            <ArtifactBody artifactKey={key} />
+            <ArtifactBody readOnly={readOnly} artifactKey={key} />
           </div>
         ))}
       </div>
