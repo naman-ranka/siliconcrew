@@ -193,3 +193,17 @@ bench-orchestrator/configs/cvdp_b*.yaml
 # CVDP container-grader staging + local pytest cache
 .pytest_cvdp_cache/
 cvdp-pipeline/**/__pycache__/
+bench-orchestrator/final_runs/*
+!bench-orchestrator/final_runs/FINAL_MANIFEST.json
+_old_scratch/
+_run_cwd/
+_scratch_*
+bench-orchestrator/_probe_logs/
+bench-orchestrator/configs/cvdp_full92_*.yaml
+bench-orchestrator/configs/cvdp_night*.yaml
+bench-orchestrator/configs/cvdp_resume_*.yaml
+bench-orchestrator/configs/cvdp_probe_*.yaml
+bench-orchestrator/configs/cvdp_rerun*.yaml
+bench-orchestrator/configs/cvdp_six_*.yaml
+bench-orchestrator/configs/cvdp_agy_test.yaml
+bench-orchestrator/configs/cvdp_xls_*.yaml
