@@ -714,3 +714,89 @@ conflicted-prompt runs, so a clean A/B. Mechanical greps use the real format `"n
   of how good SiliconCrew gets; chasing 63 would require either leakage or these problems being out of scope.
   *(How many of the leaked-12 are of this unsolvable-by-construction type vs merely-hard is not yet fully
   characterized — dyn_eq is one confirmed; worth auditing the rest before setting a real target.)*
+
+## Lean-on-passers probe (codex) — 2026-06-30
+
+Before scaling lean+cocotb to the full claude-92, ran 5 leak-clean codex PASSERS under CVDP_LEAN_PROMPT=1
+to test whether the lean prompt REGRESSES problems that already pass. Each already had a confirmed
+leak-clean codex PASS, so a FAIL now = regression caused by the lean prompt (not agent incapacity).
+
+| problem | verdict | leak | regression? |
+|---|---|---|---|
+| axis_broadcaster_0001 | PASS 1/0 | clean | no |
+| async_filo_0001 | PASS 5/0 | clean | no |
+| rgb_color_space_conversion_0004 | PASS 1/0 | clean | no |
+| gcd_0007 | PASS 5/0 | clean | no |
+| event_storing_0001 | PASS 16/0 | clean | no |
+
+**Verdict: 0/5 regressed → lean+cocotb does NOT regress passers. Safe to scale to the claude-92.**
+
+**Trace-comparison (old architect vs new lean; bg-subagent a6f4899b, 4 old/new pairs):**
+- **Ramp tax is ToolSearch, not the architect prompt.** Dropping inject_architect_prompt saves exactly 1
+  call; the real ramp cost is tool-discovery via ToolSearch (digital_stopwatch-NEW spent 10 ToolSearch + 2
+  TodoWrite before first RTL write). → FIX APPLIED: tool manifest in the lean prompt.
+- **Lean traded SV-testbench-syntax loops for cocotb-logic + python-env loops — roughly net-neutral on
+  claude.** Big win on poly_decimator (wall-clock 56m→18m, 7 wasted turns→0); digital_stopwatch 20m→34m;
+  the cocotb failures were genuine logic mismatches, NOT ReadOnly/RisingEdge scheduler races (no systemic
+  cocotb-timing tax). One new friction: host `Python was not found` (phase-NEW burned 2 calls running the
+  golden in the shell instead of via cocotb_tool). → FIX APPLIED: "run golden ONLY via cocotb_tool".
+- **Biggest single turn-waster: the sby formal loop (codex axis, 10 calls / 9 FAIL).** NOT a broken tool —
+  the user's solver fix works (z3 runs proofs to completion, DONE PASS/FAIL with counterexamples). It's
+  OFF-TARGET: the grader doesn't run formal, so the effort doesn't score. Was a CODEX behavior; claude did
+  NOT formal-loop in the trace. → LEFT AS-IS (sby nudge kept): keeps the benchmark prompt aligned with the
+  general SiliconCrew product, low risk on claude, and formal can incidentally surface a real RTL bug.
+- **One genuine tool sharp-edge (not prompt-fixable):** iverilog `sorry: constant selects in always_*
+  processes are not currently supported (all bits will be included)` — a SILENT degradation that can corrupt
+  sim results without erroring (hit saturation.sv in phase-NEW). Left unaddressed (a prompt line won't fix a
+  simulator limitation).
+
+**Pre-92 changes staged (UNCOMMITTED — commit after the evening 92 completes):** runner default
+CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000 (stops mid-run output-token truncation, e.g. hdbn); per-problem timeout
+default 1800/2400→5400s (90 min, so slow-but-correct problems like poly aren't tree-killed mid-verification);
+lean-prompt tool-manifest + golden-via-cocotb fixes. Plan: claude-only full-92, lean, 90-min timeout, ~4
+shards, launched in the evening; grade + leak-gate incrementally; commit + write conclusion after.
+
+## Full-92 Sonnet-5 run — FINAL (2026-07-03)
+
+First complete, honest, leak-gated sweep of all 92 no_commercial agentic problems on **claude-sonnet-5**
+with the lean+cocotb benchmark prompt (golden-model-first, cocotb verification, formal where it fits, no
+architect prompt, no synthesis). Every run graded in the reference container and passed through
+`leak_detector`; any run that read the hidden harness / research docs / raw dataset was marked INVALID and
+re-run sealed.
+
+**FINAL HONEST SCORE: 58/92 clean PASS (63%)** — 34 clean FAIL, 0 missing. Beats the ~51/92 leak-free
+baseline (the prior best on earlier models/prompt) by **+7**.
+
+Pass rate by difficulty (dataset `categories` easy/medium/hard):
+| difficulty | pass/total | rate |
+|---|---|---|
+| easy | 15/17 | 88% |
+| medium | 35/55 | 63% |
+| hard | 8/20 | 40% |
+
+A clean monotonic gradient — Sonnet-5's success tracks problem difficulty; it fails where problems are
+genuinely hard, not randomly. Behavior was consistently on-spine: golden-model-first, cocotb (+ formal on
+FSM/control), no oracle-drift, no wandering — and integrity held throughout.
+
+**The run also hardened the whole harness. Bugs/vectors found and fixed along the way:**
+- **3 leakage vectors closed** (all caught by `leak_detector`, none counted): (1) agent reading an *old*
+  run dir's materialized hidden harness in `bench-orchestrator/runs/` → purged all materialized harnesses;
+  (2) agent reading our own `cvdp-pipeline/research/*.md` notes → moved research out of the repo during runs;
+  (3) agent reading the *raw dataset* via the path in `run_config.json` → redacted that path.
+- **`leak_detector` false-positive fixed**: cocotb's own runner is named `test_runner.py`, which collided
+  with the hidden grader's `src/test_runner.py`; tightened `HARNESS_RE` to only the unambiguous
+  `cvdp_problem/harness` + `harness_library` signatures (else legit clean cocotb passes get discarded).
+- **NO_HARNESS grading bug fixed**: the dataset-path redaction above *also* blinded `regrade_docker` (it
+  reads the dataset from `run_config`), silently grading ~26 completed runs as NO_HARNESS → they went
+  uncounted for hours. Added a fallback to `$RTL_DATASET` / the canonical dataset path. This is what
+  temporarily made the tally look stuck at 29/44; once fixed the real number surfaced.
+- **Runner/pipeline fixes**: `CLAUDE_CODE_GIT_BASH_PATH` default (Claude Code Windows startup),
+  `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000` (stop mid-run output truncation), per-problem cwd scratch isolation
+  + isolated per-shard cwds (stop cross-run leakage of prior solutions), 90-min timeout default, and a guard
+  against an empty `--ids` config silently expanding to all 92.
+- **Operational resilience**: recovered from ~4 session-limit crashes (recompute-remaining + relaunch each
+  time, never re-running a clean verdict, distinguishing genuine fails from limit-casualties/NO_WORKSPACE),
+  and added a **limit-proof background usage watcher** (polls usage via a separate Gemini/agy account, exits
+  → notifies at 70% so the run pauses *before* a freeze that would otherwise break the wake loop).
+
+Container verdicts only; no overclaiming. 58/92 is the honest, reproducible number.

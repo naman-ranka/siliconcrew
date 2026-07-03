@@ -31,7 +31,11 @@ RUN_ROOTS = [
 
 DATASET_RE = re.compile(r"cvdp_v[\d.]+_agentic[^\s\"']*\.jsonl", re.I)
 READ_VERB = re.compile(r"(get-content|\bgc\b|\bcat\b|\btype\b|select-string|\bsls\b|import-csv|open\s*\(|\.read_text|\.read\s*\(|readlines|findstr)", re.I)
-HARNESS_RE = re.compile(r"harness_library|cvdp_problem[\\/]+harness|[\\/]src[\\/]test_runner|\btest_runner\.py\b", re.I)
+# Only the UNAMBIGUOUS hidden-grader signatures. The in-place harness leak always shows the path
+# `cvdp_problem/harness/...` (or imports `harness_library`), so those catch it. We deliberately do NOT
+# match a bare `test_runner.py` / `/src/test_runner`: cocotb names its OWN generated runner `test_runner.py`,
+# so those broad patterns false-positive on every legitimate cocotb run (the intended golden-first flow).
+HARNESS_RE = re.compile(r"harness_library|cvdp_problem[\\/]+harness", re.I)
 RESEARCH_DOCS = r"cvdp-pipeline[\\/]+research|ITERATION_LOG|AUDIT_XLS_TOOLING|CVDP_RESULTS|MORNING_REPORT|CVDP_XLS_RESEARCH|SELF_VERIFICATION_GAP|EVAL_BROKEN_HANDOFF|FULL_BENCHMARK_PLAN"
 RESEARCH_RE = re.compile(RESEARCH_DOCS, re.I)
 

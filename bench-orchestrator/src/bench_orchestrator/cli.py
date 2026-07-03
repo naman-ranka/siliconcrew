@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 import argparse
 import json
+import shutil
 
 from .config import config_to_jsonable, load_config, problem_from_jsonable, problem_to_jsonable, write_json
 from .naming import allocate_run_dir, session_name
@@ -82,8 +83,24 @@ def _override_problem(problem, agent: str | None = None, model: str | None = Non
     return replace(problem, **kwargs)
 
 
+def _clean_cwd_scratch() -> None:
+    """Remove leftover rtl/ and verif/ scratch from the agent's cwd before a problem runs.
+
+    The agent's GRADED deliverable lives in the isolated MCP session workspace (RTL_WORKSPACE), but its
+    native tools (Claude Write/Bash, codex file_change) ALSO dump *.sv/*.py into the launch cwd. Across a
+    multi-problem run those accumulate into a pile of prior near-solutions with module names matching other
+    problems — and the agent does repo-wide name searches (Glob/rg), so it can read a previous problem's
+    answer. leak_detector does not scan for that, so a contaminated run would score CLEAN. Wiping cwd scratch
+    before each problem closes the vector. SAFE only because each shard runs in its OWN cwd (see the launcher);
+    otherwise parallel shards would race on a shared cwd.
+    """
+    for name in ("rtl", "verif"):
+        shutil.rmtree(Path.cwd() / name, ignore_errors=True)
+
+
 def _run_one(cfg, problem, run_dir: Path, sess: str, project_id: str | None) -> None:
     run_dir.mkdir(parents=True, exist_ok=False)
+    _clean_cwd_scratch()
     prepared = prepare_problem(problem, run_dir)
     run_config = {
         "benchmark": cfg.name,
@@ -97,7 +114,17 @@ def _run_one(cfg, problem, run_dir: Path, sess: str, project_id: str | None) -> 
         "evaluation": problem.evaluation,
         "session": {"name": sess, "project_id": project_id},
     }
-    write_json(run_dir / "run_config.json", run_config)
+    # Redact the raw-dataset path from the agent-readable run_config.json: it embeds every problem's hidden
+    # harness, and a stuck agent that reads run_config -> Get-Content the dataset is a confirmed leak vector
+    # (leak_detector catches it, but don't hand over the breadcrumb). The orchestrator/grader still know the
+    # path from the (agent-out-of-reach) YAML config; only this per-run copy is scrubbed.
+    def _redact(o):
+        if isinstance(o, dict):
+            return {k: ("<redacted>" if k == "dataset" else _redact(v)) for k, v in o.items()}
+        if isinstance(o, list):
+            return [_redact(v) for v in o]
+        return o
+    write_json(run_dir / "run_config.json", _redact(run_config))
 
     prompt = build_agent_prompt(problem, prepared, sess, project_id)
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)

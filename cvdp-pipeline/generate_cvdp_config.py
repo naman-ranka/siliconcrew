@@ -163,7 +163,7 @@ def main() -> int:
     ap.add_argument("--model", default="gpt-5.5", help="Default model.")
     ap.add_argument("--flow", default="verilog", help="Flow (verilog for CVDP RTL-only).")
     ap.add_argument("--mcp-server", default="rtl-codex", help="MCP server name.")
-    ap.add_argument("--timeout", type=int, default=2400, help="Per-problem timeout seconds.")
+    ap.add_argument("--timeout", type=int, default=5400, help="Per-problem timeout seconds (90 min default: 60 min tree-killed slow-but-correct problems mid-verification, e.g. poly_decimator at 65 min, depressing the score by pace not capability).")
     ap.add_argument("--allow-commercial", action="store_true", help="Allow commercial datasets (xrun-dependent). Default: reject.")
     ap.add_argument(
         "--enable-project",

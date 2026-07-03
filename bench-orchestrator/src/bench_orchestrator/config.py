@@ -98,7 +98,7 @@ def load_config(path: Path, repo_root: Path) -> BenchmarkConfig:
         flow = str(merged.get("flow") or "verilog").strip()
         model = str(merged.get("model") or "default").strip()
         mcp_server = str(merged.get("mcp_server") or "rtl-codex").strip()
-        timeout_sec = int(merged.get("timeout_sec") or 1800)
+        timeout_sec = int(merged.get("timeout_sec") or 5400)
 
         p = ProblemConfig(
             id=pid,
