@@ -1,6 +1,6 @@
 # Session System + Agent-first Shell — Implementation Plan
 
-Status: PROPOSED (awaiting review). Branch: `claude/siliconc-workbench-v2-ilsd83`.
+Status: ACCEPTED with revisions (see REVISIONS). Implementation in progress. Branch: `claude/siliconc-workbench-v2-ilsd83`.
 Prototypes: `sessionsystemv2_backup.html` (Launcher / ⌘O / breadcrumb),
 `workbenchagentfirst_backup.html` (chat-primary shell + inline tool stream).
 
@@ -54,23 +54,31 @@ One event log (already built — attempt_events + activity slice), two rendering
 | Manual actions inline in conversation | Only visible in IDE Activity dock |
 | Session rename / duplicate | **No backend endpoint** (SessionPatch = project_id only) |
 
+## REVISIONS (owner feedback, accepted)
+
+1. **Cards lead with recency, not run verdicts.** "Last worked on" replaces the
+   latest-run headline ("WNS +0.42ns" etc.) — with many runs a single verdict
+   is ambiguous. Cards: glyph · name · group tag · thread count · updated.
+   File chips + run detail move to the drawer (ONE lazy manifest/runs fetch for
+   the selected session only). **card_summary machinery is DELETED from the
+   plan** — S0-4 is now just a cheap thread_count on the session list.
+2. **Groups**: pure UI relabel of the existing projects API. No new entity.
+3. **Agent-first is prompt + view ONLY.** No CommandPalette/CommandModal/
+   CommandSurface/context menus/file creation in the agent shell. Manual tool
+   invocation is IDE-posture power. ⌘P quick-open (viewing) stays. Inline
+   "You ran a command" cards still render (actions performed from IDE/MCP).
+4. Session duplicate: deferred (menu ships without it).
+
 ## Plan
 
 ### Wave S0 — backend micro-wave (small, unblocks everything)
-1. `PATCH /api/sessions/{id}`: accept `name` (rename; workspace dir unchanged —
-   name is display; document that) alongside `project_id`.
-2. `PATCH /api/projects/{id}`: rename. (`ProjectResponse` already has label.)
-3. OPTIONAL (defer unless cheap): `POST /api/sessions/{id}/duplicate` — new
-   session + copy workspace files (excluding run dirs). If deferred, the
-   launcher menu ships without Duplicate.
-4. Session list enrichment for cards, ONE cheap endpoint concern: the launcher
-   needs per-session `latestRun {kind,status,head}`, `fileCount/topFiles`,
-   `threadCount`. Options: (a) extend GET /api/sessions with a `?cards=1`
-   aggregate (reads each session's runs index + manifest — hosted cost: N
-   hydrations! NO) — or (b) persist a tiny `card_summary` into the session
-   store row updated on workspace sync / run completion (honest cache,
-   cheap list). **Choose (b)**; stale-tolerant (card shows last-synced truth).
-   Reviewer: check `session_manager` row shape + where sync completes.
+1. `PATCH /api/sessions/{id}`: accept `name` (rename; display-only — the
+   workspace dir/id never changes; document that) alongside `project_id`.
+   Mirror in ALL MetadataStore implementations (src/platform_engines/
+   metadata_store.py — SQLite + cloud), following move_session_to_project.
+2. `PATCH /api/projects/{id}`: rename, same store mirroring.
+3. `thread_count` added to the session list response — a COUNT over the
+   threads table in the same store (NO workspace hydration).
 
 ### Wave S1 — routing foundation (the real structural change)
 - URL becomes the source of truth for *where you are*:
