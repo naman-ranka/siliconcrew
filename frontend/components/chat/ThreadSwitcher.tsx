@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
-import { sessionUrl } from "@/lib/nav";
+import { replaceThreadUrl } from "@/lib/nav";
 import { ChevronDown, Check, Trash2, MessageSquarePlus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn, formatRelativeTime } from "@/lib/utils";
@@ -32,24 +32,13 @@ export function ThreadSwitcher() {
   const router = useRouter();
 
   // Keep the URL's ?chat= in step with the active thread (S1) so refresh keeps
-  // the conversation — but only on /w/ routes; the legacy `/` page has no
-  // session URL to sync. replace (not push): thread hops aren't history
-  // entries; { scroll: false } keeps the viewport still. Reads location inside
-  // the handler (not useSearchParams) so the statically-prerendered legacy
-  // page needs no Suspense boundary.
+  // the conversation. replaceThreadUrl (shared with Breadcrumb) no-ops off /w/
+  // routes and reads location inside the handler (not useSearchParams) so the
+  // statically-prerendered legacy page needs no Suspense boundary.
   const syncThreadUrl = (threadId: string | null) => {
-    if (typeof window === "undefined") return;
-    if (!window.location.pathname.startsWith("/w/")) return;
     const session = useStore.getState().currentSession;
     if (!session) return;
-    const view = new URLSearchParams(window.location.search).get("view");
-    router.replace(
-      sessionUrl(session.id, {
-        chat: threadId,
-        view: view === "agent" || view === "ide" ? view : null,
-      }),
-      { scroll: false }
-    );
+    replaceThreadUrl(router, session.id, threadId);
   };
 
   // Standard popover affordances: Escape + click-outside to close.

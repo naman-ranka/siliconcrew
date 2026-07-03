@@ -6,18 +6,18 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { IconTooltip } from "@/components/ui/tooltip";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
-import { SessionPicker } from "./SessionPicker";
+import { Breadcrumb } from "./Breadcrumb";
 import { ThemeToggle } from "./ThemeToggle";
 import { LivePill } from "./LivePill";
 import { ProfileMenu, REPO_URL } from "./ProfileMenu";
 import { McpModal } from "./McpModal";
 
 /**
- * v2 top chrome — one compact 40px strip: brand · session · the single honest
- * status pill, then (right) command palette, repo, theme, and the profile
- * menu. Prop-less by design: it reads the stores itself so Workbench stays a
- * pure layout shell. The MCP handoff modal is owned here and opened from the
- * profile menu.
+ * v2 top chrome — one compact 40px strip: brand · breadcrumb (Home › block ›
+ * chat) · the single honest status pill, then (right) command palette, repo,
+ * theme, and the profile menu. Prop-less by design: it reads the stores itself
+ * so Workbench stays a pure layout shell. The MCP handoff modal is owned here
+ * and opened from the profile menu.
  */
 export function TopBar() {
   const setPaletteOpen = useWorkbenchUiStore((s) => s.setPaletteOpen);
@@ -40,7 +40,7 @@ export function TopBar() {
 
       <Separator orientation="vertical" className="h-5" />
 
-      <SessionPicker />
+      <Breadcrumb />
       <LivePill />
 
       {/* Right cluster */}

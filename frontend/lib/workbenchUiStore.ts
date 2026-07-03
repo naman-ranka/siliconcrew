@@ -54,6 +54,8 @@ interface WorkbenchUiState {
   // Ephemeral (never persisted).
   paletteOpen: boolean;
   quickOpenOpen: boolean;
+  /** ⌘O session quick-switch overlay (S3). */
+  quickSwitchOpen: boolean;
   commandModal: string | null;
   commandSurfaceOpen: boolean;
   // Tab key to flash (attention pulse) — set by openTab, cleared by clearFlash.
@@ -79,6 +81,7 @@ interface WorkbenchUiState {
   setLastSessionId: (sessionId: string | null) => void;
   setPaletteOpen: (open: boolean) => void;
   setQuickOpenOpen: (open: boolean) => void;
+  setQuickSwitchOpen: (open: boolean) => void;
   setCommandModal: (id: string | null) => void;
   setCommandSurfaceOpen: (open: boolean) => void;
   setContextMenu: (menu: ContextMenuState | null) => void;
@@ -108,6 +111,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         paletteOpen: false,
         commandSurfaceOpen: false,
         quickOpenOpen: false,
+        quickSwitchOpen: false,
         commandModal: null,
         flashKey: null,
         contextMenu: null,
@@ -189,6 +193,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         setPaletteOpen: (open) => set({ paletteOpen: open }),
         setCommandSurfaceOpen: (open) => set({ commandSurfaceOpen: open }),
         setQuickOpenOpen: (open) => set({ quickOpenOpen: open }),
+        setQuickSwitchOpen: (open) => set({ quickSwitchOpen: open }),
         setCommandModal: (id) => set({ commandModal: id }),
         setContextMenu: (menu) => set({ contextMenu: menu }),
         setNewFilePrefix: (prefix, kind) =>

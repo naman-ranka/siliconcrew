@@ -21,6 +21,7 @@ import { CommandPalette } from "./CommandPalette";
 import { CommandModal } from "./CommandModal";
 import { CommandSurface } from "./CommandSurface";
 import { QuickOpen } from "./QuickOpen";
+import { QuickSwitch } from "./QuickSwitch";
 import { Toaster } from "./Toaster";
 
 export interface WorkbenchProps {
@@ -212,6 +213,7 @@ export function Workbench({ sessionId, threadId = null }: WorkbenchProps) {
       <CommandModal />
       <CommandSurface />
       <QuickOpen />
+      <QuickSwitch />
       <FileContextMenu />
       <Toaster />
       <SettingsModal />

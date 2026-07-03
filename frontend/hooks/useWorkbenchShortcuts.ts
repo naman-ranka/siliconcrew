@@ -7,13 +7,13 @@ import { runCommand } from "@/lib/commands";
 
 // Workbench v2 global shortcuts (mounted only by Workbench — the `/` Launcher
 // has no global shortcuts):
-//   ⌘K command palette · ⌘P quick-open · ⌘J toggle dock
+//   ⌘K command palette · ⌘O session quick-switch · ⌘P quick-open · ⌘J toggle dock
 //   ⌘L lint · ⌘R simulate · ⌘Y synthesize · ⌘E retry-P&R modal
-// ⌘K/⌘P/⌘J work even while typing (they are navigation, not text editing);
+// ⌘K/⌘O/⌘P/⌘J work even while typing (they are navigation, not text editing);
 // the run shortcuts don't, so typing "l" in the chat never lints. ⌘R
 // deliberately shadows browser reload while the workbench is focused.
 
-const ALWAYS_KEYS = new Set(["k", "p", "j"]);
+const ALWAYS_KEYS = new Set(["k", "o", "p", "j"]);
 
 function isEditable(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -38,6 +38,12 @@ export function useWorkbenchShortcuts(): void {
         case "k":
           e.preventDefault();
           ui.setPaletteOpen(true);
+          return;
+        case "o":
+          // Session quick-switch — shadows the browser's "open file" dialog
+          // on purpose while the workbench is focused.
+          e.preventDefault();
+          ui.setQuickSwitchOpen(true);
           return;
         case "p":
           e.preventDefault();

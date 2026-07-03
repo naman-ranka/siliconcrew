@@ -38,3 +38,30 @@ export interface RouterLike {
 export function openSession(router: RouterLike, sessionId: string, opts?: SessionUrlOpts): void {
   router.push(sessionUrl(sessionId, opts));
 }
+
+/** Structural subset of the router's replace() — see RouterLike. */
+export interface RouterReplaceLike {
+  replace: (href: string, opts?: { scroll?: boolean }) => void;
+}
+
+/** Mirror the active thread into the URL's `?chat=` so refresh keeps the
+ * conversation — but only on /w/ routes; the Launcher has no session URL to
+ * sync. replace (not push): thread hops aren't history entries; scroll:false
+ * keeps the viewport still. Preserves a valid `?view=` if present. Shared by
+ * ThreadSwitcher and Breadcrumb so the two stay consistent. */
+export function replaceThreadUrl(
+  router: RouterReplaceLike,
+  sessionId: string,
+  threadId: string | null
+): void {
+  if (typeof window === "undefined") return;
+  if (!window.location.pathname.startsWith("/w/")) return;
+  const view = new URLSearchParams(window.location.search).get("view");
+  router.replace(
+    sessionUrl(sessionId, {
+      chat: threadId,
+      view: view === "agent" || view === "ide" ? view : null,
+    }),
+    { scroll: false }
+  );
+}

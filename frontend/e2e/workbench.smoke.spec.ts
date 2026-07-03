@@ -594,6 +594,37 @@ test("quick open (⌘P) opens an artifact by fuzzy name", async ({ page }) => {
   await expect(page.getByRole("tab", { name: /cpu_tb\.v/ })).toBeVisible();
 });
 
+// S3: ⌘O session quick-switch — grouped list (left) + detail pane (right) with
+// the shell choice and the lazily-fetched chat list; Esc closes.
+test("quick switch (⌘O): current session, detail pane, empty state, esc closes", async ({ page }) => {
+  await installMocks(page);
+  await page.goto("/w/demo");
+  await expect(page.getByText("alu.v")).toBeVisible();
+
+  await page.keyboard.press("ControlOrMeta+o");
+  const qs = page.getByTestId("quick-switch");
+  await expect(qs).toBeVisible();
+
+  // The active session row carries the "current" chip.
+  const row = qs.getByTestId("qs-session-demo");
+  await expect(row).toBeVisible();
+  await expect(row.getByText("current")).toBeVisible();
+
+  // Detail pane: shell buttons (stored default = IDE until S4) and the
+  // jump-to-chat list, hydrated lazily (debounced threadsApi.list).
+  const detail = qs.getByTestId("qs-detail");
+  await expect(detail.getByRole("button", { name: "Open in IDE" })).toBeVisible();
+  await expect(detail.getByRole("button", { name: "Open in Chat" })).toBeVisible();
+  await expect(detail.getByText("Chat 1")).toBeVisible();
+
+  // Nonsense query → honest empty state (and the detail pane goes blank).
+  await page.getByPlaceholder("Switch to a session…").fill("zzznope");
+  await expect(qs.getByTestId("qs-empty")).toHaveText('No sessions match "zzznope"');
+
+  await page.keyboard.press("Escape");
+  await expect(qs).toHaveCount(0);
+});
+
 test("command surface: browse → Metrics → live payload → invoke → inline result", async ({ page }) => {
   await installMocks(page);
   await page.goto("/w/demo");
