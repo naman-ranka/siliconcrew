@@ -41,6 +41,10 @@ export interface ContextMenuState {
 interface WorkbenchUiState {
   // Persisted (partialize): per-session UI chrome, keyed by session id.
   perSession: Record<string, SessionUiState>;
+  // Persisted (partialize): last session opened at /w/{id} — set by the /w
+  // page when a session loads successfully; the legacy /workbench shim
+  // redirects here (S1).
+  lastSessionId: string | null;
 
   // Ephemeral (never persisted).
   paletteOpen: boolean;
@@ -66,6 +70,7 @@ interface WorkbenchUiState {
   setDockTab: (sessionId: string, tab: "activity" | "runs") => void;
   setDockCollapsed: (sessionId: string, collapsed: boolean) => void;
   setChatOpen: (sessionId: string, open: boolean) => void;
+  setLastSessionId: (sessionId: string | null) => void;
   setPaletteOpen: (open: boolean) => void;
   setQuickOpenOpen: (open: boolean) => void;
   setCommandModal: (id: string | null) => void;
@@ -92,6 +97,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
 
       return {
         perSession: {},
+        lastSessionId: null,
 
         paletteOpen: false,
         commandSurfaceOpen: false,
@@ -168,6 +174,8 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
           updateSession(sessionId, (ui) => ({ ...ui, chatOpen: open }));
         },
 
+        setLastSessionId: (sessionId) => set({ lastSessionId: sessionId }),
+
         setPaletteOpen: (open) => set({ paletteOpen: open }),
         setCommandSurfaceOpen: (open) => set({ commandSurfaceOpen: open }),
         setQuickOpenOpen: (open) => set({ quickOpenOpen: open }),
@@ -184,8 +192,9 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
       // SSR-safe: on the server `localStorage` doesn't exist — createJSONStorage
       // catches the getter throwing and persist quietly skips hydration.
       storage: createJSONStorage(() => localStorage),
-      // Persist ONLY the per-session chrome; palette/menus/flash are ephemeral.
-      partialize: (s) => ({ perSession: s.perSession }),
+      // Persist ONLY the per-session chrome + last-opened session id;
+      // palette/menus/flash are ephemeral.
+      partialize: (s) => ({ perSession: s.perSession, lastSessionId: s.lastSessionId }),
     }
   )
 );

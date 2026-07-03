@@ -248,6 +248,11 @@ interface AppState {
   createSession: (name: string, model: string, projectId?: string | null) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
   selectSession: (session: Session | null) => Promise<void>;
+  /** URL-driven selection (S1): resolve a session id → Session (via the list,
+   * falling back to a direct fetch for fresh deep links) and select it.
+   * Returns false when the id doesn't resolve so the /w page can render an
+   * honest "Session not found" state instead of an empty workbench. */
+  selectSessionById: (sessionId: string) => Promise<boolean>;
 
   loadChatHistory: () => Promise<void>;
   sendMessage: (content: string) => void;
@@ -596,6 +601,31 @@ export const useStore = create<AppState>((set, get) => ({
       await get().loadChatHistory();
       await get().loadWorkbench();
     }
+  },
+
+  selectSessionById: async (sessionId: string) => {
+    // The URL is the source of truth (S1). Resolve against the session list
+    // (loaded anyway for the picker); a deep link to a session not in the list
+    // yet falls back to a direct fetch. A miss returns false — no silent
+    // "empty new session" for a bad URL.
+    let list = get().sessions;
+    if (list.length === 0) {
+      await get().loadSessions();
+      list = get().sessions;
+    }
+    let target = list.find((s) => s.id === sessionId) ?? null;
+    if (!target) {
+      try {
+        target = await sessionsApi.get(sessionId);
+        set((state) => ({ sessions: [target as Session, ...state.sessions] }));
+      } catch {
+        return false; // 404 (or unreachable) → caller renders "Session not found"
+      }
+    }
+    // Back/forward no-op: already on this session — compare before dispatch.
+    if (get().currentSession?.id === sessionId) return true;
+    await get().selectSession(target);
+    return true;
   },
 
   // Chat actions

@@ -1,6 +1,8 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
+import { sessionUrl } from "@/lib/nav";
 import { ChevronDown, Check, Trash2, MessageSquarePlus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn, formatRelativeTime } from "@/lib/utils";
@@ -27,6 +29,28 @@ export function ThreadSwitcher() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+
+  // Keep the URL's ?chat= in step with the active thread (S1) so refresh keeps
+  // the conversation — but only on /w/ routes; the legacy `/` page has no
+  // session URL to sync. replace (not push): thread hops aren't history
+  // entries; { scroll: false } keeps the viewport still. Reads location inside
+  // the handler (not useSearchParams) so the statically-prerendered legacy
+  // page needs no Suspense boundary.
+  const syncThreadUrl = (threadId: string | null) => {
+    if (typeof window === "undefined") return;
+    if (!window.location.pathname.startsWith("/w/")) return;
+    const session = useStore.getState().currentSession;
+    if (!session) return;
+    const view = new URLSearchParams(window.location.search).get("view");
+    router.replace(
+      sessionUrl(session.id, {
+        chat: threadId,
+        view: view === "agent" || view === "ide" ? view : null,
+      }),
+      { scroll: false }
+    );
+  };
 
   // Standard popover affordances: Escape + click-outside to close.
   useEffect(() => {
@@ -51,11 +75,19 @@ export function ThreadSwitcher() {
   const onNew = async () => {
     setOpen(false);
     await newThread();
+    syncThreadUrl(useStore.getState().activeThreadId);
   };
 
   const onPick = async (id: string) => {
     setOpen(false);
     await selectThread(id);
+    syncThreadUrl(id);
+  };
+
+  const onDelete = async (id: string) => {
+    await deleteThread(id);
+    // Deleting the active chat lands on the next one — mirror it in the URL.
+    syncThreadUrl(useStore.getState().activeThreadId);
   };
 
   const startRename = (id: string, current: string | null) => {
@@ -153,7 +185,7 @@ export function ThreadSwitcher() {
                 {!isEditing && threads.length > 1 && (
                   <button
                     type="button"
-                    onClick={() => void deleteThread(t.id)}
+                    onClick={() => void onDelete(t.id)}
                     aria-label={`Delete chat ${t.title ?? ""}`}
                     className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-muted-foreground hover:text-destructive outline-none focus-visible:ring-2 focus-visible:ring-destructive/50"
                   >

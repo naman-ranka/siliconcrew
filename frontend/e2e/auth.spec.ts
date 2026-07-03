@@ -85,7 +85,7 @@ test.describe("auth — unconfigured (zero-config self-host)", () => {
 
   test("no sign-in UI and no Authorization header is sent", async ({ page }) => {
     const seen = installMocks(page);
-    await page.goto("/workbench");
+    await page.goto("/w/demo");
     await expect(page.getByTestId("workbench-v2")).toBeVisible();
     await expect(page.getByText("alu.v")).toBeVisible();
     // Zero auth chrome: no standalone sign-in button; the profile menu shows no
@@ -106,7 +106,7 @@ test.describe("auth — configured (Google sign-in)", () => {
   test("sign-in via the profile menu; a gated request carries the Bearer token", async ({ page }) => {
     await mockGis(page);
     const seen = installMocks(page);
-    await page.goto("/workbench");
+    await page.goto("/w/demo");
     await expect(page.getByTestId("workbench-v2")).toBeVisible();
 
     // Signed-out: the profile menu offers Google sign-in (mocked GIS resolves

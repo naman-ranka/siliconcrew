@@ -72,7 +72,7 @@ function installMocks(page: import("@playwright/test").Page) {
 
 test("model picker: grouped popover, unavailable greyed, switch model", async ({ page }) => {
   await installMocks(page);
-  await page.goto("/workbench");
+  await page.goto("/w/demo");
 
   // The picker button shows the current model (the session's default thread model).
   const picker = page.getByRole("button", { name: /Change model/i });

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { useAuth } from "@/lib/auth";
 import { useWorkbenchSync } from "@/lib/useWorkbenchSync";
-import { useSessionUi } from "@/lib/workbenchUiStore";
+import { useSessionUi, useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { useWorkbenchShortcuts } from "@/hooks/useWorkbenchShortcuts";
 import { Button } from "@/components/ui/button";
 import { ChatArea } from "@/components/chat/ChatArea";
@@ -22,6 +23,16 @@ import { CommandSurface } from "./CommandSurface";
 import { QuickOpen } from "./QuickOpen";
 import { Toaster } from "./Toaster";
 
+export interface WorkbenchProps {
+  /** Session id from the URL (`/w/[...sid]`) — the source of truth (S1). */
+  sessionId: string;
+  /** Thread id from the `?chat=` param, if any. */
+  threadId?: string | null;
+  /** `?view=` posture. S4: only "ide" exists — "agent" renders the IDE shell
+   * until the agent-first shell lands; accepted now so deep links are stable. */
+  view?: "agent" | "ide";
+}
+
 /**
  * SiliconCrew Workbench v2 — a pure layout shell.
  *
@@ -30,42 +41,76 @@ import { Toaster } from "./Toaster";
  * (right). Every surface is prop-less and reads the stores itself; ephemeral
  * overlays (⌘K palette, param modal, quick-open, context menu) mount once at
  * the bottom and render from workbenchUiStore state.
+ *
+ * Selection is URL-driven (S1): the store follows the sessionId/threadId
+ * props, never the other way — refresh, share, and back/forward just work.
  */
-export function Workbench() {
-  const { currentSession, loadSessions, selectSession, loadWorkbench, workspaceError } = useStore();
+export function Workbench({ sessionId, threadId = null }: WorkbenchProps) {
+  const { currentSession, selectSessionById, selectThread, loadWorkbench, workspaceError } =
+    useStore();
   const { status: authStatus } = useAuth();
   // The assistant rail is collapsible (per-session, persisted) so the artifact
   // center gets full width when the user is driving the pipeline themselves.
   const { chatOpen, setChatOpen } = useSessionUi(currentSession?.id);
+  // Honest 404 for a dead deep link — never an empty-looking workbench.
+  const [notFound, setNotFound] = useState(false);
+  // One workbench refresh per mount when the session was already selected
+  // (client-side remount); thread-only URL changes must not re-hydrate.
+  const booted = useRef(false);
 
   // Keep the workbench fresh w.r.t. changes made by other clients (e.g. the
   // user's AI app via MCP): revalidate on focus + poll while a run is active.
   useWorkbenchSync();
   useWorkbenchShortcuts();
 
-  // Ensure a session is active and the workbench data is loaded. A single
-  // deterministic effect (reading fresh state via getState) avoids the races a
-  // multi-effect/closure approach has during first mount.
+  // Store follows the URL: session + thread from props, re-run on back/forward
+  // (prop changes). Compares before dispatching so URL-sync writes from the
+  // ThreadSwitcher (router.replace) never loop. Auth-wait stays: never fetch
+  // before the token is restored.
   useEffect(() => {
-    if (authStatus === "loading") return;
+    if (authStatus === "loading" || !sessionId) return;
+    let cancelled = false;
 
     void (async () => {
-      let list = useStore.getState().sessions;
-      if (list.length === 0) {
-        await loadSessions();
-        list = useStore.getState().sessions;
+      if (useStore.getState().currentSession?.id === sessionId) {
+        // Same session (remount or thread-only change) → refresh once per mount.
+        if (!booted.current) await loadWorkbench();
+        if (!cancelled) setNotFound(false);
+      } else {
+        const ok = await selectSessionById(sessionId);
+        if (cancelled) return;
+        setNotFound(!ok);
+        if (!ok) return;
       }
-      const cur = useStore.getState().currentSession;
-      if (cur) {
-        // Already selected (remount) → load its workbench once.
-        await loadWorkbench();
-      } else if (list.length > 0) {
-        // selectSession loads the workbench itself — F4: no second refresh.
-        await selectSession(list[0]);
+      booted.current = true;
+      useWorkbenchUiStore.getState().setLastSessionId(sessionId);
+      // Thread follows the ?chat= param (minimal wiring; compare first).
+      if (threadId && threadId !== useStore.getState().activeThreadId) {
+        await selectThread(threadId);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authStatus]);
+  }, [authStatus, sessionId, threadId]);
+
+  if (notFound) {
+    return (
+      <main
+        data-testid="workbench-not-found"
+        className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-surface-0"
+      >
+        <p className="text-sm text-muted-foreground">
+          Session <span className="font-mono text-foreground">{sessionId}</span> was not found.
+        </p>
+        <Link href="/" className="text-sm text-primary hover:underline">
+          Back to home
+        </Link>
+      </main>
+    );
+  }
 
   return (
     <main

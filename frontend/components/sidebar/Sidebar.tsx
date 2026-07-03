@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { openSession } from "@/lib/nav";
 import {
   PanelLeftClose,
   PanelLeft,
@@ -549,9 +551,12 @@ export function Sidebar() {
     deleteSession,
     deleteProject,
     moveSession,
-    selectSession,
     toggleSidebar,
   } = useStore();
+
+  // Opening a session ROUTES to /w/{id} (S1) — the workbench page's effect
+  // drives store selection from the URL, so deep links/refresh keep context.
+  const router = useRouter();
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [createDialogProjectId, setCreateDialogProjectId] = useState<string | null>(null);
@@ -675,7 +680,7 @@ export function Sidebar() {
                     "hover:bg-surface-2",
                     currentSession?.id === session.id && "bg-surface-2 border-l-2 border-l-primary"
                   )}
-                  onClick={() => selectSession(session)}
+                  onClick={() => openSession(router, session.id)}
                 >
                   <MessageSquare className="h-4 w-4" />
                 </Button>
@@ -795,7 +800,7 @@ export function Sidebar() {
                           session={session}
                           isActive={currentSession?.id === session.id}
                           projects={projects}
-                          onSelect={() => selectSession(session)}
+                          onSelect={() => openSession(router, session.id)}
                           onDelete={(e) => confirmDeleteSession(session, e)}
                           onMove={(pid) => moveSession(session.id, pid)}
                         />

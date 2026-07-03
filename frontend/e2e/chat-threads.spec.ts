@@ -99,7 +99,7 @@ function installMocks(page: import("@playwright/test").Page) {
 
 test("chat threads: new chat → switch back → history intact, workspace unchanged", async ({ page }) => {
   await installMocks(page);
-  await page.goto("/workbench");
+  await page.goto("/w/demo");
 
   // Workspace is present (left rail).
   await expect(page.getByText("alu.v")).toBeVisible();

@@ -99,9 +99,10 @@ describe("workbenchUiStore: per-session isolation", () => {
 });
 
 describe("workbenchUiStore: persistence (partialize)", () => {
-  it("persists ONLY perSession — ephemeral fields never reach localStorage", () => {
+  it("persists ONLY perSession + lastSessionId — ephemeral fields never reach localStorage", () => {
     const s = useWorkbenchUiStore.getState();
     s.openTab("s1", "spec");
+    s.setLastSessionId("s1");
     s.setPaletteOpen(true);
     s.setQuickOpenOpen(true);
     s.setCommandModal("run-sim");
@@ -111,8 +112,10 @@ describe("workbenchUiStore: persistence (partialize)", () => {
     expect(raw).toBeTruthy();
     const persisted = JSON.parse(raw!);
     expect(persisted.version).toBe(1);
-    expect(Object.keys(persisted.state)).toEqual(["perSession"]);
+    expect(Object.keys(persisted.state).sort()).toEqual(["lastSessionId", "perSession"]);
     expect(persisted.state.perSession["s1"].openTabs).toEqual(["spec"]);
+    // S1: the /workbench redirect shim reads this back after a reload.
+    expect(persisted.state.lastSessionId).toBe("s1");
     // flashKey is set by openTab but must stay ephemeral too.
     expect(persisted.state).not.toHaveProperty("flashKey");
     expect(persisted.state).not.toHaveProperty("paletteOpen");

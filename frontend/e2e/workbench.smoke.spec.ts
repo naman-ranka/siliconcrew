@@ -16,6 +16,15 @@ test("app loads (smoke)", async ({ page }) => {
   await expect(page.locator("body")).toBeVisible();
 });
 
+// S1: /workbench is a redirect shim. With no lastSessionId persisted (fresh
+// browser context) it must land on `/` — never a half-booted workbench.
+test("legacy /workbench redirects to / when no session is known", async ({ page }) => {
+  await installMocks(page);
+  await page.goto("/workbench");
+  await page.waitForURL((u) => u.pathname === "/");
+  expect(new URL(page.url()).pathname).toBe("/");
+});
+
 // ---- Stateful v2 backend mock ----------------------------------------------
 
 const MANIFEST = {
@@ -316,7 +325,7 @@ const openPalette = async (page: Page) => {
 
 test("v2 shell boots from the snapshot — tree, dock, empty center, no v1 chrome", async ({ page }) => {
   await installMocks(page);
-  await page.goto("/workbench");
+  await page.goto("/w/demo");
 
   await expect(page.getByTestId("workbench-v2")).toBeVisible();
   // Left rail: real tree from the snapshot rootDir, with a role badge.
@@ -335,7 +344,7 @@ test("v2 shell boots from the snapshot — tree, dock, empty center, no v1 chrom
 
 test("palette flow: lint → sim (fail) → waveform → synth → report", async ({ page }) => {
   await installMocks(page);
-  await page.goto("/workbench");
+  await page.goto("/w/demo");
   await expect(page.getByText("alu.v")).toBeVisible();
 
   // ⌘K → Lint (manifest defaults, no modal). The toast names the engine the
@@ -383,7 +392,7 @@ test("palette flow: lint → sim (fail) → waveform → synth → report", asyn
 
 test("sim options: TB combobox suggests manifest testbenches; POST carries simTop", async ({ page }) => {
   await installMocks(page);
-  await page.goto("/workbench");
+  await page.goto("/w/demo");
   await expect(page.getByText("alu.v")).toBeVisible();
 
   // ⌘K → gear on Simulate opens the param modal instead of running.
@@ -417,7 +426,7 @@ test("sim options: TB combobox suggests manifest testbenches; POST carries simTo
 
 test("file tree → code tab: open, focus-if-open, close", async ({ page }) => {
   await installMocks(page);
-  await page.goto("/workbench");
+  await page.goto("/w/demo");
   await expect(page.getByText("alu.v")).toBeVisible();
 
   await page.getByText("alu.v").click();
@@ -437,7 +446,7 @@ test("file tree → code tab: open, focus-if-open, close", async ({ page }) => {
 
 test("quick open (⌘P) opens an artifact by fuzzy name", async ({ page }) => {
   await installMocks(page);
-  await page.goto("/workbench");
+  await page.goto("/w/demo");
   await expect(page.getByText("alu.v")).toBeVisible();
 
   await page.keyboard.press("ControlOrMeta+p");
@@ -450,7 +459,7 @@ test("quick open (⌘P) opens an artifact by fuzzy name", async ({ page }) => {
 
 test("command surface: browse → Metrics → live payload → invoke → inline result", async ({ page }) => {
   await installMocks(page);
-  await page.goto("/workbench");
+  await page.goto("/w/demo");
   await expect(page.getByText("alu.v")).toBeVisible();
 
   // The Metrics run_id param needs a synth run — dispatch Synthesize first,

@@ -1,13 +1,16 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
+import { openSession, sessionUrl } from "@/lib/nav";
 import { ChevronDown, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 /** Minimal session switcher for the workbench top bar. */
 export function SessionPicker() {
-  const { sessions, currentSession, selectSession, createSession, loadWorkbench } = useStore();
+  const { sessions, currentSession, createSession, loadWorkbench } = useStore();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -26,11 +29,11 @@ export function SessionPicker() {
     };
   }, [open]);
 
-  const pick = async (id: string) => {
+  const pick = (id: string) => {
     setOpen(false);
-    const s = sessions.find((x) => x.id === id) ?? null;
-    // selectSession loads the workbench (F4: no redundant second load).
-    await selectSession(s);
+    // Switching sessions ROUTES (S1): the /w page effect drives the store
+    // selection from the URL, so refresh/share/back-button all just work.
+    openSession(router, id);
   };
 
   const [creating, setCreating] = useState(false);
@@ -54,6 +57,10 @@ export function SessionPicker() {
     setNewName("");
     await createSession(name, currentSession?.model_name || "claude-sonnet-4-6");
     await loadWorkbench();
+    // Land on the new session's canonical URL (createSession already selected
+    // it in the store; the /w effect sees it current and won't re-hydrate).
+    const created = useStore.getState().currentSession;
+    if (created) router.push(sessionUrl(created.id));
   };
 
   // Reset the inline create UI whenever the popover closes.
