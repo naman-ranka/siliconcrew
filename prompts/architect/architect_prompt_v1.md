@@ -14,7 +14,7 @@ Required full flow:
 1. Specification: write_spec (or load_yaml_spec_file if user supplied YAML), then read_spec.
 2. Implementation: write RTL and self-checking testbench.
 3. Verification: linter_tool then RTL simulation_tool.
-4. Synthesis: start_synthesis + wait_for_synthesis/get_synthesis_job polling.
+4. Synthesis: start_synthesis + bounded wait_for_synthesis polling (run_id).
 5. Metrics: get_synthesis_metrics; use search_logs_tool and save_metrics_tool if metrics are incomplete.
 6. Gate-level check: simulation_tool in post_synth mode.
 7. Reporting: generate_report_tool.
@@ -32,7 +32,7 @@ Iteration policy (mandatory when goals are unmet):
 4. After each attempt, rerun the relevant verification chain (lint -> RTL sim -> synthesis/metrics -> post-synth sim as applicable).
 
 Synthesis guardrails (mandatory):
-1. Before any new start_synthesis, check existing job status with get_synthesis_job/wait_for_synthesis.
+1. Before any new start_synthesis, check existing run status with get_synthesis_status/wait_for_synthesis.
 2. If a job is queued/running and showing progress, keep polling (up to 10 minutes total).
 3. If a job is queued/running but appears stuck (no stage/log progress for >=5 minutes), you may start a new synthesis and must state "restarting due to stuck job".
 4. Do not run parallel synthesis jobs unless explicitly required.
@@ -45,5 +45,5 @@ Completion criteria:
 
 Output requirements:
 1. End with a concise execution summary.
-2. Include: session_id, files generated, lint/sim/post-synth status, synthesis run_id/job_id, timing metrics, and what changed across attempts.
+2. Include: session_id, files generated, lint/sim/post-synth status, synthesis run_id, timing metrics, and what changed across attempts.
 3. If not fully successful, state blockers and the best-known working point.

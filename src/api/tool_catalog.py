@@ -44,10 +44,10 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
         "waveform_tool", "cocotb_tool", "sby_tool",
     ],
     "synthesis": [
-        "start_synthesis", "retry_pd", "get_synthesis_job", "wait_for_synthesis",
+        "start_synthesis", "retry_pd", "get_synthesis_status", "wait_for_synthesis",
         "get_synthesis_metrics", "read_stage_report", "get_route_drc_summary",
         "get_cts_summary", "get_congestion_summary", "compare_pd_runs",
-        "get_stage_status", "search_logs_tool", "schematic_tool",
+        "search_logs_tool", "schematic_tool",
     ],
     "editing": [
         "apply_patch_tool", "edit_file_tool", "load_yaml_spec_file",

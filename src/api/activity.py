@@ -67,6 +67,10 @@ def build_activity_events(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     events: List[Dict[str, Any]] = []
     by_call_id: Dict[str, Dict[str, Any]] = {}
     open_by_tool: Dict[str, List[Dict[str, Any]]] = {}
+    # Deterministic-id orphan results (e.g. the synthesis completion event,
+    # tool_call_id "completion:<run_id>") may be emitted by more than one
+    # instance — duplicates collapse here at read time (plan round-2 #2).
+    seen_orphan_ids: set = set()
 
     for i, rec in enumerate(records):
         etype = rec.get("event_type")
@@ -107,6 +111,10 @@ def build_activity_events(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         elif open_by_tool.get(tool):
             ev = open_by_tool[tool].pop()
         if ev is None:
+            if cid:
+                if str(cid) in seen_orphan_ids:
+                    continue  # duplicate deterministic-id event (cross-instance)
+                seen_orphan_ids.add(str(cid))
             ev = {
                 "id": str(cid) if cid else f"evt-{i}",
                 "ts": ts,
@@ -116,7 +124,7 @@ def build_activity_events(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                 "status": "running",
                 "resultSummary": "",
                 "durationMs": None,
-                "runId": None,
+                "runId": _extract_run_id(args, rec.get("result")),
                 "threadId": rec.get("thread_id"),
                 "_callTs": None,
             }

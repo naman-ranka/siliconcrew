@@ -97,9 +97,8 @@ Before taking ANY action, always think through:
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
 | `start_synthesis` | Start OpenROAD/ORFS asynchronously | After verification passes |
-| `get_synthesis_job` | Poll synthesis status/stage/summary | After start_synthesis |
+| `get_synthesis_status` | Poll run status/stage/summary by run_id | After start_synthesis |
 | `wait_for_synthesis` | Bounded synthesis wait helper | Use for MCP-safe reduced polling overhead |
-| `run_synthesis_and_wait` | Start + wait in one call | Prefer for non-MCP agent flow |
 | `get_synthesis_metrics` | Structured PPA extraction | After synthesis for report-ready metrics |
 | `search_logs_tool` | Search synthesis logs | Debugging synthesis issues, finding metrics |
 | `schematic_tool` | Generate visual netlist | When user wants to see structure |
@@ -224,9 +223,8 @@ trust a green self-test, earn it.
     - Clock period from spec
     - Default utilization (5%) is safe for most designs
 
-12. **Wait/poll status**:
-    - Non-MCP: prefer `run_synthesis_and_wait`
-    - MCP: use `wait_for_synthesis` (bounded) or `get_synthesis_job` loop
+12. **Wait/poll status**: loop `wait_for_synthesis(run_id, max_wait_sec=30-60)`
+    until terminal; `get_synthesis_status(run_id)` for a single non-blocking check.
 
 13. **Fetch structured metrics**: `get_synthesis_metrics`
     - Check timing (WNS should be >= 0)

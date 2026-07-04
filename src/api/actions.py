@@ -54,9 +54,8 @@ from src.tools.synthesis_manager import (
     list_synthesis_runs,
     start_synthesis_job,
     retry_pd_job,
-    get_synthesis_job_status,
+    get_synthesis_status,
     get_synthesis_metrics,
-    get_stage_status,
 )
 
 WorkspaceResolver = Callable[[str], str]
@@ -658,7 +657,7 @@ def build_actions_router(
             dispatched = isinstance(result, dict) and result.get("status") != "rejected"
             _ui_log_result(
                 workspace, session_id, "start_synthesis", call_id,
-                {"job_id": (result or {}).get("job_id"), "run_id": (result or {}).get("run_id"),
+                {"run_id": (result or {}).get("run_id"),
                  "status": (result or {}).get("status")},
                 ok=dispatched,
             )
@@ -679,7 +678,7 @@ def build_actions_router(
         if isinstance(result, dict) and result.get("status") == "error":
             _err("invalid_request", result.get("message", "Invalid synthesis request."),
                  details={"supported_stages": result.get("supported_stages")}, status=400)
-        return _ok({"jobId": result.get("job_id"), "runId": result.get("run_id"), "raw": result})
+        return _ok({"runId": result.get("run_id"), "pollAfterSec": result.get("poll_after_sec"), "raw": result})
 
     # ---- Activity feed (unified per-session tool event log) -----------------
 
@@ -893,7 +892,9 @@ def build_actions_router(
                 return {"kind": "sim", "run": get_sim_run(workspace, run_id)}
             return {
                 "kind": "synth",
-                "status": get_stage_status(workspace=workspace, run_id=run_id),
+                # Unified self-healing status payload (Wave 9) — the same
+                # answer every other surface gets.
+                "status": get_synthesis_status(run_id, workspace=workspace),
                 "metrics": get_synthesis_metrics(workspace=workspace, run_id=run_id),
             }
 
@@ -905,10 +906,7 @@ def build_actions_router(
 
         status = out["status"] or {}
         metrics_resp = out["metrics"] or {}
-        # get_stage_status returns {"status": "error", ...} when the run is missing
-        # (its "status" key is the CALL status, not the run status — the run's
-        # actual lifecycle state lives in "run_status").
-        if status.get("status") == "error" and not metrics_resp:
+        if status.get("error") == "unknown_run":
             _err("not_found", f"Run {run_id} not found.", status=404)
         # get_synthesis_metrics returns the PPA fields NESTED under "metrics"
         # (the top-level dict is the wrapper: status/run_id/metrics/...). Read the
@@ -925,20 +923,21 @@ def build_actions_router(
         return _ok({"run": {
             "id": run_id,
             "kind": "synth",
-            # Map from run_status (the run's lifecycle), not "status" (the call
-            # status, which is always "ok" on success → would mis-map to running).
-            "status": _SYNTH_STATUS_MAP.get(status.get("run_status") or "", "running"),
+            "status": _SYNTH_STATUS_MAP.get(status.get("status") or "", "running"),
             "top": status.get("top_module"),
             "stages": status.get("stages"),
+            "stageHistory": status.get("stage_history"),
             "currentStage": status.get("current_stage"),
             "ppa": ppa,
         }})
 
-    @router.get("/jobs/{job_id}")
-    async def get_job(session_id: str, job_id: str, identity=Depends(get_identity)):
+    @router.get("/runs/{run_id}/status")
+    async def get_run_status(session_id: str, run_id: str, identity=Depends(get_identity)):
+        """Full self-healing status by run_id — the ONE key (Wave 9). A plain
+        read for callers; reconciliation persists durably on its own."""
         uid = require_owned(session_id, identity)
         workspace = await require_workspace(session_id)
-        status = await run_scoped(session_id, workspace, get_synthesis_job_status, job_id, workspace, _uid=uid, _id=identity)
+        status = await run_scoped(session_id, workspace, get_synthesis_status, run_id, workspace, _uid=uid, _id=identity)
         return _ok({"job": status})
 
     @router.post("/runs/{run_id}/retry")
@@ -961,7 +960,7 @@ def build_actions_router(
             dispatched = isinstance(result, dict) and result.get("status") != "rejected"
             _ui_log_result(
                 workspace, session_id, "retry_pd", call_id,
-                {"job_id": (result or {}).get("job_id"), "run_id": (result or {}).get("run_id"),
+                {"run_id": (result or {}).get("run_id"),
                  "status": (result or {}).get("status")},
                 ok=dispatched,
             )
@@ -972,7 +971,7 @@ def build_actions_router(
             _err((result.get("error") or {}).get("code", "quota_exceeded"),
                  (result.get("error") or {}).get("message", "Quota exceeded."),
                  details=result.get("error"), status=429)
-        return _ok({"jobId": result.get("job_id"), "runId": result.get("run_id"), "raw": result})
+        return _ok({"runId": result.get("run_id"), "pollAfterSec": result.get("poll_after_sec"), "raw": result})
 
     @router.post("/runs/{run_id}/pin")
     async def pin_run(session_id: str, run_id: str, body: PinRequest, identity=Depends(require_signed_in)):

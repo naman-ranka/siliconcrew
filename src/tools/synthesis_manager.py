@@ -239,8 +239,29 @@ def _submit_with_quota_release(reservation, fn, *fn_args):
         provider = None
 
     def runner():
+        # Rebind the dispatching request's session context inside the worker
+        # thread: the completion event (and hosted sync) need session identity,
+        # and contextvars do not cross thread submission on their own.
+        if ctx is not None:
+            try:
+                from src.utils.session_context import set_current_session
+
+                set_current_session(ctx)
+            except Exception:
+                pass
         try:
-            return fn(*fn_args)
+            result = fn(*fn_args)
+            # One announcement per terminal transition (both workers end by
+            # returning their final run_meta). fn_args = (workspace, run_dir,
+            # args) for both worker functions.
+            try:
+                if isinstance(result, dict) and result.get("status") in _TERMINAL_SYNTH_STATES:
+                    _emit_completion_event(
+                        fn_args[0], fn_args[1], result.get("run_id") or "", result
+                    )
+            except Exception:
+                pass
+            return result
         finally:
             try:
                 _sync_current_session_workspace(ctx, provider)
@@ -794,6 +815,68 @@ def _refresh_stage_metadata(run_dir: str, run_meta: Dict[str, Any], terminal_sta
     return run_meta
 
 
+def stage_progress_from_files(run_dir: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Live stage truth from the deterministic ORFS file trail — a refactor
+    over the existing marker tables, replacing log-text guessing.
+
+    A stage is *completed* when its completion marker exists
+    (_STAGE_COMPLETION_MARKERS; mtime = end time), *running* when it is the
+    first unfinished stage of an active run, *pending*/"skipped" otherwise.
+    ``dispatched_at`` is the mtime floor: retry runs copy parent checkpoints
+    with their ORIGINAL mtimes (shutil.copy2), so anything older than this
+    run's dispatch renders as "inherited", never as this run's progress.
+
+    Timings honesty: end timestamps come from marker mtimes — reliable for
+    local_docker (bind-mounted, written live); hosted staging clobbers
+    mtimes, so history there proves PRESENCE, not timing (plan round-2 #3).
+    """
+    bound = _run_stage_bound(meta)
+    plan = PD_STAGE_SEQUENCE[: PD_STAGE_SEQUENCE.index(bound) + 1]
+    floor_ts: Optional[float] = None
+    dispatched = meta.get("dispatched_at") or meta.get("created_at")
+    if dispatched:
+        try:
+            dt = datetime.fromisoformat(dispatched)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            floor_ts = dt.timestamp()
+        except Exception:
+            floor_ts = None
+
+    history: List[Dict[str, Any]] = []
+    current: Optional[str] = None
+    for stage in PD_STAGE_SEQUENCE:
+        if stage not in plan:
+            history.append({"stage": stage, "status": "skipped"})
+            continue
+        marker = _find_stage_completion_marker(run_dir, stage)
+        if marker:
+            try:
+                mtime = os.path.getmtime(marker)
+            except OSError:
+                mtime = None
+            if floor_ts is not None and mtime is not None and mtime < floor_ts - 1.0:
+                # Pre-dispatch artifact: a parent checkpoint copied in for a
+                # retry — evidence of the PARENT's work, not this run's.
+                history.append({"stage": stage, "status": "inherited"})
+                continue
+            ended = (
+                datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+                if mtime is not None
+                else None
+            )
+            history.append({"stage": stage, "status": "completed", "ended_at": ended})
+            continue
+        if current is None:
+            current = stage
+            history.append({"stage": stage, "status": "running"})
+        else:
+            history.append({"stage": stage, "status": "pending"})
+
+    # Everything complete up to the bound → the run sits at its bound.
+    return {"stage_history": history, "current_stage": current or bound}
+
+
 def _load_run_meta_with_inferred_stages(run_dir: str) -> Dict[str, Any]:
     run_meta = _read_run_meta(run_dir)
     stages = run_meta.get("stages")
@@ -1172,14 +1255,13 @@ def _copy_retry_prerequisites(parent_run_dir: str, child_run_dir: str, start_sta
     return copied
 
 
-def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str, Any]:
+def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str, Any]:
     start = time.time()
     parent_run_id = args["source_run_id"]
     parent_run_dir = get_run_dir(workspace, parent_run_id)
     if not parent_run_dir:
         return {
             "run_id": args["run_id"],
-            "job_id": job_id,
             "status": "failed",
             "current_stage": args["start_stage"],
             "check_notes": f"Source run '{parent_run_id}' not found.",
@@ -1204,7 +1286,7 @@ def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, 
 
     run_meta: Dict[str, Any] = {
         "run_id": args["run_id"],
-        "job_id": job_id,
+        **_dispatch_fields(run_dir),
         "created_at": _now_iso(),
         "status": "running",
         "mode": "pd_retry",
@@ -1284,7 +1366,7 @@ def _retry_pd_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, 
     run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
 
     _persist_run_meta(run_dir, run_meta)
-    _append_index(workspace, args["run_id"], job_id, run_meta["status"])
+    _append_index(workspace, args["run_id"], run_meta["status"])
     return run_meta
 
 
@@ -1318,17 +1400,55 @@ def _persist_run_meta(run_dir: str, meta: Dict[str, Any]) -> None:
     _write_json(os.path.join(run_dir, RUN_META_FILENAME), meta)
 
 
-def _append_index(workspace: str, run_id: str, job_id: str, status: str) -> None:
+def _append_index(workspace: str, run_id: str, status: str) -> None:
+    # One key: run_id. The legacy "jobs" mapping is no longer written (old
+    # dirs may still carry it; readers key by run_id and never need it).
     with _INDEX_LOCK:
         index = _load_index(workspace)
         index["runs"] = [x for x in index["runs"] if x.get("run_id") != run_id]
-        index["jobs"] = [x for x in index["jobs"] if x.get("job_id") != job_id]
         now = _now_iso()
         index["runs"].append({"run_id": run_id, "status": status, "updated_at": now})
-        index["jobs"].append({"job_id": job_id, "run_id": run_id, "status": status, "updated_at": now})
         _save_index(workspace, index)
         with open(_latest_path(workspace), "w", encoding="utf-8") as f:
             f.write(run_id)
+
+
+def _write_dispatch_meta(run_dir: str, run_id: str, args: Dict[str, Any], timeout_sec: int) -> None:
+    """Queued run_meta written synchronously AT DISPATCH, before submit.
+
+    Makes a just-dispatched run visible (and tombstone-able) to any
+    out-of-process reader keyed by run_id alone. The worker preserves
+    ``dispatched_at``/``timeout_sec`` when it takes over the meta.
+    """
+    meta: Dict[str, Any] = {
+        "run_id": run_id,
+        "status": "queued",
+        "dispatched_at": _now_iso(),
+        "timeout_sec": timeout_sec,
+        "backend": _configured_orfs_backend(),
+        "top_module": args.get("top_module"),
+        "platform": args.get("platform"),
+        "max_stage": args.get("max_stage"),
+        "current_stage": "constraints",
+        "stages": _init_stage_metadata(),
+    }
+    if args.get("source_run_id"):
+        meta["mode"] = "pd_retry"
+        meta["source_run_id"] = args["source_run_id"]
+        meta["retry_start_stage"] = args.get("start_stage")
+        meta["retry_max_stage"] = args.get("max_stage")
+    _persist_run_meta(run_dir, meta)
+
+
+def _dispatch_fields(run_dir: str) -> Dict[str, Any]:
+    """dispatched_at/timeout_sec from the dispatch-time meta — the worker
+    rebuilds run_meta from scratch and must carry these forward."""
+    existing = _read_run_meta(run_dir)
+    return {
+        k: existing[k]
+        for k in ("dispatched_at", "timeout_sec")
+        if existing.get(k) is not None
+    }
 
 
 def _load_stdcell_manifest(workspace: str, platform: str) -> Dict[str, Any]:
@@ -1341,7 +1461,7 @@ def _load_stdcell_manifest(workspace: str, platform: str) -> Dict[str, Any]:
         return {}
 
 
-def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str, Any]:
+def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str, Any]:
     start = time.time()
     run_id = args["run_id"]
     top_module = args["top_module"]
@@ -1365,7 +1485,9 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
 
     run_meta: Dict[str, Any] = {
         "run_id": run_id,
-        "job_id": job_id,
+        # Dispatch-time fields (dispatched_at/timeout_sec) survive the worker
+        # rebuilding the meta from scratch — the tombstone ceiling needs them.
+        **_dispatch_fields(run_dir),
         "created_at": _now_iso(),
         # Record the configured execution backend up-front so the job-status
         # payload can communicate where this run is executing (e.g. the "remote"
@@ -1412,7 +1534,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         run_meta["next_action"] = "Fix spec/clock constraints and rerun synthesis."
         run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status="failed")
         _persist_run_meta(run_dir, run_meta)
-        _append_index(workspace, run_id, job_id, "failed")
+        _append_index(workspace, run_id, "failed")
         return run_meta
 
     run_meta["stages"]["constraints"]["status"] = "completed"
@@ -1433,7 +1555,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         run_meta["elapsed_sec"] = round(time.time() - start, 2)
         run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status="completed")
         _persist_run_meta(run_dir, run_meta)
-        _append_index(workspace, run_id, job_id, "completed")
+        _append_index(workspace, run_id, "completed")
         return run_meta
 
     run_meta["current_stage"] = "synth"
@@ -1521,7 +1643,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
         run_meta["elapsed_sec"] = round(time.time() - start, 2)
         run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
         _persist_run_meta(run_dir, run_meta)
-        _append_index(workspace, run_id, job_id, run_meta["status"])
+        _append_index(workspace, run_id, run_meta["status"])
         return run_meta
 
     signoff = _signoff_guardrail(run_dir, top_module, docker_result)
@@ -1570,7 +1692,7 @@ def _job_worker(job_id: str, workspace: str, run_dir: str, args: Dict[str, Any])
     run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
 
     _persist_run_meta(run_dir, run_meta)
-    _append_index(workspace, run_id, job_id, run_meta["status"])
+    _append_index(workspace, run_id, run_meta["status"])
     return run_meta
 
 
@@ -1606,7 +1728,6 @@ def start_synthesis_job(
 
     _ensure_dir(workspace)
     run_id, run_dir = _allocate_run_dir(workspace)
-    job_id = f"job_{uuid.uuid4().hex[:10]}"
 
     # Enforce global safety cap so synthesis jobs do not run unbounded.
     timeout_sec = max(60, min(int(timeout), SYNTH_HARD_TIMEOUT_SEC))
@@ -1626,23 +1747,27 @@ def start_synthesis_job(
         "max_stage": max_stage,
     }
 
+    # Initial meta AT DISPATCH (before submit): a queued run is visible and
+    # tombstone-able out-of-process from second zero — run_id-only status
+    # must answer even if the worker never starts.
+    _write_dispatch_meta(run_dir, run_id, args, timeout_sec)
+
     with _JOB_LOCK:
-        future = _submit_with_quota_release(reservation, _job_worker, job_id, workspace, run_dir, args)
-        _JOBS[job_id] = {
+        future = _submit_with_quota_release(reservation, _job_worker, workspace, run_dir, args)
+        _JOBS[run_id] = {
             "future": future,
             "workspace": workspace,
-            "run_id": run_id,
             "run_dir": run_dir,
             "created_at": _now_iso(),
         }
 
-    _append_index(workspace, run_id, job_id, "running")
+    _append_index(workspace, run_id, "running")
     return {
-        "job_id": job_id,
         "run_id": run_id,
         "status": "queued",
-        "stage": "unknown",
+        "stage": "queued",
         "timeout_sec": timeout_sec,
+        "poll_after_sec": POLL_BACKOFF_START_SEC,
     }
 
 
@@ -1718,7 +1843,6 @@ def retry_pd_job(
 
     pd_parameters = _pd_parameters_from_run(parent_run_dir, parent_meta)
     run_id, run_dir = _allocate_run_dir(workspace)
-    job_id = f"job_{uuid.uuid4().hex[:10]}"
     timeout_sec = max(60, min(int(timeout), SYNTH_HARD_TIMEOUT_SEC))
     args = {
         "run_id": run_id,
@@ -1734,25 +1858,27 @@ def retry_pd_job(
         "orfs_overrides": orfs_overrides,
     }
 
+    # Same dispatch-time meta as start_synthesis_job (queued + dispatched_at).
+    _write_dispatch_meta(run_dir, run_id, args, timeout_sec)
+
     with _JOB_LOCK:
-        future = _submit_with_quota_release(reservation, _retry_pd_worker, job_id, workspace, run_dir, args)
-        _JOBS[job_id] = {
+        future = _submit_with_quota_release(reservation, _retry_pd_worker, workspace, run_dir, args)
+        _JOBS[run_id] = {
             "future": future,
             "workspace": workspace,
-            "run_id": run_id,
             "run_dir": run_dir,
             "created_at": _now_iso(),
         }
 
-    _append_index(workspace, run_id, job_id, "running")
+    _append_index(workspace, run_id, "running")
     return {
-        "job_id": job_id,
         "run_id": run_id,
         "status": "queued",
         "stage": start_stage,
         "timeout_sec": timeout_sec,
         "source_run_id": source_run_id,
         "mode": "pd_retry",
+        "poll_after_sec": POLL_BACKOFF_START_SEC,
     }
 
 
@@ -1766,14 +1892,14 @@ def _read_run_meta(run_dir: str) -> Dict[str, Any]:
         return {}
 
 
-def _recommended_poll_after_sec(job_id: str, status: str, stage: str, last_log_lines: List[str]) -> int:
+def _recommended_poll_after_sec(run_id: str, status: str, stage: str, last_log_lines: List[str]) -> int:
     if status not in {"queued", "running"}:
-        _POLL_BACKOFF_STATE.pop(job_id, None)
+        _POLL_BACKOFF_STATE.pop(run_id, None)
         return 0
 
-    state = _POLL_BACKOFF_STATE.get(job_id, {"count": 0})
+    state = _POLL_BACKOFF_STATE.get(run_id, {"count": 0})
     state["count"] = int(state.get("count", 0)) + 1
-    _POLL_BACKOFF_STATE[job_id] = state
+    _POLL_BACKOFF_STATE[run_id] = state
 
     poll_after = POLL_BACKOFF_START_SEC * (2 ** (state["count"] - 1))
     return min(POLL_BACKOFF_MAX_SEC, max(POLL_BACKOFF_START_SEC, poll_after))
@@ -1828,13 +1954,24 @@ def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, 
                 "with a later max_stage to continue."
             )
 
+    if status == "completed":
+        terminal_stage = _run_stage_bound(meta)
+    elif status == "failed":
+        terminal_stage = meta.get("current_stage") or stage
+    else:
+        terminal_stage = stage
     resp = {
-        "job_id": job_id,
         "run_id": run_id,
         "status": status,
-        "stage": "final" if status in {"completed", "failed"} else stage,
-        "current_stage": meta.get("current_stage", stage),
+        "stage": terminal_stage,
+        # Mirror kept for existing consumers (failure attribution, UI
+        # currentStage); file-derived while live, persisted when terminal.
+        "current_stage": meta.get("current_stage") if status in {"completed", "failed"} else stage,
         "stages": meta.get("stages"),
+        "stage_history": progress["stage_history"],
+        "dispatched_at": meta.get("dispatched_at"),
+        "timeout_sec": meta.get("timeout_sec"),
+        "top_module": meta.get("top_module"),
         # Live elapsed while running (computed from created_at), final elapsed
         # once persisted at finalization. So the UI always has a running timer.
         "elapsed_sec": _elapsed_seconds(meta, status),
@@ -1878,58 +2015,51 @@ def _with_rate_limit_fields(resp: Dict[str, Any], retry_after_sec: float) -> Dic
     return out
 
 
-def _maybe_cache_poll_response(job_id: str, response: Dict[str, Any]) -> None:
+def _maybe_cache_poll_response(run_id: str, response: Dict[str, Any]) -> None:
     status = response.get("status")
     if status in {"running", "queued"}:
-        _POLL_CACHE[job_id] = {"ts": time.time(), "response": dict(response)}
-    elif job_id in _POLL_CACHE:
-        del _POLL_CACHE[job_id]
-    if status not in {"running", "queued"} and job_id in _POLL_BACKOFF_STATE:
-        del _POLL_BACKOFF_STATE[job_id]
+        _POLL_CACHE[run_id] = {"ts": time.time(), "response": dict(response)}
+    elif run_id in _POLL_CACHE:
+        del _POLL_CACHE[run_id]
+    if status not in {"running", "queued"} and run_id in _POLL_BACKOFF_STATE:
+        del _POLL_BACKOFF_STATE[run_id]
 
 
-def _recover_job_from_index(workspace: str, job_id: str) -> Optional[Dict[str, str]]:
-    index = _load_index(workspace)
-    for item in index.get("jobs", []):
-        if item.get("job_id") == job_id:
-            run_id = item.get("run_id")
-            if not run_id:
-                return None
-            run_dir = os.path.join(_runs_root(workspace), run_id)
-            if not os.path.exists(run_dir):
-                return None
-            return {"run_id": run_id, "run_dir": run_dir}
-    return None
+def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[str, Any]:
+    """Self-healing status by the ONE durable key (run_id).
 
-
-def get_synthesis_job_status(job_id: str, workspace: Optional[str] = None) -> Dict[str, Any]:
+    Lookup order: in-process memory (live queued/running detail from the
+    dispatching process) -> run_meta.json on disk -> reconcile (adopt
+    artifacts as completed, or declare an expired silent run failed). The
+    payload shape is identical from every source.
+    """
     with _JOB_LOCK:
-        data = _JOBS.get(job_id)
+        data = _JOBS.get(run_id)
 
     if not data:
-        if workspace:
-            recovered = _recover_job_from_index(workspace, job_id)
-            if recovered:
-                meta = _read_run_meta(recovered["run_dir"])
-                status = meta.get("status", "running")
-                return _build_status_response(
-                    job_id=job_id,
-                    run_id=recovered["run_id"],
-                    run_dir=recovered["run_dir"],
-                    status=status,
-                    meta=meta,
-                    recovered=True,
-                )
-        return {"job_id": job_id, "status": "failed", "check_notes": "Unknown job_id", "next_action": "Start a new synthesis run."}
+        run_dir = get_run_dir(workspace, run_id) if workspace else None
+        if run_dir:
+            meta = _read_run_meta(run_dir)
+            # Self-healing read: no live future in ANY process path here —
+            # adopt on-disk completion, or tombstone an expired silent run.
+            meta = _reconcile_stale_status(run_dir, meta, workspace=workspace, has_live_future=False)
+            status = meta.get("status", "running")
+            return _build_status_response(
+                run_id=run_id,
+                run_dir=run_dir,
+                status=status,
+                meta=meta,
+                recovered=True,
+            )
+        return {"run_id": run_id, "status": "failed", "error": "unknown_run", "check_notes": "Unknown run_id", "next_action": "Start a new synthesis run."}
 
     future = data["future"]
-    run_id = data["run_id"]
     run_dir = data["run_dir"]
 
     # Throttle aggressive polling while job is non-terminal.
     # Terminal states are never rate-limited.
     if not future.done():
-        cached = _POLL_CACHE.get(job_id)
+        cached = _POLL_CACHE.get(run_id)
         if cached:
             elapsed = time.time() - cached["ts"]
             if elapsed < POLL_MIN_INTERVAL_SEC:
@@ -1940,15 +2070,15 @@ def get_synthesis_job_status(job_id: str, workspace: Optional[str] = None) -> Di
     if future.running():
         if not meta.get("check_notes"):
             meta["check_notes"] = "Synthesis in progress."
-        resp = _build_status_response(job_id, run_id, run_dir, "running", meta)
-        _maybe_cache_poll_response(job_id, resp)
+        resp = _build_status_response(run_id, run_dir, "running", meta)
+        _maybe_cache_poll_response(run_id, resp)
         return resp
 
     if not future.done():
         if not meta.get("check_notes"):
             meta["check_notes"] = "Queued."
-        resp = _build_status_response(job_id, run_id, run_dir, "queued", meta)
-        _maybe_cache_poll_response(job_id, resp)
+        resp = _build_status_response(run_id, run_dir, "queued", meta)
+        _maybe_cache_poll_response(run_id, resp)
         return resp
 
     try:
@@ -1956,13 +2086,13 @@ def get_synthesis_job_status(job_id: str, workspace: Optional[str] = None) -> Di
     except Exception as exc:
         meta["check_notes"] = f"Job execution error: {exc}"
         meta["auto_checks"] = meta.get("auto_checks", {"constraints": "fail", "signoff": "fail", "equiv": "skip"})
-        resp = _build_status_response(job_id, run_id, run_dir, "failed", meta)
-        _maybe_cache_poll_response(job_id, resp)
+        resp = _build_status_response(run_id, run_dir, "failed", meta)
+        _maybe_cache_poll_response(run_id, resp)
         return resp
 
     final_status = final.get("status", "failed")
-    resp = _build_status_response(job_id, run_id, run_dir, final_status, final)
-    _maybe_cache_poll_response(job_id, resp)
+    resp = _build_status_response(run_id, run_dir, final_status, final)
+    _maybe_cache_poll_response(run_id, resp)
     return resp
 
 
@@ -1983,8 +2113,80 @@ def get_run_dir(workspace: str, run_id: Optional[str]) -> Optional[str]:
 # (running / queued / unknown) is non-terminal and eligible for reconciliation.
 _TERMINAL_SYNTH_STATES = {"completed", "failed"}
 
+# Slack past the dispatch ceiling (and the minimum file-activity silence)
+# before a silent non-terminal run is declared dead.
+STALE_RUN_GRACE_SEC = 120
 
-def _reconcile_stale_status(run_dir: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+
+def _latest_file_activity_ts(run_dir: str) -> Optional[float]:
+    """Freshest mtime under the run dir — the local-docker liveness signal
+    (ORFS logs/results are bind-mounted and grow during execution)."""
+    latest: Optional[float] = None
+    for root, _, files in os.walk(run_dir):
+        for name in files:
+            try:
+                ts = os.path.getmtime(os.path.join(root, name))
+            except OSError:
+                continue
+            if latest is None or ts > latest:
+                latest = ts
+    return latest
+
+
+def _emit_completion_event(
+    workspace: Optional[str], run_dir: str, run_id: str, meta: Dict[str, Any]
+) -> None:
+    """One activity event per terminal transition — the trigger the UI
+    consumes. Exactly-once locally via an O_EXCL marker; cross-instance
+    duplicates collapse at read time on the deterministic id
+    (tool_call_id = "completion:<run_id>")."""
+    if not workspace:
+        return
+    marker = os.path.join(run_dir, "completion.event")
+    try:
+        fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+    except FileExistsError:
+        return  # already announced
+    except OSError:
+        return
+    status = meta.get("status", "failed")
+    sm = meta.get("summary_metrics") or {}
+    bits = [f"{run_id} {status}"]
+    if sm.get("wns_ns") is not None:
+        bits.append(f"WNS {sm['wns_ns']}ns")
+    if sm.get("cell_count") is not None:
+        bits.append(f"{sm['cell_count']} cells")
+    if status == "failed" and meta.get("check_notes"):
+        bits.append(str(meta.get("check_notes"))[:160])
+    try:
+        from src.utils.session_context import get_current_session
+        ctx = get_current_session()
+        session_id = ctx.session_id if ctx else None
+    except Exception:
+        session_id = None
+    try:
+        from src.utils.attempt_logger import log_tool_result
+        log_tool_result(
+            workspace,
+            session_id,
+            source="system",
+            tool="synthesis_run",
+            result=" \u00b7 ".join(bits),
+            status="success" if status == "completed" else "error",
+            tool_call_id=f"completion:{run_id}",
+            arguments={"run_id": run_id},
+        )
+    except Exception:
+        pass
+
+
+def _reconcile_stale_status(
+    run_dir: str,
+    meta: Dict[str, Any],
+    workspace: Optional[str] = None,
+    has_live_future: Optional[bool] = None,
+) -> Dict[str, Any]:
     """Adopt on-disk artifacts as the source of truth for a run stuck at a
     non-terminal status.
 
@@ -2004,26 +2206,77 @@ def _reconcile_stale_status(run_dir: str, meta: Dict[str, Any]) -> Dict[str, Any
     keys on that stage's own marker instead (see _STAGE_COMPLETION_MARKERS,
     e.g. synth -> synth_stat.txt/1_synth.odb, place -> 3_place.odb).
 
-    Fail-safe: no completion marker → status left untouched (never worse than
-    today; a genuinely-failed run stays non-terminal rather than being falsely
-    marked completed, and an in-flight run polled mid-read is not falsely
-    failed). Mutates and returns ``meta``; persists only on reconcile.
+    Tombstone (Wave 9): a run that is past its dispatch ceiling, has no live
+    worker in this process, and shows no file activity is declared FAILED —
+    "orchestrator lost". No run is ever stuck at "running".
+
+    Fail-safe: a run with a live future, fresh file activity, or an unexpired
+    ceiling is left untouched (an in-flight run polled mid-read is never
+    falsely failed). Mutates and returns ``meta``; persists only on reconcile.
     """
     if meta.get("status") in _TERMINAL_SYNTH_STATES:
         return meta
+    run_id = meta.get("run_id") or os.path.basename(run_dir)
+
     # Only the target stage's present completion artifact proves the (possibly
     # bounded) flow actually completed.
-    if _find_stage_completion_marker(run_dir, _run_stage_bound(meta)) is None:
-        return meta  # not demonstrably finished — leave as-is
-    meta["status"] = "completed"
-    meta["summary_metrics"] = _compute_summary_metrics(run_dir, meta)
+    if _find_stage_completion_marker(run_dir, _run_stage_bound(meta)) is not None:
+        meta["status"] = "completed"
+        meta["summary_metrics"] = _compute_summary_metrics(run_dir, meta)
+        if not meta.get("finished_at"):
+            meta["finished_at"] = _now_iso()
+        meta = _refresh_stage_metadata(run_dir, meta, terminal_status="completed")
+        try:
+            _persist_run_meta(run_dir, meta)
+        except Exception:
+            pass
+        _emit_completion_event(workspace, run_dir, run_id, meta)
+        return meta
+
+    # ---- death verdict ----
+    if has_live_future is None:
+        with _JOB_LOCK:
+            data = _JOBS.get(run_id)
+        has_live_future = bool(data and not data["future"].done())
+    if has_live_future:
+        return meta  # this process owns it — trust the worker
+
+    started = meta.get("dispatched_at") or meta.get("created_at")
+    if not started:
+        return meta  # legacy meta without timestamps: never guess
+    try:
+        started_dt = datetime.fromisoformat(started)
+        if started_dt.tzinfo is None:
+            started_dt = started_dt.replace(tzinfo=timezone.utc)
+        started_ts = started_dt.timestamp()
+    except Exception:
+        return meta
+    timeout_sec = meta.get("timeout_sec") or SYNTH_HARD_TIMEOUT_SEC
+    deadline = started_ts + float(timeout_sec) + STALE_RUN_GRACE_SEC
+    now_ts = time.time()
+    if now_ts < deadline:
+        return meta  # ceiling not reached — honestly still "running"
+    # Growing files are the local-docker heartbeat: a run this process lost
+    # but docker still executes keeps living while its logs move. (Hosted
+    # backends produce no local files mid-run, so the ceiling governs.)
+    last_activity = _latest_file_activity_ts(run_dir)
+    if last_activity is not None and (now_ts - last_activity) < STALE_RUN_GRACE_SEC:
+        return meta
+
+    meta["status"] = "failed"
+    note = (
+        "orchestrator lost (backend restarted or instance recycled); "
+        f"no progress past the {timeout_sec}s ceiling"
+    )
+    meta["check_notes"] = f"{meta.get('check_notes')} | {note}" if meta.get("check_notes") else note
     if not meta.get("finished_at"):
         meta["finished_at"] = _now_iso()
-    meta = _refresh_stage_metadata(run_dir, meta, terminal_status="completed")
+    meta = _refresh_stage_metadata(run_dir, meta, terminal_status="failed")
     try:
         _persist_run_meta(run_dir, meta)
     except Exception:
         pass
+    _emit_completion_event(workspace, run_dir, run_id, meta)
     return meta
 
 
@@ -2049,7 +2302,7 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
         # Reconcile a status stuck non-terminal (e.g. a Cloud Run worker killed
         # after the response returned) using on-disk finish artifacts, so a
         # finished run doesn't read as "running" forever.
-        meta = _reconcile_stale_status(run_dir, meta)
+        meta = _reconcile_stale_status(run_dir, meta, workspace=workspace)
         # Self-heal: re-finalize PPA for completed runs whose stored
         # summary_metrics predate the shared finalizer (missing cell_count or the
         # derived fmax_mhz). This repairs historical runs on read without a
@@ -2689,43 +2942,6 @@ def compare_pd_runs(
             "Positive WNS/TNS deltas are better; negative area/cell/power/DRC/congestion deltas are better.",
             "Use this as a retry triage summary; detailed diagnosis still comes from stage-specific reports.",
         ],
-    }
-
-
-def get_stage_status(workspace: str, run_id: Optional[str] = None) -> Dict[str, Any]:
-    run_dir = get_run_dir(workspace, run_id)
-    if run_dir is None:
-        return {
-            "status": "error",
-            "message": f"Run '{run_id}' not found." if run_id else "No synthesis run found.",
-            "run_id": run_id,
-        }
-
-    run_meta = _load_run_meta_with_inferred_stages(run_dir)
-    resolved_run_id = run_meta.get("run_id") or os.path.basename(run_dir)
-    stages = run_meta.get("stages", {})
-    completed = [name for name, item in stages.items() if item.get("status") == "completed"]
-    failed = [name for name, item in stages.items() if item.get("status") == "failed"]
-    running = [name for name, item in stages.items() if item.get("status") == "running"]
-    pending = [name for name, item in stages.items() if item.get("status") == "pending"]
-    skipped = [name for name, item in stages.items() if item.get("status") == "skipped"]
-
-    return {
-        "status": "ok",
-        "run_id": resolved_run_id,
-        "top_module": run_meta.get("top_module"),
-        "platform": run_meta.get("platform"),
-        "run_status": run_meta.get("status"),
-        "current_stage": run_meta.get("current_stage"),
-        "max_stage": _run_stage_bound(run_meta),
-        "stages": stages,
-        "completed_stages": completed,
-        "failed_stages": failed,
-        "running_stages": running,
-        "pending_stages": pending,
-        "skipped_stages": skipped,
-        "stage_count": len(stages),
-        "elapsed_sec": run_meta.get("elapsed_sec"),
     }
 
 
