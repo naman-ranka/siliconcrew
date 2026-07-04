@@ -160,6 +160,18 @@ describe("stop → server-confirmed `stopped` frame", () => {
     expect(useStore.getState().queuedMessages).toHaveLength(MAX_QUEUED_MESSAGES);
   });
 
+  it("`done` resets streaming state even if the local placeholder is missing", () => {
+    // Regression: the composer showed Stop forever after a turn ended when the
+    // placeholder had been lost (odd refresh/reconnect paths) because the
+    // terminal frame was skipped by the placeholder guard.
+    useStore.getState().sendMessage("hi");
+    const sock = useStore.getState().ws as any;
+    useStore.setState({ streamingMessage: null } as any);
+    sock.onmessage(frame({ type: "done", tokens: {} }));
+    expect(useStore.getState().isStreaming).toBe(false);
+    expect(useStore.getState().stopPending).toBe(false);
+  });
+
   it("cumulative text_delta frames render into the streaming message", () => {
     useStore.getState().sendMessage("hi");
     const sock = useStore.getState().ws as any;
