@@ -597,6 +597,40 @@ def load_system_prompt(prompt_path: Path | None = None) -> str:
     return SYSTEM_PROMPT
 
 
+def _strip_reasoning_blocks(state: dict) -> dict:
+    """pre_model_hook: drop `thinking`/`redacted_thinking` content blocks from
+    every message right before the LLM sees them (does NOT touch the
+    checkpoint — only `llm_input_messages`, the model-facing view).
+
+    Reasoning blocks are provider- and often model-version-specific. A thread
+    can switch models mid-conversation (the picker allows it per turn), so a
+    history built on one provider/model may carry a reasoning block shape the
+    CURRENT provider's strict request validation rejects outright — e.g.
+    Anthropic returning 400 "messages.N.content.0.thinking.thinking: Field
+    required" when replaying a block that isn't a well-formed Anthropic
+    thinking block. Our agent doesn't depend on reasoning traces surviving
+    across turns (tool-calling correctness lives in `.tool_calls`, not
+    `.content`), so the safe fix is: never resend them, from anyone, ever.
+    This also self-heals a thread already stuck on a bad historical block —
+    every future call strips it, no checkpoint migration required.
+    """
+    messages = state.get("messages", [])
+    cleaned = []
+    changed = False
+    for msg in messages:
+        content = getattr(msg, "content", None)
+        if isinstance(content, list):
+            kept = [
+                block for block in content
+                if not (isinstance(block, dict) and block.get("type") in ("thinking", "redacted_thinking"))
+            ]
+            if len(kept) != len(content):
+                msg = msg.model_copy(update={"content": kept})
+                changed = True
+        cleaned.append(msg)
+    return {"llm_input_messages": cleaned if changed else messages}
+
+
 def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=None):
     """
     Creates the Architect agent using ReAct pattern.
@@ -620,6 +654,7 @@ def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=
             tools=architect_tools,
             checkpointer=checkpointer,
             prompt=runtime_prompt,
+            pre_model_hook=_strip_reasoning_blocks,
         )
     except TypeError:
         agent_graph = create_react_agent(
@@ -627,6 +662,6 @@ def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=
             tools=architect_tools,
             checkpointer=checkpointer
         )
-    
+
     return agent_graph
 

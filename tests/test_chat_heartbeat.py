@@ -12,6 +12,7 @@ explicit `stopped` terminal frame.
 """
 import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 
 import pytest
@@ -249,6 +250,49 @@ def test_stop_writes_interrupted_tool_results_into_checkpoint(monkeypatch):
     assert f["type"] == "stopped", f
     repaired = [m for u in agent.updates for m in u.get("messages", [])]
     assert any(getattr(m, "tool_call_id", None) == "tc1" for m in repaired), agent.updates
+
+
+def test_terminal_frame_does_not_wait_on_workspace_sync(monkeypatch):
+    """The user-visible symptom: a turn's content fully renders, then the
+    Stop-to-Send transition lags far behind because `done` was gated on a
+    slow hosted workspace upload. The terminal frame must arrive well before
+    a slow sync finishes; the sync itself still runs (just not awaited)."""
+    class _SlowSyncWs:
+        def workspace_for(self, sid):
+            return "/tmp/sc-hb-test-ws"
+
+        def sync(self, sid):
+            # Called via asyncio.to_thread — a plain blocking sleep is fine.
+            time.sleep(0.3)
+
+    class _FastAgent:
+        """No artificial delay — isolates the workspace-sync latency being
+        tested from any agent-side latency (unlike _SlowAgent)."""
+
+        async def aget_state(self, config):
+            return _State()
+
+        async def astream(self, inputs, config, stream_mode=None):
+            yield ("updates", {"agent": {"messages": [_Msg()]}})
+
+    _patch_common(monkeypatch, _FastAgent)
+    monkeypatch.setattr(api, "get_workspace_provider", lambda: _SlowSyncWs())
+
+    # Measure up to the terminal frame's ARRIVAL only — that's the instant a
+    # real browser's Stop button would flip to Send. (The `with` block's own
+    # exit/teardown is a separate, test-harness-only cost and not what the
+    # user experiences — it must not be included in this measurement.)
+    start = time.time()
+    with TestClient(api.app).websocket_connect("/api/chat/sess1") as ws:
+        ws.send_json({"message": "hi"})
+        while True:
+            f = ws.receive_json()
+            if f.get("type") in ("done", "error", "stopped"):
+                elapsed = time.time() - start
+                break
+
+    assert f["type"] == "done"
+    assert elapsed < 0.2, f"terminal frame waited on workspace sync ({elapsed:.2f}s)"
 
 
 def test_terminal_frame_survives_bookkeeping_failure(slow, monkeypatch):

@@ -44,6 +44,22 @@ export interface QueuedMessage {
 // Hard cap on client-side queued follow-ups (bounded memory, sane UX).
 export const MAX_QUEUED_MESSAGES = 10;
 
+// Every session/thread switch must reset per-turn chat state — otherwise a
+// stale `chatError` banner from a PREVIOUS conversation renders over the new
+// one's (unrelated) messages, or a streaming/Stop state left over from a turn
+// whose terminal frame never arrived (because the user navigated away first)
+// leaks into the next conversation and pins the composer on "Stop" forever.
+function chatTurnResetFields() {
+  return {
+    chatError: null as string | null,
+    chatErrorCode: null as string | null,
+    isStreaming: false,
+    streamingMessage: null as Message | null,
+    stopPending: false,
+    activeTurnId: null as string | null,
+  };
+}
+
 // F4/F5: store-level single-flight for the workspace hydrate + workbench load,
 // keyed by session id. Every trigger — mount, selectSession, chat-complete,
 // upload, focus revalidate, manual refresh — shares one in-flight promise, so
@@ -693,6 +709,7 @@ export const useStore = create<AppState>((set, get) => ({
       currentSession: session,
       messages: [],
       queuedMessages: [],
+      ...chatTurnResetFields(),
       threads: [],
       activeThreadId: null,
       ws: null,
@@ -1202,7 +1219,7 @@ export const useStore = create<AppState>((set, get) => ({
       ws: null,
       wsSessionId: null,
       wsThreadId: null,
-      chatError: null,
+      ...chatTurnResetFields(),
     }));
   },
 
@@ -1210,7 +1227,11 @@ export const useStore = create<AppState>((set, get) => ({
     const { currentSession, activeThreadId, ws } = get();
     if (!currentSession || threadId === activeThreadId) return;
     if (ws) ws.close();
-    set({ activeThreadId: threadId, messages: [], queuedMessages: [], ws: null, wsSessionId: null, wsThreadId: null });
+    set({
+      activeThreadId: threadId, messages: [], queuedMessages: [],
+      ws: null, wsSessionId: null, wsThreadId: null,
+      ...chatTurnResetFields(),
+    });
     await get().loadChatHistory();
   },
 
@@ -1224,7 +1245,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({
       threads: remaining,
       activeThreadId: wasActive ? remaining[0]?.id ?? null : activeThreadId,
-      ...(wasActive ? { messages: [], queuedMessages: [], ws: null, wsSessionId: null, wsThreadId: null } : {}),
+      ...(wasActive ? { messages: [], queuedMessages: [], ws: null, wsSessionId: null, wsThreadId: null, ...chatTurnResetFields() } : {}),
     });
     if (wasActive) {
       // Reload the list (it may come back EMPTY — listing is read-only; the
