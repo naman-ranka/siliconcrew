@@ -1120,6 +1120,17 @@ class _ActiveTurn:
 # stalls, no reply to the new message, terminal frames never sent).
 _ACTIVE_TURNS: Dict[str, _ActiveTurn] = {}
 
+# Fire-and-forget background tasks (post-turn bookkeeping) need a strong
+# reference or the event loop may garbage-collect them mid-flight; this set
+# holds them until they finish, then a done-callback removes themselves.
+_BACKGROUND_TASKS: set = set()
+
+
+def _run_in_background(coro) -> None:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
 
 def _pending_tool_call_ids(messages) -> list:
     """Tool-call ids with no matching ToolMessage yet (dangling after an
@@ -1504,10 +1515,13 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     except Exception:
                         pass  # the next turn's start-of-turn repair still covers it
 
-                # Post-turn bookkeeping must NEVER swallow the terminal frame —
-                # a failure here previously left the UI "streaming" forever.
+                # Fast, correctness-sensitive bookkeeping stays synchronous and
+                # BEFORE the terminal frame: local SQLite writes (sub-ms), and
+                # the hosted-tier limiter must reflect this turn's usage before
+                # the client can possibly send the next message on this same
+                # connection, or a rapid back-to-back turn could slip past a
+                # cap it should have hit.
                 try:
-                    # Update token usage
                     if total_input_tokens > 0 or total_output_tokens > 0:
                         current_meta = session_manager.get_session_metadata(session_id, user_id=uid)
                         if current_meta:
@@ -1525,17 +1539,11 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         if limiter is not None:
                             turn_cost = calculate_cost(total_input_tokens, total_output_tokens, model_name)
                             limiter.record(uid or "anonymous", total_input_tokens + total_output_tokens, turn_cost)
-
-                    # Persist any workspace changes back to durable storage in
-                    # hosted mode (cloud provider). No-op for the local provider.
-                    # Off-thread: a slow tarball upload must not block the event
-                    # loop (it would stall other connections' heartbeats too).
-                    _sync = getattr(_ws_provider, "sync", None)
-                    if callable(_sync):
-                        await asyncio.to_thread(_sync, session_id)
                 except Exception as exc:
-                    print(f"[WARN] post-turn bookkeeping failed: {exc}")
+                    print(f"[WARN] token/limiter bookkeeping failed: {exc}")
 
+                # Terminal frame goes out NOW — the moment the assistant's turn
+                # is logically complete — not after whatever comes next.
                 tokens = {"input": total_input_tokens, "output": total_output_tokens}
                 if agent_error is not None:
                     print(f"[ERROR] Agent error: {agent_error}")
@@ -1555,6 +1563,24 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     })
                 else:
                     await _send({"type": "done", "tokens": tokens})
+
+                # Persist workspace changes to durable storage in hosted mode
+                # (no-op locally) as a background task — this is the ONE slow,
+                # non-critical step (a real network upload). Awaiting it before
+                # the terminal frame made the UI sit on "Stop" for as long as
+                # the upload took (observed up to ~1 minute) even though the
+                # reply had fully rendered. It doesn't touch the checkpoint
+                # connection (already closed by then), so it's safe to outlive
+                # this turn.
+                _sync = getattr(_ws_provider, "sync", None)
+                if callable(_sync):
+                    async def _background_sync() -> None:
+                        try:
+                            await asyncio.to_thread(_sync, session_id)
+                        except Exception as exc:
+                            print(f"[WARN] workspace sync failed: {exc}")
+
+                    _run_in_background(_background_sync())
 
                 if client_gone:
                     # The socket is dead; nothing more can be received on it.
