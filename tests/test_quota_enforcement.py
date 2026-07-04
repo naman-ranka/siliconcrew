@@ -66,7 +66,8 @@ def test_concurrency_cap_blocks_second_run_and_release_frees(governed):
     execu, qm, ws = governed
     with session_scope(SessionContext("s1", ws, user_id="alice", tier="user")):
         first = _start(ws)
-        assert "job_id" in first and first.get("status") == "queued"
+        assert first.get("run_id") and first.get("status") == "queued"
+        assert "job_id" not in first
         # Second concurrent run for the same user is rejected (slot still held).
         second = _start(ws)
         assert second.get("status") == "rejected"
@@ -75,7 +76,7 @@ def test_concurrency_cap_blocks_second_run_and_release_frees(governed):
         # Completing the first run releases the slot...
         execu.run_all()
         third = _start(ws)
-        assert "job_id" in third and third.get("status") == "queued"
+        assert third.get("run_id") and third.get("status") == "queued"
 
 
 def test_completed_background_job_syncs_workspace_provider(governed):
@@ -94,7 +95,7 @@ def test_completed_background_job_syncs_workspace_provider(governed):
     try:
         with session_scope(SessionContext("s1", ws, user_id="alice", tier="user")):
             first = _start(ws)
-            assert "job_id" in first and first.get("status") == "queued"
+            assert first.get("run_id") and first.get("status") == "queued"
             assert provider.synced == []
 
             execu.run_all()
@@ -115,9 +116,9 @@ def test_anonymous_tier_cannot_synth(governed):
 def test_different_users_not_blocked(governed):
     _execu, _qm, ws = governed
     with session_scope(SessionContext("sa", ws, user_id="alice", tier="user")):
-        assert "job_id" in _start(ws)
+        assert _start(ws).get("status") == "queued"
     with session_scope(SessionContext("sb", ws, user_id="bob", tier="user")):
-        assert "job_id" in _start(ws)  # independent tenant, own slot
+        assert _start(ws).get("status") == "queued"  # independent tenant, own slot
 
 
 def test_no_quota_manager_is_unchanged(tmp_path, monkeypatch):
@@ -130,7 +131,8 @@ def test_no_quota_manager_is_unchanged(tmp_path, monkeypatch):
         with session_scope(SessionContext("s", str(tmp_path), user_id=None)):
             r1 = _start(str(tmp_path))
             r2 = _start(str(tmp_path))  # no cap → both accepted
-            assert "job_id" in r1 and "job_id" in r2
+            assert r1.get("status") == "queued" and r2.get("status") == "queued"
+            assert r1.get("run_id") != r2.get("run_id")
     finally:
         sm.set_job_executor(None)
 

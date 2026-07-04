@@ -27,8 +27,9 @@ def main():
     print(output)
     print("-------------------")
     
-    if "job_id" in output and "run_id" in output:
-        print("✅ Async synthesis start verified!")
+    # Wave 9: run_id is the ONE durable handle — no job_id in the payload.
+    if "run_id" in output and "job_id" not in output:
+        print("✅ Async synthesis start verified (run_id-only contract)!")
     else:
         print("❌ Rich Output Missing or Synthesis Failed")
 

@@ -1,6 +1,5 @@
 {
   "run_id": "synth_0002",
-  "job_id": "job_05c3f7c0c8",
   "created_at": "2026-07-02T22:57:02.271516+00:00",
   "status": "completed",
   "mode": "pd_retry",

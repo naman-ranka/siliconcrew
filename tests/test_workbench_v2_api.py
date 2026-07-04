@@ -200,11 +200,18 @@ def test_synthesize_action_logs_dispatch(client, monkeypatch):
     c, ws = client
     with open(os.path.join(ws, "counter.v"), "w") as f:
         f.write(DUT)
+    # Dispatch returns the ONE durable key (run_id) — no job_id (Wave 9).
     monkeypatch.setattr(actions_mod, "start_synthesis_job",
-                        lambda **kw: {"job_id": "job_ab12", "run_id": "synth_0001", "status": "queued"})
+                        lambda **kw: {"run_id": "synth_0001", "status": "queued",
+                                      "stage": "queued", "timeout_sec": 1200, "poll_after_sec": 30})
 
     r = c.post(f"/api/workspace/{SID}/synthesize", json={})
-    assert r.status_code == 200 and r.json()["runId"] == "synth_0001"
+    assert r.status_code == 200
+    body = r.json()
+    assert body["runId"] == "synth_0001"
+    assert body["pollAfterSec"] == 30
+    assert "jobId" not in body
+    assert body["raw"]["status"] == "queued"
 
     ev = c.get(f"/api/workspace/{SID}/activity").json()["events"][0]
     assert ev["tool"] == "start_synthesis"
@@ -212,6 +219,42 @@ def test_synthesize_action_logs_dispatch(client, monkeypatch):
     assert ev["status"] == "ok"
     assert ev["runId"] == "synth_0001"
     assert ev["args"]["top_module"] == "counter"  # manifest-resolved args logged
+
+
+# --- Run status by run_id (GET /runs/{run_id}/status replaces GET /jobs/{id}) --
+
+def test_run_status_route_answers_by_run_id(client):
+    c, ws = client
+    run_dir = os.path.join(ws, "synth_runs", "synth_0001")
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "run_meta.json"), "w") as f:
+        json.dump({
+            "run_id": "synth_0001", "status": "completed", "current_stage": "finish",
+            "top_module": "counter", "platform": "sky130hd",
+            "summary_metrics": {"area_um2": 12.3},
+            "auto_checks": {"constraints": "pass", "signoff": "pass", "equiv": "skip"},
+        }, f)
+
+    r = c.get(f"/api/workspace/{SID}/runs/synth_0001/status")
+    assert r.status_code == 200
+    job = r.json()["job"]
+    assert job["run_id"] == "synth_0001"
+    assert job["status"] == "completed"
+    assert job["current_stage"] == "finish"
+    assert isinstance(job["stage_history"], list)  # file-derived history is always present
+    assert job["summary_metrics"]["area_um2"] == 12.3
+
+
+def test_run_status_route_unknown_run(client):
+    c, ws = client
+    r = c.get(f"/api/workspace/{SID}/runs/synth_9999/status")
+    assert r.status_code == 200  # honest payload, not a transport error
+    job = r.json()["job"]
+    assert job["status"] == "failed" and job["error"] == "unknown_run"
+
+    # The run DETAIL endpoint keys its 404 on the same marker.
+    r2 = c.get(f"/api/workspace/{SID}/runs/synth_9999")
+    assert r2.status_code == 404
 
 
 # --- Directory listing --------------------------------------------------------
@@ -471,3 +514,10 @@ def test_shared_policy_single_source():
     assert "linter_tool" not in PROTECTED_TOOLS
     flat = {n for names in TOOL_CATEGORIES.values() for n in names}
     assert "get_manifest" in flat and "run_isolated_simulation" in flat
+    # Wave 9 rename made it into the catalog (a stale name here would silently
+    # drop the status tool's PROTECTED gating).
+    assert "get_synthesis_status" in flat
+    assert "get_synthesis_status" in PROTECTED_TOOLS
+    assert "get_stage_status" not in flat
+    assert "get_synthesis_job" not in flat
+    assert "run_synthesis_and_wait" not in flat

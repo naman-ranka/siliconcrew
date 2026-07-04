@@ -28,8 +28,30 @@ def test_sleep_tool_clamps_seconds(monkeypatch):
     assert "30 second" in msg
 
 
+def test_tool_registry_matches_run_id_contract():
+    """Wave 9 tool surface, checked at the source registry (wrappers.mcp_tools
+    is exactly what mcp_server advertises): get_synthesis_status replaces
+    get_synthesis_job + get_stage_status; the start+wait combo is gone; the
+    bounded wait stays; sleep_tool is architect-only."""
+    mcp_names = {t.name for t in wrappers.mcp_tools}
+
+    assert "get_synthesis_status" in mcp_names
+    assert "wait_for_synthesis" in mcp_names
+    assert "start_synthesis" in mcp_names
+    assert "retry_pd" in mcp_names
+
+    assert "get_synthesis_job" not in mcp_names
+    assert "get_stage_status" not in mcp_names
+    assert "run_synthesis_and_wait" not in mcp_names
+    assert "sleep_tool" not in mcp_names
+
+    architect_names = {t.name for t in wrappers.architect_tools}
+    assert architect_names == mcp_names | {"sleep_tool"}
+
+
 def test_mcp_does_not_expose_sleep_tool():
     pytest.importorskip("langgraph")
+    pytest.importorskip("mcp")  # the MCP SDK is optional in dev environments
 
     scratch_root = os.path.join(os.path.dirname(__file__), "_tmp")
     os.makedirs(scratch_root, exist_ok=True)
@@ -53,8 +75,12 @@ def test_mcp_does_not_expose_sleep_tool():
         assert "get_cts_summary" in names
         assert "get_congestion_summary" in names
         assert "compare_pd_runs" in names
-        assert "get_stage_status" in names
         assert "retry_pd" in names
+        # Wave 9: one status tool keyed by run_id.
+        assert "get_synthesis_status" in names
+        assert "get_stage_status" not in names
+        assert "get_synthesis_job" not in names
+        assert "run_synthesis_and_wait" not in names
     finally:
         if old_home is None:
             os.environ.pop("HOME", None)

@@ -50,9 +50,9 @@ def _make_counter_workspace(workspace: str) -> str:
     return design
 
 
-def _wait_for_terminal(job_id: str, workspace: str) -> dict:
+def _wait_for_terminal(run_id: str, workspace: str) -> dict:
     for _ in range(80):
-        status = sm.get_synthesis_job_status(job_id, workspace=workspace)
+        status = sm.get_synthesis_status(run_id, workspace=workspace)
         if status["status"] in {"completed", "failed"}:
             return status
         time.sleep(0.05)
@@ -136,7 +136,7 @@ def test_synth_only_run_completes_with_skipped_downstream(tmp_path, monkeypatch)
     )
     assert started["status"] == "queued"
 
-    final = _wait_for_terminal(started["job_id"], workspace)
+    final = _wait_for_terminal(started["run_id"], workspace)
     assert final["status"] == "completed"
     assert calls["targets"] == ["do-synth"]
 
@@ -161,10 +161,16 @@ def test_synth_only_run_completes_with_skipped_downstream(tmp_path, monkeypatch)
     for stage in ["floorplan", "place", "cts", "grt", "route", "finish"]:
         assert data["stages"][stage]["status"] == "skipped", stage
 
-    stage_status = sm.get_stage_status(workspace=workspace, run_id=started["run_id"])
-    assert stage_status["max_stage"] == "synth"
-    assert set(stage_status["skipped_stages"]) == {"floorplan", "place", "cts", "grt", "route", "finish"}
-    assert stage_status["pending_stages"] == []
+    # Stage table + file-derived history come from the unified status payload
+    # (get_stage_status was folded into get_synthesis_status in Wave 9).
+    stage_status = sm.get_synthesis_status(started["run_id"], workspace=workspace)
+    skipped = {s for s, m in stage_status["stages"].items() if m.get("status") == "skipped"}
+    assert skipped == {"floorplan", "place", "cts", "grt", "route", "finish"}
+    assert not any(m.get("status") == "pending" for m in stage_status["stages"].values())
+    history = {h["stage"]: h["status"] for h in stage_status["stage_history"]}
+    assert history["synth"] == "completed"
+    for stage in ["floorplan", "place", "cts", "grt", "route", "finish"]:
+        assert history[stage] == "skipped", stage
 
     # PPA degrades gracefully: area/cells from synth_stat.txt, timing/power
     # honestly listed as missing (no finish reports for a synth-only run).
@@ -194,7 +200,7 @@ def test_constraints_only_run_skips_orfs_entirely(tmp_path, monkeypatch):
         top_module="counter",
         max_stage="constraints",
     )
-    final = _wait_for_terminal(started["job_id"], workspace)
+    final = _wait_for_terminal(started["run_id"], workspace)
     assert final["status"] == "completed"
     assert final["current_stage"] == "constraints"
     assert final["auto_checks"]["constraints"] == "pass"
@@ -232,7 +238,7 @@ def test_full_flow_default_still_uses_run_orfs(tmp_path, monkeypatch):
     started = sm.start_synthesis_job(
         workspace=workspace, verilog_files=[design], top_module="counter",
     )
-    final = _wait_for_terminal(started["job_id"], workspace)
+    final = _wait_for_terminal(started["run_id"], workspace)
     assert final["status"] == "completed"
     assert used["full"] is True
 
@@ -361,7 +367,7 @@ def test_retry_pd_from_next_stage_of_partial_parent_passes_prereqs(tmp_path, mon
     # Prerequisite validation accepts the synth-only parent: it DID run the
     # stage (synth) that feeds a floorplan retry.
     assert started["status"] == "queued"
-    final = _wait_for_terminal(started["job_id"], workspace)
+    final = _wait_for_terminal(started["run_id"], workspace)
     assert final["status"] == "completed"
 
 
@@ -415,7 +421,7 @@ def test_rest_synthesize_passes_max_stage(rest_client, monkeypatch):
 
     def fake_start(**kwargs):
         captured.update(kwargs)
-        return {"job_id": "job_x", "run_id": "synth_0001", "status": "queued"}
+        return {"run_id": "synth_0001", "status": "queued", "poll_after_sec": 30}
 
     monkeypatch.setattr(actions_mod, "start_synthesis_job", fake_start)
 

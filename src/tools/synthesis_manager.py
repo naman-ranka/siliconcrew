@@ -1927,10 +1927,13 @@ def _elapsed_seconds(meta: Dict[str, Any], status: str) -> Optional[float]:
     return persisted
 
 
-def _build_status_response(job_id: str, run_id: str, run_dir: str, status: str, meta: Dict[str, Any], recovered: bool = False) -> Dict[str, Any]:
+def _build_status_response(run_id: str, run_dir: str, status: str, meta: Dict[str, Any], recovered: bool = False) -> Dict[str, Any]:
     last_log_lines = _collect_log_tail(run_dir)
-    stage = _infer_stage(last_log_lines)
-    poll_after = _recommended_poll_after_sec(job_id, status, stage, last_log_lines)
+    # Stage truth from the deterministic file trail (Wave 9 Item 1) — the log
+    # tail stays as detail, never as the stage source.
+    progress = stage_progress_from_files(run_dir, meta)
+    stage = progress["current_stage"]
+    poll_after = _recommended_poll_after_sec(run_id, status, stage, last_log_lines)
 
     next_action = (
         "Use search_logs_tool for detailed PPA/error verification."
@@ -2035,6 +2038,17 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
     """
     with _JOB_LOCK:
         data = _JOBS.get(run_id)
+
+    # run_ids (synth_NNNN) are unique per WORKSPACE, not globally: the same id
+    # in a different workspace must fall through to that workspace's disk meta,
+    # never to this process's in-memory entry for someone else's run.
+    if (
+        data
+        and workspace
+        and data.get("workspace")
+        and os.path.abspath(data["workspace"]) != os.path.abspath(workspace)
+    ):
+        data = None
 
     if not data:
         run_dir = get_run_dir(workspace, run_id) if workspace else None
