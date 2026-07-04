@@ -11,10 +11,12 @@ Stop: a `{"type": "stop"}` frame mid-run cancels the agent and yields an
 explicit `stopped` terminal frame.
 """
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 import pytest
 from starlette.testclient import TestClient
+from langchain_core.messages import AIMessage
 
 import api
 from src.platform_engines.llm_keys import LlmKey
@@ -61,11 +63,13 @@ class _HangingAgent:
         yield ("updates", {"agent": {"messages": [_Msg()]}})
 
 
-def _patch_common(monkeypatch, agent):
+def _patch_common(monkeypatch, make_agent):
+    os.makedirs("/tmp/sc-hb-test-ws", exist_ok=True)
+    api._ACTIVE_TURNS.clear()
     monkeypatch.setattr(api, "_WS_HEARTBEAT_SEC", 0.1)
     # Disable delta coalescing so every token chunk yields a frame to assert on.
     monkeypatch.setattr(api, "_WS_DELTA_INTERVAL_SEC", 0.0)
-    monkeypatch.setattr(api, "create_architect_agent", lambda **k: agent)
+    monkeypatch.setattr(api, "create_architect_agent", lambda **k: make_agent())
 
     @asynccontextmanager
     async def fake_ckpt(_p):
@@ -100,12 +104,12 @@ def _patch_common(monkeypatch, agent):
 
 @pytest.fixture()
 def slow(monkeypatch):
-    _patch_common(monkeypatch, _SlowAgent())
+    _patch_common(monkeypatch, _SlowAgent)
 
 
 @pytest.fixture()
 def hanging(monkeypatch):
-    _patch_common(monkeypatch, _HangingAgent())
+    _patch_common(monkeypatch, _HangingAgent)
 
 
 def _drive(ws):
@@ -155,6 +159,106 @@ def test_stop_mid_run_yields_stopped_terminal_frame(hanging):
 def test_stop_when_idle_is_ignored(slow):
     with TestClient(api.app).websocket_connect("/api/chat/sess1") as ws:
         ws.send_json({"type": "stop"})  # idle no-op, must not error
+        ws.send_json({"message": "hi"})
+        frames = _drive(ws)
+    assert frames[-1]["type"] == "done"
+
+
+class _CancellableHang:
+    """First frame arrives, then hangs; records whether it got cancelled."""
+
+    def __init__(self):
+        self.cancelled = False
+
+    async def aget_state(self, config):
+        return _State()
+
+    async def astream(self, inputs, config, stream_mode=None):
+        yield ("updates", {"agent": {"messages": [_Msg()]}})
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+def test_new_message_supersedes_headless_run(monkeypatch):
+    """The 'sent a message, no reply, but the old run was secretly going' bug:
+    a run orphaned by a page refresh must be superseded by the next message on
+    the same thread — cancelled, deregistered, and the new turn completes."""
+    hang = _CancellableHang()
+    agents = iter([hang, _SlowAgent()])
+    _patch_common(monkeypatch, lambda: next(agents))
+
+    client = TestClient(api.app)
+    with client.websocket_connect("/api/chat/sess1") as ws:
+        ws.send_json({"message": "start something long"})
+        while True:
+            if ws.receive_json().get("type") == "text":
+                break
+        # Leave (page refresh / tab close) while the run hangs → headless run.
+
+    with client.websocket_connect("/api/chat/sess1") as ws:
+        ws.send_json({"message": "you there"})
+        frames = _drive(ws)
+
+    assert frames[-1]["type"] == "done", frames
+    assert hang.cancelled is True
+    assert api._ACTIVE_TURNS == {}
+
+
+class _ToolHangAgent:
+    """Emits a tool call whose result never comes (hangs); exposes the dangling
+    call via aget_state and records aupdate_state repairs."""
+
+    def __init__(self):
+        self.updates = []
+        self._tool_msg = AIMessage(
+            content="", tool_calls=[{"name": "wait_for_synthesis", "args": {}, "id": "tc1"}]
+        )
+
+    async def aget_state(self, config):
+        st = _State()
+        st.values = {"messages": [self._tool_msg]}
+        return st
+
+    async def astream(self, inputs, config, stream_mode=None):
+        yield ("updates", {"agent": {"messages": [self._tool_msg]}})
+        await asyncio.sleep(30)
+
+    async def aupdate_state(self, config, values):
+        self.updates.append(values)
+
+
+def test_stop_writes_interrupted_tool_results_into_checkpoint(monkeypatch):
+    """Stop during a tool call closes the turn cleanly: the dangling tool call
+    gets an explicit interrupted result written into the checkpoint NOW, not
+    lazily on the next turn."""
+    agent = _ToolHangAgent()
+    _patch_common(monkeypatch, lambda: agent)
+    with TestClient(api.app).websocket_connect("/api/chat/sess1") as ws:
+        ws.send_json({"message": "run it"})
+        while True:
+            if ws.receive_json().get("type") == "tool_call":
+                break
+        ws.send_json({"type": "stop"})
+        while True:
+            f = ws.receive_json()
+            if f.get("type") in ("done", "error", "stopped"):
+                break
+    assert f["type"] == "stopped", f
+    repaired = [m for u in agent.updates for m in u.get("messages", [])]
+    assert any(getattr(m, "tool_call_id", None) == "tc1" for m in repaired), agent.updates
+
+
+def test_terminal_frame_survives_bookkeeping_failure(slow, monkeypatch):
+    """A stats/sync failure after the run must not swallow `done` — that
+    leaves the UI showing Stop forever."""
+    def boom(*a, **k):
+        raise RuntimeError("stats db down")
+
+    monkeypatch.setattr(api.session_manager, "update_session_stats", boom)
+    with TestClient(api.app).websocket_connect("/api/chat/sess1") as ws:
         ws.send_json({"message": "hi"})
         frames = _drive(ws)
     assert frames[-1]["type"] == "done"

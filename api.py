@@ -1094,6 +1094,47 @@ _WS_HEARTBEAT_SEC = 20
 _WS_DELTA_INTERVAL_SEC = 0.05
 
 
+class _ActiveTurn:
+    """Handle to a thread's in-flight agent run.
+
+    Process-local by design: Cloud Run session affinity pins a user's requests
+    to one instance, so the runs for a thread land in the same process.
+    """
+
+    def __init__(self, task: asyncio.Task, queue: asyncio.Queue):
+        self.task = task
+        self.queue = queue
+
+    def supersede(self) -> None:
+        self.task.cancel()
+        try:
+            # Wake the run's consumer so it terminates its socket cleanly.
+            self.queue.put_nowait(("superseded", None))
+        except asyncio.QueueFull:
+            pass
+
+
+# One live run per chat thread. A run can outlive its socket (headless after a
+# refresh/drop); without this registry a new message would start a SECOND run
+# on the same thread — two writers interleaving on one checkpoint (SQLite lock
+# stalls, no reply to the new message, terminal frames never sent).
+_ACTIVE_TURNS: Dict[str, _ActiveTurn] = {}
+
+
+def _pending_tool_call_ids(messages) -> list:
+    """Tool-call ids with no matching ToolMessage yet (dangling after an
+    interrupted/stopped run)."""
+    pending: set = set()
+    for msg in messages or []:
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            for tc in msg.tool_calls:
+                pending.add(tc.get("id"))
+        elif hasattr(msg, "tool_call_id"):
+            pending.discard(msg.tool_call_id)
+    pending.discard(None)
+    return sorted(pending)
+
+
 @app.websocket("/api/chat/{session_id:path}")
 async def chat_websocket(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for streaming chat."""
@@ -1178,6 +1219,19 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             # Bump activity + auto-title an untitled thread from the first message.
             session_manager.touch_thread(thread_id, user_id=uid, auto_title_from=message)
 
+            # One live run per thread: a new message SUPERSEDES a run that is
+            # still executing for this thread (left running headless after a
+            # page refresh, or orphaned by a dropped socket). Two concurrent
+            # runs would interleave writes on one checkpoint — the "sent a
+            # message, got no reply, but the old run was still going" failure.
+            # The superseded run's dangling tool calls are repaired by the
+            # start-of-turn scan below.
+            prior = _ACTIVE_TURNS.pop(thread_id, None)
+            if prior is not None and not prior.task.done():
+                prior.supersede()
+                # Let its checkpoint writes settle before we read state.
+                await asyncio.wait({prior.task}, timeout=10)
+
             print(f"[CHAT] Session: {session_id} | Thread: {thread_id} | Message: {message[:50]}...")
 
             # Initialize agent with AsyncSqliteSaver (supports async streaming/state).
@@ -1214,29 +1268,19 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 )
                 config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
 
-                # Check for corrupted state
+                # Start-of-turn repair: a previous run interrupted mid-tool
+                # leaves dangling tool calls in the checkpoint; close them with
+                # explicit interrupted results so the provider accepts the
+                # history.
                 snapshot = await agent_graph.aget_state(config)
                 input_messages = []
 
                 if snapshot.values and snapshot.values.get("messages"):
-                    messages = snapshot.values["messages"]
-                    pending_tool_ids = set()
-
-                    for msg in messages:
-                        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
-                            for tc in msg.tool_calls:
-                                pending_tool_ids.add(tc.get("id"))
-                        elif hasattr(msg, "tool_call_id"):
-                            pending_tool_ids.discard(msg.tool_call_id)
-
-                    # Fix corrupted state with fake responses
-                    if pending_tool_ids:
-                        for tool_id in pending_tool_ids:
-                            fake_response = ToolMessage(
-                                content="[Tool execution was interrupted. Please retry the operation.]",
-                                tool_call_id=tool_id
-                            )
-                            input_messages.append(fake_response)
+                    for tool_id in _pending_tool_call_ids(snapshot.values["messages"]):
+                        input_messages.append(ToolMessage(
+                            content="[Tool execution was interrupted. Please retry the operation.]",
+                            tool_call_id=tool_id,
+                        ))
 
                 if not snapshot.values or not snapshot.values.get("messages"):
                     input_messages.append(SystemMessage(content=load_system_prompt()))
@@ -1295,6 +1339,8 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         await event_queue.put(("end", None))
 
                 drain_task = asyncio.create_task(_drain_stream())
+                turn_handle = _ActiveTurn(drain_task, event_queue)
+                _ACTIVE_TURNS[thread_id] = turn_handle
 
                 async def _watch_client() -> None:
                     # Reads the socket for the duration of the run. A `stop`
@@ -1368,6 +1414,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     return frames
 
                 agent_error: Optional[Exception] = None
+                superseded = False
                 delta_gate = 0.0
                 try:
                     while True:
@@ -1389,6 +1436,10 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         if kind == "stop":
                             stop_requested = True
                             drain_task.cancel()
+                            break
+                        if kind == "superseded":
+                            # A newer message on this thread took over the run.
+                            superseded = True
                             break
                         if kind == "disconnect":
                             # Client dropped mid-run. Finish the run headless so
@@ -1429,31 +1480,61 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         await drain_task
                     except (asyncio.CancelledError, Exception):
                         pass
+                    if _ACTIVE_TURNS.get(thread_id) is turn_handle:
+                        _ACTIVE_TURNS.pop(thread_id, None)
 
-                # Update token usage
-                if total_input_tokens > 0 or total_output_tokens > 0:
-                    current_meta = session_manager.get_session_metadata(session_id, user_id=uid)
-                    if current_meta:
-                        new_input = current_meta.get("input_tokens", 0) + total_input_tokens
-                        new_output = current_meta.get("output_tokens", 0) + total_output_tokens
-                        cached = current_meta.get("cached_tokens", 0)
-                        new_cost = calculate_cost(new_input, new_output, model_name)
-                        session_manager.update_session_stats(session_id, new_input, new_output, cached, new_cost, user_id=uid)
+                if stop_requested:
+                    # Close the turn cleanly NOW: write explicit interrupted
+                    # results for any dangling tool calls into the checkpoint,
+                    # so the conversation history is immediately consistent
+                    # instead of being lazily repaired on the next turn.
+                    try:
+                        snap = await agent_graph.aget_state(config)
+                        repairs = [
+                            ToolMessage(
+                                content="[Stopped by user before this tool finished.]",
+                                tool_call_id=tid,
+                            )
+                            for tid in _pending_tool_call_ids(
+                                (snap.values or {}).get("messages") or []
+                            )
+                        ]
+                        if repairs:
+                            await agent_graph.aupdate_state(config, {"messages": repairs})
+                    except Exception:
+                        pass  # the next turn's start-of-turn repair still covers it
 
-                # Cap the shared hosted tier: charge THIS turn's tokens/cost to
-                # the limiter so the per-user daily + global ceilings actually
-                # bite (otherwise a free-tier user is effectively uncapped).
-                if llm_key.source == "hosted":
-                    limiter = getattr(_LLM_KEY_PROVIDER, "limiter", None)
-                    if limiter is not None:
-                        turn_cost = calculate_cost(total_input_tokens, total_output_tokens, model_name)
-                        limiter.record(uid or "anonymous", total_input_tokens + total_output_tokens, turn_cost)
+                # Post-turn bookkeeping must NEVER swallow the terminal frame —
+                # a failure here previously left the UI "streaming" forever.
+                try:
+                    # Update token usage
+                    if total_input_tokens > 0 or total_output_tokens > 0:
+                        current_meta = session_manager.get_session_metadata(session_id, user_id=uid)
+                        if current_meta:
+                            new_input = current_meta.get("input_tokens", 0) + total_input_tokens
+                            new_output = current_meta.get("output_tokens", 0) + total_output_tokens
+                            cached = current_meta.get("cached_tokens", 0)
+                            new_cost = calculate_cost(new_input, new_output, model_name)
+                            session_manager.update_session_stats(session_id, new_input, new_output, cached, new_cost, user_id=uid)
 
-                # Persist any workspace changes back to durable storage in
-                # hosted mode (cloud provider). No-op for the local provider.
-                _sync = getattr(_ws_provider, "sync", None)
-                if callable(_sync):
-                    _sync(session_id)
+                    # Cap the shared hosted tier: charge THIS turn's tokens/cost to
+                    # the limiter so the per-user daily + global ceilings actually
+                    # bite (otherwise a free-tier user is effectively uncapped).
+                    if llm_key.source == "hosted":
+                        limiter = getattr(_LLM_KEY_PROVIDER, "limiter", None)
+                        if limiter is not None:
+                            turn_cost = calculate_cost(total_input_tokens, total_output_tokens, model_name)
+                            limiter.record(uid or "anonymous", total_input_tokens + total_output_tokens, turn_cost)
+
+                    # Persist any workspace changes back to durable storage in
+                    # hosted mode (cloud provider). No-op for the local provider.
+                    # Off-thread: a slow tarball upload must not block the event
+                    # loop (it would stall other connections' heartbeats too).
+                    _sync = getattr(_ws_provider, "sync", None)
+                    if callable(_sync):
+                        await asyncio.to_thread(_sync, session_id)
+                except Exception as exc:
+                    print(f"[WARN] post-turn bookkeeping failed: {exc}")
 
                 tokens = {"input": total_input_tokens, "output": total_output_tokens}
                 if agent_error is not None:
@@ -1461,9 +1542,17 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     await _send({"type": "error", "error": str(agent_error)})
                 elif stop_requested:
                     # Explicit terminal marker for a user-initiated stop; the
-                    # next turn repairs any dangling tool calls in the
-                    # checkpoint (see the corrupted-state fix above).
+                    # dangling tool calls were closed with interrupted results
+                    # right above.
                     await _send({"type": "stopped", "tokens": tokens})
+                elif superseded:
+                    # Usually the socket is already gone (this run was
+                    # orphaned); if a second tab is still attached, tell it
+                    # honestly what happened.
+                    await _send({
+                        "type": "error", "code": "superseded",
+                        "error": "A newer message took over this chat.",
+                    })
                 else:
                     await _send({"type": "done", "tokens": tokens})
 

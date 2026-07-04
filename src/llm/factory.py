@@ -60,6 +60,24 @@ def _openai_temperature_supported(model_name: str) -> bool:
     return not _prefer_openai_responses_api(model_name)
 
 
+def _anthropic_temperature_supported(model_name: str) -> bool:
+    """
+    Claude Opus 4.7+, Sonnet 5, and the Fable/Mythos family removed sampling
+    parameters — sending `temperature` returns a 400 ("deprecated for this
+    model"). Older families (Haiku 4.5, Sonnet 4.6, Opus 4.6) still accept it.
+    """
+    name = (model_name or "").strip().lower()
+    return not name.startswith((
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "claude-haiku-5",
+        "claude-fable",
+        "claude-mythos",
+    ))
+
+
 def create_llm(model_name: str, temperature: float = 0.0, api_key: str | None = None):
     """
     Create a LangChain chat model for the inferred provider.
@@ -140,8 +158,17 @@ def create_llm(model_name: str, temperature: float = 0.0, api_key: str | None = 
             "Missing dependency 'langchain-anthropic'. Install it with: pip install langchain-anthropic"
         ) from exc
 
-    return ChatAnthropic(
-        model=model_name,
-        anthropic_api_key=anthropic_api_key,
-        temperature=temperature,
-    )
+    anthropic_kwargs = {
+        "model": model_name,
+        "anthropic_api_key": anthropic_api_key,
+    }
+    if _anthropic_temperature_supported(model_name):
+        anthropic_kwargs["temperature"] = temperature
+    elif temperature is not None and temperature != 1:
+        warnings.warn(
+            f"Skipping explicit temperature={temperature} for model '{model_name}' "
+            "— sampling parameters are rejected on this model family.",
+            UserWarning,
+        )
+
+    return ChatAnthropic(**anthropic_kwargs)

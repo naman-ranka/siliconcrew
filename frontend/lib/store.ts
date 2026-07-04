@@ -872,6 +872,24 @@ export const useStore = create<AppState>((set, get) => ({
 
     let terminalReceived = false;
     const socket = ws;
+
+    // Liveness watchdog: during a run the server sends SOMETHING at least
+    // every heartbeat (~20s) — content or a ping. 45s of total silence means
+    // the connection or turn is dead; close the socket so finalizeDrop
+    // recovers. Guarantees the Stop/streaming state can never stay stuck.
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
+    const disarmWatchdog = () => {
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = null;
+    };
+    const armWatchdog = () => {
+      disarmWatchdog();
+      watchdog = setTimeout(() => {
+        if (get().ws === socket && !terminalReceived) socket.close();
+      }, 45000);
+    };
+    armWatchdog();
+
     socket.onmessage = (event) => {
       if (get().ws !== socket) return;
       const data = JSON.parse(event.data);
@@ -879,13 +897,19 @@ export const useStore = create<AppState>((set, get) => ({
       // stop or reconnect) are dropped by id. Frames without a turn_id (older
       // backend) pass through unchanged.
       if (data.turn_id && data.turn_id !== turnId) return;
+      if (["done", "stopped", "error"].includes(data.type)) disarmWatchdog();
+      else armWatchdog();
       const { streamingMessage: msg, messages: currentMessages } = get();
 
-      if (!msg) return;
+      // Terminal + keepalive frames MUST be processed even if the local
+      // streaming placeholder is somehow gone — otherwise a missed
+      // placeholder pins the composer in "streaming/Stop" forever.
+      if (!msg && !["done", "stopped", "error", "ping"].includes(data.type)) return;
 
       switch (data.type) {
         case "text_delta":
         case "text": {
+          if (!msg) break;
           const updatedBlocks = [...(msg.blocks ?? [])];
           const lastIdx = updatedBlocks.length - 1;
           if (lastIdx >= 0 && updatedBlocks[lastIdx].type === "text") {
@@ -898,6 +922,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
 
         case "tool_call": {
+          if (!msg) break;
           const newToolBlock: ContentBlock = { type: "tool", toolCall: data.tool as ToolCall };
           set({
             streamingMessage: {
@@ -926,6 +951,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
 
         case "tool_result": {
+          if (!msg) break;
           const result: ToolResult = {
             tool_call_id: data.tool_call_id,
             status: data.status,
@@ -991,6 +1017,10 @@ export const useStore = create<AppState>((set, get) => ({
               streamingMessage: null,
               stopPending: false,
             });
+          } else {
+            // No local placeholder (odd path) — still leave streaming state,
+            // or the composer shows Stop forever after the turn ended.
+            set({ isStreaming: false, streamingMessage: null, stopPending: false });
           }
           // Final workspace refresh after completion
           get().refreshWorkspace();
@@ -1060,6 +1090,7 @@ export const useStore = create<AppState>((set, get) => ({
     // running server-side (Cloud Run), so the completed result often lands there.
     // Guarded so error+close only handle the drop once.
     const finalizeDrop = () => {
+      disarmWatchdog();
       if (get().ws !== socket) return;
       if (terminalReceived) {
         set({ ws: null, wsSessionId: null, wsThreadId: null });
