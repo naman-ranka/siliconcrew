@@ -41,7 +41,7 @@ explicit aware datetimes; workspace-scoped keys; reconciler live-future
 priority; store reset; retry 400; queued grace; retry current stage;
 wait final sample). Then gates + commit + push + mark task 10 complete.
 
-# Round 2 (codex, post-F1-F8) — C1-C6
+# Round 2 (codex, post-F1-F8) — C1-C6 — ALL RESOLVED (C5 accepted deviation; tests: test_synth_codex_round2.py)
 
 C1 HIGH one stage truth in the PAYLOAD: _build_status_response returns
   persisted `stages` (run_meta) next to file-derived `stage_history` +

@@ -920,7 +920,12 @@ def stage_progress_from_files(run_dir: str, meta: Dict[str, Any]) -> Dict[str, A
             continue
         if current is None:
             current = stage
-            history.append({"stage": stage, "status": "running"})
+            # C1 coherence: for a run whose persisted status is terminal
+            # FAILED, the first unfinished in-plan stage is where it died —
+            # "failed", never "running", so stage / current_stage /
+            # stage_history / stages all tell one story.
+            first_status = "failed" if meta.get("status") == "failed" else "running"
+            history.append({"stage": stage, "status": first_status})
         else:
             history.append({"stage": stage, "status": "pending"})
 
@@ -1549,6 +1554,74 @@ def _push_durable_run_meta(run_dir: str, meta: Dict[str, Any]) -> None:
         pass
 
 
+def _pull_durable_run_meta(run_dir: str) -> Optional[Dict[str, Any]]:
+    """Best-effort read-back of the durable run_meta copy pushed by
+    _push_durable_run_meta (``<handle>/meta/run_meta.json``), cloud mode only.
+
+    C2: the durable meta was write-only — an instance that never dispatched
+    the run (or lost its scratch) could not see the announcing instance's
+    terminal milestone. Mirrors put_file's key scheme exactly. Returns the
+    parsed dict, or None (no store / no handle / object absent / parse error).
+    """
+    try:
+        store = _durable_run_store()
+        if store is None:
+            return None
+        get_file = getattr(store, "get_file", None)
+        if not callable(get_file):
+            return None
+        handle = _compute_run_handle(run_dir)
+        if not handle:
+            return None
+        import tempfile
+
+        fd, tmp_name = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            if not get_file(f"{handle}/meta/{RUN_META_FILENAME}", tmp_name):
+                return None
+            with open(tmp_name, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) and data else None
+        finally:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+    except Exception:
+        return None
+
+
+def _maybe_adopt_remote_run_meta(
+    run_dir: str, meta: Dict[str, Any], workspace: Optional[str], run_id: str
+) -> Dict[str, Any]:
+    """C2 precedence rule: prefer the durable remote meta when the local one
+    is MISSING, or when the remote status is terminal and the local one isn't.
+
+    Adopting a terminal remote meta IS a terminal-transition write (allowed
+    for the reconciler) — persist it locally and announce the completion.
+    The announcing instance's own event may have died with its scratch (the
+    attempt log is per-session scratch synced by tarball), so emitting here is
+    correct; the O_EXCL marker dedupes locally and the deterministic
+    tool_call_id ("completion:<run_id>") dedupes cross-instance at read time.
+    Callers must have already established there is NO live local future.
+    """
+    remote = _pull_durable_run_meta(run_dir)
+    if not remote:
+        return meta
+    remote_terminal = remote.get("status") in _TERMINAL_SYNTH_STATES
+    local_terminal = meta.get("status") in _TERMINAL_SYNTH_STATES
+    if meta and not (remote_terminal and not local_terminal):
+        return meta
+    try:
+        _persist_run_meta(run_dir, remote)
+    except Exception:
+        pass
+    if remote_terminal:
+        _emit_completion_event(workspace, run_dir, run_id, remote)
+    return remote
+
+
 def _persist_run_meta_durable(run_dir: str, meta: Dict[str, Any]) -> None:
     """Milestone persist: local scratch + best-effort durable copy under the
     run's object-storage handle. Workers and the reconciler's terminal writes
@@ -2159,6 +2232,29 @@ def _build_status_response(
         terminal_stage = meta.get("current_stage") or stage
     else:
         terminal_stage = stage
+
+    # C1: one stage truth in the PAYLOAD. While a run is non-terminal the
+    # persisted stages table lags the file-derived history (readers never
+    # write run_meta — Wave 9 persistence discipline), so the response
+    # overlays the derived statuses onto a COPY of the persisted table,
+    # keeping each stage's persisted artifact detail. Response-only: meta is
+    # never mutated. Terminal runs stay persisted-authoritative (the worker /
+    # reconciler refreshed stages at the terminal transition).
+    stages_payload = meta.get("stages")
+    if status not in _TERMINAL_SYNTH_STATES and isinstance(stages_payload, dict):
+        derived = {
+            h.get("stage"): h.get("status")
+            for h in progress["stage_history"]
+            if h.get("stage") and h.get("status")
+        }
+        overlaid: Dict[str, Any] = {}
+        for name, entry in stages_payload.items():
+            merged = dict(entry) if isinstance(entry, dict) else {"status": entry}
+            if name in derived:
+                merged["status"] = derived[name]
+            overlaid[name] = merged
+        stages_payload = overlaid
+
     resp = {
         "run_id": run_id,
         "status": status,
@@ -2166,7 +2262,7 @@ def _build_status_response(
         # Mirror kept for existing consumers (failure attribution, UI
         # currentStage); file-derived while live, persisted when terminal.
         "current_stage": meta.get("current_stage") if status in {"completed", "failed"} else stage,
-        "stages": meta.get("stages"),
+        "stages": stages_payload,
         "stage_history": progress["stage_history"],
         "dispatched_at": meta.get("dispatched_at"),
         "timeout_sec": meta.get("timeout_sec"),
@@ -2290,8 +2386,34 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
     try:
         final = future.result()
     except Exception as exc:
-        meta["check_notes"] = f"Job execution error: {exc}"
-        meta["auto_checks"] = meta.get("auto_checks", {"constraints": "fail", "signoff": "fail", "equiv": "skip"})
+        # C4: a future that RAISED left no terminal meta anywhere — the worker
+        # died before its own finalize. Persist the tombstone (local + durable
+        # push), refresh the stage table, index the run as failed, and emit
+        # the completion event (idempotent via the O_EXCL marker + the
+        # deterministic event id), so a later fresh reader — this instance
+        # after _JOBS eviction, or another instance — sees the same "failed".
+        # Everything best-effort: the response below never depends on it.
+        ws = workspace or data.get("workspace") or _workspace_from_run_dir(run_dir)
+        try:
+            if meta.get("status") not in _TERMINAL_SYNTH_STATES:
+                meta["status"] = "failed"
+                meta["check_notes"] = f"Job execution error: {exc}"
+                meta["auto_checks"] = meta.get(
+                    "auto_checks", {"constraints": "fail", "signoff": "fail", "equiv": "skip"}
+                )
+                if not meta.get("finished_at"):
+                    meta["finished_at"] = _now_iso()
+                meta = _refresh_stage_metadata(run_dir, meta, terminal_status="failed")
+                _persist_run_meta_durable(run_dir, meta)
+                try:
+                    _append_index(ws, run_id, "failed")
+                except Exception:
+                    pass
+            _emit_completion_event(ws, run_dir, run_id, meta)
+        except Exception:
+            pass
+        if not meta.get("check_notes"):
+            meta["check_notes"] = f"Job execution error: {exc}"
         resp = _build_status_response(run_id, run_dir, "failed", meta, workspace=workspace)
         _maybe_cache_poll_response(run_id, resp, workspace=workspace)
         return resp
@@ -2437,6 +2559,17 @@ def _reconcile_stale_status(
     if has_live_future:
         return meta  # this process owns it — trust the worker
 
+    # C2: durable-meta read-back (cloud mode, no live local future). Another
+    # instance may have finalized this run and pushed its terminal meta to
+    # <handle>/meta/run_meta.json while THIS instance's local copy is missing
+    # or stuck non-terminal. Adopting a terminal remote meta persists it
+    # locally (a terminal-transition write, allowed) and announces completion
+    # (idempotent locally via the O_EXCL marker, cross-instance via the
+    # deterministic event id). Comes strictly AFTER the live-future check.
+    meta = _maybe_adopt_remote_run_meta(run_dir, meta, workspace, run_id)
+    if meta.get("status") in _TERMINAL_SYNTH_STATES:
+        return meta
+
     def _finalize_completed(m: Dict[str, Any]) -> Dict[str, Any]:
         # Shared COMPLETED leg (also re-run after cloud-output adoption).
         # Terminal write goes through the durable wrapper: a reconciling
@@ -2457,6 +2590,17 @@ def _reconcile_stale_status(
     # Only the target stage's present completion artifact proves the (possibly
     # bounded) flow actually completed.
     if _find_stage_completion_marker(run_dir, _run_stage_bound(meta)) is not None:
+        return _finalize_completed(meta)
+
+    # Adoption does not wait for the ceiling (C3): with no live future,
+    # ``store.exists`` is a cheap check — if the hosted Job already uploaded
+    # its outputs (orchestrating instance died between execute and stage_out),
+    # pull them in and finalize COMPLETED on this very read instead of leaving
+    # the run "running" until the timeout ceiling expires.
+    if (
+        _try_adopt_cloud_outputs(run_dir, meta)
+        and _find_stage_completion_marker(run_dir, _run_stage_bound(meta)) is not None
+    ):
         return _finalize_completed(meta)
 
     # ---- death verdict ----
@@ -2492,16 +2636,6 @@ def _reconcile_stale_status(
     last_activity = _latest_file_activity_ts(run_dir)
     if last_activity is not None and (now_ts - last_activity) < STALE_RUN_GRACE_SEC:
         return meta
-
-    # Adoption before the death verdict (Item 4): a hosted Job may have
-    # uploaded its outputs even though the orchestrating instance died before
-    # stage_out. If ``<handle>/out`` exists, pull it in and re-run the
-    # completion check — artifacts now present means COMPLETED, not failed.
-    if (
-        _try_adopt_cloud_outputs(run_dir, meta)
-        and _find_stage_completion_marker(run_dir, _run_stage_bound(meta)) is not None
-    ):
-        return _finalize_completed(meta)
 
     meta["status"] = "failed"
     note = (

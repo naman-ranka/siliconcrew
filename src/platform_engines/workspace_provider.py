@@ -33,12 +33,15 @@ class ObjectStore(Protocol):
     its "absent blob → empty dir" behavior, so callers that must distinguish
     absence — e.g. the reconciler adopting cloud outputs — use ``exists``).
     ``put_file`` stores one small raw object (no tarring) under a key — the
-    Item-4 durable run_meta push path.
+    Item-4 durable run_meta push path. ``get_file`` is its read-back (same raw
+    key scheme, no ``.tar.gz`` spelling): False when the object is absent, so
+    a reader can distinguish "no durable meta yet" from an empty pull.
     """
 
     def exists(self, key: str) -> bool: ...
     def put_tree(self, key: str, local_dir: str) -> None: ...
     def put_file(self, key: str, local_path: str) -> None: ...
+    def get_file(self, key: str, local_path: str) -> bool: ...
     def get_tree(self, key: str, local_dir: str, subdirs: Optional[List[str]] = None) -> None: ...
     # A version token for the stored object (GCS generation), or None if absent.
     # Used by the workspace provider to skip re-downloading an unchanged object
@@ -108,6 +111,16 @@ class InMemoryObjectStore:
         with open(local_path, "rb") as f:
             self._files[key] = f.read()
 
+    def get_file(self, key: str, local_path: str) -> bool:
+        # Mirrors put_file's key scheme exactly (raw objects live in _files,
+        # never in the tar-blob namespace).
+        if key not in self._files:
+            return False
+        os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
+        with open(local_path, "wb") as f:
+            f.write(self._files[key])
+        return True
+
     def get_tree(self, key: str, local_dir: str, subdirs: Optional[List[str]] = None) -> None:
         if key not in self._blobs:
             os.makedirs(local_dir, exist_ok=True)
@@ -159,6 +172,16 @@ class GcsObjectStore:
 
     def put_file(self, key: str, local_path: str) -> None:
         self._raw_blob(key).upload_from_filename(local_path)
+
+    def get_file(self, key: str, local_path: str) -> bool:
+        # Mirrors put_file's key scheme exactly: raw blob at the key itself
+        # (no ``.tar.gz`` suffix).
+        blob = self._raw_blob(key)
+        if not blob.exists():
+            return False
+        os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
+        blob.download_to_filename(local_path)
+        return True
 
     def get_tree(self, key: str, local_dir: str, subdirs: Optional[List[str]] = None) -> None:
         blob = self._blob(key)
