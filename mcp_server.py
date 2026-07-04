@@ -91,6 +91,13 @@ from src.platform_engines.identity import Action, AuthError, authorize
 
 load_dotenv()
 
+# Single source of truth for tool dispatch: derive the name→tool map from the
+# same ``mcp_tools`` list that ``list_tools`` advertises from. Building it by
+# hand drifted (tools got listed but not dispatchable → "Unknown tool", e.g.
+# run_isolated_simulation / get_manifest / update_manifest); deriving it keeps
+# "advertised" and "callable" in lockstep. See test_mcp_tool_registry.
+TOOL_REGISTRY = {t.name: t for t in mcp_tools}
+
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts" / "architect"
 DEFAULT_ARCHITECT_PROMPT_VERSION = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v2") or "v2").strip().lower()
 if not DEFAULT_ARCHITECT_PROMPT_VERSION:
@@ -816,45 +823,11 @@ Ready to design! What would you like to create?"""
             except AuthError as e:
                 return [TextContent(type="text", text=f"❌ {e.message}")]
 
-        # Map tool names to implementations
-        tool_map = {
-            "write_spec": write_spec,
-            "read_spec": read_spec,
-            "load_yaml_spec_file": load_yaml_spec_file,
-            "write_file": write_file,
-            "read_file": read_file,
-            "apply_patch_tool": apply_patch_tool,
-            "edit_file_tool": edit_file_tool,
-            "list_files_tool": list_files_tool,
-            "linter_tool": linter_tool,
-            "simulation_tool": simulation_tool,
-            "waveform_tool": waveform_tool,
-            "cocotb_tool": cocotb_tool,
-            "sby_tool": sby_tool,
-            "start_synthesis": start_synthesis,
-            "retry_pd": retry_pd,
-            "get_synthesis_job": get_synthesis_job,
-            "wait_for_synthesis": wait_for_synthesis,
-            "get_synthesis_metrics": get_synthesis_metrics,
-            "read_stage_report": read_stage_report,
-            "get_route_drc_summary": get_route_drc_summary,
-            "get_cts_summary": get_cts_summary,
-            "get_congestion_summary": get_congestion_summary,
-            "compare_pd_runs": compare_pd_runs,
-            "get_stage_status": get_stage_status,
-            "search_logs_tool": search_logs_tool,
-            "schematic_tool": schematic_tool,
-            "save_metrics_tool": save_metrics_tool,
-            "generate_report_tool": generate_report_tool,
-            "run_dslx_interpreter": run_dslx_interpreter,
-            "compile_dslx_to_ir": compile_dslx_to_ir,
-            "experimental_compile_cpp_to_ir": experimental_compile_cpp_to_ir,
-            "optimize_xls_ir": optimize_xls_ir,
-            "codegen_xls": codegen_xls,
-            "benchmark_xls": benchmark_xls,
-            "run_xls_flow": run_xls_flow,
-        }
-        
+        # Dispatch from the single source of truth (TOOL_REGISTRY, derived from
+        # mcp_tools) so every advertised tool is callable — no hand-maintained
+        # map to drift out of sync.
+        tool_map = TOOL_REGISTRY
+
         if name not in tool_map:
             raise ValueError(f"Unknown tool: {name}")
         

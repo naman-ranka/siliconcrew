@@ -21,6 +21,7 @@ import { Toaster } from "./Toaster";
 import { Button } from "@/components/ui/button";
 import { CircuitBoard, MessagesSquare, MessageSquare, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { useWorkbenchSync } from "@/lib/useWorkbenchSync";
 
 /**
  * SiliconCrew Workbench — hardware-design-first, artifact-first.
@@ -31,20 +32,43 @@ import { useAuth } from "@/lib/auth";
  *   center — "viewing X" banner + the reused artifact viewers + the console
  *   right  — the agent rail (same tools, same workspace, same runs)
  */
+/**
+ * Whether to show first-run onboarding: a session is active, its workbench data
+ * has actually LOADED (manifest fetched, not mid-load), it is genuinely empty,
+ * nothing has been run, and we're not in the editor (so "Write a file" still
+ * reaches the Code tab). Gating on "loaded" avoids the flash where the empty
+ * "Let's build a chip" state renders for ~1s before data arrives on first mount.
+ */
+export function shouldShowOnboarding(s: {
+  currentSession: unknown;
+  manifest: { files: unknown[] } | null;
+  runs: unknown[];
+  manifestLoading: boolean;
+  runsLoading: boolean;
+  activeArtifactTab: string;
+}): boolean {
+  const loaded = s.manifest !== null && !s.manifestLoading && !s.runsLoading;
+  return (
+    !!s.currentSession &&
+    loaded &&
+    s.manifest!.files.length === 0 &&
+    s.runs.length === 0 &&
+    s.activeArtifactTab !== "code"
+  );
+}
+
 export function Workbench() {
-  const { currentSession, loadSessions, selectSession, loadWorkbench, artifactsVisible, manifest, runs, activeArtifactTab, workspaceError } = useStore();
+  const { currentSession, loadSessions, selectSession, loadWorkbench, artifactsVisible, manifest, runs, manifestLoading, runsLoading, activeArtifactTab, workspaceError } = useStore();
   const { status: authStatus } = useAuth();
   // The agent rail is collapsible so the waveform/report get full width when the
   // user is driving the pipeline themselves (re-review feedback).
   const [chatOpen, setChatOpen] = useState(true);
 
-  // First-run guidance: empty workspace, nothing run yet, and not actively in the
-  // editor (so "Write a file" still reaches the Code tab).
-  const showOnboarding =
-    !!currentSession &&
-    (manifest?.files.length ?? 0) === 0 &&
-    runs.length === 0 &&
-    activeArtifactTab !== "code";
+  // Keep the workbench fresh w.r.t. changes made by other clients (e.g. the
+  // user's AI app via MCP): revalidate on focus + poll while a run is active.
+  useWorkbenchSync();
+
+  const showOnboarding = shouldShowOnboarding({ currentSession, manifest, runs, manifestLoading, runsLoading, activeArtifactTab });
 
   // Ensure a session is active and the workbench data is loaded. A single
   // deterministic effect (reading fresh state via getState) avoids the races a
@@ -59,12 +83,14 @@ export function Workbench() {
         await loadSessions();
         list = useStore.getState().sessions;
       }
-      let cur = useStore.getState().currentSession;
-      if (!cur && list.length > 0) {
+      const cur = useStore.getState().currentSession;
+      if (cur) {
+        // Already selected (remount) → load its workbench once.
+        await loadWorkbench();
+      } else if (list.length > 0) {
+        // selectSession loads the workbench itself — F4: no second refresh.
         await selectSession(list[0]);
-        cur = useStore.getState().currentSession;
       }
-      if (cur) await loadWorkbench();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus]);

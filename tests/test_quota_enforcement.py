@@ -143,8 +143,9 @@ def test_no_quota_manager_is_unchanged(tmp_path, monkeypatch):
 def test_shared_store_serializes_two_app_instances():
     """Two QuotaManagers (two replicas) over ONE shared store enforce the cap."""
     shared = InMemoryQuotaStore()
-    inst_a = QuotaManager(store=shared)
-    inst_b = QuotaManager(store=shared)
+    policy = {"user": QuotaPolicy(synth_runs_per_day=5, compute_minutes_per_month=1000, max_concurrent_synth=1)}
+    inst_a = QuotaManager(store=shared, policies=policy)
+    inst_b = QuotaManager(store=shared, policies=policy)
     inst_a.reserve_synth_run("alice")  # replica A takes the only slot
     with pytest.raises(QuotaExceeded) as ei:
         inst_b.reserve_synth_run("alice")  # replica B is blocked by the shared store

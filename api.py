@@ -1006,6 +1006,12 @@ async def delete_thread(session_id: str, tid: str, identity: Identity = Depends(
     return {"status": "deleted", "thread_id": tid}
 
 
+# Keepalive cadence for the chat stream. LangGraph emits nothing during a long
+# tool call (e.g. a 60s+ ORFS synth wait); a `ping` well under the ~30s GCP load
+# balancer / proxy idle timeout keeps the connection from being dropped mid-run.
+_WS_HEARTBEAT_SEC = 20
+
+
 @app.websocket("/api/chat/{session_id:path}")
 async def chat_websocket(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for streaming chat."""
@@ -1040,8 +1046,11 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
     # the same workspace/<session_id> directory the session manager uses; in
     # hosted mode it stages the session's object-storage tarball into local
     # scratch and returns that POSIX path. The tools never know the difference.
+    # F7: hydrate the workspace once on WS connect (session open) so the first
+    # artifact read isn't a cold full download — and F6: off the event loop so a
+    # cold hydration doesn't block the accept / other connections.
     _ws_provider = get_workspace_provider()
-    workspace = _ws_provider.workspace_for(session_id)
+    workspace = await asyncio.to_thread(_ws_provider.workspace_for, session_id)
 
     # Bind this connection's task to its session/workspace/identity. Each
     # WebSocket runs in its own asyncio task, so this contextvar is task-local
@@ -1143,11 +1152,26 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 pending_tool_calls: Dict[str, Dict[str, Any]] = {}
 
                 try:
-                    async for event in agent_graph.astream(
+                    # Heartbeat-wrapped iteration: wait for each stream event with
+                    # a timeout; on timeout (a long silent tool call) send a `ping`
+                    # keepalive and keep waiting. Serialized on this one coroutine,
+                    # so there's no concurrent-send race with the frames below.
+                    _stream = agent_graph.astream(
                         {"messages": input_messages},
                         config,
-                        stream_mode="updates"
-                    ):
+                        stream_mode="updates",
+                    ).__aiter__()
+                    while True:
+                        try:
+                            event = await asyncio.wait_for(
+                                _stream.__anext__(), timeout=_WS_HEARTBEAT_SEC
+                            )
+                        except asyncio.TimeoutError:
+                            await websocket.send_json({"type": "ping"})
+                            continue
+                        except StopAsyncIteration:
+                            break
+
                         if "agent" in event:
                             msg = event["agent"]["messages"][-1]
 
@@ -1262,142 +1286,161 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 @app.get("/api/workspace/{session_id:path}/files")
 async def list_workspace_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[FileInfo]:
     """List all files in the workspace."""
-    workspace = _resolve_workspace(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
+    # F6: the whole body blocks (workspace hydration download+untar, os.listdir,
+    # os.stat, manifest read) — run it off the event loop so a slow hydration on
+    # one request can't stall every other in-flight request.
+    def work() -> List[FileInfo]:
+        workspace = _resolve_workspace(session_id)
+        if not os.path.exists(workspace):
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    # Manifest roles annotate the design files (rtl/tb/sdc/include).
-    try:
-        with session_scope(SessionContext(session_id=session_id, workspace=workspace)):
-            manifest = manifest_mod.read_manifest(workspace, session_id)
-        roles = {f.name: f.role for f in manifest.files}
-    except Exception:
-        roles = {}
+        # Manifest roles annotate the design files (rtl/tb/sdc/include).
+        try:
+            with session_scope(SessionContext(session_id=session_id, workspace=workspace)):
+                manifest = manifest_mod.read_manifest(workspace, session_id)
+            roles = {f.name: f.role for f in manifest.files}
+        except Exception:
+            roles = {}
 
-    files = []
-    for item in os.listdir(workspace):
-        item_path = os.path.join(workspace, item)
-        if os.path.isfile(item_path):
-            stat = os.stat(item_path)
+        files = []
+        for item in os.listdir(workspace):
+            item_path = os.path.join(workspace, item)
+            if os.path.isfile(item_path):
+                stat = os.stat(item_path)
 
-            # Determine file type
-            ext = os.path.splitext(item)[1].lower()
-            file_type = "unknown"
-            if ext in [".v", ".sv"]:
-                file_type = "verilog"
-            elif ext == ".yaml":
-                file_type = "spec" if "_spec" in item else "yaml"
-            elif ext == ".vcd":
-                file_type = "waveform"
-            elif ext == ".gds":
-                file_type = "layout"
-            elif ext == ".svg":
-                file_type = "schematic"
-            elif ext == ".md":
-                file_type = "report"
+                # Determine file type
+                ext = os.path.splitext(item)[1].lower()
+                file_type = "unknown"
+                if ext in [".v", ".sv"]:
+                    file_type = "verilog"
+                elif ext == ".yaml":
+                    file_type = "spec" if "_spec" in item else "yaml"
+                elif ext == ".vcd":
+                    file_type = "waveform"
+                elif ext == ".gds":
+                    file_type = "layout"
+                elif ext == ".svg":
+                    file_type = "schematic"
+                elif ext == ".md":
+                    file_type = "report"
 
-            files.append(FileInfo(
-                name=item,
-                path=item_path,
-                type=file_type,
-                size=stat.st_size,
-                modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                role=roles.get(item),
-            ))
+                files.append(FileInfo(
+                    name=item,
+                    path=item_path,
+                    type=file_type,
+                    size=stat.st_size,
+                    modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    role=roles.get(item),
+                ))
 
-    return sorted(files, key=lambda f: f.modified, reverse=True)
+        return sorted(files, key=lambda f: f.modified, reverse=True)
+
+    return await asyncio.to_thread(work)
 
 
 @app.get("/api/workspace/{session_id:path}/spec")
 async def get_spec(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> SpecResponse:
     """Get the latest spec file."""
-    workspace = _resolve_workspace(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
+    def work() -> SpecResponse:  # F6: hydration + listdir + file read off-thread
+        workspace = _resolve_workspace(session_id)
+        if not os.path.exists(workspace):
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    spec_files = sorted(
-        [f for f in os.listdir(workspace) if f.endswith("_spec.yaml")],
-        key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
-        reverse=True
-    )
+        spec_files = sorted(
+            [f for f in os.listdir(workspace) if f.endswith("_spec.yaml")],
+            key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
+            reverse=True
+        )
 
-    if not spec_files:
-        raise HTTPException(status_code=404, detail="No spec files found")
+        if not spec_files:
+            raise HTTPException(status_code=404, detail="No spec files found")
 
-    spec_file = spec_files[0]
-    spec_path = os.path.join(workspace, spec_file)
+        spec_file = spec_files[0]
+        spec_path = os.path.join(workspace, spec_file)
 
-    with open(spec_path, "r") as f:
-        content = f.read()
+        with open(spec_path, "r") as f:
+            content = f.read()
 
-    try:
-        parsed = yaml.safe_load(content)
-    except:
-        parsed = None
+        try:
+            parsed = yaml.safe_load(content)
+        except:
+            parsed = None
 
-    return SpecResponse(
-        filename=spec_file,
-        content=content,
-        parsed=parsed
-    )
+        return SpecResponse(
+            filename=spec_file,
+            content=content,
+            parsed=parsed
+        )
+
+    return await asyncio.to_thread(work)
 
 
 @app.get("/api/workspace/{session_id:path}/code")
 async def get_code_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[CodeFile]:
     """Get all Verilog/SystemVerilog files."""
-    workspace = _resolve_workspace(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
+    def work() -> List[CodeFile]:  # F6: hydration + listdir + file reads off-thread
+        workspace = _resolve_workspace(session_id)
+        if not os.path.exists(workspace):
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    files = sorted([
-        f for f in os.listdir(workspace)
-        if f.endswith(('.v', '.sv')) and os.path.isfile(os.path.join(workspace, f))
-    ])
+        files = sorted([
+            f for f in os.listdir(workspace)
+            if f.endswith(('.v', '.sv')) and os.path.isfile(os.path.join(workspace, f))
+        ])
 
-    result = []
-    for filename in files:
-        with open(os.path.join(workspace, filename), "r", errors='ignore') as f:
-            content = f.read()
+        result = []
+        for filename in files:
+            with open(os.path.join(workspace, filename), "r", errors='ignore') as f:
+                content = f.read()
 
-        lang = "systemverilog" if filename.endswith(".sv") else "verilog"
-        result.append(CodeFile(filename=filename, content=content, language=lang))
+            lang = "systemverilog" if filename.endswith(".sv") else "verilog"
+            result.append(CodeFile(filename=filename, content=content, language=lang))
 
-    return result
+        return result
+
+    return await asyncio.to_thread(work)
 
 
 @app.get("/api/workspace/{session_id:path}/code/{filename:path}")
 async def get_code_file(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)) -> CodeFile:
     """Get a specific code file."""
-    workspace = _resolve_workspace(session_id)
-    file_path = os.path.join(workspace, filename)
+    def work() -> CodeFile:  # F6: hydration + file read off-thread
+        workspace = _resolve_workspace(session_id)
+        file_path = os.path.join(workspace, filename)
 
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found")
 
-    if not is_within(workspace, file_path):
-        raise HTTPException(status_code=403, detail="Access denied")
+        if not is_within(workspace, file_path):
+            raise HTTPException(status_code=403, detail="Access denied")
 
-    with open(file_path, "r", errors='ignore') as f:
-        content = f.read()
+        with open(file_path, "r", errors='ignore') as f:
+            content = f.read()
 
-    lang = "systemverilog" if filename.endswith(".sv") else "verilog"
-    return CodeFile(filename=filename, content=content, language=lang)
+        lang = "systemverilog" if filename.endswith(".sv") else "verilog"
+        return CodeFile(filename=filename, content=content, language=lang)
+
+    return await asyncio.to_thread(work)
 
 
 @app.get("/api/workspace/{session_id:path}/waveforms")
 async def list_waveform_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
     """List VCD files in the workspace."""
-    workspace = _resolve_workspace(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
+    def work() -> List[str]:  # F6: hydration + listdir off-thread
+        workspace = _resolve_workspace(session_id)
+        if not os.path.exists(workspace):
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    return [f for f in os.listdir(workspace) if f.endswith(".vcd")]
+        return [f for f in os.listdir(workspace) if f.endswith(".vcd")]
+
+    return await asyncio.to_thread(work)
 
 
 @app.get("/api/workspace/{session_id:path}/waveform/{filename:path}")
 async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)):
     """Get parsed VCD waveform data."""
-    workspace = _resolve_workspace(session_id)
+    # F6: hydration + the VCD parse are both blocking — run them off the loop.
+    workspace = await asyncio.to_thread(_resolve_workspace, session_id)
     vcd_path = os.path.join(workspace, filename)
 
     if not os.path.exists(vcd_path):
@@ -1406,6 +1449,11 @@ async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] 
     if not is_within(workspace, vcd_path):
         raise HTTPException(status_code=403, detail="Access denied")
 
+    return await asyncio.to_thread(_parse_vcd_file, vcd_path, filename)
+
+
+def _parse_vcd_file(vcd_path: str, filename: str) -> dict:
+    """Parse a VCD into the viewer payload (blocking; run via asyncio.to_thread)."""
     try:
         from vcdvcd import VCDVCD
 
@@ -1500,73 +1548,88 @@ async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] 
 @app.get("/api/workspace/{session_id:path}/synthesis-runs", response_model=List[SynthesisRunResponse])
 async def get_synthesis_runs(session_id: str, _acl: Optional[str] = Depends(verify_session_access)):
     """List synthesis runs for a workspace."""
-    workspace = _resolve_workspace(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
+    def work():  # F6: hydration + index read off-thread
+        workspace = _resolve_workspace(session_id)
+        if not os.path.exists(workspace):
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    return [SynthesisRunResponse(**item) for item in list_synthesis_runs(workspace)]
+        return [SynthesisRunResponse(**item) for item in list_synthesis_runs(workspace)]
+
+    return await asyncio.to_thread(work)
 
 
 @app.get("/api/workspace/{session_id:path}/report", response_model=ReportResponse)
 async def get_report(session_id: str, run_id: Optional[str] = Query(default=None), _acl: Optional[str] = Depends(verify_session_access)) -> ReportResponse:
     """Get the latest available report or a report for a specific synthesis run."""
-    workspace = _resolve_workspace(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
+    def work() -> ReportResponse:  # F6: hydration + report read off-thread
+        workspace = _resolve_workspace(session_id)
+        if not os.path.exists(workspace):
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    report_path, resolved_run_id = resolve_report_path(workspace, run_id=run_id)
-    if not report_path:
-        raise HTTPException(status_code=404, detail="No report found")
+        report_path, resolved_run_id = resolve_report_path(workspace, run_id=run_id)
+        if not report_path:
+            raise HTTPException(status_code=404, detail="No report found")
 
-    with open(report_path, "r", encoding="utf-8") as f:
-        content = f.read()
+        with open(report_path, "r", encoding="utf-8") as f:
+            content = f.read()
 
-    return ReportResponse(filename=os.path.basename(report_path), content=content, run_id=resolved_run_id)
+        return ReportResponse(filename=os.path.basename(report_path), content=content, run_id=resolved_run_id)
+
+    return await asyncio.to_thread(work)
 
 
 @app.post("/api/workspace/{session_id:path}/report/generate", response_model=ReportResponse)
 async def generate_report(session_id: str, run_id: Optional[str] = Query(default=None), _acl: Optional[str] = Depends(verify_session_access)) -> ReportResponse:
     """Generate a design report for the selected synthesis run or latest available run."""
-    workspace = _resolve_workspace(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
+    # F6: report generation (+ the hosted sync it triggers) is blocking — off the loop.
+    def work() -> ReportResponse:
+        workspace = _resolve_workspace(session_id)
+        if not os.path.exists(workspace):
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    try:
-        report_path = save_design_report(workspace, run_id=run_id)
-        with open(report_path, "r", encoding="utf-8") as f:
-            content = f.read()
+        try:
+            report_path = save_design_report(workspace, run_id=run_id)
+            with open(report_path, "r", encoding="utf-8") as f:
+                content = f.read()
 
-        # Persist the freshly-written report back to object storage so a later
-        # read on a different/cold instance can see it (hosted only; self-host
-        # writes are already in-place). Mirrors the action router's sync.
-        if get_settings().hosted:
-            get_workspace_provider().sync(session_id)
+            # Persist the freshly-written report back to object storage so a later
+            # read on a different/cold instance can see it (hosted only; self-host
+            # writes are already in-place). Mirrors the action router's sync.
+            if get_settings().hosted:
+                get_workspace_provider().sync(session_id)
 
-        resolved_run_id = None
-        report_dir = os.path.dirname(report_path)
-        if os.path.basename(report_path) == "design_report.md" and os.path.realpath(report_dir) != os.path.realpath(workspace):
-            resolved_run_id = os.path.basename(report_dir)
+            resolved_run_id = None
+            report_dir = os.path.dirname(report_path)
+            if os.path.basename(report_path) == "design_report.md" and os.path.realpath(report_dir) != os.path.realpath(workspace):
+                resolved_run_id = os.path.basename(report_dir)
 
-        return ReportResponse(filename=os.path.basename(report_path), content=content, run_id=resolved_run_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            return ReportResponse(filename=os.path.basename(report_path), content=content, run_id=resolved_run_id)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return await asyncio.to_thread(work)
 
 
 @app.get("/api/workspace/{session_id:path}/layouts")
 async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
     """List GDS files in the workspace."""
-    workspace = _resolve_workspace(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
+    def work() -> List[str]:  # F6: hydration + os.walk off-thread
+        workspace = _resolve_workspace(session_id)
+        if not os.path.exists(workspace):
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    gds_files = []
-    for root, dirs, files in os.walk(workspace):
-        for f in files:
-            if f.endswith(".gds"):
-                rel_path = os.path.relpath(os.path.join(root, f), workspace)
-                gds_files.append(rel_path)
+        gds_files = []
+        for root, dirs, files in os.walk(workspace):
+            for f in files:
+                if f.endswith(".gds"):
+                    rel_path = os.path.relpath(os.path.join(root, f), workspace)
+                    gds_files.append(rel_path)
 
-    return gds_files
+        return gds_files
+
+    return await asyncio.to_thread(work)
 
 
 @app.get("/api/workspace/{session_id:path}/layout/{filename:path}")
@@ -1578,76 +1641,86 @@ async def get_layout_svg(session_id: str, filename: str, _acl: Optional[str] = D
     large designs is a Phase-2 concern, so this degrades to a structured error
     the viewer shows gracefully rather than failing the request.
     """
-    workspace = _resolve_workspace(session_id)
-    gds_path = os.path.join(workspace, filename)
-    if not is_within(workspace, gds_path):
-        raise HTTPException(status_code=403, detail="Access denied")
-    if not os.path.exists(gds_path):
-        raise HTTPException(status_code=404, detail="Layout not found")
+    # F6: hydration + the (potentially heavy) gdstk render run off the loop.
+    def work():
+        workspace = _resolve_workspace(session_id)
+        gds_path = os.path.join(workspace, filename)
+        if not is_within(workspace, gds_path):
+            raise HTTPException(status_code=403, detail="Access denied")
+        if not os.path.exists(gds_path):
+            raise HTTPException(status_code=404, detail="Layout not found")
 
-    # 1) pre-rendered SVG sidecar
-    sidecar = gds_path + ".svg"
-    if os.path.exists(sidecar):
-        with open(sidecar, "r", encoding="utf-8", errors="ignore") as f:
-            return {"svg": f.read(), "cell_name": os.path.basename(filename), "cached": True}
+        # 1) pre-rendered SVG sidecar
+        sidecar = gds_path + ".svg"
+        if os.path.exists(sidecar):
+            with open(sidecar, "r", encoding="utf-8", errors="ignore") as f:
+                return {"svg": f.read(), "cell_name": os.path.basename(filename), "cached": True}
 
-    # 2) render with gdstk if available
-    try:
-        import gdstk  # type: ignore
-    except Exception:
-        return {"error": "unsupported", "message": "Layout rendering needs gdstk (Phase 2). No pre-rendered SVG found.", "cell_name": ""}
+        # 2) render with gdstk if available
+        try:
+            import gdstk  # type: ignore
+        except Exception:
+            return {"error": "unsupported", "message": "Layout rendering needs gdstk (Phase 2). No pre-rendered SVG found.", "cell_name": ""}
 
-    import tempfile
+        import tempfile
 
-    try:
-        lib = gdstk.read_gds(gds_path)
-        top = lib.top_level()
-        if not top:
-            return {"error": "render_failed", "message": "No top cell in GDS.", "cell_name": ""}
-        # Render the largest top cell (the real design, not an empty wrapper).
-        cell = max(top, key=lambda c: len(c.get_polygons()))
-        polygon_count = len(cell.get_polygons())
-        if polygon_count > 2_000_000:
-            return {"error": "too_large", "message": "Layout too large to render inline.", "cell_name": cell.name}
-        # gdstk's Cell only exposes write_svg(outfile, ...) (no in-memory svg()).
-        # Render to a temp file, read it back, and return the markup inline.
-        with tempfile.TemporaryDirectory() as tmp:
-            out = os.path.join(tmp, "layout.svg")
-            cell.write_svg(out, scaling=10.0, background="#0b0e14")
-            with open(out, "r", encoding="utf-8", errors="ignore") as f:
-                svg = f.read()
-        return {"svg": svg, "cell_name": cell.name, "polygon_count": polygon_count}
-    except Exception as e:
-        return {"error": "render_failed", "message": str(e), "cell_name": ""}
+        try:
+            lib = gdstk.read_gds(gds_path)
+            top = lib.top_level()
+            if not top:
+                return {"error": "render_failed", "message": "No top cell in GDS.", "cell_name": ""}
+            # Render the largest top cell (the real design, not an empty wrapper).
+            cell = max(top, key=lambda c: len(c.get_polygons()))
+            polygon_count = len(cell.get_polygons())
+            if polygon_count > 2_000_000:
+                return {"error": "too_large", "message": "Layout too large to render inline.", "cell_name": cell.name}
+            # gdstk's Cell only exposes write_svg(outfile, ...) (no in-memory svg()).
+            # Render to a temp file, read it back, and return the markup inline.
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "layout.svg")
+                cell.write_svg(out, scaling=10.0, background="#0b0e14")
+                with open(out, "r", encoding="utf-8", errors="ignore") as f:
+                    svg = f.read()
+            return {"svg": svg, "cell_name": cell.name, "polygon_count": polygon_count}
+        except Exception as e:
+            return {"error": "render_failed", "message": str(e), "cell_name": ""}
+
+    return await asyncio.to_thread(work)
 
 
 @app.get("/api/workspace/{session_id:path}/schematics")
 async def list_schematic_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
     """List SVG schematic files in the workspace."""
-    workspace = _resolve_workspace(session_id)
-    if not os.path.exists(workspace):
-        raise HTTPException(status_code=404, detail="Session not found")
+    def work() -> List[str]:  # F6: hydration + listdir off-thread
+        workspace = _resolve_workspace(session_id)
+        if not os.path.exists(workspace):
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    return [f for f in os.listdir(workspace) if f.endswith(".svg") and not f.endswith(".gds.svg")]
+        return [f for f in os.listdir(workspace) if f.endswith(".svg") and not f.endswith(".gds.svg")]
+
+    return await asyncio.to_thread(work)
 
 
 @app.get("/api/workspace/{session_id:path}/file/{filename:path}")
 async def get_file_content(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)):
     """Get raw file content."""
-    workspace = _resolve_workspace(session_id)
-    file_path = os.path.join(workspace, filename)
+    def work():  # F6: hydration + file read off-thread
+        workspace = _resolve_workspace(session_id)
+        file_path = os.path.join(workspace, filename)
 
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found")
 
-    # Security check - ensure file is within workspace
-    if not is_within(workspace, file_path):
-        raise HTTPException(status_code=403, detail="Access denied")
+        # Security check - ensure file is within workspace
+        if not is_within(workspace, file_path):
+            raise HTTPException(status_code=403, detail="Access denied")
 
-    with open(file_path, "r", errors='ignore') as f:
-        content = f.read()
+        with open(file_path, "r", errors='ignore') as f:
+            content = f.read()
 
-    return {"filename": filename, "content": content}
+        return {"filename": filename, "content": content}
+
+    return await asyncio.to_thread(work)
 
 
 # =============================================================================

@@ -206,6 +206,110 @@ def _parse_lint_output(stderr: str):
     return warnings, errors, by_file
 
 
+def _classify_file(name: str) -> str:
+    """FileInfo.type classification — mirrors api.py's list_workspace_files."""
+    ext = os.path.splitext(name)[1].lower()
+    if ext in (".v", ".sv"):
+        return "verilog"
+    if ext == ".yaml":
+        return "spec" if "_spec" in name else "yaml"
+    if ext == ".vcd":
+        return "waveform"
+    if ext == ".gds":
+        return "layout"
+    if ext == ".svg":
+        return "schematic"
+    if ext == ".md":
+        return "report"
+    return "unknown"
+
+
+def _snapshot_files(workspace: str, roles: Dict[str, Optional[str]]) -> List[Dict[str, Any]]:
+    """FileInfo[] for the workbench snapshot (same shape as GET /files)."""
+    import datetime as _dt
+
+    out: List[Dict[str, Any]] = []
+    for item in os.listdir(workspace):
+        item_path = os.path.join(workspace, item)
+        if not os.path.isfile(item_path):
+            continue
+        st = os.stat(item_path)
+        out.append({
+            "name": item,
+            "path": item_path,
+            "type": _classify_file(item),
+            "size": st.st_size,
+            "modified": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(),
+            "role": roles.get(item),
+        })
+    out.sort(key=lambda f: f["modified"], reverse=True)
+    return out
+
+
+def _snapshot_spec(workspace: str) -> Optional[Dict[str, Any]]:
+    """Latest *_spec.yaml as {filename, content, parsed} — same as GET /spec."""
+    import yaml as _yaml
+
+    spec_files = sorted(
+        [f for f in os.listdir(workspace) if f.endswith("_spec.yaml")],
+        key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
+        reverse=True,
+    )
+    if not spec_files:
+        return None
+    path = os.path.join(workspace, spec_files[0])
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+    try:
+        parsed = _yaml.safe_load(content)
+    except Exception:
+        parsed = None
+    return {"filename": spec_files[0], "content": content, "parsed": parsed}
+
+
+def _snapshot_code(workspace: str) -> List[Dict[str, Any]]:
+    """All .v/.sv files as CodeFile[] — same shape as GET /code."""
+    files = sorted(
+        f for f in os.listdir(workspace)
+        if f.endswith((".v", ".sv")) and os.path.isfile(os.path.join(workspace, f))
+    )
+    out: List[Dict[str, Any]] = []
+    for name in files:
+        with open(os.path.join(workspace, name), "r", errors="ignore") as f:
+            out.append({
+                "filename": name,
+                "content": f.read(),
+                "language": "systemverilog" if name.endswith(".sv") else "verilog",
+            })
+    return out
+
+
+def _snapshot_report(workspace: str) -> Optional[Dict[str, Any]]:
+    """Latest available report as {filename, content, run_id} — same as GET /report."""
+    run_dir = get_run_dir(workspace, None)
+    report_path = None
+    run_id = None
+    if run_dir:
+        candidate = os.path.join(run_dir, "design_report.md")
+        if os.path.exists(candidate):
+            report_path, run_id = candidate, os.path.basename(run_dir)
+    if not report_path:
+        loose = sorted(
+            [f for f in os.listdir(workspace) if f.endswith("_report.md")],
+            key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
+            reverse=True,
+        )
+        if loose:
+            report_path = os.path.join(workspace, loose[0])
+    if not report_path:
+        return None
+    with open(report_path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+    # Field name must match the frontend ReportData shape (run_id), same as the
+    # /report endpoint's ReportResponse — NOT runId.
+    return {"filename": os.path.basename(report_path), "content": content, "run_id": run_id}
+
+
 def build_actions_router(
     resolve_workspace: WorkspaceResolver,
     *,
@@ -241,19 +345,29 @@ def build_actions_router(
 
     router = APIRouter(prefix="/api/workspace/{session_id:path}", tags=["actions"])
 
-    def require_workspace(session_id: str) -> str:
-        workspace = resolve_workspace(session_id)
+    async def require_workspace(session_id: str) -> str:
+        # F6: workspace_for() is a blocking hydration (GCS download+untar in
+        # hosted) — resolve it off the event loop so one slow session's read
+        # can't stall every other in-flight request. (No-op cost in self-host.)
+        workspace = await asyncio.to_thread(resolve_workspace, session_id)
         if not workspace or not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
         return workspace
 
-    async def run_scoped(session_id: str, workspace: str, fn, *args, _uid=None, _id=None, **kwargs):
+    async def run_scoped(session_id: str, workspace: str, fn, *args, _uid=None, _id=None, mutates: bool = False, **kwargs):
         """Run a sync tool call bound to this request's SessionContext, off-thread.
 
         Binds the tenant (``_uid``) and tier into the task-local SessionContext so
         tenancy + synth quota enforcement see them, copies the contextvar into the
         worker thread (so tools reading ``get_workspace_path()`` resolve this
-        session), and persists the workspace back (cloud) on exit.
+        session), and — **only after a mutating action** (``mutates=True``) —
+        persists the workspace back to object storage (cloud) on exit.
+
+        Reads pass ``mutates=False`` (the default) and therefore never upload.
+        This is the F1 fix: a read-only GET re-tarring+uploading the whole
+        workspace made post-synth "list my runs" take tens of seconds, and a
+        stale read's sync could clobber a concurrent write's object. Self-host
+        passes ``sync_workspace=None``, so the ``finally`` is a no-op regardless.
         """
         ctx = SessionContext(
             session_id=session_id,
@@ -269,9 +383,11 @@ def build_actions_router(
         try:
             return await asyncio.to_thread(runner)
         finally:
-            if sync_workspace is not None:
+            # F6: the sync (tar + GCS upload) is blocking — run it off the event
+            # loop so it can't stall other in-flight requests.
+            if mutates and sync_workspace is not None:
                 try:
-                    sync_workspace(session_id)
+                    await asyncio.to_thread(sync_workspace, session_id)
                 except Exception:
                     pass
 
@@ -280,22 +396,22 @@ def build_actions_router(
     @router.get("/manifest")
     async def get_manifest(session_id: str, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
         manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id, _uid=uid, _id=identity)
         return _ok({"manifest": manifest.model_dump()})
 
     @router.put("/manifest")
     async def put_manifest(session_id: str, body: ManifestUpdate, identity=Depends(require_signed_in)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
-        manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id, _uid=uid, _id=identity)
+        manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id, _uid=uid, _id=identity, mutates=True)
         return _ok({"manifest": manifest.model_dump()})
 
     @router.post("/files")
     async def upload_files(session_id: str, files: List[UploadFile] = File(...), identity=Depends(require_signed_in)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
         os.makedirs(workspace, exist_ok=True)
 
         saved: List[str] = []
@@ -311,7 +427,9 @@ def build_actions_router(
                 f.write(content)
             saved.append(name)
 
-        manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id, _uid=uid, _id=identity)
+        # Files were written to the workspace above (outside run_scoped), so this
+        # call must persist them → mutates=True even though read_manifest reads.
+        manifest = await run_scoped(session_id, workspace, manifest_mod.read_manifest, workspace, session_id, _uid=uid, _id=identity, mutates=True)
         return _ok({"uploaded": saved, "manifest": manifest.model_dump()})
 
     @router.put("/code/{filename:path}")
@@ -320,7 +438,7 @@ def build_actions_router(
         refreshed manifest. Routes through ``file_ops.write_file`` — the SAME
         function the agent's write_file tool uses (one write path)."""
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             try:
@@ -329,7 +447,7 @@ def build_actions_router(
                 return {"error": str(exc)}
             return {"manifest": manifest_mod.read_manifest(workspace, session_id)}
 
-        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error"):
             _err("invalid_path", out["error"], status=400)
         return _ok({"saved": os.path.basename(filename), "manifest": out["manifest"].model_dump()})
@@ -339,7 +457,7 @@ def build_actions_router(
     @router.post("/lint")
     async def lint_action(session_id: str, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
@@ -369,7 +487,7 @@ def build_actions_router(
     @router.post("/simulate")
     async def simulate_action(session_id: str, body: SimulateRequest, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
@@ -389,7 +507,7 @@ def build_actions_router(
             )
             return {"simRun": sim_run}
 
-        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error") == "no_sim_top":
             _err("no_sim_top", "No simTop in the manifest and none provided.", status=400)
         if out.get("error") == "no_files":
@@ -401,7 +519,7 @@ def build_actions_router(
     @router.post("/synthesize")
     async def synthesize_action(session_id: str, body: SynthesizeRequest, identity=Depends(require_signed_in)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
@@ -427,7 +545,7 @@ def build_actions_router(
             )
             return {"result": result}
 
-        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error") == "no_synth_top":
             _err("no_synth_top", "No synthTop in the manifest and none provided.", status=400)
         if out.get("error") == "no_files":
@@ -440,12 +558,42 @@ def build_actions_router(
                  details=result.get("error"), status=429)
         return _ok({"jobId": result.get("job_id"), "runId": result.get("run_id"), "raw": result})
 
+    # ---- Workbench snapshot (F4: one hydration, one response) ---------------
+
+    @router.get("/workbench")
+    async def workbench_snapshot(session_id: str, identity=Depends(get_identity)):
+        """Hydrate the workspace ONCE and return everything the workbench needs on
+        open — manifest + runs + files + spec + code + report — in a single
+        response, replacing the ~18-call fan-out (each of which, in hosted, was a
+        separate GCS download). A read: mutates=False, so it never uploads."""
+        uid = require_owned(session_id, identity)
+        workspace = await require_workspace(session_id)
+
+        def work():
+            manifest = manifest_mod.read_manifest(workspace, session_id)
+            roles = {f.name: f.role for f in manifest.files}
+            runs: List[Dict[str, Any]] = list(list_sim_runs(workspace))
+            runs.extend(_synth_to_run(workspace, item) for item in list_synthesis_runs(workspace))
+            runs.sort(key=lambda r: r.get("createdAt") or "", reverse=True)
+            return {
+                "manifest": manifest.model_dump(),
+                "runs": runs,
+                "files": _snapshot_files(workspace, roles),
+                "spec": _snapshot_spec(workspace),
+                "code": _snapshot_code(workspace),
+                "report": _snapshot_report(workspace),
+                "synthesisRuns": list(list_synthesis_runs(workspace)),
+            }
+
+        snap = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        return _ok(snap)
+
     # ---- Unified runs -------------------------------------------------------
 
     @router.get("/runs")
     async def list_runs(session_id: str, kind: str = Query(default="all"), identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             runs: List[Dict[str, Any]] = []
@@ -462,7 +610,7 @@ def build_actions_router(
     @router.get("/runs/compare")
     async def compare_runs(session_id: str, a: str = Query(...), b: str = Query(...), identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             return (
@@ -494,7 +642,7 @@ def build_actions_router(
     @router.get("/runs/{run_id}")
     async def get_run(session_id: str, run_id: str, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             if run_id.startswith("sim_"):
@@ -545,14 +693,14 @@ def build_actions_router(
     @router.get("/jobs/{job_id}")
     async def get_job(session_id: str, job_id: str, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
         status = await run_scoped(session_id, workspace, get_synthesis_job_status, job_id, workspace, _uid=uid, _id=identity)
         return _ok({"job": status})
 
     @router.post("/runs/{run_id}/retry")
     async def retry_run(session_id: str, run_id: str, body: RetryRequest, identity=Depends(require_signed_in)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
         overrides_json = json.dumps(body.overrides) if body.overrides else ""
 
         def work():
@@ -564,7 +712,7 @@ def build_actions_router(
                 orfs_overrides_json=overrides_json,
             )
 
-        result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if isinstance(result, dict) and result.get("status") == "rejected":
             _err((result.get("error") or {}).get("code", "quota_exceeded"),
                  (result.get("error") or {}).get("message", "Quota exceeded."),
@@ -574,7 +722,7 @@ def build_actions_router(
     @router.post("/runs/{run_id}/pin")
     async def pin_run(session_id: str, run_id: str, body: PinRequest, identity=Depends(require_signed_in)):
         uid = require_owned(session_id, identity)
-        workspace = require_workspace(session_id)
+        workspace = await require_workspace(session_id)
 
         def work():
             if run_id.startswith("sim_"):
@@ -595,7 +743,7 @@ def build_actions_router(
                 json.dump(meta, f, indent=2)
             return {"run_id": run_id, "pinned": body.pinned}
 
-        result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if not result:
             _err("not_found", f"Run {run_id} not found.", status=404)
         return _ok({"runId": run_id, "pinned": body.pinned})

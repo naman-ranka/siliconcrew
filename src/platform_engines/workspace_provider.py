@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 import tarfile
+import threading
 import uuid
 from typing import Callable, List, Optional, Protocol, Tuple
 
@@ -30,6 +32,21 @@ class ObjectStore(Protocol):
     def exists(self, key: str) -> bool: ...
     def put_tree(self, key: str, local_dir: str) -> None: ...
     def get_tree(self, key: str, local_dir: str, subdirs: Optional[List[str]] = None) -> None: ...
+    # A version token for the stored object (GCS generation), or None if absent.
+    # Used by the workspace provider to skip re-downloading an unchanged object
+    # (F3). Optional — a store that doesn't implement it disables the cache.
+    def generation(self, key: str) -> Optional[str]: ...
+
+
+def _store_generation(store, key: str) -> Optional[str]:
+    """The object's version token, or None (absent, or the store lacks support)."""
+    fn = getattr(store, "generation", None)
+    if fn is None:
+        return None
+    try:
+        return fn(key)
+    except Exception:
+        return None
 
 
 def _tar_dir_to_bytes(local_dir: str) -> bytes:
@@ -69,18 +86,24 @@ class InMemoryObjectStore:
 
     def __init__(self) -> None:
         self._blobs: dict[str, bytes] = {}
+        self._gen: dict[str, int] = {}
 
     def exists(self, key: str) -> bool:
         return key in self._blobs
 
     def put_tree(self, key: str, local_dir: str) -> None:
         self._blobs[key] = _tar_dir_to_bytes(local_dir)
+        self._gen[key] = self._gen.get(key, 0) + 1  # bump the version on each write
 
     def get_tree(self, key: str, local_dir: str, subdirs: Optional[List[str]] = None) -> None:
         if key not in self._blobs:
             os.makedirs(local_dir, exist_ok=True)
             return
         _untar_bytes_to_dir(self._blobs[key], local_dir, subdirs)
+
+    def generation(self, key: str) -> Optional[str]:
+        g = self._gen.get(key)
+        return str(g) if g is not None else None
 
 
 class GcsObjectStore:
@@ -121,6 +144,13 @@ class GcsObjectStore:
             return
         _untar_bytes_to_dir(blob.download_as_bytes(), local_dir, subdirs)
 
+    def generation(self, key: str) -> Optional[str]:
+        path = f"{self._prefix}/{key}.tar.gz" if self._prefix else f"{key}.tar.gz"
+        # get_blob does a metadata GET (cheap) and returns None if the object is
+        # absent; .generation is the monotonic version token GCS assigns per write.
+        blob = self._bucket().get_blob(path)
+        return str(blob.generation) if blob is not None else None
+
 
 # ---------------------------------------------------------------------------
 # Cloud workspace provider — stage in / hand POSIX path / sync back.
@@ -134,12 +164,31 @@ class CloudWorkspaceProvider:
     scratch directory and returns that POSIX path — exactly what the tools expect.
     ``sync`` persists local changes back. The request lifecycle calls
     ``workspace_for`` on entry and ``sync`` on exit (see ``api.py`` integration).
+
+    Concurrency (F2 + F3) — mandatory once hydration runs off the event loop
+    (F6), because every session open now hydrates the SAME session twice **in
+    parallel**: the WS-connect (agent) path and the F4 snapshot read. Without
+    care both would ``tar.extractall()`` into the live scratch dir at once → torn
+    files / half-extracted trees / intermittent "not found" right after opening.
+
+      * **Per-session lock** serializes ``workspace_for``/``sync`` for a session
+        (different sessions never block each other).
+      * **Temp-dir + atomic swap**: a hydration untars into a private temp dir and
+        is swapped into place only when complete — an in-progress extract is
+        never visible to a reader.
+      * **Generation-skip (F3)**: if the materialized scratch already reflects the
+        object's current generation, skip the download+untar entirely. So the
+        second of the two open-time hydrations is a cache hit (no second untar),
+        the F7 prewarm's scratch is actually reused, and the swap window never
+        even opens on the common unchanged-generation open.
     """
 
     def __init__(self, store: ObjectStore, scratch_dir: str, prefix: str = "workspaces"):
         self._store = store
         self._scratch_dir = scratch_dir
         self._prefix = prefix
+        self._locks: dict[str, "threading.Lock"] = {}
+        self._locks_guard = threading.Lock()
 
     def _key(self, session_id: str) -> str:
         return f"{self._prefix}/{session_id}"
@@ -147,17 +196,100 @@ class CloudWorkspaceProvider:
     def _scratch(self, session_id: str) -> str:
         return os.path.join(self._scratch_dir, session_id)
 
+    def _lock_for(self, session_id: str) -> "threading.Lock":
+        with self._locks_guard:
+            lk = self._locks.get(session_id)
+            if lk is None:
+                lk = threading.Lock()
+                self._locks[session_id] = lk
+            return lk
+
+    def _marker_path(self, session_id: str) -> str:
+        # A SIBLING of the scratch dir, never inside it — so it is neither tarred
+        # into the upload (sync) nor shown in the workspace file listing.
+        return self._scratch(session_id) + ".sc_generation"
+
+    def _read_marker(self, session_id: str) -> Optional[str]:
+        try:
+            with open(self._marker_path(session_id), "r", encoding="utf-8") as f:
+                return f.read().strip() or None
+        except OSError:
+            return None
+
+    def _write_marker(self, session_id: str, generation: str) -> None:
+        try:
+            with open(self._marker_path(session_id), "w", encoding="utf-8") as f:
+                f.write(generation)
+        except OSError:
+            pass  # marker is a best-effort cache; a miss only costs a re-download
+
     def workspace_for(self, session_id: str) -> str:
         scratch = self._scratch(session_id)
-        os.makedirs(scratch, exist_ok=True)
         key = self._key(session_id)
-        if self._store.exists(key):
-            self._store.get_tree(key, scratch)
-        return scratch
+        with self._lock_for(session_id):
+            generation = _store_generation(self._store, key)
+
+            if generation is None:
+                # No stored object yet (new session) — just ensure the dir exists.
+                os.makedirs(scratch, exist_ok=True)
+                return scratch
+
+            # F3: the scratch already reflects the current object → reuse it.
+            if os.path.isdir(scratch) and self._read_marker(session_id) == generation:
+                return scratch
+
+            # F2: hydrate into a private temp dir, then swap it in atomically so a
+            # concurrent reader never sees a half-extracted tree. The marker is
+            # written only after a successful swap (a crash mid-hydrate leaves a
+            # stale marker → a safe re-download, never a torn tree).
+            tmp = f"{scratch}.tmp.{uuid.uuid4().hex}"
+            try:
+                self._store.get_tree(key, tmp)
+                self._atomic_swap(tmp, scratch)
+                self._write_marker(session_id, generation)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+            return scratch
+
+    def _atomic_swap(self, tmp: str, scratch: str) -> None:
+        """Replace ``scratch`` with the freshly-hydrated ``tmp`` tree.
+
+        Directory ``os.replace`` can't overwrite a non-empty dir, so move the old
+        tree aside first. The gap between the two renames is two syscalls (vs the
+        multi-second extract, which happened entirely in ``tmp``), and with F3 the
+        common unchanged-generation open takes the cache-hit path above and never
+        reaches this swap at all.
+        """
+        os.makedirs(os.path.dirname(scratch), exist_ok=True)
+        old = f"{scratch}.old.{uuid.uuid4().hex}"
+        moved_old = False
+        if os.path.exists(scratch):
+            os.replace(scratch, old)
+            moved_old = True
+        try:
+            os.replace(tmp, scratch)
+        except OSError:
+            if moved_old and not os.path.exists(scratch):
+                os.replace(old, scratch)  # restore on failure
+            raise
+        finally:
+            if moved_old:
+                shutil.rmtree(old, ignore_errors=True)
 
     def sync(self, session_id: str) -> None:
-        """Persist the local scratch workspace back to object storage."""
-        self._store.put_tree(self._key(session_id), self._scratch(session_id))
+        """Persist the local scratch workspace back to object storage.
+
+        Under the per-session lock so an upload never races a hydration swap, and
+        the generation marker is refreshed to the just-written object so a
+        subsequent read on this instance doesn't re-download our own write (F3).
+        """
+        key = self._key(session_id)
+        scratch = self._scratch(session_id)
+        with self._lock_for(session_id):
+            self._store.put_tree(key, scratch)
+            new_gen = _store_generation(self._store, key)
+            if new_gen is not None and os.path.isdir(scratch):
+                self._write_marker(session_id, new_gen)
 
 
 # ---------------------------------------------------------------------------

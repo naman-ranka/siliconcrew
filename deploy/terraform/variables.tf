@@ -106,6 +106,31 @@ variable "backend_max_instances" {
   default = 10
 }
 
+# --- Hosted synth governance ---
+variable "synth_runs_per_day" {
+  type        = number
+  default     = 20
+  description = "Signed-in per-user synthesis run cap per UTC day."
+}
+
+variable "synth_compute_minutes_per_month" {
+  type        = number
+  default     = 600
+  description = "Signed-in per-user synthesis compute-minute cap per UTC month."
+}
+
+variable "synth_max_concurrent_per_user" {
+  type        = number
+  default     = 5
+  description = "Maximum in-flight synthesis jobs per signed-in user."
+}
+
+variable "synth_queue_global_workers" {
+  type        = number
+  default     = 16
+  description = "Backend process-wide synth queue worker count."
+}
+
 # --- ORFS job sizing (P&R is memory-heavy) ---
 variable "orfs_cpu" {
   type    = string
