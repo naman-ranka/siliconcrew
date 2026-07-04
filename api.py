@@ -7,6 +7,7 @@ Provides REST endpoints and WebSocket streaming for the Next.js frontend.
 
 import os
 import json
+import uuid
 import asyncio
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -1087,6 +1088,10 @@ async def patch_session(session_id: str, data: SessionPatch, identity: Identity 
 # tool call (e.g. a 60s+ ORFS synth wait); a `ping` well under the ~30s GCP load
 # balancer / proxy idle timeout keeps the connection from being dropped mid-run.
 _WS_HEARTBEAT_SEC = 20
+# Coalesce token deltas: at most one text_delta frame per interval per turn, so
+# a fast stream doesn't flood the socket / React state. The authoritative
+# `text` frame carries anything the gate trimmed.
+_WS_DELTA_INTERVAL_SEC = 0.05
 
 
 @app.websocket("/api/chat/{session_id:path}")
@@ -1153,6 +1158,12 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             if not message.strip():
                 await websocket.send_json({"type": "error", "error": "Empty message"})
                 continue
+
+            # Stable per-turn id (client-generated when provided): echoed on
+            # every frame of this turn so the UI can correlate frames — and
+            # drop stale ones after a stop or reconnect — by id instead of by
+            # last-message heuristics.
+            turn_id = str(data.get("turn_id") or "") or uuid.uuid4().hex
 
             # Resolve the chat thread for this turn (per-message override → the
             # connection default → Chat 1). The workspace stays bound to
@@ -1232,9 +1243,10 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 input_messages.append(("user", message))
 
                 # Stream the agent turn. A background task drains astream() into
-                # a queue; this coroutine multiplexes (1) agent events, (2) a
-                # heartbeat ping when the stream is silent (long tool call), and
-                # (3) client frames read concurrently so `stop` works mid-run.
+                # a bounded queue; a second task reads the socket (so `stop`
+                # works mid-run) and forwards control signals onto the SAME
+                # queue. This coroutine is the single consumer and the ONLY
+                # writer to the websocket — no concurrent-send races.
                 #
                 # The heartbeat MUST time out on the queue read, never on the
                 # generator itself: asyncio.wait_for cancels its awaitable on
@@ -1242,8 +1254,6 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 # into the running graph — aborting the very long tool call
                 # (e.g. wait_for_synthesis) the ping was meant to protect
                 # (plans/phase2/REVIEW_FINDINGS.md P0 #2).
-                await websocket.send_json({"type": "start"})
-
                 total_input_tokens = 0
                 total_output_tokens = 0
                 pending_tool_calls: Dict[str, Dict[str, Any]] = {}
@@ -1251,18 +1261,25 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 stop_requested = False
 
                 async def _send(payload: dict) -> None:
-                    # After a client drop, keep the agent running to completion
-                    # (the checkpoint persists; the UI refetches history on
+                    # Single writer (this coroutine only). Every frame carries
+                    # the turn id so the UI can drop stale frames by id. After
+                    # a client drop, keep the agent running to completion (the
+                    # checkpoint persists; the UI refetches history on
                     # reconnect) but stop attempting sends.
                     nonlocal client_gone
                     if client_gone:
                         return
+                    payload.setdefault("turn_id", turn_id)
                     try:
                         await websocket.send_json(payload)
                     except Exception:
                         client_gone = True
 
-                event_queue: asyncio.Queue = asyncio.Queue()
+                await _send({"type": "start"})
+
+                # Bounded: a slow client backpressures the drain task instead
+                # of building unbounded memory.
+                event_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
 
                 async def _drain_stream() -> None:
                     try:
@@ -1279,20 +1296,24 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
                 drain_task = asyncio.create_task(_drain_stream())
 
-                async def _watch_client() -> str:
+                async def _watch_client() -> None:
                     # Reads the socket for the duration of the run. A `stop`
                     # frame cancels the run; any other frame is rejected — the
-                    # UI queues follow-up messages and sends them after `done`.
+                    # UI queues follow-up messages and sends them after the
+                    # terminal frame. Signals go through the event queue so
+                    # sending stays with the single writer.
                     while True:
-                        frame = await websocket.receive_json()
+                        try:
+                            frame = await websocket.receive_json()
+                        except Exception:
+                            await event_queue.put(("disconnect", None))
+                            return
                         if isinstance(frame, dict) and frame.get("type") == "stop":
-                            return "stop"
-                        await _send({
-                            "type": "error", "code": "busy",
-                            "error": "A response is already in progress.",
-                        })
+                            await event_queue.put(("stop", None))
+                            return
+                        await event_queue.put(("busy", None))
 
-                watch_task: Optional[asyncio.Task] = asyncio.create_task(_watch_client())
+                watch_task = asyncio.create_task(_watch_client())
 
                 # `text_delta` frames carry the cumulative text of the CURRENT
                 # LLM segment (the UI replaces the active text block), so a
@@ -1347,65 +1368,62 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     return frames
 
                 agent_error: Optional[Exception] = None
+                delta_gate = 0.0
                 try:
-                    queue_get: Optional[asyncio.Future] = None
                     while True:
-                        if queue_get is None:
-                            queue_get = asyncio.ensure_future(event_queue.get())
-                        waiters = {queue_get} | ({watch_task} if watch_task else set())
-                        done, _ = await asyncio.wait(
-                            waiters, timeout=_WS_HEARTBEAT_SEC,
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        if not done:
-                            # Silent gap (tool still running): keepalive only.
+                        try:
+                            kind, payload = await asyncio.wait_for(
+                                event_queue.get(), timeout=_WS_HEARTBEAT_SEC
+                            )
+                        except asyncio.TimeoutError:
+                            # Silent gap (tool still running). This cancels only
+                            # the queue read — never the agent stream.
                             await _send({"type": "ping"})
                             continue
 
-                        if queue_get in done:
-                            kind, payload = queue_get.result()
-                            queue_get = None
-                            if kind == "end":
-                                break
-                            if kind == "error":
-                                agent_error = payload
-                                break
-                            mode, data = payload
-                            if mode == "messages":
-                                chunk, meta = data
-                                if (meta or {}).get("langgraph_node") == "agent":
-                                    piece = get_clean_content(chunk)
-                                    if piece:
-                                        chunk_id = getattr(chunk, "id", None)
-                                        if chunk_id != segment_id:
-                                            segment_id, segment_text = chunk_id, ""
-                                        segment_text += piece
-                                        await _send({"type": "text_delta", "content": segment_text})
-                            elif mode == "updates":
-                                for frame in _handle_updates(data):
-                                    await _send(frame)
+                        if kind == "end":
+                            break
+                        if kind == "error":
+                            agent_error = payload
+                            break
+                        if kind == "stop":
+                            stop_requested = True
+                            drain_task.cancel()
+                            break
+                        if kind == "disconnect":
+                            # Client dropped mid-run. Finish the run headless so
+                            # the result lands in the checkpoint; the UI
+                            # reconciles via history refetch.
+                            client_gone = True
+                            continue
+                        if kind == "busy":
+                            await _send({
+                                "type": "error", "code": "busy",
+                                "error": "A response is already in progress.",
+                            })
+                            continue
 
-                        if watch_task is not None and watch_task in done:
-                            try:
-                                outcome = watch_task.result()
-                            except Exception:
-                                # Client dropped mid-run (WebSocketDisconnect &
-                                # friends). Finish the run headless so the
-                                # result lands in the checkpoint.
-                                client_gone = True
-                                watch_task = None
-                                continue
-                            if outcome == "stop":
-                                stop_requested = True
-                                watch_task = None
-                                drain_task.cancel()
-                                break
+                        mode, data = payload
+                        if mode == "messages":
+                            chunk, meta = data
+                            if (meta or {}).get("langgraph_node") == "agent":
+                                piece = get_clean_content(chunk)
+                                if piece:
+                                    chunk_id = getattr(chunk, "id", None)
+                                    if chunk_id != segment_id:
+                                        segment_id, segment_text = chunk_id, ""
+                                        delta_gate = 0.0  # new segment: emit at once
+                                    segment_text += piece
+                                    now = asyncio.get_running_loop().time()
+                                    if now - delta_gate >= _WS_DELTA_INTERVAL_SEC:
+                                        delta_gate = now
+                                        await _send({"type": "text_delta", "content": segment_text})
+                        elif mode == "updates":
+                            for frame in _handle_updates(data):
+                                await _send(frame)
                 finally:
-                    if queue_get is not None and not queue_get.done():
-                        queue_get.cancel()
-                    if watch_task is not None:
-                        watch_task.cancel()
-                    if drain_task and not drain_task.done():
+                    watch_task.cancel()
+                    if not drain_task.done():
                         drain_task.cancel()
                     try:
                         await drain_task

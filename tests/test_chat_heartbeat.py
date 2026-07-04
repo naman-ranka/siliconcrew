@@ -63,6 +63,8 @@ class _HangingAgent:
 
 def _patch_common(monkeypatch, agent):
     monkeypatch.setattr(api, "_WS_HEARTBEAT_SEC", 0.1)
+    # Disable delta coalescing so every token chunk yields a frame to assert on.
+    monkeypatch.setattr(api, "_WS_DELTA_INTERVAL_SEC", 0.0)
     monkeypatch.setattr(api, "create_architect_agent", lambda **k: agent)
 
     @asynccontextmanager
@@ -118,7 +120,7 @@ def _drive(ws):
 
 def test_heartbeat_ping_during_silent_gap_and_content_survives(slow):
     with TestClient(api.app).websocket_connect("/api/chat/sess1") as ws:
-        ws.send_json({"message": "hi"})
+        ws.send_json({"message": "hi", "turn_id": "turn-abc"})
         frames = _drive(ws)
     types = [f["type"] for f in frames]
     assert "ping" in types, f"expected a heartbeat ping during the silent gap, got {types}"
@@ -128,6 +130,9 @@ def test_heartbeat_ping_during_silent_gap_and_content_survives(slow):
     texts = [f["content"] for f in frames if f["type"] == "text"]
     assert texts == ["hello"], f"authoritative text frame must survive the gap, got {types}"
     assert types[-1] == "done"
+    # Every frame of the turn echoes the client-provided turn id, so the UI
+    # can correlate frames and drop stale ones by id.
+    assert all(f.get("turn_id") == "turn-abc" for f in frames), frames
 
 
 def test_stop_mid_run_yields_stopped_terminal_frame(hanging):

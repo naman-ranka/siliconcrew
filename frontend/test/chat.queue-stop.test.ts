@@ -25,7 +25,7 @@ vi.mock("@/lib/api", () => ({
   keysApi: {},
 }));
 
-import { useStore } from "@/lib/store";
+import { useStore, MAX_QUEUED_MESSAGES } from "@/lib/store";
 
 const frame = (obj: unknown) => ({ data: JSON.stringify(obj) });
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -39,6 +39,7 @@ beforeEach(() => {
     messages: [], queuedMessages: [], activeThreadId: null,
     ws: null, wsSessionId: null, wsThreadId: null,
     isStreaming: false, streamingMessage: null, chatError: null, chatErrorCode: null,
+    stopPending: false, activeTurnId: null,
   } as any);
 });
 
@@ -100,14 +101,24 @@ describe("stop → server-confirmed `stopped` frame", () => {
     sock.onmessage(frame({ type: "text", content: "working on it" }));
 
     useStore.getState().stopStreaming();
-    // Cancel is server-side now: a control frame, not a socket teardown.
-    expect(sock.send).toHaveBeenCalledWith(JSON.stringify({ type: "stop" }));
+    // Cancel is server-side now: a control frame, not a socket teardown —
+    // scoped to the active turn by id.
+    const stopPayload = JSON.parse(sock.send.mock.calls.at(-1)![0]);
+    expect(stopPayload.type).toBe("stop");
+    expect(stopPayload.turn_id).toBe(useStore.getState().activeTurnId);
     expect(sock.close).not.toHaveBeenCalled();
     expect(useStore.getState().isStreaming).toBe(true); // awaiting server confirm
+    expect(useStore.getState().stopPending).toBe(true); // "Stopping…" state
+
+    // Duplicate stop clicks are no-ops while the confirm is pending.
+    const sends = sock.send.mock.calls.length;
+    useStore.getState().stopStreaming();
+    expect(sock.send.mock.calls.length).toBe(sends);
 
     sock.onmessage(frame({ type: "stopped", tokens: { input: 1, output: 1 } }));
     const st = useStore.getState();
     expect(st.isStreaming).toBe(false);
+    expect(st.stopPending).toBe(false); // confirmed — button resets
     expect(st.streamingMessage).toBeNull();
     const last = st.messages[st.messages.length - 1];
     expect(last.role).toBe("assistant");
@@ -123,6 +134,30 @@ describe("stop → server-confirmed `stopped` frame", () => {
     const st = useStore.getState();
     expect(st.isStreaming).toBe(true);
     expect(st.chatError).toBeNull();
+  });
+
+  it("the user message carries a turn_id and frames from other turns are ignored", () => {
+    useStore.getState().sendMessage("hi");
+    const sock = useStore.getState().ws as any;
+    sock.onopen?.();
+    const payload = JSON.parse(sock.send.mock.calls[0][0]);
+    expect(payload.turn_id).toBeTruthy();
+    expect(payload.turn_id).toBe(useStore.getState().activeTurnId);
+
+    // A stale frame from a previous turn must not touch this turn's state…
+    sock.onmessage(frame({ type: "text", content: "ghost", turn_id: "some-old-turn" }));
+    expect(useStore.getState().streamingMessage?.content ?? "").toBe("");
+    // …while frames tagged with THIS turn (and untagged legacy frames) apply.
+    sock.onmessage(frame({ type: "text", content: "real", turn_id: payload.turn_id }));
+    expect(useStore.getState().streamingMessage?.content).toBe("real");
+  });
+
+  it("the queue is capped at MAX_QUEUED_MESSAGES", () => {
+    useStore.getState().sendMessage("first");
+    for (let i = 0; i < MAX_QUEUED_MESSAGES + 3; i++) {
+      useStore.getState().sendMessage(`q${i}`);
+    }
+    expect(useStore.getState().queuedMessages).toHaveLength(MAX_QUEUED_MESSAGES);
   });
 
   it("cumulative text_delta frames render into the streaming message", () => {

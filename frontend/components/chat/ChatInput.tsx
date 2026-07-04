@@ -1,16 +1,17 @@
 "use client";
 
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
-import { Send, Square, X, Clock } from "lucide-react";
+import { Send, Square, X, Clock, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelPicker } from "./ModelPicker";
-import { useStore } from "@/lib/store";
+import { useStore, MAX_QUEUED_MESSAGES } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export function ChatInput() {
-  const { currentSession, isStreaming, sendMessage, stopStreaming, queuedMessages, removeQueuedMessage } = useStore();
+  const { currentSession, isStreaming, stopPending, sendMessage, stopStreaming, queuedMessages, removeQueuedMessage } = useStore();
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const queueFull = queuedMessages.length >= MAX_QUEUED_MESSAGES;
 
   // Auto-resize textarea
   useEffect(() => {
@@ -25,6 +26,8 @@ export function ChatInput() {
     if (!input.trim() || !currentSession) return;
     // While a response is streaming, sendMessage queues the follow-up (shown
     // as a removable chip below) and dispatches it when the turn completes.
+    // At the queue cap, keep the draft in the composer instead of dropping it.
+    if (isStreaming && queueFull) return;
     sendMessage(input);
     setInput("");
   };
@@ -94,7 +97,12 @@ export function ChatInput() {
                   size="sm"
                   className="h-9 px-3 gap-2 font-medium"
                   onClick={handleSubmit}
-                  title="Queue this message — it sends when the current response finishes"
+                  disabled={queueFull}
+                  title={
+                    queueFull
+                      ? `Queue is full (max ${MAX_QUEUED_MESSAGES}) — remove a queued message first`
+                      : "Queue this message — it sends when the current response finishes"
+                  }
                 >
                   <Send className="h-3.5 w-3.5" />
                   Queue
@@ -106,9 +114,19 @@ export function ChatInput() {
                   size="sm"
                   className="h-9 px-3 gap-2 font-medium"
                   onClick={stopStreaming}
+                  disabled={stopPending}
                 >
-                  <Square className="h-3.5 w-3.5" />
-                  Stop
+                  {stopPending ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Stopping…
+                    </>
+                  ) : (
+                    <>
+                      <Square className="h-3.5 w-3.5" />
+                      Stop
+                    </>
+                  )}
                 </Button>
               ) : (
                 <Button
