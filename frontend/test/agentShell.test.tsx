@@ -1,13 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-// S4 smoke: the agent shell renders the sidebar sections + artifacts wrapper,
-// and mounts NO command surfaces (revision 3: prompt + view only).
+// Wave 8 smoke: the agent shell's resting state is header + conversation;
+// the nav rail is a closed-by-default overlay, the artifact panel is an
+// always-mounted width-animated split whose home tab is the Runs/Files
+// Index. Still prompt + view only (revision 3): NO command surfaces.
 
 vi.mock("@/lib/api", () => ({
   projectsApi: {},
   sessionsApi: {},
-  threadsApi: {},
+  threadsApi: { list: async () => [] },
   modelsApi: {},
   chatApi: {},
   // ⌘P opens QuickOpen, which indexes the workspace on open.
@@ -54,9 +56,16 @@ const SESSION = {
 };
 
 beforeEach(() => {
-  useWorkbenchUiStore.setState({ perSession: {}, paletteOpen: false, quickOpenOpen: false });
+  useWorkbenchUiStore.setState({
+    perSession: {},
+    paletteOpen: false,
+    quickOpenOpen: false,
+    navRailOpen: false,
+  });
   useStore.setState({
     currentSession: SESSION as never,
+    sessions: [SESSION] as never,
+    projects: [],
     threads: [],
     activeThreadId: null,
     messages: [],
@@ -89,36 +98,43 @@ beforeEach(() => {
     selectSessionById: async () => true,
     selectThread: async () => {},
     loadModels: async () => {},
+    loadSessions: async () => {},
+    loadProjects: async () => {},
   } as never);
 });
 
-describe("AgentShell (view=agent)", () => {
-  it("renders sidebar sections, chat, and the artifacts wrapper", async () => {
+const panelOpen = () =>
+  screen.getByTestId("agent-artifacts-panel").getAttribute("data-open") === "true";
+
+describe("AgentShell (view=agent, Wave 8 slide-over)", () => {
+  it("resting state: header chrome + Index home (runs/files) in the panel; no fixed sidebar", async () => {
     render(<Workbench sessionId="s1" view="agent" />);
 
     expect(await screen.findByTestId("workbench-agent")).toBeInTheDocument();
 
-    // Sidebar: brand, session block, runs + files sections.
-    const sidebar = screen.getByTestId("agent-sidebar");
-    expect(sidebar).toHaveTextContent("SiliconCrew");
+    // Header carries the chrome: rail toggle, session, mode toggle, chip.
+    expect(screen.getByTestId("agent-header")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-rail-toggle")).toBeInTheDocument();
     expect(screen.getByTestId("agent-session-button")).toHaveTextContent("sync_fifo");
-    expect(sidebar).toHaveTextContent("Runs");
-    expect(sidebar).toHaveTextContent("sim_0001");
-    expect(sidebar).toHaveTextContent("Files");
+    expect(screen.getByTestId("mode-toggle-agent")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("agent-artifacts-chip")).toBeInTheDocument();
+
+    // The old fixed sidebar is GONE.
+    expect(screen.queryByTestId("agent-sidebar")).toBeNull();
+
+    // Panel (open by default) shows the Index home: Runs + Files lists.
+    expect(panelOpen()).toBe(true);
+    expect(screen.getByTestId("artifact-index")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-runs-section")).toHaveTextContent("Runs");
+    expect(screen.getByTestId("agent-run-sim_0001")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-files-section")).toHaveTextContent("Files");
     expect(screen.getByTestId("agent-file-alu.v")).toBeInTheDocument();
 
-    // Artifacts wrapper: header + agent-posture empty copy in ArtifactCenter.
-    const panel = screen.getByTestId("agent-artifacts-panel");
-    expect(panel).toHaveTextContent("Artifacts");
-    expect(panel).toHaveTextContent(
-      "Click Open on a tool card, or press ⌘P. Nothing opens on its own."
-    );
-
-    // Mode toggle present (floating, agent active).
-    expect(screen.getByTestId("mode-toggle-agent")).toHaveAttribute("aria-pressed", "true");
+    // Nav rail exists but is CLOSED by default.
+    expect(screen.getByTestId("agent-nav-rail").getAttribute("data-open")).toBe("false");
   });
 
-  it("mounts NO command surfaces, and ⌘K does not open a palette", async () => {
+  it("mounts NO command surfaces; ⌘K inert; ⌘P quick-open; ⌘O toggles the rail", async () => {
     render(<Workbench sessionId="s1" view="agent" />);
     await screen.findByTestId("workbench-agent");
 
@@ -132,9 +148,18 @@ describe("AgentShell (view=agent)", () => {
     // ⌘P (viewing) still works in the agent posture.
     fireEvent.keyDown(window, { key: "p", metaKey: true, bubbles: true });
     expect(useWorkbenchUiStore.getState().quickOpenOpen).toBe(true);
+    useWorkbenchUiStore.setState({ quickOpenOpen: false });
+
+    // ⌘O toggles the NAV RAIL here (the rail is the switcher in this
+    // posture; QuickSwitch is IDE-only).
+    fireEvent.keyDown(window, { key: "o", metaKey: true, bubbles: true });
+    expect(useWorkbenchUiStore.getState().navRailOpen).toBe(true);
+    expect(useWorkbenchUiStore.getState().quickSwitchOpen).toBe(false);
+    fireEvent.keyDown(window, { key: "o", metaKey: true, bubbles: true });
+    expect(useWorkbenchUiStore.getState().navRailOpen).toBe(false);
   });
 
-  it("sidebar clicks open artifacts via the shared open-tab model (panel auto-tracks)", async () => {
+  it("Index clicks open artifacts as tabs; Back to index returns home", async () => {
     render(<Workbench sessionId="s1" view="agent" />);
     await screen.findByTestId("workbench-agent");
 
@@ -143,23 +168,49 @@ describe("AgentShell (view=agent)", () => {
       expect(useWorkbenchUiStore.getState().perSession["s1"]?.openTabs).toContain("code:alu.v")
     );
 
+    // Viewing a tab → the footer path home appears; take it.
+    fireEvent.click(screen.getByTestId("artifact-back-to-index"));
+    expect(useWorkbenchUiStore.getState().perSession["s1"]?.activeTab).toBeNull();
+    expect(screen.getByTestId("artifact-index")).toBeInTheDocument();
+
     fireEvent.click(screen.getByTestId("agent-run-sim_0001"));
     await waitFor(() =>
       expect(useWorkbenchUiStore.getState().perSession["s1"]?.openTabs).toContain("wave:sim_0001")
     );
+    // The pinned Index tab can also take you home.
+    fireEvent.click(screen.getByTestId("artifact-index-tab"));
+    expect(useWorkbenchUiStore.getState().perSession["s1"]?.activeTab).toBeNull();
   });
 
-  it("collapse hides the panel; opening an artifact expands it again", async () => {
+  it("collapse animates the panel closed (stays MOUNTED); opening an artifact re-expands", async () => {
     render(<Workbench sessionId="s1" view="agent" />);
     await screen.findByTestId("workbench-agent");
 
     fireEvent.click(screen.getByTestId("agent-artifacts-collapse"));
-    expect(screen.queryByTestId("agent-artifacts-panel")).toBeNull();
-    // Floating reopen affordance appears.
-    expect(screen.getByTestId("agent-artifacts-open")).toBeInTheDocument();
+    // Width-0 keep-alive: still in the DOM (viewers survive), just closed.
+    expect(screen.getByTestId("agent-artifacts-panel")).toBeInTheDocument();
+    expect(panelOpen()).toBe(false);
 
-    // openArtifact (here via a sidebar file click) must re-expand the panel.
+    // The chip reopens it…
+    fireEvent.click(screen.getByTestId("agent-artifacts-chip"));
+    expect(panelOpen()).toBe(true);
+
+    // …and openArtifact (an Index file click) re-expands after a collapse.
+    fireEvent.click(screen.getByTestId("agent-artifacts-collapse"));
+    expect(panelOpen()).toBe(false);
     fireEvent.click(screen.getByTestId("agent-file-alu.v"));
-    expect(await screen.findByTestId("agent-artifacts-panel")).toBeInTheDocument();
+    await waitFor(() => expect(panelOpen()).toBe(true));
+  });
+
+  it("☰ opens the nav rail overlay with the sessions list", async () => {
+    render(<Workbench sessionId="s1" view="agent" />);
+    await screen.findByTestId("workbench-agent");
+
+    fireEvent.click(screen.getByTestId("agent-rail-toggle"));
+    const rail = screen.getByTestId("agent-nav-rail");
+    expect(rail.getAttribute("data-open")).toBe("true");
+    expect(rail).toHaveTextContent("SiliconCrew");
+    expect(screen.getByTestId("rail-new-session")).toBeInTheDocument();
+    expect(screen.getByTestId("rail-session-s1")).toHaveTextContent("sync_fifo");
   });
 });

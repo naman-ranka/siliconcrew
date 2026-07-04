@@ -42,9 +42,19 @@ export function ThreadSwitcher() {
   };
 
   // Standard popover affordances: Escape + click-outside to close.
+  // preventDefault marks the Esc as consumed: the agent shell's artifact
+  // panel also closes on Esc (skipping defaultPrevented events), and a
+  // popover-Esc must not also close the panel. Safe to always call here —
+  // this handler is only attached while the popover is open (effect gated
+  // on `open`).
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setOpen(false);
+      }
+    };
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };

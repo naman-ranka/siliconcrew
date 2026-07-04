@@ -550,7 +550,8 @@ export const useStore = create<AppState>((set, get) => ({
         artifactCache: {},
         activity: emptyActivity(),
       }));
-      // Materialize the session's default thread ("Chat 1") for the switcher.
+      // Load the session's chats for the switcher (read-only — "Chat 1" is
+      // seeded at creation; browsing never materializes rows).
       await get().loadThreads();
       return session;
     } catch (error) {
@@ -1030,7 +1031,9 @@ export const useStore = create<AppState>((set, get) => ({
       ...(wasActive ? { messages: [], ws: null, wsSessionId: null, wsThreadId: null } : {}),
     });
     if (wasActive) {
-      // Re-materialize (ensures a Chat 1 exists) and load the next conversation.
+      // Reload the list (it may come back EMPTY — listing is read-only; the
+      // default chat re-materializes on the next message) and load the next
+      // conversation.
       await get().loadThreads();
       await get().loadChatHistory();
     }
@@ -1064,21 +1067,24 @@ export const useStore = create<AppState>((set, get) => ({
   setActiveThreadModel: async (modelId: string) => {
     const { currentSession, activeThreadId } = get();
     if (!currentSession) return;
-    // If no thread is active yet, load threads to get the real default thread UUID
-    // (never use the session ID as a thread ID — threads have auto-generated UUIDs).
     let tid = activeThreadId;
     if (!tid) {
       await get().loadThreads();
       tid = get().activeThreadId;
     }
-    if (!tid) return; // no thread exists at all; bail silently
+    // Legacy sessions (pre-seeding) can have ZERO thread rows: the DEFAULT
+    // thread id is the session id by design, and the PATCH below materializes
+    // it server-side — a deliberate act on the chat, unlike read-only browsing.
+    if (!tid) tid = currentSession.id;
     // Persist on the thread; the next message uses it (WS reads the thread model).
     await threadsApi.patch(currentSession.id, tid, { model: modelId });
+    if (!get().threads.some((t) => t.id === tid)) {
+      // The PATCH just materialized the default row — pick it up.
+      await get().loadThreads();
+    }
     set((state) => ({
       activeThreadId: tid,
-      threads: state.threads.some((t) => t.id === tid)
-        ? state.threads.map((t) => (t.id === tid ? { ...t, model: modelId } : t))
-        : state.threads,
+      threads: state.threads.map((t) => (t.id === tid ? { ...t, model: modelId } : t)),
     }));
   },
 

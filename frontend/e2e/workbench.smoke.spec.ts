@@ -625,11 +625,12 @@ test("quick switch (⌘O): current session, detail pane, empty state, esc closes
   await expect(qs).toHaveCount(0);
 });
 
-// S4: the agent-first shell (`?view=agent`) — prompt + view only (revision 3):
-// chat center, runs/files sidebar, the SAME ArtifactCenter in a right panel,
-// NO command palette (⌘K falls through), and the mode toggle routes back to
-// the IDE posture with the dock intact.
-test("agent shell: chat + artifacts + sidebar, no ⌘K palette, file→tab, toggle → IDE", async ({ page }) => {
+// Wave 8: the agent-first shell (`?view=agent`) — prompt + view only
+// (revision 3), Codex-style resting state: header + conversation. The nav
+// rail is a closed-by-default overlay (☰/⌘O); the artifact panel is an
+// animated split whose home tab is the Runs/Files Index. NO command palette
+// (⌘K falls through); the mode toggle routes back to the IDE with the dock.
+test("agent shell: header + Index panel + nav rail, no ⌘K palette, file→tab, toggle → IDE", async ({ page }) => {
   await installMocks(page);
   await page.goto("/w/demo?view=agent");
 
@@ -637,16 +638,16 @@ test("agent shell: chat + artifacts + sidebar, no ⌘K palette, file→tab, togg
   // Center: the conversation (composer enabled for the selected session).
   await expect(page.getByPlaceholder("Describe your RTL design requirements...")).toBeVisible();
 
-  // Right: the artifacts panel with its slim header.
-  const panel = page.getByTestId("agent-artifacts-panel");
-  await expect(panel).toBeVisible();
-  await expect(panel.getByText("Artifacts")).toBeVisible();
-  await expect(panel.getByText(/Nothing opens on its own/)).toBeVisible();
+  // Header carries the chrome; the old fixed sidebar is gone.
+  const header = page.getByTestId("agent-header");
+  await expect(header.getByTestId("agent-session-button")).toBeVisible();
+  await expect(page.getByTestId("agent-sidebar")).toHaveCount(0);
 
-  // Left sidebar: session block + Runs + Files (manifest design files).
-  const sidebar = page.getByTestId("agent-sidebar");
-  await expect(sidebar.getByTestId("agent-runs-section")).toBeVisible();
-  await expect(sidebar.getByTestId("agent-files-section")).toBeVisible();
+  // Right: the artifacts panel, open on the Index home = Runs + Files.
+  const panel = page.getByTestId("agent-artifacts-panel");
+  await expect(panel).toHaveAttribute("data-open", "true");
+  await expect(panel.getByTestId("agent-runs-section")).toBeVisible();
+  await expect(panel.getByTestId("agent-files-section")).toBeVisible();
   await expect(page.getByTestId("agent-file-alu.v")).toBeVisible();
   await expect(page.getByTestId("agent-file-cpu_tb.v")).toBeVisible();
 
@@ -654,10 +655,30 @@ test("agent shell: chat + artifacts + sidebar, no ⌘K palette, file→tab, togg
   await page.keyboard.press("ControlOrMeta+k");
   await expect(page.getByPlaceholder("Run a command…")).toHaveCount(0);
 
-  // Sidebar file click → a code tab opens in the artifacts panel.
+  // Index file click → a code tab opens; "Back to index" returns home.
   await page.getByTestId("agent-file-alu.v").click();
   await expect(panel.getByRole("tab", { name: /alu\.v/ })).toBeVisible();
   await expect(panel.getByText(/real content/)).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("artifact-back-to-index").click();
+  await expect(panel.getByTestId("artifact-index")).toBeVisible();
+
+  // Esc dismisses the panel (width-0 keep-alive, still mounted); the chip
+  // brings it back.
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveAttribute("data-open", "false");
+  await page.getByTestId("agent-artifacts-chip").click();
+  await expect(panel).toHaveAttribute("data-open", "true");
+
+  // ☰ opens the nav rail overlay: sessions + nested chats; Esc closes it
+  // WITHOUT also closing the artifact panel (consumed Esc).
+  await page.getByTestId("agent-rail-toggle").click();
+  const rail = page.getByTestId("agent-nav-rail");
+  await expect(rail).toHaveAttribute("data-open", "true");
+  await expect(rail.getByTestId("rail-session-demo")).toBeVisible();
+  await expect(rail.getByTestId("rail-new-session")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(rail).toHaveAttribute("data-open", "false");
+  await expect(panel).toHaveAttribute("data-open", "true");
   await page.screenshot({ path: "e2e-artifacts/wb2-agent-shell.png", fullPage: true });
 
   // Mode toggle → ?view=ide with the full IDE chrome (dock) — same session.

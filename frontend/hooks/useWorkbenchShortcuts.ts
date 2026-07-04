@@ -10,8 +10,9 @@ import { runCommand } from "@/lib/commands";
 //   "ide"   — full set: ⌘K command palette · ⌘O session quick-switch · ⌘P
 //             quick-open · ⌘J toggle dock · ⌘L lint · ⌘R simulate · ⌘Y
 //             synthesize · ⌘E retry-P&R modal
-//   "agent" — prompt + view ONLY (revision 3): ⌘P quick-open and ⌘O
-//             quick-switch. No command invocation keys — ⌘K/⌘L/⌘R/⌘Y/⌘E/⌘J
+//   "agent" — prompt + view ONLY (revision 3): ⌘P quick-open and ⌘O nav
+//             rail (the rail IS the session/chat switcher in this posture;
+//             Wave 8). No command invocation keys — ⌘K/⌘L/⌘R/⌘Y/⌘E/⌘J
 //             fall through to the browser untouched.
 // ⌘K/⌘O/⌘P/⌘J work even while typing (they are navigation, not text editing);
 // the run shortcuts don't, so typing "l" in the chat never lints. ⌘R
@@ -56,10 +57,12 @@ export function useWorkbenchShortcuts(
           ui.setPaletteOpen(true);
           return;
         case "o":
-          // Session quick-switch — shadows the browser's "open file" dialog
-          // on purpose while the workbench is focused.
+          // Shadows the browser's "open file" dialog on purpose while the
+          // workbench is focused. IDE: session quick-switch modal. Agent:
+          // toggle the nav rail (the rail is the switcher there, Wave 8).
           e.preventDefault();
-          ui.setQuickSwitchOpen(true);
+          if (scope === "agent") ui.setNavRailOpen(!ui.navRailOpen);
+          else ui.setQuickSwitchOpen(true);
           return;
         case "p":
           e.preventDefault();
@@ -98,5 +101,7 @@ export function useWorkbenchShortcuts(
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [scope]);
+    // `enabled` must re-run the effect: toggling true→false has to actually
+    // unregister the listener (stale-effect bug, Wave 8 review F4).
+  }, [scope, enabled]);
 }

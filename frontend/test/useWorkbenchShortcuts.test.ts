@@ -66,14 +66,19 @@ describe("useWorkbenchShortcuts: ⌘O quick-switch", () => {
 });
 
 // S4: the agent posture claims ONLY viewing keys (⌘P/⌘O) — no palette, no
-// run shortcuts, no dock toggle (revision 3: prompt + view only).
+// run shortcuts, no dock toggle (revision 3: prompt + view only). Wave 8:
+// agent ⌘O toggles the NAV RAIL (the rail is the switcher in this posture;
+// the QuickSwitch modal is IDE-only).
 describe("useWorkbenchShortcuts: agent scope", () => {
-  it("⌘P and ⌘O still work (viewing/navigation)", () => {
+  it("⌘P quick-opens; ⌘O toggles the nav rail (not QuickSwitch)", () => {
     const { unmount } = renderHook(() => useWorkbenchShortcuts("agent"));
     press("p");
     expect(useWorkbenchUiStore.getState().quickOpenOpen).toBe(true);
     press("o");
-    expect(useWorkbenchUiStore.getState().quickSwitchOpen).toBe(true);
+    expect(useWorkbenchUiStore.getState().navRailOpen).toBe(true);
+    expect(useWorkbenchUiStore.getState().quickSwitchOpen).toBe(false);
+    press("o");
+    expect(useWorkbenchUiStore.getState().navRailOpen).toBe(false);
     unmount();
   });
 

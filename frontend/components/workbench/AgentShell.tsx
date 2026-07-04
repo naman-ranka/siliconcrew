@@ -4,203 +4,42 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
-  ChevronsUpDown,
-  CircuitBoard,
-  Cpu,
-  FileCode2,
-  Github,
-  PanelRight,
+  Crown,
+  FolderOpen,
+  Layers,
+  Menu,
+  PanelLeftClose,
   PanelRightClose,
   Search,
-  Waves,
+  X,
 } from "lucide-react";
 import { selectActivity, useStore } from "@/lib/store";
 import { useSessionUi, useWorkbenchUiStore } from "@/lib/workbenchUiStore";
-import { openArtifact, artifactKeyForFile } from "@/lib/openArtifact";
 import { splitInlineActions } from "@/lib/inlineActions";
-import { cn } from "@/lib/utils";
+import { cn, formatCost, formatTokens } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { IconTooltip } from "@/components/ui/tooltip";
 import { ChatArea } from "@/components/chat/ChatArea";
+import { ThreadSwitcher } from "@/components/chat/ThreadSwitcher";
 import { InlineActionCard } from "@/components/chat/InlineActionCard";
 import { ArtifactCenter } from "./ArtifactCenter";
+import { ArtifactIndex } from "./ArtifactIndex";
 import { ModeToggle } from "./ModeToggle";
-import { ThemeToggle } from "./ThemeToggle";
-import { ProfileMenu, REPO_URL } from "./ProfileMenu";
-import { McpModal } from "./McpModal";
-import { relativeTime, statusDotClass } from "./runStatus";
-import type { RunSummary } from "@/types";
+import { NavRail } from "./NavRail";
 
-// The agent-first shell (S4) — prompt + view ONLY (revision 3): no command
-// palette, no command modal/surface, no context menus, no file creation.
-// Layout per prototype: compact 210px sidebar (session · runs · files ·
-// footer) · conversation center · collapsible right panel = the EXISTING
-// ArtifactCenter (same open tabs, keep-alive, unread state as the IDE —
-// posture is layout emphasis only).
+// The agent-first shell, Wave 8 (slide-over revision) — prompt + view ONLY:
+// no command palette, no command modal/surface, no context menus, no file
+// creation. The resting state is just HEADER + CONVERSATION (Codex-style);
+// everything else appears on demand:
+//   left  — NavRail overlay (☰ / ⌘O): sessions grouped, chats nested.
+//   right — artifact panel, a docked split that ANIMATES its width open
+//           (chat recenters; Esc dismisses; narrow ↔ wide toggle). Its home
+//           tab is the Runs/Files Index — the old fixed sidebar's lists,
+//           relocated to live WITH the artifacts they open.
 
-const SECTION_LABEL =
-  "px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70";
-
-function primaryArtifactKey(r: RunSummary): string {
-  return r.kind === "sim" ? `wave:${r.id}` : `report:${r.id}`;
-}
-
-/** Sidebar runs list — VIEWING only (no pin/compare/retry; that's IDE power). */
-function SidebarRuns() {
-  const runs = useStore((s) => s.runs);
-  const sid = useStore((s) => s.currentSession?.id ?? null);
-  const { unreadRunIds, clearUnread } = useSessionUi(sid);
-
-  return (
-    <>
-      <div className={cn(SECTION_LABEL, "flex items-center")} data-testid="agent-runs-section">
-        Runs
-        <span className="ml-auto font-mono text-muted-foreground/50">{runs.length}</span>
-      </div>
-      <div className="px-1">
-        {runs.length === 0 && (
-          <p className="px-2 py-1 text-[11px] text-muted-foreground/60">No runs yet.</p>
-        )}
-        {runs.map((r) => (
-          <button
-            key={r.id}
-            type="button"
-            data-testid={`agent-run-${r.id}`}
-            onClick={() => {
-              if (!sid) return;
-              openArtifact(sid, primaryArtifactKey(r));
-              clearUnread(r.id);
-            }}
-            className="group flex h-8 w-full items-center gap-2 rounded-md px-2 text-left hover:bg-surface-2"
-          >
-            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", statusDotClass(r.status))} />
-            {r.kind === "sim" ? (
-              <Waves className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
-            ) : (
-              <Cpu className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
-            )}
-            <span className="truncate font-mono text-[11px]">{r.id}</span>
-            {unreadRunIds.includes(r.id) && (
-              <span
-                title="new"
-                className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary animate-pulse-subtle"
-              />
-            )}
-            <span className="ml-auto text-[9px] font-mono text-muted-foreground/50">
-              {relativeTime(r.createdAt)}
-            </span>
-          </button>
-        ))}
-      </div>
-    </>
-  );
-}
-
-/** Sidebar design files (manifest rtl/tb/sdc/include) — viewing only: no
- *  context menu, no new-file (IDE posture power). */
-function SidebarFiles() {
-  const manifest = useStore((s) => s.manifest);
-  const sid = useStore((s) => s.currentSession?.id ?? null);
-  const files = useMemo(
-    () =>
-      (manifest?.files ?? []).filter((f) =>
-        ["rtl", "tb", "sdc", "include"].includes(f.role)
-      ),
-    [manifest]
-  );
-
-  return (
-    <>
-      <div className={cn(SECTION_LABEL, "pt-3")} data-testid="agent-files-section">
-        Files
-      </div>
-      <div className="px-1">
-        {files.length === 0 && (
-          <p className="px-2 py-1 text-[11px] text-muted-foreground/60">No design files yet.</p>
-        )}
-        {files.map((f) => (
-          <button
-            key={f.path}
-            type="button"
-            data-testid={`agent-file-${f.path}`}
-            onClick={() => sid && openArtifact(sid, artifactKeyForFile(f.path))}
-            className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left hover:bg-surface-2"
-          >
-            <FileCode2 className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
-            <span className="truncate font-mono text-[11px]">{f.name}</span>
-            <span className="ml-auto text-[9px] uppercase text-muted-foreground/40">{f.role}</span>
-          </button>
-        ))}
-      </div>
-    </>
-  );
-}
-
-function Sidebar() {
-  const currentSession = useStore((s) => s.currentSession);
-  const setQuickSwitchOpen = useWorkbenchUiStore((s) => s.setQuickSwitchOpen);
-  const [mcpOpen, setMcpOpen] = useState(false);
-
-  return (
-    <aside
-      data-testid="agent-sidebar"
-      className="flex w-[210px] shrink-0 flex-col border-r border-border bg-surface-1 min-h-0"
-    >
-      {/* Logo */}
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
-        <div className="grid h-6 w-6 place-items-center rounded-md bg-primary/15">
-          <CircuitBoard className="h-3.5 w-3.5 text-primary" aria-hidden />
-        </div>
-        <span className="text-[13px] font-semibold" data-testid="agent-brand">
-          SiliconCrew
-        </span>
-      </div>
-
-      <div className="flex-1 overflow-y-auto thin-scrollbar py-2">
-        {/* Session block → ⌘O quick-switch */}
-        <div className={SECTION_LABEL}>Session</div>
-        <div className="mb-3 px-2">
-          <button
-            type="button"
-            data-testid="agent-session-button"
-            title="Switch session (⌘O)"
-            onClick={() => setQuickSwitchOpen(true)}
-            className="flex h-8 w-full items-center gap-2 rounded-md bg-surface-2 px-2 text-xs hover:bg-surface-3"
-          >
-            <span className="truncate font-mono">
-              {currentSession?.name ?? currentSession?.id ?? "—"}
-            </span>
-            <ChevronsUpDown className="ml-auto h-3 w-3 text-muted-foreground" aria-hidden />
-          </button>
-        </div>
-
-        <SidebarRuns />
-        <SidebarFiles />
-      </div>
-
-      {/* Footer: repo · theme · profile (MCP handoff modal owned here). */}
-      <div className="flex items-center gap-1 border-t border-border p-2">
-        <IconTooltip label="Open-source repo">
-          <a
-            href={REPO_URL}
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Open-source repo"
-            className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-surface-2 hover:text-foreground"
-          >
-            <Github className="h-3.5 w-3.5" aria-hidden />
-          </a>
-        </IconTooltip>
-        <ThemeToggle />
-        <div className="ml-auto">
-          <ProfileMenu placement="top-start" onConnectMcp={() => setMcpOpen(true)} />
-        </div>
-      </div>
-
-      <McpModal open={mcpOpen} onOpenChange={setMcpOpen} />
-    </aside>
-  );
-}
+/** Panel width presets — outer animates between them; inner stays fixed so
+ *  content never reflows mid-transition. */
+const PANEL_W = { normal: "min(42%, 520px)", wide: "min(62%, 760px)" } as const;
+const PANEL_INNER_W = { normal: "min(42vw, 520px)", wide: "min(62vw, 760px)" } as const;
 
 /**
  * Inline manual actions (S5-2): live foreign-actor events (user via IDE/REST,
@@ -268,19 +107,159 @@ function InlineActionsTail() {
   );
 }
 
-/** Right panel: slim "Artifacts" header over the EXISTING ArtifactCenter. */
-function ArtifactsPanel({ onCollapse }: { onCollapse: () => void }) {
+/** Composer context strip — REAL data only: manifest facts (synth top ·
+ *  clock · platform) plus the session's token/cost totals (the same live
+ *  numbers the IDE chat header shows; per-thread metering doesn't exist,
+ *  so nothing per-thread is invented). Pieces hide when absent. */
+function ContextStrip() {
+  const manifest = useStore((s) => s.manifest);
+  const session = useStore((s) => s.currentSession);
+  if (!manifest && !session) return null;
+  const showTotals = !!session && (session.total_tokens > 0 || session.total_cost > 0);
+
+  return (
+    <div
+      data-testid="agent-context-strip"
+      className="mx-auto flex w-full max-w-3xl items-center gap-3 px-5 pb-2 text-[10px] text-muted-foreground/60"
+    >
+      {manifest?.synthTop && (
+        <span className="flex items-center gap-1 font-mono">
+          <Crown className="h-2.5 w-2.5 text-info/60" aria-hidden />
+          {manifest.synthTop}
+        </span>
+      )}
+      {manifest && (
+        <span className="font-mono">
+          clk {manifest.clockPeriodNs}ns · {manifest.platform}
+        </span>
+      )}
+      {showTotals && (
+        <span className="ml-auto flex items-center gap-2 font-mono">
+          <span>{formatTokens(session.total_tokens)}</span>
+          <span>{formatCost(session.total_cost)}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** The Artifacts chip — the panel's toggle; unread evidence surfaces here. */
+function ArtifactsChip({
+  open,
+  unread,
+  onClick,
+}: {
+  open: boolean;
+  unread: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={open ? "Hide artifacts (Esc)" : "Show artifacts"}
+      data-testid="agent-artifacts-chip"
+      className={cn(
+        "flex h-7 items-center gap-1.5 rounded-md border pl-2 pr-2.5 text-[11.5px] font-medium transition-colors",
+        "outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
+        open
+          ? "border-primary/50 bg-primary/10 text-foreground"
+          : "border-border bg-surface-1 text-foreground/85 hover:bg-surface-2"
+      )}
+    >
+      <Layers className={cn("h-3.5 w-3.5", open ? "text-primary" : "text-muted-foreground")} aria-hidden />
+      Artifacts
+      {unread > 0 && (
+        <span className="ml-0.5 inline-flex items-center gap-1 border-l border-border/60 pl-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse-subtle" />
+          <span className="tabular-nums text-primary">{unread}</span>
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** Shell header — ALL the resting-state chrome: ☰ rail toggle · session ·
+ *  thread switcher · mode toggle · artifacts chip. No status dot on the
+ *  session (many runs — one verdict is ambiguous; revision 1). */
+function ShellHeader({
+  artifactsOpen,
+  unread,
+  onToggleArtifacts,
+}: {
+  artifactsOpen: boolean;
+  unread: number;
+  onToggleArtifacts: () => void;
+}) {
+  const currentSession = useStore((s) => s.currentSession);
+  const setNavRailOpen = useWorkbenchUiStore((s) => s.setNavRailOpen);
+  const navRailOpen = useWorkbenchUiStore((s) => s.navRailOpen);
+
+  return (
+    <div
+      data-testid="agent-header"
+      className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-surface-0 px-3"
+    >
+      <Button
+        variant="ghost"
+        size="icon"
+        title="Sessions (⌘O)"
+        aria-label="Toggle navigation"
+        data-testid="agent-rail-toggle"
+        onClick={() => setNavRailOpen(!navRailOpen)}
+      >
+        <Menu className="h-4 w-4" aria-hidden />
+      </Button>
+      <div className="mx-0.5 h-5 w-px bg-border/70" aria-hidden />
+
+      {/* Session → nav rail (the rail IS the switcher in this posture). */}
+      <button
+        type="button"
+        title="Switch session (⌘O)"
+        data-testid="agent-session-button"
+        onClick={() => setNavRailOpen(true)}
+        className="flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 hover:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+      >
+        <FolderOpen className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+        <span className="truncate font-mono text-[13px] font-medium">
+          {currentSession?.name ?? currentSession?.id ?? "—"}
+        </span>
+      </button>
+
+      {currentSession && (
+        <>
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40" aria-hidden />
+          <ThreadSwitcher />
+        </>
+      )}
+
+      <div className="ml-auto flex items-center gap-2">
+        <ModeToggle mode="agent" />
+        <ArtifactsChip open={artifactsOpen} unread={unread} onClick={onToggleArtifacts} />
+      </div>
+    </div>
+  );
+}
+
+/** Panel chrome over the EXISTING ArtifactCenter (Index home = Runs/Files). */
+function ArtifactsPanel({
+  wide,
+  onToggleWide,
+  onCollapse,
+}: {
+  wide: boolean;
+  onToggleWide: () => void;
+  onCollapse: () => void;
+}) {
   const sid = useStore((s) => s.currentSession?.id ?? null);
   const { unreadRunIds } = useSessionUi(sid);
   const setQuickOpenOpen = useWorkbenchUiStore((s) => s.setQuickOpenOpen);
 
   return (
-    <div
-      data-testid="agent-artifacts-panel"
-      className="flex h-full w-[40%] min-w-[340px] max-w-[560px] shrink-0 flex-col border-l border-border bg-surface-0 min-h-0"
-    >
+    <div className="flex h-full min-h-0 flex-col border-l border-border bg-surface-0">
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border/70 bg-surface-1 px-2">
-        <span className="pl-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <Layers className="h-3.5 w-3.5 shrink-0 pl-0 text-primary" aria-hidden />
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Artifacts
         </span>
         {unreadRunIds.length > 0 && (
@@ -303,18 +282,33 @@ function ArtifactsPanel({ onCollapse }: { onCollapse: () => void }) {
           <Button
             variant="ghost"
             size="icon"
+            className={cn("h-6 w-6", wide && "text-primary")}
+            title={wide ? "Narrow panel" : "Widen panel"}
+            aria-label={wide ? "Narrow panel" : "Widen panel"}
+            data-testid="agent-artifacts-wide"
+            onClick={onToggleWide}
+          >
+            {wide ? (
+              <PanelRightClose className="h-3.5 w-3.5" aria-hidden />
+            ) : (
+              <PanelLeftClose className="h-3.5 w-3.5" aria-hidden />
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
             className="h-6 w-6"
-            title="Hide artifacts"
+            title="Close (Esc)"
             aria-label="Hide artifacts"
             data-testid="agent-artifacts-collapse"
             onClick={onCollapse}
           >
-            <PanelRightClose className="h-4 w-4" aria-hidden />
+            <X className="h-4 w-4" aria-hidden />
           </Button>
         </div>
       </div>
       <div className="flex-1 min-h-0">
-        <ArtifactCenter readOnly emptyHint="Click Open on a tool card, or press ⌘P. Nothing opens on its own." />
+        <ArtifactCenter readOnly homeSlot={<ArtifactIndex />} />
       </div>
     </div>
   );
@@ -322,7 +316,8 @@ function ArtifactsPanel({ onCollapse }: { onCollapse: () => void }) {
 
 export function AgentShell() {
   const sid = useStore((s) => s.currentSession?.id ?? null);
-  const { artifactsOpen, activeTab, unreadRunIds, setArtifactsOpen } = useSessionUi(sid);
+  const { artifactsOpen, artifactsWide, activeTab, unreadRunIds, setArtifactsOpen, setArtifactsWide } =
+    useSessionUi(sid);
   const flashKey = useWorkbenchUiStore((s) => s.flashKey);
 
   // openArtifact must reveal the panel: every openTab() sets flashKey and/or
@@ -342,40 +337,97 @@ export function AgentShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sid, flashKey, activeTab]);
 
+  // Same-keypress grace: when a store-driven overlay (QuickOpen via cmdk,
+  // the rail, settings) closes itself on Esc BEFORE our window listener
+  // runs, the flags below already read "closed" for that very press —
+  // remember "an overlay was open" for one tick so the panel doesn't also
+  // close. Local popovers (ThreadSwitcher, ModelPicker, ProfileMenu) mark
+  // consumption with preventDefault instead, checked after a 0-timeout so
+  // handler registration order can't matter.
+  const overlayGraceRef = useRef(false);
+  useEffect(() => {
+    const arm = () => {
+      overlayGraceRef.current = true;
+      setTimeout(() => {
+        overlayGraceRef.current = false;
+      }, 0);
+    };
+    const unsubUi = useWorkbenchUiStore.subscribe((s, prev) => {
+      const was = prev.quickOpenOpen || prev.quickSwitchOpen || prev.navRailOpen;
+      const is = s.quickOpenOpen || s.quickSwitchOpen || s.navRailOpen;
+      if (was && !is) arm();
+    });
+    const unsubData = useStore.subscribe((s, prev) => {
+      if (prev.settingsOpen && !s.settingsOpen) arm();
+    });
+    return () => {
+      unsubUi();
+      unsubData();
+    };
+  }, []);
+
+  // Esc dismisses the panel — only when nothing else consumed the press.
+  useEffect(() => {
+    if (!sid) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setTimeout(() => {
+        if (e.defaultPrevented || overlayGraceRef.current) return;
+        const ui = useWorkbenchUiStore.getState();
+        if (ui.quickOpenOpen || ui.quickSwitchOpen || ui.navRailOpen) return;
+        if (useStore.getState().settingsOpen) return;
+        const open = ui.perSession[sid]?.artifactsOpen ?? true;
+        if (open) ui.setArtifactsOpen(sid, false);
+      }, 0);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sid]);
+
+  const width = artifactsWide ? PANEL_W.wide : PANEL_W.normal;
+  const innerWidth = artifactsWide ? PANEL_INNER_W.wide : PANEL_INNER_W.normal;
+
   return (
-    <div className="flex flex-1 min-h-0" data-testid="agent-shell">
-      <Sidebar />
+    <div className="flex min-h-0 flex-1" data-testid="agent-shell">
+      <NavRail />
 
-      {/* Center — the conversation (ChatArea constrains its own column to
-          max-w-3xl internally). The floating cluster top-right: mode toggle
-          + the reopen button when the artifacts panel is collapsed. */}
-      <div className="relative flex min-w-0 flex-1 flex-col">
-        <div className="absolute right-3 top-2 z-30 flex items-center gap-2">
-          <ModeToggle mode="agent" className="shadow-e2 backdrop-blur" />
-          {!artifactsOpen && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 gap-1.5 bg-surface-1/95 text-xs shadow-e2 backdrop-blur"
-              data-testid="agent-artifacts-open"
-              onClick={() => setArtifactsOpen(true)}
-            >
-              <PanelRight className="h-3.5 w-3.5" aria-hidden />
-              Artifacts
-              {unreadRunIds.length > 0 && (
-                <span className="inline-flex items-center gap-1 text-primary">
-                  <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse-subtle" />
-                  {unreadRunIds.length} new
-                </span>
-              )}
-            </Button>
-          )}
+      {/* Conversation — the only permanent surface (self-centers, max-w-3xl). */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <ShellHeader
+          artifactsOpen={artifactsOpen}
+          unread={unreadRunIds.length}
+          onToggleArtifacts={() => setArtifactsOpen(!artifactsOpen)}
+        />
+        <div className="min-h-0 flex-1">
+          <ChatArea
+            hideHeader
+            tailSlot={<InlineActionsTail key={sid ?? "none"} />}
+            footerSlot={<ContextStrip />}
+          />
         </div>
-
-        <ChatArea tailSlot={<InlineActionsTail key={sid ?? "none"} />} />
       </div>
 
-      {artifactsOpen && <ArtifactsPanel onCollapse={() => setArtifactsOpen(false)} />}
+      {/* Artifact panel — ALWAYS MOUNTED, animating width (keep-alive viewers
+          survive dismiss/reopen); the fixed-width inner body never reflows
+          during the transition. */}
+      <div
+        data-testid="agent-artifacts-panel"
+        data-open={artifactsOpen}
+        aria-hidden={!artifactsOpen}
+        className="shrink-0 overflow-hidden transition-[width] duration-300 motion-reduce:transition-none"
+        style={{
+          width: artifactsOpen ? width : 0,
+          transitionTimingFunction: "cubic-bezier(.22,1,.36,1)",
+        }}
+      >
+        <div className="h-full" style={{ width: innerWidth, minWidth: 360 }}>
+          <ArtifactsPanel
+            wide={!!artifactsWide}
+            onToggleWide={() => setArtifactsWide(!artifactsWide)}
+            onCollapse={() => setArtifactsOpen(false)}
+          />
+        </div>
+      </div>
     </div>
   );
 }

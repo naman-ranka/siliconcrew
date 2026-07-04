@@ -3,10 +3,12 @@
 import { useEffect } from "react";
 import {
   Activity,
+  ArrowLeft,
   BarChart3,
   CircuitBoard,
   Code2,
   FileText,
+  Home,
   Layers,
   X,
 } from "lucide-react";
@@ -65,17 +67,26 @@ function ArtifactBody({ artifactKey, readOnly }: { artifactKey: string; readOnly
 export function ArtifactCenter({
   readOnly = false,
   emptyHint = "Open a file from the tree, or an artifact from a run. Press ⌘P to quick-open anything.",
+  homeSlot,
 }: {
   /** Agent posture is prompt + view only — forces the code viewer read-only. */
   readOnly?: boolean;
   /** Empty-state guidance — the default speaks IDE (file tree); the agent
    * shell passes prompt-posture copy (tool cards + ⌘P). */
   emptyHint?: string;
+  /** Wave 8 (agent shell): a home "Index" view (Runs + Files). When given,
+   * the tab strip always renders with a pinned first Index tab; activeTab ===
+   * null means the Index is showing, and closing the last tab lands there.
+   * Without it (IDE) behavior is unchanged, including the empty state. */
+  homeSlot?: React.ReactNode;
 }) {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
-  const { openTabs, activeTab, closeTab, setActiveTab } = useSessionUi(sessionId);
+  const { openTabs, activeTab: rawActiveTab, closeTab, setActiveTab } = useSessionUi(sessionId);
   const flashKey = useWorkbenchUiStore((s) => s.flashKey);
   const clearFlash = useWorkbenchUiStore((s) => s.clearFlash);
+  // A tab must be OPEN to be active (per-session state can go stale across
+  // deletes); anything else renders as "no active tab" → Index when homed.
+  const activeTab = rawActiveTab && openTabs.includes(rawActiveTab) ? rawActiveTab : null;
 
   // The attention pulse is one-shot: let the animation play, then clear the
   // key so re-opening the same tab can flash again.
@@ -85,7 +96,7 @@ export function ArtifactCenter({
     return () => clearTimeout(t);
   }, [flashKey, clearFlash]);
 
-  if (openTabs.length === 0) {
+  if (openTabs.length === 0 && !homeSlot) {
     return (
       <div className="flex flex-col h-full items-center justify-center bg-surface-0" data-testid="artifact-center-empty">
         <div className="h-12 w-12 rounded-xl bg-surface-2 flex items-center justify-center mb-4">
@@ -99,6 +110,8 @@ export function ArtifactCenter({
     );
   }
 
+  const showIndex = !!homeSlot && activeTab === null;
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface-0" data-testid="artifact-center">
       {/* Tab strip */}
@@ -107,6 +120,26 @@ export function ArtifactCenter({
         aria-label="Open artifacts"
         className="flex h-9 items-stretch border-b border-border bg-surface-1 shrink-0 overflow-x-auto thin-scrollbar"
       >
+        {homeSlot && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={showIndex}
+            title="Artifact index — runs and files"
+            data-testid="artifact-index-tab"
+            onClick={() => setActiveTab(null)}
+            className={cn(
+              "group relative flex items-center gap-1.5 px-3 text-xs border-b-2 shrink-0",
+              "transition-colors [transition-duration:var(--dur-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              showIndex
+                ? "border-primary text-foreground bg-surface-0"
+                : "border-transparent text-muted-foreground hover:text-foreground hover:bg-surface-2/60"
+            )}
+          >
+            <Home className={cn("h-3.5 w-3.5 shrink-0", showIndex ? "text-primary" : "text-muted-foreground")} />
+            <span>Index</span>
+          </button>
+        )}
         {openTabs.map((key) => {
           const parsed = parseArtifactKey(key);
           const Icon = parsed ? KIND_ICON[parsed.kind] : Layers;
@@ -162,8 +195,18 @@ export function ArtifactCenter({
         })}
       </div>
 
-      {/* Keep-alive bodies: every open tab stays mounted; non-active hidden. */}
+      {/* Keep-alive bodies: every open tab stays mounted; non-active hidden.
+          The Index (when homed) is just another keep-alive panel. */}
       <div className="flex-1 min-h-0 relative">
+        {homeSlot && (
+          <div
+            role="tabpanel"
+            className={cn("h-full min-h-0", !showIndex && "hidden")}
+            data-testid="artifact-panel-index"
+          >
+            {homeSlot}
+          </div>
+        )}
         {openTabs.map((key) => (
           <div
             key={key}
@@ -175,6 +218,18 @@ export function ArtifactCenter({
           </div>
         ))}
       </div>
+
+      {/* One-tap way home while viewing an artifact (agent posture). */}
+      {homeSlot && activeTab !== null && (
+        <button
+          type="button"
+          data-testid="artifact-back-to-index"
+          onClick={() => setActiveTab(null)}
+          className="flex h-8 shrink-0 items-center gap-1.5 border-t border-border bg-surface-1 px-3 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to index
+        </button>
+      )}
     </div>
   );
 }

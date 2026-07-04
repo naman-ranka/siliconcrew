@@ -18,6 +18,10 @@ export interface SessionUiState {
   chatOpen: boolean;
   /** Agent-shell right panel (ArtifactCenter wrapper) open/collapsed (S4). */
   artifactsOpen: boolean;
+  /** Agent-shell artifact panel width toggle (Wave 8): false = normal split,
+   * true = wide. Optional-field pattern (like `shell`) — absent means false,
+   * and pre-Wave-8 persisted state needs no migration. */
+  artifactsWide?: boolean;
   /** Preferred shell posture ("Open in Chat" vs "Open in IDE") — a viewing
    * preference, so it lives client-side. Absent = never chosen; "ide" stays
    * the fallback everywhere ("Open in Chat" opens the agent shell, S4). */
@@ -58,6 +62,8 @@ interface WorkbenchUiState {
   quickOpenOpen: boolean;
   /** ⌘O session quick-switch overlay (S3). */
   quickSwitchOpen: boolean;
+  /** Agent-shell left nav rail overlay (Wave 8; ⌘O in the agent posture). */
+  navRailOpen: boolean;
   commandModal: string | null;
   commandSurfaceOpen: boolean;
   // Tab key to flash (attention pulse) — set by openTab, cleared by clearFlash.
@@ -80,11 +86,13 @@ interface WorkbenchUiState {
   setDockCollapsed: (sessionId: string, collapsed: boolean) => void;
   setChatOpen: (sessionId: string, open: boolean) => void;
   setArtifactsOpen: (sessionId: string, open: boolean) => void;
+  setArtifactsWide: (sessionId: string, wide: boolean) => void;
   setShell: (sessionId: string, shell: "agent" | "ide") => void;
   setLastSessionId: (sessionId: string | null) => void;
   setPaletteOpen: (open: boolean) => void;
   setQuickOpenOpen: (open: boolean) => void;
   setQuickSwitchOpen: (open: boolean) => void;
+  setNavRailOpen: (open: boolean) => void;
   setCommandModal: (id: string | null) => void;
   setCommandSurfaceOpen: (open: boolean) => void;
   setContextMenu: (menu: ContextMenuState | null) => void;
@@ -115,6 +123,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         commandSurfaceOpen: false,
         quickOpenOpen: false,
         quickSwitchOpen: false,
+        navRailOpen: false,
         commandModal: null,
         flashKey: null,
         contextMenu: null,
@@ -191,6 +200,10 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
           updateSession(sessionId, (ui) => ({ ...ui, artifactsOpen: open }));
         },
 
+        setArtifactsWide: (sessionId, wide) => {
+          updateSession(sessionId, (ui) => ({ ...ui, artifactsWide: wide }));
+        },
+
         setShell: (sessionId, shell) => {
           updateSession(sessionId, (ui) => ({ ...ui, shell }));
         },
@@ -201,6 +214,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         setCommandSurfaceOpen: (open) => set({ commandSurfaceOpen: open }),
         setQuickOpenOpen: (open) => set({ quickOpenOpen: open }),
         setQuickSwitchOpen: (open) => set({ quickSwitchOpen: open }),
+        setNavRailOpen: (open) => set({ navRailOpen: open }),
         setCommandModal: (id) => set({ commandModal: id }),
         setContextMenu: (menu) => set({ contextMenu: menu }),
         setNewFilePrefix: (prefix, kind) =>
@@ -235,6 +249,7 @@ export function useSessionUi(sessionId: string | null | undefined) {
       ...ui,
       // Migration default: sessions persisted before S4 lack artifactsOpen.
       artifactsOpen: ui.artifactsOpen ?? true,
+      artifactsWide: ui.artifactsWide ?? false,
       openTab: (key: string) => (sid ? a.openTab(sid, key) : undefined),
       closeTab: (key: string) => (sid ? a.closeTab(sid, key) : undefined),
       setActiveTab: (key: string | null) => (sid ? a.setActiveTab(sid, key) : undefined),
@@ -246,6 +261,7 @@ export function useSessionUi(sessionId: string | null | undefined) {
         sid ? a.setDockCollapsed(sid, collapsed) : undefined,
       setChatOpen: (open: boolean) => (sid ? a.setChatOpen(sid, open) : undefined),
       setArtifactsOpen: (open: boolean) => (sid ? a.setArtifactsOpen(sid, open) : undefined),
+      setArtifactsWide: (wide: boolean) => (sid ? a.setArtifactsWide(sid, wide) : undefined),
     };
   }, [session, sessionId]);
 }

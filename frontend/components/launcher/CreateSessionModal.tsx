@@ -22,6 +22,10 @@ import { slugify } from "./util";
 export interface CreateSessionModalProps {
   /** Pre-filled group NAME (opened from a group's "+ Add"). */
   presetGroup?: string | null;
+  /** Pre-selected "Start in" shell — the agent shell's nav rail passes
+   * "agent" so creating from there doesn't bounce the user into the IDE
+   * (Wave 8); the Launcher keeps the IDE default. */
+  defaultStartIn?: ViewMode;
   onClose: () => void;
 }
 
@@ -31,14 +35,14 @@ export interface CreateSessionModalProps {
  * optional group (a tag — created on the fly if the name is new). No model
  * picker: the model is a per-chat choice; creation uses the catalog default.
  */
-export function CreateSessionModal({ presetGroup, onClose }: CreateSessionModalProps) {
+export function CreateSessionModal({ presetGroup, defaultStartIn, onClose }: CreateSessionModalProps) {
   const router = useRouter();
   const { projects, createSession, createProject, loadProjects, loadModels } = useStore();
 
   const [name, setName] = useState("");
   // S4 resolved: both shells are real; IDE stays the default pre-selection
   // (the stored per-session shell preference takes over after first open).
-  const [startIn, setStartIn] = useState<ViewMode>("ide");
+  const [startIn, setStartIn] = useState<ViewMode>(defaultStartIn ?? "ide");
   const [showGroup, setShowGroup] = useState(!!presetGroup);
   const [group, setGroup] = useState(presetGroup ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +53,14 @@ export function CreateSessionModal({ presetGroup, onClose }: CreateSessionModalP
     loadProjects();
     loadModels();
     const t = setTimeout(() => inputRef.current?.focus(), 30);
-    const h = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // Consume the Esc (see ThreadSwitcher) — the modal is open for as long as
+    // this component is mounted, so an Escape here always closes it.
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
     window.addEventListener("keydown", h);
     return () => {
       clearTimeout(t);

@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { useAuth } from "@/lib/auth";
+import { replaceThreadUrl } from "@/lib/nav";
 import { useWorkbenchSync } from "@/lib/useWorkbenchSync";
 import { useSessionUi, useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { useWorkbenchShortcuts } from "@/hooks/useWorkbenchShortcuts";
@@ -50,6 +52,7 @@ export interface WorkbenchProps {
 export function Workbench({ sessionId, threadId = null, view = "ide" }: WorkbenchProps) {
   const { currentSession, selectSessionById, selectThread, loadWorkbench, workspaceError } =
     useStore();
+  const router = useRouter();
   const { status: authStatus } = useAuth();
   // The assistant rail is collapsible (per-session, persisted) so the artifact
   // center gets full width when the user is driving the pipeline themselves.
@@ -88,9 +91,17 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
       }
       booted.current = true;
       useWorkbenchUiStore.getState().setLastSessionId(sessionId);
-      // Thread follows the ?chat= param (minimal wiring; compare first).
+      // Thread follows the ?chat= param (compare first) — VALIDATED against
+      // the loaded list: a stale/crafted id must not be selected (the WS
+      // would reject it anyway; F2). Unknown id → default thread + clean URL.
+      // Only when the list truly loaded — a failed load must not eat a valid id.
       if (threadId && threadId !== useStore.getState().activeThreadId) {
-        await selectThread(threadId);
+        const { threads, threadsLoading, chatError } = useStore.getState();
+        if (threads.some((t) => t.id === threadId)) {
+          await selectThread(threadId);
+        } else if (!threadsLoading && !chatError) {
+          replaceThreadUrl(router, sessionId, useStore.getState().activeThreadId);
+        }
       }
     })();
 
@@ -136,9 +147,10 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
   ) : null;
 
   if (view === "agent") {
-    // Agent-first shell (S4) — prompt + view ONLY (revision 3): QuickOpen
-    // (⌘P, viewing) and QuickSwitch (⌘O) stay; CommandPalette, CommandModal,
-    // CommandSurface and the file context menu do NOT mount here.
+    // Agent-first shell (S4/Wave 8) — prompt + view ONLY (revision 3):
+    // QuickOpen (⌘P, viewing) stays; ⌘O opens the shell's own NavRail (the
+    // rail replaces the QuickSwitch modal in this posture). CommandPalette,
+    // CommandModal, CommandSurface and the file context menu do NOT mount.
     return (
       <main
         data-testid="workbench-agent"
@@ -149,7 +161,6 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
 
         {/* Shared overlays only — no command invocation surfaces. */}
         <QuickOpen />
-        <QuickSwitch />
         <Toaster />
         <SettingsModal />
       </main>

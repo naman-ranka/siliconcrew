@@ -49,7 +49,13 @@ export function ModelPicker() {
   useEffect(() => {
     if (!open) return;
     void loadModels();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    // Consume the Esc (see ThreadSwitcher) — handler only exists while open.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setOpen(false);
+      }
+    };
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };

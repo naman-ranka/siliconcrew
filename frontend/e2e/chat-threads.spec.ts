@@ -105,9 +105,9 @@ test("chat threads: new chat → switch back → history intact, workspace uncha
   await expect(page.getByText("alu.v")).toBeVisible();
   await expect(page.getByText("cpu_tb.v")).toBeVisible();
 
-  // The switcher shows the default chat. (S3: the TopBar breadcrumb carries a
-  // second "Switch chat" control — this test drives the ChatArea's switcher.)
-  const switcher = page.locator('button[aria-label="Switch chat"]:not([data-testid="breadcrumb-chat"])');
+  // The switcher shows the default chat. (The breadcrumb's duplicate chat
+  // crumb is gone — the ChatArea's ThreadSwitcher is the only "Switch chat".)
+  const switcher = page.locator('button[aria-label="Switch chat"]');
   await expect(switcher).toBeVisible();
   await expect(switcher).toContainText("Chat 1");
 

@@ -63,12 +63,13 @@ beforeEach(() => {
 });
 
 describe("Breadcrumb", () => {
-  it("renders Home › session › active chat from the store", () => {
+  it("renders Home › session from the store — no chat crumb", () => {
     render(<Breadcrumb />);
     expect(screen.getByTestId("breadcrumb-home")).toBeInTheDocument();
     expect(screen.getByTestId("breadcrumb-session")).toHaveTextContent("sync_fifo");
-    expect(screen.getByTestId("breadcrumb-chat")).toHaveTextContent("FIFO signoff");
     // Calm crumb: no status dot on the workspace segment (revision 1 spirit).
+    // Thread switching lives solely in the ChatArea's ThreadSwitcher now.
+    expect(screen.queryByTestId("breadcrumb-chat")).not.toBeInTheDocument();
   });
 
   it("renders only Home when no session is selected yet", () => {
@@ -84,30 +85,5 @@ describe("Breadcrumb", () => {
     expect(push).toHaveBeenCalledWith("/");
     fireEvent.click(screen.getByTestId("breadcrumb-session"));
     expect(useWorkbenchUiStore.getState().quickSwitchOpen).toBe(true);
-  });
-
-  it("chat dropdown lists threads (active checked) and picking one selects it", async () => {
-    const selectThread = vi.fn().mockResolvedValue(undefined);
-    useStore.setState({ selectThread });
-    render(<Breadcrumb />);
-
-    fireEvent.click(screen.getByTestId("breadcrumb-chat"));
-    const activeRow = screen.getByRole("menuitemradio", { name: /FIFO signoff/ });
-    expect(activeRow).toHaveAttribute("aria-checked", "true");
-    const other = screen.getByRole("menuitemradio", { name: /Debug overflow assert/ });
-    expect(other).toHaveAttribute("aria-checked", "false");
-
-    fireEvent.click(other);
-    expect(selectThread).toHaveBeenCalledWith("t2");
-  });
-
-  it("footer creates a new chat in the same workspace via the store action", async () => {
-    const newThread = vi.fn().mockResolvedValue(undefined);
-    useStore.setState({ newThread });
-    render(<Breadcrumb />);
-
-    fireEvent.click(screen.getByTestId("breadcrumb-chat"));
-    fireEvent.click(screen.getByRole("button", { name: /New chat — same workspace/ }));
-    expect(newThread).toHaveBeenCalled();
   });
 });
