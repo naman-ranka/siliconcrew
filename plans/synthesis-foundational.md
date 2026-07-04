@@ -111,6 +111,49 @@ tail instead. So Item 1 is a REFACTOR, not a new table:
     `get_synthesis_status(run_id)` the run combobox automatically (today's
     job_id param never had one — small UX win).
 
+## Round-2 amendments (codex review of the amended plan)
+
+1. **A reconciling status read is a WRITE — give it a durable path.**
+   `get_synthesis_status` is a self-healing read: when the reconciler flips
+   a run to completed/failed it writes run_meta. Hosted REST only syncs the
+   workspace when `mutates=True` (actions.py:425) and status tools are
+   rightly NOT in MUTATING_TOOLS — so the tombstone write would strand in
+   instance scratch. Resolution: reconciler terminal writes go through the
+   Item-4 `put_file` helper to the run's `orfs-runs/<session>/<run_id>`
+   prefix DIRECTLY (tiny object, no tarball), in addition to local scratch.
+   Durable truth never depends on the mutates flag; status stays a
+   non-mutating endpoint.
+2. **Completion-event idempotency across INSTANCES, not just threads.** The
+   `O_EXCL` marker only guards one instance's scratch. The event gets a
+   deterministic id — `tool_call_id = "completion:<run_id>"`, with
+   `arguments: {run_id}` — and `build_activity_events` dedupes orphan
+   results by id, so double emission from two instances collapses at read
+   time. O_EXCL stays as the cheap local fast-path guard.
+3. **Hosted stage TIMINGS are not promised.** The Cloud Run entrypoint
+   `cp -r`s outputs and tars them (deploy/orfs_job/entrypoint.sh:59), so
+   pulled mtimes reflect staging, not stage ends. Honest contract: file
+   evidence gives stage PRESENCE/completion everywhere; per-stage timings
+   are local-docker-only (hosted timings would need mtime-preserving
+   staging or ORFS log-timestamp parsing — deferred).
+4. **The runner seam change is explicit:** `OrfsRequest` gains a
+   `run_handle` field set by the manager (deterministic prefix);
+   `CloudJobOrfsRunner.run()` uses it instead of minting a UUID;
+   `make_run_stager` takes the handle as an argument. The manager persists
+   nothing extra — the handle is reconstructable — but the seam files
+   (`src/orfs_client/__init__.py`, orfs_runner.py, workspace_provider.py)
+   are all touched.
+5. **`GET /runs/{run_id}` (run detail) also calls `get_stage_status` today**
+   (actions.py:887) — it moves to the unified status payload; the plan's
+   endpoint list includes it.
+6. **`wait_for_synthesis` clamps `max_wait_sec`** (≤120s server-side;
+   prompts keep recommending 30–60s) — bounded means bounded even for a
+   creative caller.
+7. **The activity→runs observer is named mechanically:** `loadActivity`
+   diffs incoming events; any NEW event carrying a runId triggers
+   `loadRuns()`, whose running→terminal transition detector owns unread
+   marking (re-homed from pollJob). `TOOL_DIR_INVALIDATION` keeps doing
+   dirs only.
+
 ## Item 3 — Tombstones: no run is ever stuck "running"
 
 - **Add reconcile to the status-read path** (review: today
