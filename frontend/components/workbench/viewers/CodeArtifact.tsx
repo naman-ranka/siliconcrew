@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Editor, { loader } from "@monaco-editor/react";
+import Editor from "@monaco-editor/react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Download, FileCode, Lock, Save } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { workspaceApi } from "@/lib/api";
+import { useMonacoLoadState, useMonacoThemeName } from "@/lib/monaco";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ViewerError, ViewerSkeleton } from "./panels";
@@ -77,26 +78,8 @@ export function CodeArtifact({ path, forceReadOnly = false }: { path: string; fo
     if (sessionId) void loadFile(path);
   }, [sessionId, path, loadFile]);
 
-  // Monaco loads its workers from a CDN; on restricted networks fall back to a
-  // highlighted read view / plain textarea (same pattern as the v1 CodeViewer).
-  const [editorMode, setEditorMode] = useState<"loading" | "monaco" | "fallback">("loading");
-  useEffect(() => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (!done) setEditorMode((m) => (m === "loading" ? "fallback" : m));
-    }, 4000);
-    loader
-      .init()
-      .then(() => {
-        done = true;
-        setEditorMode("monaco");
-      })
-      .catch(() => {
-        done = true;
-        setEditorMode("fallback");
-      });
-    return () => clearTimeout(timer);
-  }, []);
+  const editorMode = useMonacoLoadState();
+  const monacoTheme = useMonacoThemeName();
 
   // Draft/baseline for the edit loop. Adopt fresh server content whenever the
   // buffer isn't dirty (so a revalidate never clobbers in-progress edits).
@@ -244,7 +227,7 @@ export function CodeArtifact({ path, forceReadOnly = false }: { path: string; fo
           <Editor
             height="100%"
             language={language}
-            theme="vs-dark"
+            theme={monacoTheme}
             value={value}
             onChange={readOnly ? undefined : (v) => setDraft(v ?? "")}
             options={{
@@ -256,6 +239,7 @@ export function CodeArtifact({ path, forceReadOnly = false }: { path: string; fo
               scrollBeyondLastLine: false,
               wordWrap: readOnly ? "on" : "off",
               automaticLayout: true,
+              padding: { top: 8 },
             }}
           />
         ) : editorMode === "fallback" ? (

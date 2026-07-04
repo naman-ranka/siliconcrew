@@ -15,6 +15,7 @@
 /.next-s5/
 /.next-s5build/
 /out/
+/public/monaco/
 
 # Production
 /build

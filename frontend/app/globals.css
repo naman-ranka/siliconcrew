@@ -207,16 +207,6 @@
   background: hsl(var(--primary));
 }
 
-/* Monaco editor customization */
-.monaco-editor {
-  padding-top: 8px !important;
-}
-
-.monaco-editor .margin,
-.monaco-editor-background {
-  background: hsl(var(--surface-1)) !important;
-}
-
 /* Prose customization for better markdown rendering */
 .prose {
   --tw-prose-body: hsl(var(--text-primary));
