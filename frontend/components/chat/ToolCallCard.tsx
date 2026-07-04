@@ -41,7 +41,7 @@ const toolLabelMap: Record<string, string> = {
   simulation_tool: "Running Simulation",
   waveform_tool: "Generating Waveform",
   start_synthesis: "Starting Synthesis",
-  get_synthesis_job: "Checking Synthesis Status",
+  get_synthesis_status: "Checking Synthesis Status",
   wait_for_synthesis: "Waiting for Synthesis",
   get_synthesis_metrics: "Collecting Synthesis Metrics",
   generate_report_tool: "Generating Report",

@@ -13,7 +13,6 @@ vi.mock("@/lib/api", () => ({
     simulate: vi.fn(),
     synthesize: vi.fn(),
     retryRun: vi.fn(),
-    getJob: vi.fn().mockResolvedValue({ status: "completed" }),
     listRuns: vi.fn().mockResolvedValue([]),
     getActivity: vi.fn().mockResolvedValue({ ok: true, events: [], nextBefore: null }),
   },
@@ -82,7 +81,6 @@ const SIM_RUN: RunSummary = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(workbenchApi.getJob).mockResolvedValue({ status: "completed" });
   vi.mocked(workbenchApi.listRuns).mockResolvedValue([]);
   vi.mocked(workbenchApi.getActivity).mockResolvedValue({
     ok: true,
@@ -200,15 +198,55 @@ describe("runCommand request bodies", () => {
   it("synth body carries maxStage", async () => {
     vi.mocked(workbenchApi.synthesize).mockResolvedValue({
       ok: true,
-      jobId: "job_1",
       runId: "synth_0001",
+      pollAfterSec: 5,
     });
-    void runCommand("synth", { maxStage: "synth" });
-    await vi.waitFor(() =>
-      expect(workbenchApi.synthesize).toHaveBeenCalledWith(
-        "s1",
-        expect.objectContaining({ maxStage: "synth", platform: "sky130hd" })
-      )
+    await runCommand("synth", { maxStage: "synth" });
+    expect(workbenchApi.synthesize).toHaveBeenCalledWith(
+      "s1",
+      expect.objectContaining({ maxStage: "synth", platform: "sky130hd" })
     );
+  });
+});
+
+// ---- dispatch-only async model (Wave 9: the UI never polls run status) ----------
+
+describe("runCommand synth is dispatch-only", () => {
+  it("dispatches, toasts, refreshes the run list once — and resolves without polling", async () => {
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue({
+      ok: true,
+      runId: "synth_0001",
+      pollAfterSec: 5,
+    });
+    await runCommand("synth"); // resolves immediately — no job poll to wait on
+    // The dispatch is narrated (toast + local activity event with the run id).
+    expect(useStore.getState().toasts.some((t) => t.title === "Synthesis dispatched")).toBe(true);
+    const locals = useStore.getState().activity.localEvents;
+    expect(
+      locals.some((e) => e.runId === "synth_0001" && /dispatched/.test(e.resultSummary))
+    ).toBe(true);
+    // The run list is pulled so the queued/running row appears.
+    expect(workbenchApi.listRuns).toHaveBeenCalled();
+    // No completion narration here — the store's transition detector owns it.
+    expect(useStore.getState().toasts.some((t) => t.title === "Synthesis completed")).toBe(false);
+  });
+
+  it("retry_pd dispatch returns { runId } only", async () => {
+    vi.mocked(workbenchApi.retryRun).mockResolvedValue({
+      ok: true,
+      runId: "synth_0002",
+      pollAfterSec: 5,
+    });
+    useStore.setState({
+      runs: [
+        { id: "synth_0001", kind: "synth", status: "passed", createdAt: null, top: "alu", pinned: false },
+      ] as never,
+    });
+    await runCommand("pnr", { runId: "synth_0001", fromStage: "place" });
+    expect(workbenchApi.retryRun).toHaveBeenCalledWith("s1", "synth_0001", {
+      fromStage: "place",
+      maxStage: "finish",
+    });
+    expect(useStore.getState().toasts.some((t) => t.title === "P&R retry dispatched")).toBe(true);
   });
 });

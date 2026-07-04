@@ -36,9 +36,9 @@ import { useWorkbenchUiStore } from "./workbenchUiStore";
 
 // F4/F5: store-level single-flight for the workspace hydrate + workbench load,
 // keyed by session id. Every trigger — mount, selectSession, chat-complete,
-// upload, the active-run poll, manual refresh — shares one in-flight promise, so
-// the heavy hydration runs ONCE even when several fire together (the double-open
-// and the two polling loops overlapping during a synth). Cleared on settle.
+// upload, focus revalidate, manual refresh — shares one in-flight promise, so
+// the heavy hydration runs ONCE even when several fire together (e.g. the
+// double-open, or focus + activity-observer overlapping). Cleared on settle.
 const _inflight = new Map<string, Promise<unknown>>();
 function singleFlight<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const existing = _inflight.get(key) as Promise<T> | undefined;
@@ -163,6 +163,59 @@ const TOOL_DIR_INVALIDATION: Record<string, string[]> = {
   start_synthesis: ["", "synth_runs"],
   retry_pd: ["", "synth_runs"],
 };
+
+// --- Run transition detector (Wave 9, Item 5) --------------------------------
+// The UI never polls run status; the runs slice is the truth it renders. So on
+// EVERY reload of that slice (loadRuns, the workbench snapshot, applyRunStatus)
+// we diff prev vs next: any run leaving a non-terminal state for a terminal one
+// triggers everything the old pollJob terminal hook did — unread marking, the
+// completion/failure toast, the dir invalidation, and (for a passed synth) the
+// synth-artifact refresh. Whatever caused the reload (activity event, user
+// Refresh, focus revalidate) gets identical behavior.
+
+function isActiveRunStatus(status: string): boolean {
+  const s = (status ?? "").toLowerCase();
+  return s === "running" || s === "queued" || s === "pending";
+}
+
+function isTerminalRunStatus(status: string): boolean {
+  const s = (status ?? "").toLowerCase();
+  return s === "passed" || s === "failed" || s === "completed" || s === "error";
+}
+
+function detectRunTransitions(sessionId: string, prev: RunSummary[], next: RunSummary[]): void {
+  const state = useStore.getState();
+  if (state.currentSession?.id !== sessionId) return;
+  const prevById = new Map(prev.map((r) => [r.id, r]));
+  for (const run of next) {
+    const before = prevById.get(run.id);
+    if (!before) continue; // brand-new rows aren't transitions
+    if (!isActiveRunStatus(before.status) || !isTerminalRunStatus(run.status)) continue;
+
+    useWorkbenchUiStore.getState().markUnread(sessionId, run.id);
+    const ok = run.status !== "failed";
+    const label = run.kind === "synth" ? "Synthesis" : "Simulation";
+    // check_notes ride the last-known status slice when a Refresh supplied them.
+    const notes =
+      state.synthJob?.runId === run.id && typeof state.synthJob.checkNotes === "string"
+        ? state.synthJob.checkNotes
+        : "";
+    state.pushToast(
+      ok
+        ? { kind: "success", title: `${label} completed`, detail: run.id }
+        : {
+            kind: "error",
+            title: `${label} failed`,
+            detail: [run.id, notes].filter(Boolean).join(" — ") || undefined,
+          }
+    );
+    // The finished run's artifacts now exist on disk — refresh the tree.
+    state.invalidateDirs(["", "synth_runs"]);
+    if (run.kind === "synth" && ok) void state.refreshSynthArtifacts(run.id);
+    // The last-known live status for this run is now history.
+    if (state.synthJob?.runId === run.id) useStore.setState({ synthJob: null });
+  }
+}
 
 // Debounced activity refresh after WS tool results — a burst of tool frames
 // coalesces into ONE GET /activity (limit 50).
@@ -295,9 +348,10 @@ interface AppState {
   selectedRunId: string | null;
   runKindFilter: "all" | "sim" | "synth";
   lintResult: LintResult | null;
-  // Live ORFS synth job status (stages, elapsed, remote label) while a synth
-  // runs; null when no synth is in flight. Drives the stage-progress UI
-  // (RunsPane's live stage cell; published by lib/commands' job poll).
+  // LAST-KNOWN ORFS synth run status (stage, elapsed, remote label). The UI is
+  // a viewer: this is fed ONLY by explicit user Refresh results / run-status
+  // responses via applyRunStatus — there is no client-side poller. Drives
+  // RunsPane's last-known stage cell; cleared when the run reaches terminal.
   synthJob: SynthJobStatus | null;
   // Section-load flags drive skeleton loaders so a section shows shimmer rows
   // instead of flashing an empty/"No …" state before content lands.
@@ -319,6 +373,11 @@ interface AppState {
   pinRun: (runId: string, pinned: boolean) => Promise<void>;
   setRunKindFilter: (kind: "all" | "sim" | "synth") => void;
   refreshSynthArtifacts: (runId?: string | null) => Promise<void>;
+  /** Apply a run-status payload (snake_case job shape from a user Refresh via
+   *  get_synthesis_status, or a GET /runs/{id}/status read) to the matching
+   *  run row + the synthJob last-known slice. Terminal transitions flow
+   *  through the same detector loadRuns uses (unread, toasts, artifacts). */
+  applyRunStatus: (status: Record<string, unknown>) => void;
 
   // --- Workbench v2 data layer (SWR slices) ---
   // Lazy directory tree: key "" = workspace root. Single-flight per path.
@@ -1391,6 +1450,7 @@ export const useStore = create<AppState>((set, get) => ({
         const files = snap.files ?? [];
         const runs = snap.runs ?? [];
         const synthesisRuns = snap.synthesisRuns ?? [];
+        const prevRuns = get().runs;
         set((state) => ({
           manifest: snap.manifest ?? null,
           manifestLoading: false,
@@ -1442,6 +1502,7 @@ export const useStore = create<AppState>((set, get) => ({
               }
             : {}),
         }));
+        detectRunTransitions(sid, prevRuns, runs);
         // Reveal the artifacts panel on the newest artifact (initial-load UX).
         const hasContent =
           !!snap.spec || (snap.code?.length ?? 0) > 0 || !!snap.report || files.length > 0;
@@ -1511,17 +1572,22 @@ export const useStore = create<AppState>((set, get) => ({
   loadRuns: async () => {
     const { currentSession, runKindFilter } = get();
     if (!currentSession) return;
-    // F5: single-flight so the two synth-time loops (the lib/commands job poll and
-    // the useWorkbenchSync active-run poll) never double-pull the run list.
-    return singleFlight(`runs:${currentSession.id}:${runKindFilter}`, async () => {
+    const sid = currentSession.id;
+    // F5: single-flight so concurrent triggers (activity observer, command
+    // dispatch refresh, focus revalidate) never double-pull the run list.
+    return singleFlight(`runs:${sid}:${runKindFilter}`, async () => {
       set({ runsLoading: true });
       try {
-        const runs = await workbenchApi.listRuns(currentSession.id, runKindFilter);
+        const runs = await workbenchApi.listRuns(sid, runKindFilter);
+        // Prev captured AFTER the fetch: a Refresh applied mid-flight already
+        // ran the detector — don't re-announce the same transition.
+        const prevRuns = get().runs;
         set((state) => ({
           runs,
           selectedRunId:
             runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
         }));
+        detectRunTransitions(sid, prevRuns, runs);
       } catch {
         set({ runs: [] });
       } finally {
@@ -1592,6 +1658,29 @@ export const useStore = create<AppState>((set, get) => ({
     } catch {
       /* best-effort refresh */
     }
+  },
+
+  applyRunStatus: (status) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const job = status ?? {};
+    if (job.error === "unknown_run") return; // stale/foreign id — nothing to update
+    const runId = typeof job.run_id === "string" ? job.run_id : null;
+    if (!runId) return;
+    // Last-known live status first, so the transition detector below can pick
+    // up check_notes for its failure toast.
+    set({ synthJob: toSynthJobStatus(runId, job) });
+    const jobStatus = String(job.status ?? "").toLowerCase();
+    // Map the run lifecycle onto the runs-list vocabulary.
+    const rowStatus: RunSummary["status"] =
+      jobStatus === "completed" ? "passed" : jobStatus === "failed" ? "failed" : "running";
+    const prevRuns = get().runs;
+    if (!prevRuns.some((r) => r.id === runId)) return; // row not loaded (yet)
+    const nextRuns = prevRuns.map((r) =>
+      r.id === runId && r.status !== rowStatus ? { ...r, status: rowStatus } : r
+    );
+    set({ runs: nextRuns });
+    detectRunTransitions(currentSession.id, prevRuns, nextRuns);
   },
 
   // ====================== Workbench v2 data layer ======================
@@ -1832,6 +1921,9 @@ export const useStore = create<AppState>((set, get) => ({
     }));
     await singleFlight(`activity:${sid}:${before ?? "head"}`, async () => {
       try {
+        // Ids known before this fetch — the activity→runs observer diffs
+        // against them to spot brand-new run-scoped events.
+        const knownIds = new Set(get().activity.serverEvents.map((e) => e.id));
         const res = await workbenchApi.getActivity(sid, {
           limit: 50,
           before: before ?? undefined,
@@ -1869,6 +1961,16 @@ export const useStore = create<AppState>((set, get) => ({
             },
           };
         });
+        // Activity→runs observer (Wave 9, Item 5): the UI watches the LOG, not
+        // run status. A NEW head event carrying a runId means some actor
+        // touched a run (dispatch, status read, the system completion event) —
+        // pull the runs list; its transition detector owns unread/toasts.
+        // Skipped on the very first page (everything is "new"; the initial
+        // hydration loads runs anyway) and on older-page loads.
+        if (!more && populated) {
+          const fresh = res.events.some((e) => !knownIds.has(e.id) && e.runId);
+          if (fresh) void get().loadRuns();
+        }
       } catch (e) {
         if (get().currentSession?.id !== sid) return;
         // Failed (re)fetch keeps whatever events we have + records the error.
@@ -1934,20 +2036,28 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-// Normalize the backend job-status payload into the typed SynthJobStatus the
-// live-stage UI consumes (exported for lib/commands' job poll).
-export function toSynthJobStatus(jobId: string, runId: string, job: Record<string, unknown>): SynthJobStatus {
+// Normalize the backend run-status payload (snake_case job shape) into the
+// typed SynthJobStatus the last-known-stage UI consumes.
+export function toSynthJobStatus(runId: string, job: Record<string, unknown>): SynthJobStatus {
   const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
+  const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
   return {
-    jobId,
     runId,
     status: String(job.status ?? ""),
-    currentStage: (job.current_stage as string | null) ?? null,
+    currentStage: str(job.current_stage) ?? str(job.stage),
     stages: (job.stages as SynthJobStatus["stages"]) ?? undefined,
+    stageHistory: Array.isArray(job.stage_history)
+      ? (job.stage_history as SynthJobStatus["stageHistory"])
+      : undefined,
+    dispatchedAt: str(job.dispatched_at),
+    lastLogLines: Array.isArray(job.last_log_lines)
+      ? (job.last_log_lines as unknown[]).filter((l): l is string => typeof l === "string")
+      : undefined,
     elapsedSec: num(job.elapsed_sec),
-    backend: typeof job.backend === "string" ? job.backend : null,
+    checkNotes: str(job.check_notes),
+    backend: str(job.backend),
     remote: typeof job.remote === "boolean" ? job.remote : null,
-    executionLabel: typeof job.execution_label === "string" ? job.execution_label : null,
+    executionLabel: str(job.execution_label),
   };
 }
 

@@ -214,6 +214,13 @@ describe("buildSurfaceCommands", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].label).toBe("Flow");
   });
+
+  it("the synth core command describes the run_id-only dispatch contract (no job_id)", () => {
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    expect(synth.desc).toContain("run_id");
+    expect(synth.desc).not.toContain("job_id");
+    expect(synth.desc).toContain("no client polling");
+  });
 });
 
 // ---- payload from generated commands --------------------------------------------------

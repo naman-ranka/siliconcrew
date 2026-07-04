@@ -354,8 +354,9 @@ export const workbenchApi = {
       body: JSON.stringify(body),
     }).then((r) => r.run),
 
+  // Dispatch-only: returns the durable run key immediately (no job_id).
   synthesize: (sessionId: string, body: Record<string, unknown> = {}) =>
-    actionFetch<{ ok: true; jobId: string; runId: string }>(`${ws(sessionId)}/synthesize`, {
+    actionFetch<{ ok: true; runId: string; pollAfterSec?: number }>(`${ws(sessionId)}/synthesize`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
@@ -396,8 +397,14 @@ export const workbenchApi = {
   getRun: (sessionId: string, runId: string) =>
     actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/runs/${encodeURIComponent(runId)}`).then((r) => r.run),
 
-  getJob: (sessionId: string, jobId: string) =>
-    actionFetch<{ ok: true; job: Record<string, unknown> }>(`${ws(sessionId)}/jobs/${encodeURIComponent(jobId)}`).then((r) => r.job),
+  // Self-healing run-status read (GET /runs/{run_id}/status). The UI never
+  // calls this on its own cadence — it exists for actor-style reads; the
+  // user-gesture Refresh goes through invokeTool("get_synthesis_status")
+  // instead so the gesture lands in the activity log.
+  getRunStatus: (sessionId: string, runId: string) =>
+    actionFetch<{ ok: true; job: Record<string, unknown> }>(
+      `${ws(sessionId)}/runs/${encodeURIComponent(runId)}/status`
+    ).then((r) => r.job),
 
   // Introspected tool catalog — every UI-invocable tool with its real JSON
   // Schema + policy flags, straight from the agent's @tool registry.
@@ -417,7 +424,7 @@ export const workbenchApi = {
     runId: string,
     body: { fromStage: string; maxStage?: string; overrides?: Record<string, unknown> }
   ) =>
-    actionFetch<{ ok: true; jobId: string; runId: string }>(
+    actionFetch<{ ok: true; runId: string; pollAfterSec?: number }>(
       `${ws(sessionId)}/runs/${encodeURIComponent(runId)}/retry`,
       { method: "POST", body: JSON.stringify(body) }
     ),

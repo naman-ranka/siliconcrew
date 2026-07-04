@@ -24,7 +24,7 @@ vi.mock("@/lib/api", () => {
       synthesize: vi.fn(),
       listRuns: vi.fn(),
       getRun: vi.fn(),
-      getJob: vi.fn(),
+      getRunStatus: vi.fn(),
       pinRun: vi.fn(),
       compareRuns: vi.fn(),
     },

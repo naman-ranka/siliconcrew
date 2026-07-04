@@ -1,3 +1,5 @@
+import { workbenchApi } from "@/lib/api";
+import { useStore } from "@/lib/store";
 import type { RunStatus, RunSummary } from "@/types";
 
 /** Tailwind text color for a run/stage status (status = meaning, never brand). */
@@ -29,6 +31,37 @@ export function statusDotClass(status: RunStatus | "info" | undefined): string {
 
 export function latestOfKind(runs: RunSummary[], kind: "sim" | "synth"): RunSummary | undefined {
   return runs.find((r) => r.kind === kind);
+}
+
+/** Parse a tool's JSON result defensively — /invoke returns the tool's raw
+ *  result, which may arrive as a JSON string or an already-parsed object. */
+export function parseToolJsonResult(result: unknown): Record<string, unknown> | null {
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return result as Record<string, unknown>;
+  }
+  if (typeof result === "string") {
+    try {
+      const parsed = JSON.parse(result);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* not JSON — nothing to apply */
+    }
+  }
+  return null;
+}
+
+/**
+ * User-gesture run Refresh: calls get_synthesis_status THROUGH /invoke — the
+ * same primitive every actor uses, so the gesture is logged as a source:"ui"
+ * activity event — then applies the payload to the run row + last-known
+ * status via the store's applyRunStatus.
+ */
+export async function refreshRunStatus(sessionId: string, runId: string): Promise<void> {
+  const res = await workbenchApi.invokeTool(sessionId, "get_synthesis_status", { run_id: runId });
+  const parsed = parseToolJsonResult(res.result);
+  if (parsed) useStore.getState().applyRunStatus(parsed);
 }
 
 export function relativeTime(iso: string | null | undefined): string {

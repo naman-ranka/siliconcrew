@@ -17,8 +17,9 @@ import type { ActivityEvent, DesignManifest, RunSummary, ToolCatalogEntry } from
 // tool registry (GET /tools; the same @tool schemas the agent and MCP clients
 // use), mapped to forms by lib/schemaForm's conventions. Only the four core
 // flow commands stay hand-defined: they mirror REST request bodies (which ARE
-// their contract) and delegate to lib/commands' runCommand for job polling and
-// unread marking. Everything else goes through the curated POST /invoke, so
+// their contract) and delegate to lib/commands' runCommand (dispatch + toasts;
+// async runs complete via activity events). Everything else goes through the
+// curated POST /invoke, so
 // each run lands in the Activity feed with source "user" exactly like an agent
 // call would with source "agent".
 
@@ -109,7 +110,7 @@ export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
   },
   {
     id: "synth", label: "Synthesize", group: "Flow", tool: "start_synthesis", core: "synth", async: true, requiresSignIn: true, mutates: true,
-    desc: "Async ORFS job → { job_id, run_id } immediately, then honest polling.",
+    desc: "Async ORFS job → { run_id } immediately; completion arrives via activity events / Refresh (no client polling).",
     autoArgs: [
       { key: "verilog_files", describe: (c: SurfaceCtx) => rtlFiles(c).join(", ") || "—" },
       { key: "top_module", describe: (c: SurfaceCtx) => c.manifest?.synthTop ?? "—" },
@@ -141,7 +142,7 @@ export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
 ];
 
 // Catalog entries duplicating a core twin are skipped — the core versions
-// carry the REST + job-polling semantics the plain /invoke path lacks.
+// carry the REST dispatch semantics the plain /invoke path lacks.
 export const CORE_TWIN_TOOLS = new Set([
   "linter_tool",
   "run_isolated_simulation",

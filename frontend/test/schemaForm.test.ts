@@ -387,6 +387,35 @@ describe("buildFormModel", () => {
     expect(end.optional).toBe(true);
   });
 
+  it("get_synthesis_status(run_id): the RUN_ID_KEYS convention gives it the run picker", () => {
+    // The Wave-9 status tool (get_synthesis_job's replacement) takes run_id —
+    // the convention hands it the closed run combobox automatically, with the
+    // newest run as the required default. No per-tool code.
+    const statusEntry: ToolCatalogEntry = {
+      name: "get_synthesis_status",
+      description: "Returns the self-healing status of a synthesis run.",
+      category: "synthesis",
+      argsSchema: {
+        type: "object",
+        properties: { run_id: { type: "string" } },
+        required: ["run_id"],
+      },
+      requiresSignIn: true,
+      async: false,
+      mutates: false,
+    };
+    const [runId] = buildFormModel(statusEntry, CTX);
+    expect(runId).toMatchObject({
+      key: "run_id",
+      editor: "enum",
+      source: "run",
+      def: "synth_0002", // newest run pre-selected
+      optional: false,
+      adv: false,
+    });
+    expect(runId.options).toEqual(["synth_0002", "synth_0001"]);
+  });
+
   it("get_synthesis_metrics: optional run_id → run-sourced picker with an (omit) entry", () => {
     const [runId] = buildFormModel(METRICS_ENTRY, CTX);
     expect(runId.key).toBe("run_id");

@@ -410,17 +410,48 @@ function installMocks(page: Page) {
         platform: "sky130hd", reportAvailable: false, ppa: null,
       };
       state.runs = [run, ...state.runs];
-      serverEvent("start_synthesis", "ok", "synth_0001 dispatched (job job_abc)", "synth_0001");
-      return json(route, { ok: true, jobId: "job_abc", runId: "synth_0001" });
+      serverEvent("start_synthesis", "ok", "synth_0001 dispatched", "synth_0001");
+      // Dispatch-only contract: { runId, pollAfterSec } — no jobId.
+      return json(route, { ok: true, runId: "synth_0001", pollAfterSec: 2 });
     }
-    if (p.includes("/jobs/") && m === "GET") {
-      // First poll (after ~3s) already finds the job complete.
+    // Self-healing run status (rich job shape). The UI never calls this on its
+    // own — it exists for actor-style reads; the user-gesture Refresh goes
+    // through /invoke get_synthesis_status below.
+    const synthStatusJob = (status: string) => ({
+      run_id: "synth_0001",
+      status,
+      stage: status === "completed" ? "finish" : "synthesis",
+      current_stage: "finish",
+      stages: {},
+      stage_history: [
+        { stage: "synth", status: "completed", ended_at: new Date().toISOString() },
+        { stage: "finish", status, ended_at: status === "completed" ? new Date().toISOString() : null },
+      ],
+      dispatched_at: new Date().toISOString(),
+      timeout_sec: 1800,
+      top_module: "alu",
+      elapsed_sec: 42,
+      last_log_lines: ["Finished 6_report"],
+      artifacts_found: status === "completed",
+      summary_metrics: { wns_ns: 0.85 },
+      auto_checks: {},
+      check_notes: "",
+      next_action: null,
+      poll_after_sec: 5,
+      backend: "local_docker",
+      remote: false,
+      execution_label: "local",
+    });
+    const completeSynthRun = () => {
       state.runs = state.runs.map((r) =>
         r.id === "synth_0001"
           ? { ...r, status: "passed", reportAvailable: true, ppa: { areaUm2: 142.5, cells: 48, wnsNs: 0.85, tnsNs: 0, fmaxMhz: 120, powerMw: 1.2 } }
           : r
       );
-      return json(route, { ok: true, job: { status: "completed", current_stage: "finish" } });
+    };
+    if (/\/runs\/[^/]+\/status$/.test(p) && m === "GET") {
+      completeSynthRun();
+      return json(route, { ok: true, job: synthStatusJob("completed") });
     }
 
     // ---- artifacts ----
@@ -439,13 +470,28 @@ function installMocks(page: Page) {
     if (p.endsWith("/tools") && m === "GET")
       return json(route, { ok: true, tools: TOOL_CATALOG });
 
-    // ---- curated tool invocation (command surface) ----
-    if (p.endsWith("/invoke") && m === "POST")
+    // ---- curated tool invocation (command surface + run Refresh gesture) ----
+    if (p.endsWith("/invoke") && m === "POST") {
+      const body = bodyOf(route);
+      if (body.tool === "get_synthesis_status") {
+        // The user-gesture Refresh: the tool's status read reconciles the run
+        // to completed and is itself logged as a source-ui activity event.
+        completeSynthRun();
+        serverEvent("get_synthesis_status", "ok", "synth_0001 completed", "synth_0001");
+        return json(route, {
+          ok: true,
+          tool: "get_synthesis_status",
+          // /invoke returns the tool's raw result — a JSON STRING, like the
+          // real registry does; the frontend must parse it defensively.
+          result: JSON.stringify(synthStatusJob("completed")),
+        });
+      }
       return json(route, {
         ok: true,
         tool: "get_synthesis_metrics",
         result: { status: "ok", run_id: "synth_0001", metrics: { wns_ns: 0.85 } },
       });
+    }
 
     if (p.endsWith("/layouts")) return json(route, []);
     if (p.endsWith("/schematics")) return json(route, []);
@@ -510,13 +556,19 @@ test("palette flow: lint → sim (fail) → waveform → synth → report", asyn
   await expect(dock.locator('[title="new"]')).toHaveCount(0);
   await page.screenshot({ path: "e2e-artifacts/wb2-waveform.png", fullPage: true });
 
-  // ⌘K → Synthesize → dispatch → poll → completed run with PPA → report tab
+  // ⌘K → Synthesize → DISPATCH-ONLY: the running row appears and the UI does
+  // NOT poll. The user-gesture Refresh on the row (→ /invoke
+  // get_synthesis_status, logged as a ui activity event) applies the terminal
+  // status: unread marker + completion toast, then the report opens on click.
   await openPalette(page);
   await page.getByRole("option", { name: /^Synthesize/ }).click();
   await expect(page.getByText(/Synthesis dispatched/)).toBeVisible();
   await expect(dock.getByText("synth_0001")).toBeVisible();
-  // First poll lands after ~3s and completes the job.
-  await expect(page.getByText(/Synthesis completed/)).toBeVisible({ timeout: 15_000 });
+  await expect(dock.locator('[data-run-id="synth_0001"]').getByText("running")).toBeVisible();
+  await dock.getByTestId("run-refresh-synth_0001").click();
+  await expect(page.getByText(/Synthesis completed/)).toBeVisible();
+  // running → terminal marked the run unread (no auto-switching).
+  await expect(dock.locator('[title="new"]')).toBeVisible();
   await dock.getByText("synth_0001").click();
   await expect(page.getByText("Report · synth_0001")).toBeVisible();
   await expect(page.getByText(/Design Report/)).toBeVisible({ timeout: 10_000 });

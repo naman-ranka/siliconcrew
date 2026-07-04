@@ -8,14 +8,16 @@ import {
   Cpu,
   Layers,
   Pin,
+  RefreshCw,
   Waves,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
 import { useSessionUi } from "@/lib/workbenchUiStore";
+import { isTerminal } from "@/lib/useWorkbenchSync";
 import { openArtifact } from "@/lib/openArtifact";
 import { groupRuns } from "@/lib/runsGrouping";
-import { relativeTime, statusDotClass, statusTextClass } from "./runStatus";
+import { refreshRunStatus, relativeTime, statusDotClass, statusTextClass } from "./runStatus";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { RunSummary } from "@/types";
 
@@ -47,6 +49,20 @@ export function RunsPane() {
   const { unreadRunIds, clearUnread } = useSessionUi(sid);
 
   const [kind, setKind] = useState<"all" | "sim" | "synth">("all");
+  // Run id whose user-gesture Refresh is in flight (one at a time).
+  const [refreshing, setRefreshing] = useState<string | null>(null);
+
+  const refreshRun = async (runId: string) => {
+    if (!sid || refreshing) return;
+    setRefreshing(runId);
+    try {
+      await refreshRunStatus(sid, runId);
+    } catch {
+      // Best-effort gesture — the row keeps its last-known status.
+    } finally {
+      setRefreshing(null);
+    }
+  };
 
   const groups = useMemo(() => {
     const filtered = kind === "all" ? runs : runs.filter((r) => r.kind === kind);
@@ -119,6 +135,29 @@ export function RunsPane() {
             <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
               · {synthJob.currentStage}
             </span>
+          ) : null}
+          {!isTerminal(r.status) ? (
+            <>
+              {r.createdAt ? (
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  · started {relativeTime(r.createdAt)}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                title="Refresh run status (logged as a UI event)"
+                aria-label={`Refresh status of ${r.id}`}
+                data-testid={`run-refresh-${r.id}`}
+                disabled={refreshing === r.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void refreshRun(r.id);
+                }}
+                className="shrink-0 rounded p-0.5 text-muted-foreground outline-none hover:bg-surface-3 hover:text-foreground focus-visible:ring-1 focus-visible:ring-primary/60 disabled:opacity-50"
+              >
+                <RefreshCw className={cn("h-3 w-3", refreshing === r.id && "animate-spin")} />
+              </button>
+            </>
           ) : null}
           {r.kind === "synth" && r.status === "passed" && r.ppa?.wnsNs != null ? (
             <span

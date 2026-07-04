@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
-import { ArrowRight, Cpu, FileCode2, Waves } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ArrowRight, Cpu, FileCode2, RefreshCw, Waves } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { useSessionUi } from "@/lib/workbenchUiStore";
+import { isTerminal } from "@/lib/useWorkbenchSync";
 import { openArtifact, artifactKeyForFile } from "@/lib/openArtifact";
 import { cn } from "@/lib/utils";
-import { relativeTime, statusDotClass } from "./runStatus";
+import { refreshRunStatus, relativeTime, statusDotClass } from "./runStatus";
 import type { RunSummary } from "@/types";
 
 // The agent-shell artifact panel's HOME view (Wave 8): Runs + Files as an
@@ -29,6 +30,20 @@ export function ArtifactIndex() {
   const manifest = useStore((s) => s.manifest);
   const sid = useStore((s) => s.currentSession?.id ?? null);
   const { unreadRunIds, clearUnread } = useSessionUi(sid);
+  // Run id whose compact Refresh gesture is in flight.
+  const [refreshing, setRefreshing] = useState<string | null>(null);
+
+  const refreshRun = async (runId: string) => {
+    if (!sid || refreshing) return;
+    setRefreshing(runId);
+    try {
+      await refreshRunStatus(sid, runId);
+    } catch {
+      // Best-effort — the row keeps its last-known status.
+    } finally {
+      setRefreshing(null);
+    }
+  };
 
   const files = useMemo(
     () =>
@@ -83,8 +98,38 @@ export function ArtifactIndex() {
               )}
             </span>
             <span className="shrink-0 text-[9px] font-mono text-muted-foreground/50">
-              {relativeTime(r.createdAt)}
+              {!isTerminal(r.status) && r.createdAt
+                ? `started ${relativeTime(r.createdAt)}`
+                : relativeTime(r.createdAt)}
             </span>
+            {!isTerminal(r.status) ? (
+              // Compact user-gesture Refresh (span, not <button> — the row
+              // itself is a button and buttons can't nest).
+              <span
+                role="button"
+                tabIndex={0}
+                title="Refresh run status (logged as a UI event)"
+                aria-label={`Refresh status of ${r.id}`}
+                data-testid={`agent-run-refresh-${r.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void refreshRun(r.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void refreshRun(r.id);
+                  }
+                }}
+                className={cn(
+                  "shrink-0 rounded p-0.5 text-muted-foreground/60 hover:bg-surface-3 hover:text-foreground",
+                  refreshing === r.id && "pointer-events-none opacity-50"
+                )}
+              >
+                <RefreshCw className={cn("h-3 w-3", refreshing === r.id && "animate-spin")} aria-hidden />
+              </span>
+            ) : null}
             <ArrowRight
               className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40 opacity-0 group-hover:opacity-100"
               aria-hidden

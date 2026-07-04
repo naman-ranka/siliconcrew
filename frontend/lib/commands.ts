@@ -1,5 +1,5 @@
 import { workbenchApi } from "@/lib/api";
-import { toSynthJobStatus, useStore } from "@/lib/store";
+import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import type { ActivityEvent, DesignManifest, RunSummary } from "@/types";
 
@@ -10,10 +10,13 @@ import type { ActivityEvent, DesignManifest, RunSummary } from "@/types";
 // each command's file set from the manifest (files_for_stage), so the param
 // surface here is choices only (platform, clock, mode, stages…).
 //
-// Sync commands (lint, sim) resolve inline; async ones (synth, pnr) dispatch a
-// job and poll honestly. Nothing here auto-switches the artifact center: a
-// finished run marks itself unread in the Runs panel instead (v2 principle:
-// no view hijacking).
+// Sync commands (lint, sim) resolve inline; async ones (synth, pnr) are
+// DISPATCH-ONLY: POST → run appears queued/running → done. The UI is a viewer
+// of the event log — it never polls run status. Completion arrives through
+// activity events, a user Refresh, or focus revalidate, and the store's
+// runs-slice transition detector owns unread marking, toasts and artifact
+// refresh. Nothing here auto-switches the artifact center (v2 principle: no
+// view hijacking).
 
 export type CommandId = "lint" | "sim" | "synth" | "pnr";
 
@@ -247,49 +250,6 @@ function errText(e: unknown): string {
   return String(e);
 }
 
-const JOB_DEADLINE_MS = 20 * 60 * 1000;
-
-/** Poll an async job to a terminal state, honestly and politely.
- *  Respects the backend's own poll_after_sec hint when present. */
-async function pollJob(
-  sessionId: string,
-  jobId: string,
-  runId: string
-): Promise<Record<string, unknown> | null> {
-  const store = useStore.getState;
-  const deadline = Date.now() + JOB_DEADLINE_MS;
-  let interval = 3000;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, interval));
-    if (store().currentSession?.id !== sessionId) {
-      useStore.setState({ synthJob: null });
-      return null; // switched away
-    }
-    let job: Record<string, unknown>;
-    try {
-      job = await workbenchApi.getJob(sessionId, jobId);
-    } catch {
-      interval = Math.min(interval * 1.5, 30000);
-      continue;
-    }
-    const state = String(job.status ?? "");
-    if (state === "completed" || state === "failed") {
-      useStore.setState({ synthJob: null });
-      return job;
-    }
-    // Publish the live stage for anything rendering run state (RunsPane shows
-    // the current PD stage next to the RUNNING synth run).
-    useStore.setState({ synthJob: toSynthJobStatus(jobId, runId, job) });
-    const hint = Number(job.poll_after_sec);
-    interval = Number.isFinite(hint) && hint > 0
-      ? Math.min(hint * 1000, 60000)
-      : Math.min(interval * 1.5, 30000);
-    void store().loadRuns();
-  }
-  useStore.setState({ synthJob: null });
-  return { status: "failed", timeout: true };
-}
-
 /**
  * Run a command. `values` omitted → manifest-derived defaults (the ⌘K fast
  * path); the param modal passes explicit values. Results surface through the
@@ -400,34 +360,19 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
                 fromStage: String(vals.fromStage ?? "floorplan"),
                 maxStage: String(vals.maxStage ?? "finish"),
               });
-        const { jobId, runId } = dispatch;
+        const { runId } = dispatch;
         inFlight.delete(id); // dispatched — a second job may now be queued
-        done({ runId, resultSummary: `${runId} dispatched (job ${jobId})` });
-        store.pushToast({ kind: "info", title: id === "synth" ? "Synthesis dispatched" : "P&R retry dispatched", detail: runId });
-        refresh();
-
-        const job = await pollJob(sessionId, jobId, runId);
-        if (!job) return; // session switched — stop narrating
-        const okDone = String(job.status) === "completed";
-        done({
-          status: okDone ? "ok" : "error",
-          runId,
-          resultSummary: okDone ? `${runId} completed` : `${runId} failed`,
+        done({ runId, resultSummary: `${runId} dispatched` });
+        store.pushToast({
+          kind: "info",
+          title: id === "synth" ? "Synthesis dispatched" : "P&R retry dispatched",
+          detail: `run ${runId}`,
         });
-        useWorkbenchUiStore.getState().markUnread(sessionId, runId);
-        if (okDone) {
-          await useStore.getState().refreshSynthArtifacts?.(runId);
-          useStore.getState().pushToast({ kind: "success", title: "Synthesis completed", detail: runId });
-        } else {
-          const notes = typeof job.check_notes === "string" ? job.check_notes : "";
-          useStore.getState().pushToast({
-            kind: "error",
-            title: id === "synth" ? "Synthesis failed" : "P&R retry failed",
-            detail: [runId, notes].filter(Boolean).join(" — ") || undefined,
-          });
-        }
-        // A finished run's artifacts now exist on disk — refresh the tree.
-        useStore.getState().invalidateDirs(["", "synth_runs"]);
+        // Dispatch-only: the finally-block refresh() below pulls the run list
+        // once so the new queued/running row appears. No polling — completion
+        // reaches the runs slice via activity events / user Refresh / focus
+        // revalidate, and the store's transition detector handles the rest
+        // (unread, toasts, artifact refresh, dir invalidation).
         break;
       }
     }

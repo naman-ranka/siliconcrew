@@ -119,4 +119,28 @@ describe("BottomDock", () => {
     expect(screen.getByText("sim_0001")).toBeInTheDocument();
     expect(screen.getByText(/failed @ 240ns/)).toBeInTheDocument();
   });
+
+  it("running synth rows show the LAST-KNOWN stage (synthJob), started-ago, and a Refresh button", () => {
+    useStore.setState({
+      runs: [
+        {
+          id: "synth_0001",
+          kind: "synth",
+          status: "running",
+          createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+          top: "decoder",
+          pinned: false,
+        },
+      ] as any,
+      // Last-known status — fed only by Refresh/status responses, never a poller.
+      synthJob: { runId: "synth_0001", status: "running", currentStage: "place" },
+    });
+
+    render(<BottomDock />);
+    fireEvent.click(screen.getByRole("button", { name: /Runs/ }));
+    expect(screen.getByText("synth_0001")).toBeInTheDocument();
+    expect(screen.getByText(/place/)).toBeInTheDocument(); // last-known stage
+    expect(screen.getByText(/started 5m ago/)).toBeInTheDocument(); // honest staleness
+    expect(screen.getByLabelText("Refresh status of synth_0001")).toBeInTheDocument();
+  });
 });

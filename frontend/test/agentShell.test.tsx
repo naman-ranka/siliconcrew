@@ -16,7 +16,12 @@ vi.mock("@/lib/api", () => ({
   workspaceApi: { getDirPaths: async () => ({ ok: true, paths: [], truncated: false }) },
   workbenchApi: {},
 }));
-vi.mock("@/lib/useWorkbenchSync", () => ({ useWorkbenchSync: () => {} }));
+// Neutralize only the hook — keep the real isTerminal/hasActiveRun helpers
+// (ArtifactIndex uses isTerminal for the running-run Refresh affordance).
+vi.mock("@/lib/useWorkbenchSync", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/useWorkbenchSync")>()),
+  useWorkbenchSync: () => {},
+}));
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({
     enabled: false,
@@ -91,6 +96,14 @@ beforeEach(() => {
         top: "cpu_tb",
         pinned: false,
       },
+      {
+        id: "synth_0002",
+        kind: "synth",
+        status: "running",
+        createdAt: new Date().toISOString(),
+        top: "alu",
+        pinned: false,
+      },
     ] as never,
     activity: { serverEvents: [], localEvents: [], status: "ready", nextBefore: null, error: null },
     // Neutralize data loading — this is a layout smoke test.
@@ -137,6 +150,11 @@ describe("AgentShell (view=agent, Wave 8 slide-over)", () => {
     expect(screen.getByTestId("agent-run-sim_0001")).toBeInTheDocument();
     expect(screen.getByTestId("agent-files-section")).toHaveTextContent("Files");
     expect(screen.getByTestId("agent-file-alu.v")).toBeInTheDocument();
+
+    // The RUNNING run carries the compact user-gesture Refresh; terminal
+    // runs don't (the UI never polls — refresh is an explicit act).
+    expect(screen.getByTestId("agent-run-refresh-synth_0002")).toBeInTheDocument();
+    expect(screen.queryByTestId("agent-run-refresh-sim_0001")).toBeNull();
   });
 
   it("mounts NO command surfaces; ⌘K inert; ⌘P quick-open; ⌘O toggles the rail", async () => {

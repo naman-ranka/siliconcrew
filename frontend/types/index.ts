@@ -235,8 +235,9 @@ export interface Toast {
   detail?: string;
 }
 
-// Live synthesis (ORFS) job status — drives the stage-progress UI while a
-// remote synth runs. Mirrors the backend job-status payload (snake_case).
+// Last-known synthesis (ORFS) run status — the UI is a VIEWER: this is fed
+// only by explicit user Refresh results / run-status responses, never by a
+// client-side poller. Mirrors the backend status payload (snake_case).
 export type SynthStageId =
   | "constraints"
   | "synth"
@@ -248,12 +249,16 @@ export type SynthStageId =
   | "finish";
 export type SynthStageStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 export interface SynthJobStatus {
-  jobId: string;
   runId: string;
   status: string; // queued | running | completed | failed
   currentStage?: SynthStageId | string | null;
   stages?: Partial<Record<SynthStageId, { status: SynthStageStatus; artifacts?: Record<string, unknown> }>>;
+  /** Per-stage lifecycle derived from file evidence (backend stage truth). */
+  stageHistory?: { stage: string; status: string; ended_at?: string | null }[];
+  dispatchedAt?: string | null;
+  lastLogLines?: string[];
   elapsedSec?: number | null;
+  checkNotes?: string | null;
   backend?: string | null;
   remote?: boolean | null;
   executionLabel?: string | null;
