@@ -1,6 +1,7 @@
 # Wave 9 — Foundational synthesis job model
 
-Status: DRAFT (pending 2nd-agent review)
+Status: ACCEPTED with amendments (2nd-agent review folded in; implementation
+awaiting user go)
 
 ## Intent
 
@@ -13,182 +14,225 @@ surface, NOT a rewrite of the synthesis engine.
 1. **The run directory is the database.** `run_meta.json` + artifacts are the
    only authoritative state; process memory is a cache, never load-bearing.
 2. **One key.** `run_id` (the durable folder name) addresses everything;
-   the process-lifetime `job_id` is eliminated.
+   the process-lifetime `job_id` is eliminated. (Non-goal: the internal
+   remote-ORFS service layer has its own unrelated `job_id` —
+   `src/platform_engines/orfs_service.py`, `src/orfs_client/` — that
+   namespace is NOT touched.)
 3. **One async contract.** dispatch → poll → read. Exactly one blocking
    convenience (`wait_for_synthesis`), defined as bounded polling, identical
    on every platform.
 4. **The computer writes its own tombstone.** Terminal state is persisted
    durably by whoever did/observed the work; readers can declare a run dead
    by staleness, so no run is ever stuck at "running".
-5. **The UI is a viewer, not an actor.** Actors (agent, MCP client, the USER
-   via Refresh) call status; every call and every completion is an activity
-   event; the UI updates from events, user gestures, and window focus — no
-   autonomous polling loops.
+5. **The UI is a viewer of the event log, not a status actor.** Actors
+   (agent, MCP client, the USER via Refresh) call status; every call and
+   every completion is an activity event; the UI updates from events, user
+   gestures, and window focus. The UI never calls run-status on its own.
 
 ## Locked constraints (user decisions)
 
 - `run_synthesis_and_wait` is REMOVED.
 - The ORFS invocation is UNCHANGED: full flow stays one
-  `make -B DESIGN_CONFIG=…`; partial/retry flows keep their existing chained
+  `make -B DESIGN_CONFIG=…`; partial/retry flows keep their chained
   `do-<stage>` targets. Splitting the full flow per-stage is DEFERRED.
-- The 7 report readers (`get_synthesis_metrics`, `read_stage_report`,
-  `get_route_drc_summary`, `get_cts_summary`, `get_congestion_summary`,
-  `compare_pd_runs`, `search_logs_tool`) are untouched — designers-first,
-  each answers a distinct question.
-- `retry_pd` stays as a named designer verb (same dispatcher internally).
-- Quotas/tier gating (429), PROTECTED gating, run lineage/pin/compare,
-  unread + no-auto-switch UX: all unchanged.
+- The 7 report readers are untouched. `retry_pd` stays as a named designer
+  verb (same dispatcher internally). Quotas (429), PROTECTED gating, run
+  lineage/pin/compare, unread + no-auto-switch: all unchanged.
 
 ## Item 1 — Stage truth from files, not log text
 
-Today `get_synthesis_job_status` infers the live stage by regex over the log
-tail while `run_meta.current_stage` sits at "synth" for the whole ORFS run —
-the payload carries BOTH (`stage` inferred vs `current_stage` persisted) and
-they can disagree.
+Reality check (review): a deterministic file→stage layer ALREADY exists —
+`_STAGE_COMPLETION_MARKERS`, `_find_stage_completion_marker`,
+`_find_stage_artifacts`, `_refresh_stage_metadata`,
+`_load_run_meta_with_inferred_stages` (synthesis_manager.py). The problem is
+only that the LIVE status path ignores it and regex-guesses from the log
+tail instead. So Item 1 is a REFACTOR, not a new table:
 
-Change (`src/tools/synthesis_manager.py`):
-- New pure helper `stage_progress_from_files(run_dir, plan) ->
-  {stage_history: [{stage, ended_at?, status}], current_stage}` driven by the
-  deterministic ORFS trail: per-stage logs (`logs/<plat>/<design>/base/N_*.log`)
-  and result artifacts (`results/.../N_*.odb|.v|.gds`). A stage is
-  *completed* when its artifact exists (mtime = end time), *running* when its
-  log exists but its artifact doesn't, *pending* otherwise. Works live AND
-  post-mortem (hosted stage_out reconstructs history from pulled files).
-- Status responses expose ONE stage field (`stage`) + the `stages` table +
-  new `stage_history` (with real timings). The `stage`/`current_stage`
-  duality collapses (`current_stage` kept as a mirror only if a consumer
-  needs it — verify; prefer removal, pre-users).
-- Opportunistic persistence: in-process status reads (and worker milestones)
-  write the derived progress into `run_meta.json` via the existing atomic
-  `_write_json` — the folder stays the truth for out-of-process readers.
-- Log-tail text stays in the payload (`last_log_lines`) as detail, never as
-  the stage source.
-- Hosted note (honest): during a cloud Job execution the web instance has no
-  live file view; stage stays "running (synthesis)" with elapsed time — same
-  as today — and `stage_history` backfills at stage_out.
+- One helper `stage_progress_from_files(run_dir, plan, floor_ts)` built ON
+  TOP of the existing marker/artifact tables (no third stage-truth table):
+  a stage is *completed* when its marker artifact exists (mtime = end
+  time), *running* when its stage log exists without the artifact,
+  *pending* otherwise. Correct repo paths: `orfs_logs/<plat>/<design>/base/
+  N_*.log`, `orfs_results/<plat>/<design>/base/N_*.odb` (intermediate
+  stages emit .odb/.sdc only; .v/.gds exist only for finish; grt =
+  `5_1_grt.odb`).
+- `floor_ts = dispatched_at`: only files with mtime ≥ dispatched_at count
+  as THIS run's progress. Retry runs copy parent checkpoints with
+  `shutil.copy2` (parent mtimes preserved) — those render as status
+  "inherited", never as this run's timings.
+- The live status path uses this instead of log-regex; `stage` (payload)
+  becomes file-derived truth; `last_log_lines` stays as detail, never the
+  stage source. New `stage_history` (per-stage status + end timestamps).
+- **`current_stage` STAYS** (mirrors the derived value): it is load-bearing
+  in `_refresh_stage_metadata` failure attribution, `actions.py`
+  `currentStage`, the frontend `toSynthJobStatus`/RunsPane, and multiple
+  test fixtures. No removal this wave.
+- Persistence discipline (race fix from review): readers NEVER write
+  run_meta — stage progress is derived on read (cheap stat calls). Only the
+  worker (milestones) and the reconciler (terminal transitions) write, so
+  reader writes can't clobber the worker's whole-dict persists.
+- Hosted note (honest): during a cloud/remote execution the web instance
+  has no live file view — stage stays "running (synthesis)" with elapsed
+  time; `stage_history` backfills after stage_out from pulled file mtimes.
 
 ## Item 2 — One key: run_id (tool-surface consolidation)
 
-- `_JOBS` re-keyed by `run_id`; `start_synthesis_job` / `retry_pd_job`
-  return `{run_id, status:"queued", poll_after_sec, timeout_sec}` — no
-  `job_id` anywhere (pre-users: clean break; `index.json`'s jobs mapping
-  becomes unnecessary for new runs, tolerated when reading old dirs).
-- `get_synthesis_job` → **`get_synthesis_status(run_id)`** (wrapper rename;
-  manager fn renamed to `get_synthesis_status(run_id, workspace)`), keeping
-  the FULL rich payload: status, stage, stages, stage_history, elapsed_sec,
-  last_log_lines, artifacts_found, summary_metrics, auto_checks, check_notes,
-  next_action, poll_after_sec, backend, execution_label (+ new dispatched_at,
-  last_activity_at). Lookup order: in-process memory (live queued/running
-  detail) → `run_meta.json` → reconcile. Same shape from any source.
-- **Delete** `get_stage_status` (content = `stages`/`stage_history` fields)
-  and `run_synthesis_and_wait` (architect_tools + prompts updated to
-  "start → bounded wait loop").
-- `wait_for_synthesis(run_id, max_wait_sec, poll_interval_sec)` — unchanged
-  bounded-poll semantics, re-keyed.
-- REST (`src/api/actions.py` + `frontend/lib/api.ts`): POST /synthesize →
-  `{ok, runId, pollAfterSec}`; `GET …/jobs/{job_id}` replaced by
-  `GET …/runs/{run_id}/status`. Retry endpoint returns runId only.
-- Update: `tool_catalog.py` sets (ASYNC/MUTATING/PROTECTED;
-  EXCLUDED_FROM_UI stays `{wait_for_synthesis}`), `mcp_tools` +
-  `architect_tools` lists, architect prompts (v0/v2 + pareto), tests
-  (incl. `test_poll_wait_and_mcp_visibility`), Command Surface (schema-driven
-  — picks up renames from the catalog automatically; verify run_id param
-  conventions still map to the run combobox).
+- Initial `run_meta.json` written AT DISPATCH (before submit) with
+  `status:"queued", dispatched_at, timeout_sec` — a queued run is visible
+  and tombstone-able out-of-process from second zero (today meta first
+  appears inside the worker).
+- `_JOBS`, `_POLL_CACHE`, `_POLL_BACKOFF_STATE`, `_recommended_poll_after_sec`
+  re-keyed by `run_id`; `start_synthesis_job`/`retry_pd_job` return
+  `{run_id, status:"queued", poll_after_sec, timeout_sec}` — no `job_id`.
+  index.json's jobs mapping stops being written (tolerated when reading old
+  dirs).
+- `get_synthesis_job` → **`get_synthesis_status(run_id)`** keeping the FULL
+  rich payload (status, stage, stages, stage_history, elapsed_sec,
+  last_log_lines, artifacts_found, summary_metrics, auto_checks,
+  check_notes, next_action, poll_after_sec, backend, execution_label,
+  dispatched_at). Lookup: in-process memory → run_meta.json → reconcile
+  (Item 3). Same shape from any source.
+- **Delete** `get_stage_status` (content = stages/stage_history fields) and
+  `run_synthesis_and_wait`. `wait_for_synthesis(run_id, …)` unchanged
+  semantics, re-keyed.
+- REST: POST /synthesize → `{ok, runId, pollAfterSec}`;
+  `GET …/runs/{run_id}/status` replaces `GET …/jobs/{job_id}`; retry
+  returns runId only; `_ui_log_result` payloads drop job_id.
+- Full consumer sweep (from review — ALL of these change):
+  - backend: wrappers.py (tools + start_synthesis/sleep_tool/next_action
+    docstrings), mcp_server.py imports + mcp_tools, tool_catalog.py
+    (TOOL_CATEGORIES["synthesis"] must list the RENAMED tool or it silently
+    loses PROTECTED status), architect.py:100-102/228-229 hardcoded tool
+    table, prompts v0 + **v1** + v2 + pareto, actions.py.
+  - frontend: types (SynthJobStatus.jobId), api.ts (synthesize/getJob/
+    retryRun), store.ts synthJob slice + toSynthJobStatus, RunsPane,
+    commands.ts, commandSurface.ts:112 desc string, CommandSurface.tsx:79
+    icon map key. schemaForm's RUN_ID_KEYS convention gives
+    `get_synthesis_status(run_id)` the run combobox automatically (today's
+    job_id param never had one — small UX win).
 
 ## Item 3 — Tombstones: no run is ever stuck "running"
 
-`run_meta.json` gains: `dispatched_at`, `timeout_sec` (the clamped value),
-`orfs_run_handle` (hosted, at stage_in). Liveness needs NO new machinery
-locally: **the growing ORFS logs are the heartbeat** (freshest file mtime
-under the run dir).
+- **Add reconcile to the status-read path** (review: today
+  `_reconcile_stale_status` runs ONLY in `list_synthesis_runs`; the status
+  read and /runs/{id} return stale meta raw). After this item, EVERY read
+  (status, run list, run detail) reconciles.
+- Death verdict added to the reconciler:
+  - `running` + target artifacts complete → `completed` (exists today).
+  - `running` + no in-process future + past `dispatched_at + timeout_sec +
+    grace` + liveness signal cold → `failed`, check_notes "orchestrator
+    lost (backend restarted or instance recycled)".
+  - Liveness signal is BACKEND-SPECIFIC and stated honestly: local_docker →
+    freshest file mtime under the run dir (logs grow live via bind mounts);
+    remote/cloud_job → NO live files exist during execution, so liveness is
+    the timeout ceiling plus Item 4's durable meta pushes. No universal
+    heartbeat is claimed.
+- **Completion activity event, exactly once:** on any transition to
+  terminal (worker finalize OR reconciler), emit a SYNTHETIC ORPHAN
+  `tool_result` event (source "system", runId, honest summary) —
+  `build_activity_events` already renders orphan tool_results; no new event
+  type needed. Exactly-once via an `O_CREAT|O_EXCL` marker file
+  (`completion.event`) in the run dir — atomic claim, no read-modify-write
+  race between concurrent readers. Plumbing: `_job_worker` gains the
+  session context (captured ctx in `_submit_with_quota_release` is rebound
+  inside the worker thread) so `log_tool_result(workspace, session_id, …)`
+  has what it needs; the reconciler emits with the session it's reading.
 
-Extend `_reconcile_stale_status` (runs on every status/list read, both
-already true today) with a death verdict:
-- `running` + target artifacts complete → `completed` (exists today).
-- `running` + no in-process future + no file activity for `STALE_GRACE`
-  (e.g. 120s) + past `dispatched_at + timeout_sec + grace` → `failed`,
-  `check_notes: "orchestrator lost (backend restarted or instance
-  recycled); logs end at <ts>"`.
-- `running` + fresh file activity → honestly `running` (a run the process
-  lost but docker still executes keeps living until its files stop moving —
-  then either the completed or the failed leg lands).
+## Item 4 — Hosted durability (any instance can finalize)
 
-**Completion activity event (exactly once):** on any transition to a
-terminal status — worker finalize OR reconciler — emit one event to the
-existing attempt/event log (`attempt_logger`), guarded by a
-`completion_event_recorded` flag in `run_meta` (atomic write). This is the
-"trigger" the UI model consumes; it fires instantly when the worker is
-alive, and on the next read when it wasn't.
+- **Deterministic run handle** (review simplification): the object-storage
+  prefix becomes `orfs-runs/<session_id>/<run_id>` instead of a UUID minted
+  inside `CloudJobOrfsRunner.run()`. Any instance can reconstruct it from
+  the run alone — nothing to plumb through OrfsRequest/OrfsResult, nothing
+  extra in run_meta. (`make_run_stager` gains an explicit handle argument.)
+- **Progressive meta push:** cloud mode pushes the tiny run_meta.json (+
+  bounded log tail) to the handle prefix at worker milestones (dispatch,
+  pre-execute, post-stage_out, finalize) — single small-object puts.
+  Requires a new `put_file`/`exists` on the ObjectStore protocol → ripples:
+  Protocol + InMemoryObjectStore + GcsObjectStore + make_run_stager/
+  build_run_stager return shape + orfs_runner._build_cloud_runner
+  unpacking. All listed, all small.
+- **Adoption / idempotent finalize:** reconciler finding `running` + past
+  ceiling on any instance: check `store.exists(f"{handle}/out")` (NEW —
+  review: `get_tree` today silently creates an empty dir on absent blobs,
+  so existence MUST be explicit). If outputs exist → stage_out (confirmed
+  idempotent: pure tar-extract) → normal finalize (parse PPA, terminal
+  meta, completion event, workspace sync). If absent and past ceiling → the
+  Item-3 failed leg.
+- Cloud Run execution API: confirmed `GcpCloudRunJobClient` has only
+  `execute()` — no status probe exists. Ship without it (timeout ceiling
+  covers the gap); probe noted as follow-up.
+- Honest test limit: hosted legs unit-tested against recording-fake
+  runner/stager patterns; no live GCS/Cloud Run in CI.
 
-## Item 4 — Hosted durability (worker writes durable state; anyone can finalize)
+## Item 5 — UI: viewer of the event log
 
-- **Progressive meta push:** in cloud mode, the worker pushes the tiny
-  `run_meta.json` (+ bounded log tail) to the run's object-storage prefix at
-  milestones (dispatch, pre-execute, post-stage_out, finalize) — single
-  small-object puts via a new minimal stager method (NOT workspace tarball
-  syncs). `get_synthesis_status` on any instance answers from the durable
-  meta.
-- **Adoption / idempotent finalize:** reconciler finding `running` + stale
-  on an instance that doesn't own the run: using `orfs_run_handle` from
-  meta, attempt `stage_out` — if the Job's `/out` exists, run the normal
-  finalize (parse PPA, terminal meta, completion event, workspace sync); if
-  nothing and past timeout → the Item-3 failed leg. The dispatching thread
-  surviving is no longer required for a run to complete its bookkeeping.
-- Cloud Run execution API is used ONLY as an optional liveness fallback
-  ("container still running?" → keep `running`); it is never a stage
-  source. If the current `job_client` lacks a status probe, ship without it
-  (timeout ceiling covers the gap) and note the probe as a follow-up.
-- Honest test limit: hosted legs are unit-tested against the existing
-  recording-fake runner/stager patterns; no live GCS/Cloud Run in CI.
+- **Delete `pollJob`** (commands.ts) and the run-status polling. Dispatch =
+  POST → run appears `queued` → toast "dispatched". Everything pollJob's
+  terminal hook did re-homes to the runs-slice transition detector below
+  (unread marking, synth-artifact refresh, `invalidateDirs(["",
+  "synth_runs"])`, completion/failure toast).
+- **The one background behavior the UI keeps: watching the ACTIVITY FEED,
+  not run status.** Review flagged the honest gap — with pollJob and the 5s
+  interval both gone, a completion event has no delivery path to an
+  already-focused tab. Resolution consistent with the user's model ("some
+  kind of activity is automatically generated, and because of that
+  activity, it automatically updates the UI"): while any non-terminal run
+  exists, the activity slice revalidates on a slow cadence (~15s, cheap
+  head fetch); a new event carrying a runId triggers `loadRuns()`. The UI
+  subscribes to the LOG; it never calls run-status itself. (SSE push later
+  replaces the cadence without changing the model.) `useWorkbenchSync`'s
+  5s whole-workbench poll is deleted; focus/visibility revalidate stays.
+- **User Refresh** on a run row (RunsPane + agent Index): calls
+  `get_synthesis_status` through `/invoke` (logged as source:"ui" activity
+  — the SAME primitive every actor uses) and applies the response to the
+  row. Hosted honesty: /invoke for a non-mutating tool does not sync the
+  workspace, so that activity line persists only best-effort until the
+  next mutating sync — accepted (a Refresh is not worth a tarball upload).
+  Passive hydration (snapshot, focus) stays a plain unlogged read.
+- **Honest staleness:** run rows show `running · <stage> · started 12m ago
+  · checked 4m ago · [Refresh]` (dispatched_at + slice fetch time).
+- **LivePill (behavior CHANGE, per review):** today it renders the latest
+  activity event; it additionally gets a running-run chip (last-known
+  stage from the slice) — no fake liveness, clearly labeled as last-known.
+- **Unread on completion:** the runs slice detects running→terminal on any
+  reload (whatever caused it) and marks unread. No auto-switch (unchanged).
+- Run detail surfaces stage_history (per-stage table + timings) and
+  last_log_lines.
 
-## Item 5 — UI: viewer, not actor
+## Tests / gates (full inventory from review)
 
-- **Delete `pollJob`** (`frontend/lib/commands.ts`) and the `synthJob`
-  polling publisher. Dispatch = POST, add the run to the slice, toast
-  "dispatched", done.
-- **Remove the 5s active-run interval** from `useWorkbenchSync`; KEEP
-  focus/visibility revalidate ("look when the human looks").
-- **Updates arrive three ways only:**
-  1. Activity events (agent/MCP status calls stream in as tool cards +
-     activity; the completion event from Item 3): a new activity event
-     carrying a runId invalidates/reloads the runs slice.
-  2. **User Refresh** on a run row (RunsPane + agent-shell Index): calls
-     `get_synthesis_status` through the `/invoke` tool path so it lands in
-     activity as a source:"ui" call — the SAME primitive every other actor
-     uses. Passive hydration (snapshot, focus) stays a plain read, NOT
-     logged (gestures are events; ambient loads aren't).
-  3. Window-focus revalidate (existing).
-- **Honest staleness on run rows:** `running · <stage> · started 12m ago ·
-  checked 4m ago · [Refresh]` (from `dispatched_at` + slice fetch time).
-  LivePill shows any running run's last-known stage — no fake liveness.
-- **Unread on completion:** the runs slice detects the running→terminal
-  transition on any reload (whatever caused it) and sets the unread marker —
-  replaces the pollJob-terminal hook. No auto-switch (unchanged rule).
-- Run detail gains the per-stage table/timings + last_log_lines from the
-  status payload (already carried; newly surfaced).
-
-## Tests / gates
-
-- pytest: `stage_progress_from_files` matrix over fixture layouts (fresh /
-  mid-flow / complete / partial max_stage / retry); tombstone matrix
-  (artifacts-complete→completed · stale+expired→failed · files-growing→
-  running · exactly-once completion event); run_id-keyed status (memory hit
-  / disk recovery / unknown id); wrapper + REST renames; MCP visibility
-  test updated (no run_synthesis_and_wait, no get_stage_status, renamed
-  status tool).
-- vitest: dispatch-without-poll; activity-event→runs invalidation;
-  running→terminal transition sets unread; staleness labels.
-- e2e: palette synth flow rewritten for the new model (dispatch → row shows
-  running → user Refresh advances → completion event marks unread);
-  foreign-run discovery via focus revalidate.
+- pytest — update: test_synthesis_manager, test_synthesis_wrapper,
+  test_synthesis_wait_and_metrics (bounded-loop + the run_synthesis_and_wait
+  test is DELETED), test_stage_status_tool (folds into status-payload
+  tests), test_stage_metadata_runtime, test_synth_max_stage,
+  test_retry_pd_tool, test_quota_enforcement, test_workbench_v2_api
+  (synthesize dispatch stub + shared-policy test),
+  test_poll_wait_and_mcp_visibility, test_mcp, test_mcp_tool_registry,
+  test_synth_status_reconcile; fixtures retry_pd_workspace /
+  manager_runtime_workspace / stage_status_workspace run_meta.json
+  (job_id/current_stage fields). New: stage_progress_from_files matrix
+  (fresh/mid/complete/partial/retry-inherited), tombstone matrix
+  (artifacts→completed · stale+expired→failed · growing-files→running ·
+  queued-with-initial-meta), exactly-once completion event (O_EXCL race),
+  status-read reconciles, deterministic handle + exists()/adoption with
+  fake store.
+- vitest — update: commands.test.ts (pollJob gone), workbench.components
+  (synthJob), useWorkbenchSync.test.ts (interval deleted),
+  commandSurface.test.ts, schemaForm.test.ts, agentShell.test.tsx. New:
+  activity-event→loadRuns invalidation, running→terminal→unread, staleness
+  labels.
+- e2e — workbench.smoke.spec.ts:414-416 mock (`jobId`, /jobs route) →
+  runId + /runs/{id}/status; palette flow rewritten (dispatch → queued row
+  → Refresh advances → completion event via activity mock → unread).
 - Gates: pytest suite · tsc · vitest · Playwright · next build. Commit and
   push per item.
 
 ## Deferred (documented)
 
 - Splitting the full flow into chained per-stage ORFS invocations (locked:
-  keep `make -B` for now).
-- SSE/WebSocket push of activity events (pure optimization of the same
-  model).
-- Cloud Run execution-status probe on the job client (if absent today).
+  `make -B` stays).
+- SSE/WebSocket push of activity events (replaces the slow activity
+  cadence; same model).
+- Cloud Run execution-status probe on the job client (doesn't exist today).
 - Simulation-tool async parity; run retention/GC.
