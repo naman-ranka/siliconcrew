@@ -40,3 +40,37 @@ add regression tests per finding (tz floor via monkeypatched TZ or
 explicit aware datetimes; workspace-scoped keys; reconciler live-future
 priority; store reset; retry 400; queued grace; retry current stage;
 wait final sample). Then gates + commit + push + mark task 10 complete.
+
+# Round 2 (codex, post-F1-F8) — C1-C6
+
+C1 HIGH one stage truth in the PAYLOAD: _build_status_response returns
+  persisted `stages` (run_meta) next to file-derived `stage_history` +
+  `stage` — they can disagree (stages.synth "running" while history says
+  floorplan completed; failed runs: top-level stage "synth" while
+  history marks it "running"). Fix: for NON-terminal runs, overlay the
+  file-derived statuses onto the stages table in the RESPONSE only
+  (readers still never write meta); keep persisted artifacts detail.
+  For terminal FAILED runs, stage_progress_from_files marks the first
+  unfinished in-plan stage "failed" (not "running") when meta status is
+  failed, so history/stage/stages agree. Terminal completed: persisted
+  stages already refreshed by the worker — verify consistency.
+C2 HIGH durable meta is write-only: add ObjectStore.get_file(key,
+  local_path)->bool (protocol + InMemory + GCS); in the no-live-future
+  path of get_synthesis_status (and reconciler pre-check), cloud mode:
+  pull <handle>/meta/run_meta.json; prefer the remote meta when local is
+  missing or remote is terminal and local isn't (persist it locally).
+  Test with fake store: instance B answers terminal from durable meta
+  pushed by instance A.
+C3 MED/HIGH adoption should not wait for the ceiling: in the reconciler
+  death leg, try _try_adopt_cloud_outputs (exists() is cheap) BEFORE the
+  deadline check whenever there is no live future — outputs present →
+  finalize completed immediately on the next read.
+C4 MED get_synthesis_status future-exception path builds "failed" but
+  persists nothing: persist failed meta (check_notes = job execution
+  error), _refresh_stage_metadata(terminal failed), durable push,
+  _append_index failed, _emit_completion_event — so later readers agree.
+C5 LOW 15s activity cadence: ACCEPTED deviation, documented in the plan
+  (the UI watches the LOG while a run is live; SSE replaces it later).
+  No code change; note here for the record.
+C6 LOW docs/pd_knob_catalog.md:161 references deleted get_stage_status —
+  update to get_synthesis_status stages/stage_history.
