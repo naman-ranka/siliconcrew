@@ -1,7 +1,7 @@
 # Wave 9 — Foundational synthesis job model
 
-Status: ACCEPTED with amendments (2nd-agent review folded in; implementation
-awaiting user go)
+Status: IMPLEMENTED (Items 1-5; commits 9130a97..08f943b; adversarial
+review pass follows)
 
 ## Intent
 
