@@ -50,9 +50,18 @@ def _run_orfs_via_runner(
     Returns the same dict shape the synthesis manager has always consumed
     (``success``/``stdout``/``stderr``/``command``) so run management is
     unchanged regardless of whether the local Docker or cloud Job backend runs.
+
+    The deterministic ``run_handle`` (<session_id>/<run_id>) keys the cloud
+    backend's staged objects; local/remote backends ignore it (harmless).
     """
     result = get_orfs_runner().run(
-        OrfsRequest(run_dir=run_dir, command=command, volumes=list(volumes), timeout=timeout)
+        OrfsRequest(
+            run_dir=run_dir,
+            command=command,
+            volumes=list(volumes),
+            timeout=timeout,
+            run_handle=_compute_run_handle(run_dir),
+        )
     )
     return {
         "success": result.success,
@@ -1322,7 +1331,7 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
         ).as_dict(),
     }
     run_meta["stages"][args["start_stage"]]["status"] = "running"
-    _persist_run_meta(run_dir, run_meta)
+    _persist_run_meta_durable(run_dir, run_meta)
 
     targets = [PD_STAGE_TARGETS[stage] for stage in _stage_range(args["start_stage"], args["max_stage"])]
     docker_result = _run_orfs_targets(
@@ -1365,7 +1374,7 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     run_meta["current_stage"] = args["max_stage"] if run_meta["status"] == "completed" else args["start_stage"]
     run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
 
-    _persist_run_meta(run_dir, run_meta)
+    _persist_run_meta_durable(run_dir, run_meta)
     _append_index(workspace, args["run_id"], run_meta["status"])
     return run_meta
 
@@ -1398,6 +1407,139 @@ def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, A
 
 def _persist_run_meta(run_dir: str, meta: Dict[str, Any]) -> None:
     _write_json(os.path.join(run_dir, RUN_META_FILENAME), meta)
+
+
+# ---------------------------------------------------------------------------
+# Hosted durability (Wave 9, Item 4): deterministic run handle + durable
+# run_meta pushes + orphan-output adoption. All best-effort, no-ops locally.
+# ---------------------------------------------------------------------------
+
+# Test/wiring override for the durable run store. None → derive from settings
+# (cloud mode builds the shared "orfs-runs" store; local mode has no store).
+_DURABLE_RUN_STORE: Any = None
+
+
+def set_durable_run_store(store: Any) -> None:
+    """Override the durable run store (tests / explicit wiring). None resets
+    to settings-derived behavior."""
+    global _DURABLE_RUN_STORE
+    _DURABLE_RUN_STORE = store
+
+
+def _durable_run_store() -> Any:
+    """The object store holding staged runs, or None outside cloud mode."""
+    if _DURABLE_RUN_STORE is not None:
+        return _DURABLE_RUN_STORE
+    try:
+        from src.platform_engines.settings import get_settings
+
+        settings = get_settings()
+        if not (settings.is_cloud_orfs or settings.is_cloud_workspace):
+            return None
+        from src.platform_engines.workspace_provider import build_run_store
+
+        return build_run_store(settings)
+    except Exception:
+        return None
+
+
+def _compute_run_handle(run_dir: str) -> str:
+    """Deterministic object-storage handle for a run: ``<session_id>/<run_id>``.
+
+    The run store's ``orfs-runs`` prefix supplies the outer path segment (the
+    Cloud Run Job entrypoint hardcodes ``gs://<bucket>/orfs-runs/<handle>``),
+    so the full object prefix is ``orfs-runs/<session_id>/<run_id>`` — Item
+    4's contract. Reconstructable by ANY instance from the current session
+    context + the run dir basename alone; nothing is persisted in run_meta.
+    Empty string when no session context is bound (the cloud runner then
+    falls back to minting a unique key).
+    """
+    try:
+        from src.utils.session_context import get_current_session
+
+        ctx = get_current_session()
+        session_id = ctx.session_id if ctx else None
+    except Exception:
+        session_id = None
+    if not session_id:
+        return ""
+    return f"{session_id}/{os.path.basename(run_dir.rstrip('/'))}"
+
+
+def _push_durable_run_meta(run_dir: str, meta: Dict[str, Any]) -> None:
+    """Best-effort durable copy of run_meta.json (+ a bounded log tail) to the
+    run's object-storage prefix (``<handle>/meta/…``), cloud mode only.
+
+    This is the hosted liveness/adoption signal: any instance reading the run
+    later can see the last persisted milestone even if this instance's scratch
+    is gone. Round-2 amendment #1: reconciler tombstone writes ALSO go through
+    here so terminal truth never depends on the mutates-tarball sync. Never
+    raises; single small-object puts.
+    """
+    try:
+        store = _durable_run_store()
+        if store is None:
+            return
+        put_file = getattr(store, "put_file", None)
+        if not callable(put_file):
+            return
+        handle = _compute_run_handle(run_dir)
+        if not handle:
+            return
+        meta_path = os.path.join(run_dir, RUN_META_FILENAME)
+        if os.path.exists(meta_path):
+            put_file(f"{handle}/meta/{RUN_META_FILENAME}", meta_path)
+        tail = _collect_log_tail(run_dir, max_lines=80)
+        if tail:
+            import tempfile
+
+            fd, tmp_name = tempfile.mkstemp(suffix=".log", text=True)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as tf:
+                    tf.write("\n".join(tail) + "\n")
+                put_file(f"{handle}/meta/log_tail.txt", tmp_name)
+            finally:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
+
+def _persist_run_meta_durable(run_dir: str, meta: Dict[str, Any]) -> None:
+    """Milestone persist: local scratch + best-effort durable copy under the
+    run's object-storage handle. Workers and the reconciler's terminal writes
+    go through this wrapper (readers still never write)."""
+    _persist_run_meta(run_dir, meta)
+    _push_durable_run_meta(run_dir, meta)
+
+
+def _try_adopt_cloud_outputs(run_dir: str, meta: Dict[str, Any]) -> bool:
+    """Adoption (Item 4): pull ``<handle>/out`` into the run dir if the cloud
+    Job uploaded outputs that no worker ever staged out (instance recycled
+    between execute and stage_out).
+
+    ``store.exists`` is the explicit presence check — ``get_tree`` silently
+    materializes an empty dir for absent blobs, which must NOT count as
+    adoption. Idempotent (pure tar-extract), best-effort, no-op in local mode.
+    """
+    try:
+        store = _durable_run_store()
+        if store is None:
+            return False
+        handle = _compute_run_handle(run_dir)
+        if not handle:
+            return False
+        if not store.exists(f"{handle}/out"):
+            return False
+        from src.platform_engines.workspace_provider import make_run_stager
+
+        _stage_in, stage_out = make_run_stager(store)
+        stage_out(run_dir, handle)
+        return True
+    except Exception:
+        return False
 
 
 def _append_index(workspace: str, run_id: str, status: str) -> None:
@@ -1437,7 +1579,9 @@ def _write_dispatch_meta(run_dir: str, run_id: str, args: Dict[str, Any], timeou
         meta["source_run_id"] = args["source_run_id"]
         meta["retry_start_stage"] = args.get("start_stage")
         meta["retry_max_stage"] = args.get("max_stage")
-    _persist_run_meta(run_dir, meta)
+    # Dispatch is the first durable milestone: a hosted reader on another
+    # instance can see the queued run as soon as it exists at all.
+    _persist_run_meta_durable(run_dir, meta)
 
 
 def _dispatch_fields(run_dir: str) -> Dict[str, Any]:
@@ -1524,7 +1668,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         ).as_dict(),
     }
     run_meta["stages"]["constraints"]["status"] = "running"
-    _persist_run_meta(run_dir, run_meta)
+    _persist_run_meta_durable(run_dir, run_meta)
 
     if constraints["status"] != "pass":
         run_meta["status"] = "failed"
@@ -1533,7 +1677,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         run_meta["elapsed_sec"] = round(time.time() - start, 2)
         run_meta["next_action"] = "Fix spec/clock constraints and rerun synthesis."
         run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status="failed")
-        _persist_run_meta(run_dir, run_meta)
+        _persist_run_meta_durable(run_dir, run_meta)
         _append_index(workspace, run_id, "failed")
         return run_meta
 
@@ -1554,13 +1698,13 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         run_meta["finished_at"] = _now_iso()
         run_meta["elapsed_sec"] = round(time.time() - start, 2)
         run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status="completed")
-        _persist_run_meta(run_dir, run_meta)
+        _persist_run_meta_durable(run_dir, run_meta)
         _append_index(workspace, run_id, "completed")
         return run_meta
 
     run_meta["current_stage"] = "synth"
     run_meta["stages"]["synth"]["status"] = "running"
-    _persist_run_meta(run_dir, run_meta)
+    _persist_run_meta_durable(run_dir, run_meta)
 
     if max_stage == "finish":
         docker_result = _run_orfs(
@@ -1642,7 +1786,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         run_meta["finished_at"] = _now_iso()
         run_meta["elapsed_sec"] = round(time.time() - start, 2)
         run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
-        _persist_run_meta(run_dir, run_meta)
+        _persist_run_meta_durable(run_dir, run_meta)
         _append_index(workspace, run_id, run_meta["status"])
         return run_meta
 
@@ -1691,7 +1835,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
     run_meta["elapsed_sec"] = round(time.time() - start, 2)
     run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
 
-    _persist_run_meta(run_dir, run_meta)
+    _persist_run_meta_durable(run_dir, run_meta)
     _append_index(workspace, run_id, run_meta["status"])
     return run_meta
 
@@ -2232,20 +2376,27 @@ def _reconcile_stale_status(
         return meta
     run_id = meta.get("run_id") or os.path.basename(run_dir)
 
+    def _finalize_completed(m: Dict[str, Any]) -> Dict[str, Any]:
+        # Shared COMPLETED leg (also re-run after cloud-output adoption).
+        # Terminal write goes through the durable wrapper: a reconciling
+        # status read is a WRITE, and status is not a mutating endpoint, so
+        # the tombstone must not depend on the mutates-tarball sync.
+        m["status"] = "completed"
+        m["summary_metrics"] = _compute_summary_metrics(run_dir, m)
+        if not m.get("finished_at"):
+            m["finished_at"] = _now_iso()
+        m = _refresh_stage_metadata(run_dir, m, terminal_status="completed")
+        try:
+            _persist_run_meta_durable(run_dir, m)
+        except Exception:
+            pass
+        _emit_completion_event(workspace, run_dir, run_id, m)
+        return m
+
     # Only the target stage's present completion artifact proves the (possibly
     # bounded) flow actually completed.
     if _find_stage_completion_marker(run_dir, _run_stage_bound(meta)) is not None:
-        meta["status"] = "completed"
-        meta["summary_metrics"] = _compute_summary_metrics(run_dir, meta)
-        if not meta.get("finished_at"):
-            meta["finished_at"] = _now_iso()
-        meta = _refresh_stage_metadata(run_dir, meta, terminal_status="completed")
-        try:
-            _persist_run_meta(run_dir, meta)
-        except Exception:
-            pass
-        _emit_completion_event(workspace, run_dir, run_id, meta)
-        return meta
+        return _finalize_completed(meta)
 
     # ---- death verdict ----
     if has_live_future is None:
@@ -2277,6 +2428,16 @@ def _reconcile_stale_status(
     if last_activity is not None and (now_ts - last_activity) < STALE_RUN_GRACE_SEC:
         return meta
 
+    # Adoption before the death verdict (Item 4): a hosted Job may have
+    # uploaded its outputs even though the orchestrating instance died before
+    # stage_out. If ``<handle>/out`` exists, pull it in and re-run the
+    # completion check — artifacts now present means COMPLETED, not failed.
+    if (
+        _try_adopt_cloud_outputs(run_dir, meta)
+        and _find_stage_completion_marker(run_dir, _run_stage_bound(meta)) is not None
+    ):
+        return _finalize_completed(meta)
+
     meta["status"] = "failed"
     note = (
         "orchestrator lost (backend restarted or instance recycled); "
@@ -2287,7 +2448,10 @@ def _reconcile_stale_status(
         meta["finished_at"] = _now_iso()
     meta = _refresh_stage_metadata(run_dir, meta, terminal_status="failed")
     try:
-        _persist_run_meta(run_dir, meta)
+        # Durable tombstone (Round-2 amendment #1): the reconciling read's
+        # terminal write must survive this instance, independent of the
+        # mutates-tarball workspace sync.
+        _persist_run_meta_durable(run_dir, meta)
     except Exception:
         pass
     _emit_completion_event(workspace, run_dir, run_id, meta)
