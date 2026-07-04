@@ -638,13 +638,16 @@ test("agent shell: header + Index panel + nav rail, no ⌘K palette, file→tab,
   // Center: the conversation (composer enabled for the selected session).
   await expect(page.getByPlaceholder("Describe your RTL design requirements...")).toBeVisible();
 
-  // Header carries the chrome; the old fixed sidebar is gone.
+  // Header carries the chrome; the old fixed sidebar is gone. The panel
+  // rests CLOSED (resting state = header + conversation, locked decision).
   const header = page.getByTestId("agent-header");
   await expect(header.getByTestId("agent-session-button")).toBeVisible();
   await expect(page.getByTestId("agent-sidebar")).toHaveCount(0);
-
-  // Right: the artifacts panel, open on the Index home = Runs + Files.
   const panel = page.getByTestId("agent-artifacts-panel");
+  await expect(panel).toHaveAttribute("data-open", "false");
+
+  // The chip opens the panel on the Index home = Runs + Files.
+  await page.getByTestId("agent-artifacts-chip").click();
   await expect(panel).toHaveAttribute("data-open", "true");
   await expect(panel.getByTestId("agent-runs-section")).toBeVisible();
   await expect(panel.getByTestId("agent-files-section")).toBeVisible();

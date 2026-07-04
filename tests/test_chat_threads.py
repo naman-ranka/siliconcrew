@@ -157,6 +157,28 @@ def test_self_host_unscoped_threads(mgr):
     assert {"local", t["id"]} <= ids
 
 
+def test_ensure_session_seeds_default_thread_for_true_owner(tmp_path):
+    """A caller who merely NAMES someone else's session id (MCP ensure path)
+    must not claim its default-thread row: the seed uses the session's real
+    owner, and the row's owner is immutable (INSERT OR IGNORE)."""
+    store = SqliteMetadataStore(str(tmp_path / "state.db"))
+    store.init_schema()
+    now = datetime.datetime.now()
+    # Alice's legacy session: metadata row exists, NO thread rows yet.
+    store.upsert_session("victim", "alice", "Victim", "m", None, now)
+    mgr = SessionManager(base_dir=str(tmp_path / "ws"), db_path=str(tmp_path / "state.db"),
+                         metadata_store=store)
+
+    mgr.ensure_session("victim", user_id="mallory")
+
+    # The seeded Chat 1 belongs to ALICE — visible to her, not to mallory.
+    assert [t["id"] for t in mgr.list_threads("victim", user_id="alice")] == ["victim"]
+    assert mgr.list_threads("victim", user_id="mallory") == []
+    # And a fresh ensure_session still seeds for the creating caller.
+    mgr.ensure_session("mine", user_id="mallory")
+    assert [t["id"] for t in mgr.list_threads("mine", user_id="mallory")] == ["mine"]
+
+
 # --- delete cascade (Wave 8 F1) ----------------------------------------------
 
 

@@ -107,7 +107,7 @@ const panelOpen = () =>
   screen.getByTestId("agent-artifacts-panel").getAttribute("data-open") === "true";
 
 describe("AgentShell (view=agent, Wave 8 slide-over)", () => {
-  it("resting state: header chrome + Index home (runs/files) in the panel; no fixed sidebar", async () => {
+  it("resting state is header + conversation: panel CLOSED; the chip opens the Index home", async () => {
     render(<Workbench sessionId="s1" view="agent" />);
 
     expect(await screen.findByTestId("workbench-agent")).toBeInTheDocument();
@@ -119,19 +119,24 @@ describe("AgentShell (view=agent, Wave 8 slide-over)", () => {
     expect(screen.getByTestId("mode-toggle-agent")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("agent-artifacts-chip")).toBeInTheDocument();
 
-    // The old fixed sidebar is GONE.
+    // The old fixed sidebar is GONE — and the panel rests CLOSED (locked
+    // decision: resting state = header + conversation). Closed surfaces are
+    // inert so keyboard users can't tab into invisible UI.
     expect(screen.queryByTestId("agent-sidebar")).toBeNull();
+    expect(panelOpen()).toBe(false);
+    expect(screen.getByTestId("agent-artifacts-panel")).toHaveAttribute("inert");
+    expect(screen.getByTestId("agent-nav-rail").getAttribute("data-open")).toBe("false");
+    expect(screen.getByTestId("agent-nav-rail")).toHaveAttribute("inert");
 
-    // Panel (open by default) shows the Index home: Runs + Files lists.
+    // The chip opens the panel on its Index home: Runs + Files lists.
+    fireEvent.click(screen.getByTestId("agent-artifacts-chip"));
     expect(panelOpen()).toBe(true);
+    expect(screen.getByTestId("agent-artifacts-panel")).not.toHaveAttribute("inert");
     expect(screen.getByTestId("artifact-index")).toBeInTheDocument();
     expect(screen.getByTestId("agent-runs-section")).toHaveTextContent("Runs");
     expect(screen.getByTestId("agent-run-sim_0001")).toBeInTheDocument();
     expect(screen.getByTestId("agent-files-section")).toHaveTextContent("Files");
     expect(screen.getByTestId("agent-file-alu.v")).toBeInTheDocument();
-
-    // Nav rail exists but is CLOSED by default.
-    expect(screen.getByTestId("agent-nav-rail").getAttribute("data-open")).toBe("false");
   });
 
   it("mounts NO command surfaces; ⌘K inert; ⌘P quick-open; ⌘O toggles the rail", async () => {
@@ -163,6 +168,7 @@ describe("AgentShell (view=agent, Wave 8 slide-over)", () => {
     render(<Workbench sessionId="s1" view="agent" />);
     await screen.findByTestId("workbench-agent");
 
+    fireEvent.click(screen.getByTestId("agent-artifacts-chip")); // panel rests closed
     fireEvent.click(screen.getByTestId("agent-file-alu.v"));
     await waitFor(() =>
       expect(useWorkbenchUiStore.getState().perSession["s1"]?.openTabs).toContain("code:alu.v")
@@ -186,18 +192,15 @@ describe("AgentShell (view=agent, Wave 8 slide-over)", () => {
     render(<Workbench sessionId="s1" view="agent" />);
     await screen.findByTestId("workbench-agent");
 
+    // Open, then collapse via the panel's own close button.
+    fireEvent.click(screen.getByTestId("agent-artifacts-chip"));
+    expect(panelOpen()).toBe(true);
     fireEvent.click(screen.getByTestId("agent-artifacts-collapse"));
     // Width-0 keep-alive: still in the DOM (viewers survive), just closed.
     expect(screen.getByTestId("agent-artifacts-panel")).toBeInTheDocument();
     expect(panelOpen()).toBe(false);
 
-    // The chip reopens it…
-    fireEvent.click(screen.getByTestId("agent-artifacts-chip"));
-    expect(panelOpen()).toBe(true);
-
-    // …and openArtifact (an Index file click) re-expands after a collapse.
-    fireEvent.click(screen.getByTestId("agent-artifacts-collapse"));
-    expect(panelOpen()).toBe(false);
+    // openArtifact (an Index file click) re-expands after a collapse.
     fireEvent.click(screen.getByTestId("agent-file-alu.v"));
     await waitFor(() => expect(panelOpen()).toBe(true));
   });

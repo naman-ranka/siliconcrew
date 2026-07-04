@@ -16,7 +16,7 @@ import {
 import { selectActivity, useStore } from "@/lib/store";
 import { useSessionUi, useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { splitInlineActions } from "@/lib/inlineActions";
-import { cn, formatCost, formatTokens } from "@/lib/utils";
+import { cn, formatCost, formatTokens, inertWhenClosed } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ChatArea } from "@/components/chat/ChatArea";
 import { ThreadSwitcher } from "@/components/chat/ThreadSwitcher";
@@ -36,10 +36,11 @@ import { NavRail } from "./NavRail";
 //           tab is the Runs/Files Index — the old fixed sidebar's lists,
 //           relocated to live WITH the artifacts they open.
 
-/** Panel width presets — outer animates between them; inner stays fixed so
- *  content never reflows mid-transition. */
-const PANEL_W = { normal: "min(42%, 520px)", wide: "min(62%, 760px)" } as const;
-const PANEL_INNER_W = { normal: "min(42vw, 520px)", wide: "min(62vw, 760px)" } as const;
+/** Panel width presets — the outer wrapper animates between 0 and this, the
+ *  inner body holds it FIXED so content never reflows mid-transition. One
+ *  formula, vw-based, for BOTH: mixing % (of the flex container) with vw (of
+ *  the viewport) clips the inner body whenever container ≠ viewport. */
+const PANEL_W = { normal: "min(42vw, 520px)", wide: "min(62vw, 760px)" } as const;
 
 /**
  * Inline manual actions (S5-2): live foreign-actor events (user via IDE/REST,
@@ -376,7 +377,7 @@ export function AgentShell() {
         const ui = useWorkbenchUiStore.getState();
         if (ui.quickOpenOpen || ui.quickSwitchOpen || ui.navRailOpen) return;
         if (useStore.getState().settingsOpen) return;
-        const open = ui.perSession[sid]?.artifactsOpen ?? true;
+        const open = ui.perSession[sid]?.artifactsOpen ?? false; // default = closed (Wave 8)
         if (open) ui.setArtifactsOpen(sid, false);
       }, 0);
     };
@@ -385,7 +386,6 @@ export function AgentShell() {
   }, [sid]);
 
   const width = artifactsWide ? PANEL_W.wide : PANEL_W.normal;
-  const innerWidth = artifactsWide ? PANEL_INNER_W.wide : PANEL_INNER_W.normal;
 
   return (
     <div className="flex min-h-0 flex-1" data-testid="agent-shell">
@@ -414,13 +414,14 @@ export function AgentShell() {
         data-testid="agent-artifacts-panel"
         data-open={artifactsOpen}
         aria-hidden={!artifactsOpen}
+        {...inertWhenClosed(artifactsOpen)}
         className="shrink-0 overflow-hidden transition-[width] duration-300 motion-reduce:transition-none"
         style={{
           width: artifactsOpen ? width : 0,
           transitionTimingFunction: "cubic-bezier(.22,1,.36,1)",
         }}
       >
-        <div className="h-full" style={{ width: innerWidth, minWidth: 360 }}>
+        <div className="h-full" style={{ width, minWidth: 360 }}>
           <ArtifactsPanel
             wide={!!artifactsWide}
             onToggleWide={() => setArtifactsWide(!artifactsWide)}

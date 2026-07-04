@@ -37,7 +37,9 @@ export function emptySessionUi(): SessionUiState {
     dockTab: "activity",
     dockCollapsed: false,
     chatOpen: true,
-    artifactsOpen: true,
+    // Wave 8: the agent shell's resting state is header + conversation —
+    // the artifact panel opens on demand (chip, ⌘P, openArtifact reveal).
+    artifactsOpen: false,
   };
 }
 
@@ -248,7 +250,9 @@ export function useSessionUi(sessionId: string | null | undefined) {
     return {
       ...ui,
       // Migration default: sessions persisted before S4 lack artifactsOpen.
-      artifactsOpen: ui.artifactsOpen ?? true,
+      // Wave 8 flipped the default to CLOSED (resting state = header +
+      // conversation); explicit persisted choices are respected either way.
+      artifactsOpen: ui.artifactsOpen ?? false,
       artifactsWide: ui.artifactsWide ?? false,
       openTab: (key: string) => (sid ? a.openTab(sid, key) : undefined),
       closeTab: (key: string) => (sid ? a.closeTab(sid, key) : undefined),

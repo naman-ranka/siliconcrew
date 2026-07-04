@@ -94,7 +94,9 @@ describe("workbenchUiStore: per-session isolation", () => {
       dockTab: "activity",
       dockCollapsed: false,
       chatOpen: true,
-      artifactsOpen: true,
+      // Wave 8: the agent shell rests as header + conversation — the
+      // artifact panel opens on demand, so the default is CLOSED.
+      artifactsOpen: false,
     });
   });
 

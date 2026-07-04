@@ -1,6 +1,12 @@
 # Wave 8 — Agent Shell v2 (slide-over) + IDE breadcrumb trim + review fixes
 
-Status: ACCEPTED with amendments (2nd-agent review folded in below)
+Status: IMPLEMENTED (plan review amendments below; post-implementation
+reviews — external codex + adversarial agent — fixed: default-CLOSED panel
+resting state, inert closed surfaces, thread_count on POST responses,
+same-session ?chat= refresh-once, ensure_session seeds the TRUE owner's
+default thread (never the caller's), delete cascade returns the deleted
+thread ids for the checkpoint purge (no fragile pre-read), unified vw
+panel widths (no %/vw clipping).
 Prototype: `651657f9-workbenchslideover.html` (user-approved direction)
 
 ## User decisions (locked)

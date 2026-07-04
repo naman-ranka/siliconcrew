@@ -157,8 +157,14 @@ class SessionManager:
         os.makedirs(path, exist_ok=True)
         self._upsert_session_metadata(session_id, tag, model_name, user_id=user_id)
         # Same seeding as create_session — MCP-materialized sessions must not
-        # look chat-less to a read-only thread list.
-        self.ensure_default_thread(session_id, user_id=user_id)
+        # look chat-less to a read-only thread list. Seed with the session's
+        # TRUE owner, never the caller: the upsert keeps a pre-existing
+        # session's owner (COALESCE), and the thread row's owner is immutable
+        # (INSERT OR IGNORE) — a caller merely NAMING someone else's id must
+        # not permanently claim their default chat.
+        row = self._store.get_session(session_id)  # unscoped: read the real owner
+        owner = row.get("user_id") if row else user_id
+        self.ensure_default_thread(session_id, user_id=owner)
         return session_id
 
     def get_session_metadata(self, session_id, user_id=None):
@@ -208,22 +214,20 @@ class SessionManager:
         # cannot rmtree another tenant's workspace by guessing the id.
         if user_id is not None and not self.owns_session(session_id, user_id):
             raise PermissionError(f"Session '{session_id}' not found for this user.")
-        # Chat ids BEFORE the store cascades them away — conversation
-        # checkpoints are keyed by thread_id in the LOCAL sqlite state DB.
-        try:
-            thread_ids = [t["id"] for t in self._store.list_threads(session_id, user_id=user_id)]
-        except Exception:
-            thread_ids = []
         session_path = os.path.join(self.base_dir, session_id)
         if os.path.exists(session_path):
             shutil.rmtree(session_path)
-        self._store.delete_session(session_id, user_id=user_id)
+        # The store returns the cascaded chat ids — conversation checkpoints
+        # are keyed by thread_id, so the purge works from EXACTLY what was
+        # deleted (no separate pre-read that could fail or go stale apart
+        # from the delete itself).
+        deleted_threads = self._store.delete_session(session_id, user_id=user_id) or []
         # The SQLite store purges checkpoints itself (same file). A Postgres
         # metadata store can't reach them — best-effort local cleanup here
         # (on multi-instance deployments this only cleans the serving
         # instance's state DB; accepted as best-effort).
         if not hasattr(self._store, "_CHECKPOINT_TABLES"):
-            self._purge_local_checkpoints({session_id, *thread_ids})
+            self._purge_local_checkpoints({session_id, *deleted_threads})
 
     def _purge_local_checkpoints(self, thread_ids):
         """Best-effort delete of LangGraph checkpoint rows in the local state DB."""

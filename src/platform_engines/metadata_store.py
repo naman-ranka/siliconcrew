@@ -50,7 +50,9 @@ class MetadataStore(Protocol):
     def rename_session(self, session_id: str, name: str, user_id: Optional[str] = None) -> None: ...
     def update_stats(self, session_id: str, input_t: int, output_t: int, cached_t: int,
                      total_t: int, cost: float, now: Any, user_id: Optional[str] = None) -> None: ...
-    def delete_session(self, session_id: str, user_id: Optional[str] = None) -> None: ...
+    # Returns the ids of the chat-thread rows cascaded away (the caller may
+    # need them to purge per-thread checkpoints held elsewhere).
+    def delete_session(self, session_id: str, user_id: Optional[str] = None) -> List[str]: ...
     # chat threads (a chat = a LangGraph thread_id; many per session/workspace)
     def create_thread(self, thread_id: str, session_id: str, user_id: Optional[str],
                       title: str, model: Optional[str], now: Any) -> None: ...
@@ -311,6 +313,7 @@ class SqliteMetadataStore:
 
     def delete_session(self, session_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
+        deleted: list[str] = []
         with self._connect() as conn:
             # Chat ids first — the cascade below needs them for the checkpoint
             # tables (keyed by thread_id, no FK anywhere: manual cascade).
@@ -331,6 +334,7 @@ class SqliteMetadataStore:
                 conn.execute(
                     "DELETE FROM chat_threads WHERE session_id = ?", (session_id,)
                 )
+                deleted = thread_ids
                 # Every chat's checkpoints + the legacy default (thread_id ==
                 # session_id). The tables appear only after LangGraph's first
                 # write, hence the per-table tolerance.
@@ -343,6 +347,7 @@ class SqliteMetadataStore:
                     except sqlite3.OperationalError:
                         pass
             conn.commit()
+        return deleted
 
     # -- chat threads --
 
@@ -661,14 +666,22 @@ class PostgresMetadataStore:
 
     def delete_session(self, session_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
+        deleted: list[str] = []
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(f"DELETE FROM session_metadata WHERE session_id = %s{owner}", (session_id, *oparams))
             # Same manual cascade as SQLite (no FK). Checkpoints are NOT here:
             # they live in the local sqlite state DB even in Postgres mode —
-            # SessionManager.delete_session does that best-effort cleanup.
+            # SessionManager.delete_session purges them from the RETURNING ids
+            # (never a separate pre-read that can go stale or fail apart from
+            # the delete itself).
             if cur.rowcount or user_id is None:
-                cur.execute("DELETE FROM chat_threads WHERE session_id = %s", (session_id,))
+                cur.execute(
+                    "DELETE FROM chat_threads WHERE session_id = %s RETURNING id",
+                    (session_id,),
+                )
+                deleted = [r[0] for r in cur.fetchall()]
             conn.commit()
+        return deleted
 
     # -- chat threads --
 

@@ -210,6 +210,14 @@ def test_api_thread_count_fresh_session_is_one(client, sm):
     assert items[sid]["thread_count"] == 1
 
 
+def test_api_create_session_response_reports_seeded_thread_count(client, sm):
+    # The POST response itself must agree with later list/GET reads (1, the
+    # seeded Chat 1) — a defaulted 0 would leave the client stale.
+    r = client.post("/api/sessions", json={"name": "born", "model": "gemini-3-flash-preview"})
+    assert r.status_code == 200, r.text
+    assert r.json()["thread_count"] == 1
+
+
 def test_api_thread_count_reflects_created_threads(client, sm):
     sid = sm.create_session("busy")
     # Creating a thread first ensure-creates the default "Chat 1" row (so the

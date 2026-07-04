@@ -18,7 +18,7 @@ import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { threadsApi } from "@/lib/api";
 import { sessionUrl, replaceThreadUrl } from "@/lib/nav";
-import { cn } from "@/lib/utils";
+import { cn, inertWhenClosed } from "@/lib/utils";
 import { IconTooltip } from "@/components/ui/tooltip";
 import { CreateSessionModal } from "@/components/launcher/CreateSessionModal";
 import { groupSwatch } from "@/components/launcher/util";
@@ -140,6 +140,7 @@ export function NavRail() {
         data-testid="agent-nav-rail"
         data-open={open}
         aria-hidden={!open}
+        {...inertWhenClosed(open)}
         className={cn(
           "fixed bottom-0 left-0 top-0 z-[90] flex w-[264px] flex-col border-r border-border bg-surface-1",
           "shadow-e3 transition-transform duration-200 ease-out",

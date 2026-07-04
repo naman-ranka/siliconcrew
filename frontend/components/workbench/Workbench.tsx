@@ -93,11 +93,19 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
       useWorkbenchUiStore.getState().setLastSessionId(sessionId);
       // Thread follows the ?chat= param (compare first) — VALIDATED against
       // the loaded list: a stale/crafted id must not be selected (the WS
-      // would reject it anyway; F2). Unknown id → default thread + clean URL.
-      // Only when the list truly loaded — a failed load must not eat a valid id.
+      // would reject it anyway; F2). Before declaring an id unknown, refresh
+      // the list ONCE — on same-session navigations the local list can be
+      // stale (a thread created by another client). Unknown id → default
+      // thread + clean URL, and only when the list truly loaded — a failed
+      // load must not eat a valid id.
       if (threadId && threadId !== useStore.getState().activeThreadId) {
-        const { threads, threadsLoading, chatError } = useStore.getState();
-        if (threads.some((t) => t.id === threadId)) {
+        const known = () => useStore.getState().threads.some((t) => t.id === threadId);
+        if (!known()) {
+          await useStore.getState().loadThreads();
+          if (cancelled) return;
+        }
+        const { threadsLoading, chatError } = useStore.getState();
+        if (known()) {
           await selectThread(threadId);
         } else if (!threadsLoading && !chatError) {
           replaceThreadUrl(router, sessionId, useStore.getState().activeThreadId);

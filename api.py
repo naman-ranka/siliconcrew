@@ -648,7 +648,10 @@ async def create_session(data: SessionCreate, identity: Identity = Depends(requi
             created_at=str(meta.get("created_at")) if meta else None,
             updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
             total_tokens=0,
-            total_cost=0.0
+            total_cost=0.0,
+            # Creation seeds "Chat 1" (Wave 8) — report the honest count so
+            # the client isn't stale until the next list/GET.
+            thread_count=1,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -680,6 +683,7 @@ async def create_trial_session(data: SessionCreate, identity: Identity = Depends
             updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
             total_tokens=0,
             total_cost=0.0,
+            thread_count=1,  # seeded "Chat 1" (Wave 8)
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -48,3 +48,11 @@ export function formatRelativeTime(dateString: string): string {
 export function generateId(): string {
   return crypto.randomUUID();
 }
+
+/** `inert` for always-mounted-but-closed surfaces (agent shell panel/rail):
+ *  aria-hidden alone leaves the invisible controls tabbable. React 18
+ *  doesn't type the attribute, so spread it conditionally (empty string =
+ *  attribute present). */
+export function inertWhenClosed(open: boolean): Record<string, unknown> {
+  return open ? {} : { inert: "" };
+}
