@@ -622,7 +622,9 @@ test("file tree → code tab: open, focus-if-open, close", async ({ page }) => {
   // Tab appears; content loads via the smart-file endpoint (Monaco may fall
   // back to the plain renderer if its CDN is unreachable — content either way).
   await expect(page.getByRole("tab", { name: /alu\.v/ })).toBeVisible();
-  await expect(page.getByText(/real content/)).toBeVisible({ timeout: 15_000 });
+  // String matching (not regex): Monaco renders spaces as &nbsp; — Playwright
+  // normalizes whitespace for string matchers but not for regexes.
+  await expect(page.getByText("real content")).toBeVisible({ timeout: 15_000 });
 
   // Opening the same file again focuses the existing tab, not a duplicate.
   await page.getByText("cpu_tb.v").first().click();
@@ -713,7 +715,8 @@ test("agent shell: header + Index panel + nav rail, no ⌘K palette, file→tab,
   // Index file click → a code tab opens; "Back to index" returns home.
   await page.getByTestId("agent-file-alu.v").click();
   await expect(panel.getByRole("tab", { name: /alu\.v/ })).toBeVisible();
-  await expect(panel.getByText(/real content/)).toBeVisible({ timeout: 15_000 });
+  // String matcher: Monaco renders spaces as &nbsp; (see the file-tree test).
+  await expect(panel.getByText("real content")).toBeVisible({ timeout: 15_000 });
   await page.getByTestId("artifact-back-to-index").click();
   await expect(panel.getByTestId("artifact-index")).toBeVisible();
 
@@ -775,3 +778,4 @@ test("command surface: browse → Metrics → live payload → invoke → inline
   await expect(surface.getByText("wns_ns")).toBeVisible();
   await page.screenshot({ path: "e2e-artifacts/wb2-command-surface.png", fullPage: true });
 });
+
