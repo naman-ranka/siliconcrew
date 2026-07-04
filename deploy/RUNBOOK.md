@@ -143,7 +143,7 @@ gcloud sql connect siliconcrew-metadata --user=siliconcrew --database=siliconcre
    appears (`gcloud run jobs executions list --job siliconcrew-orfs`).
 3. Confirm artifacts land in `gs://<workspace_bucket>/orfs-runs/<handle>/out.tar.gz`
    and the run's `run_meta.json` carries a `provenance` block (commit + digest).
-4. Verify quotas: a second concurrent synth for the same user is rejected
+4. Verify quotas: a sixth concurrent synth for the same user is rejected
    (`concurrency_limit`); anonymous synth is rejected (`signin_required`).
 
 ## 6. Heavy verification (nightly, inside the EDA image)
@@ -169,7 +169,7 @@ RUN_REAL_ORFS=1 ORFS_IMAGE="${REPO}/orfs@sha256:..." pytest tests/test_orfs_runn
 - Budget alerts at 50/90/100% (`google_billing_budget`).
 - Hosted-tier hard caps in-app: per-user tokens/day + a global cost ceiling
   (`HostedTierLimiter`) — when hit, users are asked to add a BYOK key.
-- Per-user synth caps (1 concurrent, runs/day, compute-minutes/month) bound the
+- Per-user synth caps (5 concurrent by default, runs/day, compute-minutes/month) bound the
   expensive path. Scale-to-zero keeps idle cost ~0.
 - Watch: Cloud Run Job vCPU-seconds, Cloud SQL tier, egress, GCS storage.
 
@@ -214,9 +214,10 @@ Operational recommendations (do these for true per-request isolation):
 - Keep per-user synth/compute quotas (already enforced) to bound abuse.
 
 Do **not** describe native mode as "fully isolated / container-grade." For
-untrusted multi-tenant workloads needing strict per-run isolation without
-concurrency=1, run the light tools as Cloud Run Jobs too (same seam can grow a
-`cloud_job` `ToolEngine`), trading the ~6s cold-start the interactive loop avoids.
+untrusted multi-tenant workloads needing strict per-run isolation while allowing
+user-level parallelism, run the light tools as Cloud Run Jobs too (same seam can
+grow a `cloud_job` `ToolEngine`), trading the ~6s cold-start the interactive loop
+avoids.
 
 ## Security notes
 

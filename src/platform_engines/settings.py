@@ -23,6 +23,10 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
+def _int_env(name: str, default: int) -> int:
+    return int(_env(name, str(default)))
+
+
 @dataclass(frozen=True)
 class PlatformSettings:
     """Resolved platform configuration. Built once from the environment."""
@@ -77,6 +81,12 @@ class PlatformSettings:
     kms_key_uri: str          # Cloud KMS key for envelope encryption (byok)
     hosted_gemini_model: str
     hosted_gemini_key: str
+
+    # Hosted synth governance
+    synth_runs_per_day: int
+    synth_compute_minutes_per_month: int
+    synth_max_concurrent_per_user: int
+    synth_queue_global_workers: int
 
     # Determinism
     num_cores: int            # pinned NUM_CORES for ORFS P&R
@@ -194,7 +204,11 @@ def get_settings() -> PlatformSettings:
         kms_key_uri=_env("KMS_KEY_URI"),
         hosted_gemini_model=_env("HOSTED_GEMINI_MODEL", "gemini-3-flash-preview"),
         hosted_gemini_key=_env("HOSTED_GEMINI_KEY"),
-        num_cores=int(_env("ORFS_NUM_CORES", "4")),
+        synth_runs_per_day=_int_env("SYNTH_RUNS_PER_DAY", 20),
+        synth_compute_minutes_per_month=_int_env("SYNTH_COMPUTE_MINUTES_PER_MONTH", 600),
+        synth_max_concurrent_per_user=_int_env("SYNTH_MAX_CONCURRENT_PER_USER", 5),
+        synth_queue_global_workers=_int_env("SYNTH_QUEUE_GLOBAL_WORKERS", 16),
+        num_cores=_int_env("ORFS_NUM_CORES", 4),
         dev_insecure_auth=_flag("SILICONCREW_DEV_INSECURE_AUTH", default=False),
         test_bearer_token=_env("SILICONCREW_TEST_BEARER_TOKEN"),
     )
@@ -224,12 +238,18 @@ def apply_platform_wiring(force: bool = False) -> None:
     settings = get_settings()
     if settings.hosted:
         # Replace the process-global ThreadPoolExecutor with a per-user queue so
-        # one tenant's backlog cannot starve others (and enforce 1 synth/user).
+        # one tenant's backlog cannot starve others while still allowing bounded
+        # same-user parallel synths across multiple sessions.
         from src.platform_engines.job_queue import ContextUserExecutor, PerUserJobQueue
         from src.tools import synthesis_manager
 
         synthesis_manager.set_job_executor(
-            ContextUserExecutor(PerUserJobQueue(global_workers=8, per_user_limit=1))
+            ContextUserExecutor(
+                PerUserJobQueue(
+                    global_workers=max(1, settings.synth_queue_global_workers),
+                    per_user_limit=max(1, settings.synth_max_concurrent_per_user),
+                )
+            )
         )
 
         # Shared quota manager (Postgres-backed under hosted+Postgres) enforced

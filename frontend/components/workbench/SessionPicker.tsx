@@ -29,8 +29,8 @@ export function SessionPicker() {
   const pick = async (id: string) => {
     setOpen(false);
     const s = sessions.find((x) => x.id === id) ?? null;
+    // selectSession loads the workbench (F4: no redundant second load).
     await selectSession(s);
-    await loadWorkbench();
   };
 
   const [creating, setCreating] = useState(false);

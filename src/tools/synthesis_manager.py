@@ -278,8 +278,22 @@ def _allocate_run_dir(workspace: str) -> tuple[str, str]:
 
 
 def _write_json(path: str, data: Dict[str, Any]) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    # Atomic write: serialize to a temp file in the same dir, then os.replace()
+    # (atomic on POSIX). Reads self-heal run_meta.json (reconcile / PPA re-finalize)
+    # and can now run concurrently — hydration + workspace reads moved off the
+    # event loop (F6) — so a plain truncate-then-write would let a concurrent
+    # reader see a half-written / empty JSON. os.replace swaps the whole file in.
+    tmp = f"{path}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 def _read_json(path: str) -> Dict[str, Any]:
@@ -1749,6 +1763,46 @@ def get_run_dir(workspace: str, run_id: Optional[str]) -> Optional[str]:
     return path if os.path.exists(path) else None
 
 
+# A run whose persisted status is one of these is done; anything else
+# (running / queued / unknown) is non-terminal and eligible for reconciliation.
+_TERMINAL_SYNTH_STATES = {"completed", "failed"}
+
+
+def _reconcile_stale_status(run_dir: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Adopt on-disk artifacts as the source of truth for a run stuck at a
+    non-terminal status.
+
+    On serverless (Cloud Run) the worker that writes the terminal status can be
+    killed once the HTTP response returns (instance scale-down), leaving
+    run_meta at "running" even though ORFS finished and its artifacts synced to
+    object storage.
+
+    Completion signal: the **finish-stage report** (6_finish.rpt) must exist.
+    That is the only artifact that proves the full ORFS flow reached the finish
+    stage. ``synth_stat.txt`` (area/cell_count) alone is NOT sufficient — it is
+    written right after logic synthesis, so a run that failed later (e.g. before
+    CTS) also has it; keying on it would mis-mark a failed run as completed.
+
+    Fail-safe: no finish report → status left untouched (never worse than
+    today; a genuinely-failed run stays non-terminal rather than being falsely
+    marked completed). Mutates and returns ``meta``; persists only on reconcile.
+    """
+    if meta.get("status") in _TERMINAL_SYNTH_STATES:
+        return meta
+    # Only a present finish report proves the flow actually completed.
+    if _find_report_file(run_dir, "6_finish.rpt") is None:
+        return meta  # not demonstrably finished — leave as-is
+    meta["status"] = "completed"
+    meta["summary_metrics"] = _compute_summary_metrics(run_dir, meta)
+    if not meta.get("finished_at"):
+        meta["finished_at"] = _now_iso()
+    try:
+        _persist_run_meta(run_dir, meta)
+    except Exception:
+        pass
+    return meta
+
+
 def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
     index = _load_index(workspace)
     items: List[Dict[str, Any]] = []
@@ -1768,6 +1822,10 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
             continue
 
         meta = _read_run_meta(run_dir)
+        # Reconcile a status stuck non-terminal (e.g. a Cloud Run worker killed
+        # after the response returned) using on-disk finish artifacts, so a
+        # finished run doesn't read as "running" forever.
+        meta = _reconcile_stale_status(run_dir, meta)
         # Self-heal: re-finalize PPA for completed runs whose stored
         # summary_metrics predate the shared finalizer (missing cell_count or the
         # derived fmax_mhz). This repairs historical runs on read without a

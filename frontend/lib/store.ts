@@ -27,6 +27,41 @@ import type {
 import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi } from "./api";
 import { generateId } from "./utils";
 
+// F4/F5: store-level single-flight for the workspace hydrate + workbench load,
+// keyed by session id. Every trigger — mount, selectSession, chat-complete,
+// upload, the active-run poll, manual refresh — shares one in-flight promise, so
+// the heavy hydration runs ONCE even when several fire together (the double-open
+// and the two polling loops overlapping during a synth). Cleared on settle.
+const _inflight = new Map<string, Promise<unknown>>();
+function singleFlight<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = _inflight.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+  const p = fn().finally(() => {
+    if (_inflight.get(key) === p) _inflight.delete(key);
+  });
+  _inflight.set(key, p);
+  return p;
+}
+
+// Which artifact tab a file type maps to (initial-load tab selection).
+const _fileTypeToTab: Record<string, ArtifactTab | undefined> = {
+  spec: "spec",
+  verilog: "code",
+  waveform: "waveform",
+  schematic: "schematic",
+  report: "report",
+};
+function newestArtifactTab(files: FileInfo[]): ArtifactTab | null {
+  let best: { tab: ArtifactTab; ts: number } | null = null;
+  for (const f of files) {
+    const tab = _fileTypeToTab[f.type];
+    if (!tab) continue;
+    const ts = f.modified ? new Date(f.modified).getTime() : 0;
+    if (!best || ts > best.ts) best = { tab, ts };
+  }
+  return best?.tab ?? null;
+}
+
 interface AppState {
   // Project state
   projects: Project[];
@@ -403,10 +438,13 @@ export const useStore = create<AppState>((set, get) => ({
     });
 
     if (session) {
-      // Threads first (sets activeThreadId), then that thread's history, then files.
+      // Threads first (sets activeThreadId), then that thread's history, then the
+      // workbench (manifest + runs + workspace) in ONE snapshot hydration. This
+      // is the single load on open — callers no longer follow with loadWorkbench
+      // (F4: was a double refresh).
       await get().loadThreads();
       await get().loadChatHistory();
-      await get().refreshWorkspace();
+      await get().loadWorkbench();
     }
   },
 
@@ -427,6 +465,21 @@ export const useStore = create<AppState>((set, get) => ({
         tool_results: msg.tool_results,
         blocks: buildBlocks(msg.content ?? "", msg.tool_calls, msg.tool_results),
       }));
+      // Reopen reconciliation (F4): if the last assistant turn ends on a tool call
+      // with no closing summary, it was interrupted before finishing (e.g. the WS
+      // dropped mid-synthesis). Mark it honestly instead of leaving a dangling
+      // "Waiting for Synthesis" that looks perpetually in-progress — the real
+      // status lives in the Runs / Signoff panel.
+      const last = messages[messages.length - 1];
+      if (last && last.role === "assistant") {
+        const b = last.blocks ?? [];
+        if (b.length > 0 && b[b.length - 1].type === "tool") {
+          last.blocks = [
+            ...b,
+            { type: "text", content: "_The reply was interrupted before a summary — see the Runs / Signoff panel for the final status._" },
+          ];
+        }
+      }
       set({ messages, chatError: null });
     } catch (error) {
       // A fresh session with no history is NOT an error — the backend now
@@ -496,6 +549,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     set({ isStreaming: true, streamingMessage, chatError: null, chatErrorCode: null });
 
+    let terminalReceived = false;
     const socket = ws;
     socket.onmessage = (event) => {
       if (get().ws !== socket) return;
@@ -556,7 +610,11 @@ export const useStore = create<AppState>((set, get) => ({
           break;
         }
 
+        case "ping":
+          break; // server keepalive during long tool jobs; no UI effect
+
         case "done":
+          terminalReceived = true;
           const { streamingMessage: finalMsg, messages: finalMessages } = get();
           if (finalMsg) {
             set({
@@ -571,30 +629,62 @@ export const useStore = create<AppState>((set, get) => ({
           get().loadThreads();
           break;
 
-        case "error":
+        case "error": {
+          terminalReceived = true;
+          // Keep whatever streamed so far instead of discarding the trace.
+          const { streamingMessage: em, messages: emsgs } = get();
+          const keep = em && ((em.blocks?.length ?? 0) > 0 || em.content);
           set({
+            messages: keep ? [...emsgs, em!] : emsgs,
             chatError: data.error,
             chatErrorCode: data.code ?? null,
             isStreaming: false,
             streamingMessage: null,
           });
           break;
+        }
       }
     };
 
-    socket.onerror = () => {
+    // A socket that closes/errors WITHOUT a done/error frame is an unexpected drop
+    // (e.g. an idle/proxy timeout during a long tool job). Recover instead of
+    // leaving the UI stuck "streaming": preserve the partial trace, re-enable
+    // input, surface the state, and refetch persisted history — the agent can keep
+    // running server-side (Cloud Run), so the completed result often lands there.
+    // Guarded so error+close only handle the drop once.
+    const finalizeDrop = () => {
       if (get().ws !== socket) return;
+      if (terminalReceived) {
+        set({ ws: null, wsSessionId: null, wsThreadId: null });
+        return;
+      }
+      terminalReceived = true;
+      const { streamingMessage: dm, messages: dmsgs } = get();
+      const keep = dm && ((dm.blocks?.length ?? 0) > 0 || dm.content);
       set({
-        chatError: "WebSocket connection error",
-        isStreaming: false,
+        messages: keep ? [...dmsgs, dm!] : dmsgs,
         streamingMessage: null,
+        isStreaming: false,
+        ws: null,
+        wsSessionId: null,
+        wsThreadId: null,
+        chatError: "Connection lost — fetching the latest result from the server…",
+        chatErrorCode: "ws_dropped",
       });
+      // Pragmatic resume: refetch persisted history (with a couple of backoff
+      // retries) to pick up a run the server finished after the socket dropped.
+      let attempt = 0;
+      const poll = () => {
+        attempt += 1;
+        void get().loadChatHistory().finally(() => {
+          if (attempt < 3) setTimeout(poll, attempt * 2000);
+        });
+      };
+      setTimeout(poll, 1500);
     };
 
-    socket.onclose = () => {
-      if (get().ws !== socket) return;
-      set({ ws: null, wsSessionId: null, wsThreadId: null });
-    };
+    socket.onerror = finalizeDrop;
+    socket.onclose = finalizeDrop;
   },
 
   stopStreaming: () => {
@@ -747,6 +837,7 @@ export const useStore = create<AppState>((set, get) => ({
   refreshWorkspace: async () => {
     const { currentSession } = get();
     if (!currentSession) return;
+    return singleFlight(`refresh:${currentSession.id}`, async () => {
 
     const parseModified = (modified?: string) => (modified ? new Date(modified).getTime() : 0);
 
@@ -825,16 +916,14 @@ export const useStore = create<AppState>((set, get) => ({
       const hasCode = files.some((f) => f.type === "verilog");
       const hasReport = files.some((f) => f.type === "report") || synthesisRuns.some((run) => run.report_available);
 
-      // Load content
-      if (hasSpec) {
-        await get().loadSpec();
-      }
-      if (hasCode) {
-        await get().loadCodeFiles();
-      }
-      if (hasReport) {
-        await get().loadReport(nextRunId);
-      }
+      // Load content in parallel — spec, code and report set independent state
+      // slices, so serial awaits only added latency (spec blocked code blocked
+      // report). Fetch them concurrently.
+      await Promise.all([
+        hasSpec ? get().loadSpec() : Promise.resolve(),
+        hasCode ? get().loadCodeFiles() : Promise.resolve(),
+        hasReport ? get().loadReport(nextRunId) : Promise.resolve(),
+      ]);
 
       // Get updated state after loading
       const newState = get();
@@ -882,6 +971,7 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (error) {
       console.error("Failed to refresh workspace:", error);
     }
+    });
   },
 
   loadSpec: async () => {
@@ -976,6 +1066,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   selectSynthesisRun: async (runId: string | null) => {
+    // Re-selecting the already-selected run would refetch the same report for
+    // nothing (the report is already loaded for it).
+    if (runId === get().selectedSynthesisRunId) return;
     set({ selectedSynthesisRunId: runId });
     await get().loadReport(runId);
   },
@@ -1017,7 +1110,59 @@ export const useStore = create<AppState>((set, get) => ({
   // ====================== Workbench actions ======================
 
   loadWorkbench: async () => {
-    await Promise.all([get().loadManifest(), get().loadRuns(), get().refreshWorkspace()]);
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    // F4: single-flight + a ONE-hydration snapshot instead of the ~18-call
+    // fan-out. Falls back to the granular loaders if the snapshot is
+    // unavailable (older backend) or errors — behavior stays correct.
+    return singleFlight(`workbench:${sid}`, async () => {
+      try {
+        const snap = await workbenchApi.getWorkbench(sid);
+        if (get().currentSession?.id !== sid) return; // switched away mid-flight
+        const files = snap.files ?? [];
+        const runs = snap.runs ?? [];
+        const synthesisRuns = snap.synthesisRuns ?? [];
+        set((state) => ({
+          manifest: snap.manifest ?? null,
+          manifestLoading: false,
+          runs,
+          runsLoading: false,
+          selectedRunId:
+            runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
+          files,
+          spec: snap.spec ?? null,
+          codeFiles: snap.code ?? [],
+          selectedCodeFile:
+            snap.code?.find((f) => f.filename === state.selectedCodeFile)?.filename ??
+            snap.code?.[0]?.filename ??
+            null,
+          report: snap.report ?? null,
+          synthesisRuns,
+          selectedSynthesisRunId:
+            synthesisRuns.find((r) => r.run_id === state.selectedSynthesisRunId)?.run_id ??
+            synthesisRuns[0]?.run_id ??
+            null,
+          // Derive the artifact file-lists from the single files listing.
+          waveformFiles: files.filter((f) => f.type === "waveform").map((f) => f.name),
+          layoutFiles: files.filter((f) => f.type === "layout").map((f) => f.name),
+          schematicFiles: files.filter((f) => f.type === "schematic").map((f) => f.name),
+        }));
+        // Reveal the artifacts panel on the newest artifact (initial-load UX).
+        const hasContent =
+          !!snap.spec || (snap.code?.length ?? 0) > 0 || !!snap.report || files.length > 0;
+        if (hasContent) {
+          const tab = newestArtifactTab(files);
+          set((s) => ({
+            artifactsVisible: true,
+            activeArtifactTab: tab ?? s.activeArtifactTab,
+          }));
+        }
+      } catch {
+        // Snapshot unavailable → the original granular fan-out (still correct).
+        await Promise.all([get().loadManifest(), get().loadRuns(), get().refreshWorkspace()]);
+      }
+    });
   },
 
   loadManifest: async () => {
@@ -1077,22 +1222,28 @@ export const useStore = create<AppState>((set, get) => ({
   loadRuns: async () => {
     const { currentSession, runKindFilter } = get();
     if (!currentSession) return;
-    set({ runsLoading: true });
-    try {
-      const runs = await workbenchApi.listRuns(currentSession.id, runKindFilter);
-      set((state) => ({
-        runs,
-        selectedRunId:
-          runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
-      }));
-    } catch {
-      set({ runs: [] });
-    } finally {
-      set({ runsLoading: false });
-    }
+    // F5: single-flight so the two synth-time loops (the runSynth job poll and
+    // the useWorkbenchSync active-run poll) never double-pull the run list.
+    return singleFlight(`runs:${currentSession.id}:${runKindFilter}`, async () => {
+      set({ runsLoading: true });
+      try {
+        const runs = await workbenchApi.listRuns(currentSession.id, runKindFilter);
+        set((state) => ({
+          runs,
+          selectedRunId:
+            runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
+        }));
+      } catch {
+        set({ runs: [] });
+      } finally {
+        set({ runsLoading: false });
+      }
+    });
   },
 
   setRunKindFilter: (kind) => {
+    // Clicking the already-active filter shouldn't trigger a refetch.
+    if (get().runKindFilter === kind) return;
     set({ runKindFilter: kind });
     void get().loadRuns();
   },

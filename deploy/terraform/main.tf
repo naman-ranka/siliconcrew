@@ -224,6 +224,11 @@ resource "google_cloud_run_v2_service" "backend" {
 
   template {
     service_account = google_service_account.backend.email
+    # F7 (warm reads): pin a user's requests to one instance so its already-
+    # hydrated scratch workspace is reused across their calls instead of each
+    # cold-downloading. Pairs with startup_cpu_boost below; set
+    # backend_min_instances=1 to also keep one instance always warm.
+    session_affinity = true
     scaling {
       min_instance_count = var.backend_min_instances
       max_instance_count = var.backend_max_instances
@@ -310,6 +315,22 @@ resource "google_cloud_run_v2_service" "backend" {
       env {
         name  = "GCP_REGION"
         value = var.region
+      }
+      env {
+        name  = "SYNTH_RUNS_PER_DAY"
+        value = tostring(var.synth_runs_per_day)
+      }
+      env {
+        name  = "SYNTH_COMPUTE_MINUTES_PER_MONTH"
+        value = tostring(var.synth_compute_minutes_per_month)
+      }
+      env {
+        name  = "SYNTH_MAX_CONCURRENT_PER_USER"
+        value = tostring(var.synth_max_concurrent_per_user)
+      }
+      env {
+        name  = "SYNTH_QUEUE_GLOBAL_WORKERS"
+        value = tostring(var.synth_queue_global_workers)
       }
       env {
         name  = "ORFS_NUM_CORES"
