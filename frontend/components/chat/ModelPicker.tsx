@@ -22,7 +22,7 @@ const PROVIDER_DOT: Record<ModelInfo["provider"], string> = {
   gemini: "bg-blue-500",
 };
 
-const DEFAULT_MODEL = "gemini-3-flash-preview";
+const DEFAULT_MODEL = "gemini-3.5-flash";
 
 /**
  * Model picker at the composer's bottom-left. The chosen model lives on the

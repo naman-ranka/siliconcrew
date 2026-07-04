@@ -87,11 +87,8 @@ def create_llm(model_name: str, temperature: float = 0.0, api_key: str | None = 
         }
 
         if "gemini-3" in model_name.lower():
-            warnings.warn(
-                f"{model_name} may have issues with create_react_agent tool calling. "
-                "Consider gemini-3-flash-preview for maximum stability.",
-                UserWarning,
-            )
+            # Gemini 3+ models emit thought parts; surface them so downstream
+            # content handling (which filters to text blocks) stays correct.
             llm_kwargs["include_thoughts"] = True
 
         return ChatGoogleGenerativeAI(**llm_kwargs)
