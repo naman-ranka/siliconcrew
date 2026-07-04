@@ -7,6 +7,7 @@ Provides REST endpoints and WebSocket streaming for the Next.js frontend.
 
 import os
 import json
+import uuid
 import asyncio
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -1087,6 +1088,10 @@ async def patch_session(session_id: str, data: SessionPatch, identity: Identity 
 # tool call (e.g. a 60s+ ORFS synth wait); a `ping` well under the ~30s GCP load
 # balancer / proxy idle timeout keeps the connection from being dropped mid-run.
 _WS_HEARTBEAT_SEC = 20
+# Coalesce token deltas: at most one text_delta frame per interval per turn, so
+# a fast stream doesn't flood the socket / React state. The authoritative
+# `text` frame carries anything the gate trimmed.
+_WS_DELTA_INTERVAL_SEC = 0.05
 
 
 @app.websocket("/api/chat/{session_id:path}")
@@ -1143,11 +1148,22 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
         while True:
             # Receive message from client
             data = await websocket.receive_json()
+
+            # A late `stop` after the turn already ended is a no-op, not an error.
+            if isinstance(data, dict) and data.get("type") == "stop":
+                continue
+
             message = data.get("message", "")
 
             if not message.strip():
                 await websocket.send_json({"type": "error", "error": "Empty message"})
                 continue
+
+            # Stable per-turn id (client-generated when provided): echoed on
+            # every frame of this turn so the UI can correlate frames — and
+            # drop stale ones after a stop or reconnect — by id instead of by
+            # last-message heuristics.
+            turn_id = str(data.get("turn_id") or "") or uuid.uuid4().hex
 
             # Resolve the chat thread for this turn (per-message override → the
             # connection default → Chat 1). The workspace stays bound to
@@ -1226,130 +1242,234 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     input_messages.append(SystemMessage(content=load_system_prompt()))
                 input_messages.append(("user", message))
 
-                # Stream using LangGraph's astream()
-                await websocket.send_json({"type": "start"})
-
+                # Stream the agent turn. A background task drains astream() into
+                # a bounded queue; a second task reads the socket (so `stop`
+                # works mid-run) and forwards control signals onto the SAME
+                # queue. This coroutine is the single consumer and the ONLY
+                # writer to the websocket — no concurrent-send races.
+                #
+                # The heartbeat MUST time out on the queue read, never on the
+                # generator itself: asyncio.wait_for cancels its awaitable on
+                # timeout, and cancelling astream.__anext__ threw CancelledError
+                # into the running graph — aborting the very long tool call
+                # (e.g. wait_for_synthesis) the ping was meant to protect
+                # (plans/phase2/REVIEW_FINDINGS.md P0 #2).
                 total_input_tokens = 0
                 total_output_tokens = 0
                 pending_tool_calls: Dict[str, Dict[str, Any]] = {}
+                client_gone = False
+                stop_requested = False
 
-                try:
-                    # Heartbeat-wrapped iteration: wait for each stream event with
-                    # a timeout; on timeout (a long silent tool call) send a `ping`
-                    # keepalive and keep waiting. Serialized on this one coroutine,
-                    # so there's no concurrent-send race with the frames below.
-                    _stream = agent_graph.astream(
-                        {"messages": input_messages},
-                        config,
-                        stream_mode="updates",
-                    ).__aiter__()
+                async def _send(payload: dict) -> None:
+                    # Single writer (this coroutine only). Every frame carries
+                    # the turn id so the UI can drop stale frames by id. After
+                    # a client drop, keep the agent running to completion (the
+                    # checkpoint persists; the UI refetches history on
+                    # reconnect) but stop attempting sends.
+                    nonlocal client_gone
+                    if client_gone:
+                        return
+                    payload.setdefault("turn_id", turn_id)
+                    try:
+                        await websocket.send_json(payload)
+                    except Exception:
+                        client_gone = True
+
+                await _send({"type": "start"})
+
+                # Bounded: a slow client backpressures the drain task instead
+                # of building unbounded memory.
+                event_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+
+                async def _drain_stream() -> None:
+                    try:
+                        async for ev in agent_graph.astream(
+                            {"messages": input_messages},
+                            config,
+                            stream_mode=["updates", "messages"],
+                        ):
+                            await event_queue.put(("event", ev))
+                    except Exception as exc:
+                        await event_queue.put(("error", exc))
+                    else:
+                        await event_queue.put(("end", None))
+
+                drain_task = asyncio.create_task(_drain_stream())
+
+                async def _watch_client() -> None:
+                    # Reads the socket for the duration of the run. A `stop`
+                    # frame cancels the run; any other frame is rejected — the
+                    # UI queues follow-up messages and sends them after the
+                    # terminal frame. Signals go through the event queue so
+                    # sending stays with the single writer.
                     while True:
                         try:
-                            event = await asyncio.wait_for(
-                                _stream.__anext__(), timeout=_WS_HEARTBEAT_SEC
+                            frame = await websocket.receive_json()
+                        except Exception:
+                            await event_queue.put(("disconnect", None))
+                            return
+                        if isinstance(frame, dict) and frame.get("type") == "stop":
+                            await event_queue.put(("stop", None))
+                            return
+                        await event_queue.put(("busy", None))
+
+                watch_task = asyncio.create_task(_watch_client())
+
+                # `text_delta` frames carry the cumulative text of the CURRENT
+                # LLM segment (the UI replaces the active text block), so a
+                # replayed or duplicated frame is harmless. A new message id
+                # starts a new segment; the authoritative `text` frame closes it.
+                segment_text = ""
+                segment_id = None
+
+                def _handle_updates(update: dict) -> List[dict]:
+                    nonlocal total_input_tokens, total_output_tokens, segment_text, segment_id
+                    frames: List[dict] = []
+                    if "agent" in update:
+                        msg = update["agent"]["messages"][-1]
+                        text = get_clean_content(msg)
+                        if text:
+                            frames.append({"type": "text", "content": text})
+                            segment_text, segment_id = "", None
+                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                            total_input_tokens += msg.usage_metadata.get("input_tokens", 0)
+                            total_output_tokens += msg.usage_metadata.get("output_tokens", 0)
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            for tc in msg.tool_calls:
+                                tc_id = tc.get("id", "")
+                                tc_name = tc.get("name", "unknown")
+                                tc_args = tc.get("args", {}) if isinstance(tc.get("args"), dict) else {}
+                                if tc_id:
+                                    pending_tool_calls[tc_id] = {"name": tc_name, "args": tc_args}
+                                log_tool_call(
+                                    workspace=workspace,
+                                    session_id=session_id,
+                                    source="api_ws",
+                                    tool=tc_name,
+                                    arguments=tc_args,
+                                    tool_call_id=tc_id or None,
+                                )
+                                frames.append({"type": "tool_call", "tool": format_tool_call_for_api(tc)})
+                    elif "tools" in update:
+                        msg = update["tools"]["messages"][-1]
+                        result = format_tool_result_for_api(msg.content)
+                        call_meta = pending_tool_calls.pop(msg.tool_call_id, {})
+                        log_tool_result(
+                            workspace=workspace,
+                            session_id=session_id,
+                            source="api_ws",
+                            tool=call_meta.get("name", "unknown"),
+                            result=msg.content,
+                            status="success" if result.get("status") == "success" else "error",
+                            tool_call_id=msg.tool_call_id,
+                            arguments=call_meta.get("args", {}),
+                        )
+                        frames.append({"type": "tool_result", "tool_call_id": msg.tool_call_id, **result})
+                    return frames
+
+                agent_error: Optional[Exception] = None
+                delta_gate = 0.0
+                try:
+                    while True:
+                        try:
+                            kind, payload = await asyncio.wait_for(
+                                event_queue.get(), timeout=_WS_HEARTBEAT_SEC
                             )
                         except asyncio.TimeoutError:
-                            await websocket.send_json({"type": "ping"})
+                            # Silent gap (tool still running). This cancels only
+                            # the queue read — never the agent stream.
+                            await _send({"type": "ping"})
                             continue
-                        except StopAsyncIteration:
+
+                        if kind == "end":
                             break
-
-                        if "agent" in event:
-                            msg = event["agent"]["messages"][-1]
-
-                            # Send text content
-                            text = get_clean_content(msg)
-                            if text:
-                                await websocket.send_json({
-                                    "type": "text",
-                                    "content": text
-                                })
-
-                            # Track tokens
-                            if hasattr(msg, "usage_metadata") and msg.usage_metadata:
-                                total_input_tokens += msg.usage_metadata.get("input_tokens", 0)
-                                total_output_tokens += msg.usage_metadata.get("output_tokens", 0)
-
-                            # Send tool calls
-                            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                                for tc in msg.tool_calls:
-                                    tc_id = tc.get("id", "")
-                                    tc_name = tc.get("name", "unknown")
-                                    tc_args = tc.get("args", {}) if isinstance(tc.get("args"), dict) else {}
-                                    if tc_id:
-                                        pending_tool_calls[tc_id] = {"name": tc_name, "args": tc_args}
-                                    log_tool_call(
-                                        workspace=workspace,
-                                        session_id=session_id,
-                                        source="api_ws",
-                                        tool=tc_name,
-                                        arguments=tc_args,
-                                        tool_call_id=tc_id or None,
-                                    )
-                                    await websocket.send_json({
-                                        "type": "tool_call",
-                                        "tool": format_tool_call_for_api(tc)
-                                    })
-
-                        elif "tools" in event:
-                            msg = event["tools"]["messages"][-1]
-                            result = format_tool_result_for_api(msg.content)
-                            call_meta = pending_tool_calls.pop(msg.tool_call_id, {})
-                            log_tool_result(
-                                workspace=workspace,
-                                session_id=session_id,
-                                source="api_ws",
-                                tool=call_meta.get("name", "unknown"),
-                                result=msg.content,
-                                status="success" if result.get("status") == "success" else "error",
-                                tool_call_id=msg.tool_call_id,
-                                arguments=call_meta.get("args", {}),
-                            )
-                            await websocket.send_json({
-                                "type": "tool_result",
-                                "tool_call_id": msg.tool_call_id,
-                                **result
+                        if kind == "error":
+                            agent_error = payload
+                            break
+                        if kind == "stop":
+                            stop_requested = True
+                            drain_task.cancel()
+                            break
+                        if kind == "disconnect":
+                            # Client dropped mid-run. Finish the run headless so
+                            # the result lands in the checkpoint; the UI
+                            # reconciles via history refetch.
+                            client_gone = True
+                            continue
+                        if kind == "busy":
+                            await _send({
+                                "type": "error", "code": "busy",
+                                "error": "A response is already in progress.",
                             })
+                            continue
 
-                    # Update token usage
-                    if total_input_tokens > 0 or total_output_tokens > 0:
-                        current_meta = session_manager.get_session_metadata(session_id, user_id=uid)
-                        if current_meta:
-                            new_input = current_meta.get("input_tokens", 0) + total_input_tokens
-                            new_output = current_meta.get("output_tokens", 0) + total_output_tokens
-                            cached = current_meta.get("cached_tokens", 0)
-                            new_cost = calculate_cost(new_input, new_output, model_name)
-                            session_manager.update_session_stats(session_id, new_input, new_output, cached, new_cost, user_id=uid)
+                        mode, data = payload
+                        if mode == "messages":
+                            chunk, meta = data
+                            if (meta or {}).get("langgraph_node") == "agent":
+                                piece = get_clean_content(chunk)
+                                if piece:
+                                    chunk_id = getattr(chunk, "id", None)
+                                    if chunk_id != segment_id:
+                                        segment_id, segment_text = chunk_id, ""
+                                        delta_gate = 0.0  # new segment: emit at once
+                                    segment_text += piece
+                                    now = asyncio.get_running_loop().time()
+                                    if now - delta_gate >= _WS_DELTA_INTERVAL_SEC:
+                                        delta_gate = now
+                                        await _send({"type": "text_delta", "content": segment_text})
+                        elif mode == "updates":
+                            for frame in _handle_updates(data):
+                                await _send(frame)
+                finally:
+                    watch_task.cancel()
+                    if not drain_task.done():
+                        drain_task.cancel()
+                    try:
+                        await drain_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
 
-                    # Cap the shared hosted tier: charge THIS turn's tokens/cost to
-                    # the limiter so the per-user daily + global ceilings actually
-                    # bite (otherwise a free-tier user is effectively uncapped).
-                    if llm_key.source == "hosted":
-                        limiter = getattr(_LLM_KEY_PROVIDER, "limiter", None)
-                        if limiter is not None:
-                            turn_cost = calculate_cost(total_input_tokens, total_output_tokens, model_name)
-                            limiter.record(uid or "anonymous", total_input_tokens + total_output_tokens, turn_cost)
+                # Update token usage
+                if total_input_tokens > 0 or total_output_tokens > 0:
+                    current_meta = session_manager.get_session_metadata(session_id, user_id=uid)
+                    if current_meta:
+                        new_input = current_meta.get("input_tokens", 0) + total_input_tokens
+                        new_output = current_meta.get("output_tokens", 0) + total_output_tokens
+                        cached = current_meta.get("cached_tokens", 0)
+                        new_cost = calculate_cost(new_input, new_output, model_name)
+                        session_manager.update_session_stats(session_id, new_input, new_output, cached, new_cost, user_id=uid)
 
-                    # Persist any workspace changes back to durable storage in
-                    # hosted mode (cloud provider). No-op for the local provider.
-                    _sync = getattr(_ws_provider, "sync", None)
-                    if callable(_sync):
-                        _sync(session_id)
+                # Cap the shared hosted tier: charge THIS turn's tokens/cost to
+                # the limiter so the per-user daily + global ceilings actually
+                # bite (otherwise a free-tier user is effectively uncapped).
+                if llm_key.source == "hosted":
+                    limiter = getattr(_LLM_KEY_PROVIDER, "limiter", None)
+                    if limiter is not None:
+                        turn_cost = calculate_cost(total_input_tokens, total_output_tokens, model_name)
+                        limiter.record(uid or "anonymous", total_input_tokens + total_output_tokens, turn_cost)
 
-                    await websocket.send_json({
-                        "type": "done",
-                        "tokens": {
-                            "input": total_input_tokens,
-                            "output": total_output_tokens
-                        }
-                    })
+                # Persist any workspace changes back to durable storage in
+                # hosted mode (cloud provider). No-op for the local provider.
+                _sync = getattr(_ws_provider, "sync", None)
+                if callable(_sync):
+                    _sync(session_id)
 
-                except Exception as e:
-                    print(f"[ERROR] Agent error: {e}")
-                    await websocket.send_json({
-                        "type": "error",
-                        "error": str(e)
-                    })
+                tokens = {"input": total_input_tokens, "output": total_output_tokens}
+                if agent_error is not None:
+                    print(f"[ERROR] Agent error: {agent_error}")
+                    await _send({"type": "error", "error": str(agent_error)})
+                elif stop_requested:
+                    # Explicit terminal marker for a user-initiated stop; the
+                    # next turn repairs any dangling tool calls in the
+                    # checkpoint (see the corrupted-state fix above).
+                    await _send({"type": "stopped", "tokens": tokens})
+                else:
+                    await _send({"type": "done", "tokens": tokens})
+
+                if client_gone:
+                    # The socket is dead; nothing more can be received on it.
+                    return
 
     except WebSocketDisconnect:
         print(f"[CHAT] WebSocket disconnected: {session_id}")

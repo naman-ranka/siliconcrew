@@ -229,6 +229,10 @@ resource "google_cloud_run_v2_service" "backend" {
     # cold-downloading. Pairs with startup_cpu_boost below; set
     # backend_min_instances=1 to also keep one instance always warm.
     session_affinity = true
+    # WebSocket chat rides a long-lived HTTP request; the Cloud Run default
+    # (300s) kills it 5 minutes into a synthesis run even with heartbeats.
+    # Raise to 1h — the frontend reconnects + reconciles beyond that.
+    timeout = "3600s"
     scaling {
       min_instance_count = var.backend_min_instances
       max_instance_count = var.backend_max_instances

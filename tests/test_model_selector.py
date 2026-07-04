@@ -89,4 +89,7 @@ def test_thread_model_is_tenant_scoped(mgr):
 
 
 def test_model_normalization_alias():
-    assert normalize_model_name("gemini-3.1-flash") == "gemini-3-flash-preview"
+    # Compat + retired ids resolve to their GA successors.
+    assert normalize_model_name("gemini-3.1-flash") == "gemini-3.5-flash"
+    assert normalize_model_name("gemini-3-flash-preview") == "gemini-3.5-flash"
+    assert normalize_model_name("gemini-3.1-flash-lite-preview") == "gemini-3.1-flash-lite"

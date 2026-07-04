@@ -115,7 +115,7 @@ export function CreateSessionModal({ presetGroup, defaultStartIn, onClose }: Cre
       // Model: the real catalog default (loaded above); sessionsApi falls back
       // to its own default when the registry hasn't landed.
       const { defaultModel, models } = useStore.getState();
-      const model = defaultModel ?? models[0]?.id ?? "gemini-3.1-flash";
+      const model = defaultModel ?? models[0]?.id ?? "gemini-3.5-flash";
       const session = await createSession(slug, model, projectId);
       useWorkbenchUiStore.getState().setShell(session.id, startIn);
       router.push(sessionUrl(session.id, { view: startIn }));

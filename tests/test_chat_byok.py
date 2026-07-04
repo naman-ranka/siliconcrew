@@ -62,7 +62,9 @@ class _FakeAgent:
         return _FakeState()
 
     async def astream(self, inputs, config, stream_mode=None):
-        yield {"agent": {"messages": [_FakeMsg()]}}
+        # The WS streams with stream_mode=["updates", "messages"], so events
+        # arrive as (mode, payload) tuples.
+        yield ("updates", {"agent": {"messages": [_FakeMsg()]}})
 
 
 @pytest.fixture()

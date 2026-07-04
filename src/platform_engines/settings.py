@@ -202,7 +202,7 @@ def get_settings() -> PlatformSettings:
         database_url=_env("DATABASE_URL"),
         llm_key_engine=llm_key_engine,
         kms_key_uri=_env("KMS_KEY_URI"),
-        hosted_gemini_model=_env("HOSTED_GEMINI_MODEL", "gemini-3-flash-preview"),
+        hosted_gemini_model=_env("HOSTED_GEMINI_MODEL", "gemini-3.5-flash"),
         hosted_gemini_key=_env("HOSTED_GEMINI_KEY"),
         synth_runs_per_day=_int_env("SYNTH_RUNS_PER_DAY", 20),
         synth_compute_minutes_per_month=_int_env("SYNTH_COMPUTE_MINUTES_PER_MONTH", 600),

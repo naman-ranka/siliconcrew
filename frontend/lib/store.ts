@@ -34,6 +34,16 @@ import { isDuplicateOfServer, mergeActivity, upsertActivityEvent } from "./activ
 // UI-chrome store (react/zustand only - no import cycle): pruned on session delete.
 import { useWorkbenchUiStore } from "./workbenchUiStore";
 
+// A follow-up typed while the assistant is still responding — held client-side
+// until the current turn ends, and removable until then.
+export interface QueuedMessage {
+  id: string;
+  content: string;
+}
+
+// Hard cap on client-side queued follow-ups (bounded memory, sane UX).
+export const MAX_QUEUED_MESSAGES = 10;
+
 // F4/F5: store-level single-flight for the workspace hydrate + workbench load,
 // keyed by session id. Every trigger — mount, selectSession, chat-complete,
 // upload, focus revalidate, manual refresh — shares one in-flight promise, so
@@ -252,6 +262,16 @@ interface AppState {
   // Machine-readable code from a WS error frame (e.g. "no_key",
   // "hosted_tier_exhausted") so the chat can render an actionable CTA.
   chatErrorCode: string | null;
+  // Follow-ups typed while the assistant is still responding. Queued
+  // client-side (ChatGPT-style) and dispatched one at a time as each turn
+  // reaches a terminal frame; each stays removable until it's actually sent.
+  queuedMessages: QueuedMessage[];
+  // True between the user's Stop click and the server-confirmed terminal
+  // frame — the button shows "Stopping…" and duplicate stops are ignored.
+  stopPending: boolean;
+  // Client-generated id of the in-flight turn. The server echoes it on every
+  // frame, so stale frames (late after a stop/reconnect) are dropped by id.
+  activeTurnId: string | null;
 
   // Chat threads (many conversations per workspace). The active thread keys the
   // LangGraph checkpoint; all threads share the live workspace.
@@ -314,6 +334,9 @@ interface AppState {
   loadChatHistory: () => Promise<void>;
   sendMessage: (content: string) => void;
   stopStreaming: () => void;
+  removeQueuedMessage: (id: string) => void;
+  /** Send the next queued follow-up if the previous turn has ended. */
+  dispatchQueuedMessage: () => void;
 
   // Chat thread actions
   loadThreads: () => Promise<void>;
@@ -446,6 +469,9 @@ export const useStore = create<AppState>((set, get) => ({
   streamingMessage: null,
   chatError: null,
   chatErrorCode: null,
+  queuedMessages: [],
+  stopPending: false,
+  activeTurnId: null,
 
   threads: [],
   activeThreadId: null,
@@ -591,6 +617,7 @@ export const useStore = create<AppState>((set, get) => ({
         sessions: [session, ...state.sessions],
         currentSession: session,
         messages: [],
+        queuedMessages: [],
         threads: [],
         activeThreadId: null,
         ws: null,
@@ -665,6 +692,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({
       currentSession: session,
       messages: [],
+      queuedMessages: [],
       threads: [],
       activeThreadId: null,
       ws: null,
@@ -748,18 +776,18 @@ export const useStore = create<AppState>((set, get) => ({
         tool_results: msg.tool_results,
         blocks: buildBlocks(msg.content ?? "", msg.tool_calls, msg.tool_results),
       }));
-      // Reopen reconciliation (F4): if the last assistant turn ends on a tool call
-      // with no closing summary, it was interrupted before finishing (e.g. the WS
-      // dropped mid-synthesis). Mark it honestly instead of leaving a dangling
-      // "Waiting for Synthesis" that looks perpetually in-progress — the real
-      // status lives in the Runs / Signoff panel.
+      // Reopen reconciliation (F4): if the last assistant turn ends on a tool
+      // call with no closing summary, the connection was lost before this
+      // client saw the end of it. The agent may STILL be running server-side
+      // (Cloud Run keeps the container), so don't declare it dead — say what
+      // is actually known and point at the live status surface.
       const last = messages[messages.length - 1];
       if (last && last.role === "assistant") {
         const b = last.blocks ?? [];
         if (b.length > 0 && b[b.length - 1].type === "tool") {
           last.blocks = [
             ...b,
-            { type: "text", content: "_The reply was interrupted before a summary — see the Runs / Signoff panel for the final status._" },
+            { type: "text", content: "_The connection was lost during this step — it may still be running. Check the Runs / Signoff panel for live status, or send a message to continue._" },
           ];
         }
       }
@@ -779,9 +807,19 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   sendMessage: (content: string) => {
-    const { currentSession, ws: existingWs, wsSessionId, wsThreadId, activeThreadId, messages } = get();
+    const { currentSession, ws: existingWs, wsSessionId, wsThreadId, activeThreadId, messages, isStreaming, queuedMessages } = get();
     if (!currentSession || !content.trim()) return;
+    // Mid-turn follow-ups queue instead of interleaving into the running turn;
+    // they dispatch (in order) as each turn ends and stay removable until then.
+    if (isStreaming) {
+      if (queuedMessages.length >= MAX_QUEUED_MESSAGES) return;
+      set({ queuedMessages: [...queuedMessages, { id: generateId(), content }] });
+      return;
+    }
     const messageContent = content;
+    // Client-generated turn id: sent with the message, echoed by the server on
+    // every frame of the turn, and used below to drop stale frames by id.
+    const turnId = generateId();
     // The chat thread this message belongs to (defaults to Chat 1 = session id).
     const threadId = activeThreadId || currentSession.id;
 
@@ -813,10 +851,10 @@ export const useStore = create<AppState>((set, get) => ({
       socket.onopen = () => {
         // Ignore stale socket opens after session/socket replacement.
         if (get().ws !== socket) return;
-        socket.send(JSON.stringify({ message: messageContent, thread_id: threadId }));
+        socket.send(JSON.stringify({ message: messageContent, thread_id: threadId, turn_id: turnId }));
       };
     } else {
-      ws.send(JSON.stringify({ message: messageContent, thread_id: threadId }));
+      ws.send(JSON.stringify({ message: messageContent, thread_id: threadId, turn_id: turnId }));
     }
 
     // Create streaming message placeholder
@@ -830,13 +868,17 @@ export const useStore = create<AppState>((set, get) => ({
       timestamp: new Date().toISOString(),
     };
 
-    set({ isStreaming: true, streamingMessage, chatError: null, chatErrorCode: null });
+    set({ isStreaming: true, streamingMessage, chatError: null, chatErrorCode: null, stopPending: false, activeTurnId: turnId });
 
     let terminalReceived = false;
     const socket = ws;
     socket.onmessage = (event) => {
       if (get().ws !== socket) return;
       const data = JSON.parse(event.data);
+      // Stale-frame guard: frames from a previous turn (late arrivals after a
+      // stop or reconnect) are dropped by id. Frames without a turn_id (older
+      // backend) pass through unchanged.
+      if (data.turn_id && data.turn_id !== turnId) return;
       const { streamingMessage: msg, messages: currentMessages } = get();
 
       if (!msg) return;
@@ -947,15 +989,50 @@ export const useStore = create<AppState>((set, get) => ({
               messages: [...finalMessages, finalMsg],
               isStreaming: false,
               streamingMessage: null,
+              stopPending: false,
             });
           }
           // Final workspace refresh after completion
           get().refreshWorkspace();
           // Reflect server-side auto-title / last-active reordering in the switcher.
           get().loadThreads();
+          // A follow-up typed during the turn goes out now, in order.
+          setTimeout(() => get().dispatchQueuedMessage(), 0);
           break;
 
+        case "stopped": {
+          // Server confirmed the user's stop: the run was cancelled cleanly.
+          // Keep the partial trace with an explicit marker; the socket stays open.
+          terminalReceived = true;
+          const { streamingMessage: sm, messages: smsgs } = get();
+          if (sm) {
+            const stoppedText = "\n\n[Stopped]";
+            const blocks = [...(sm.blocks ?? [])];
+            const last = blocks.length - 1;
+            if (last >= 0 && blocks[last].type === "text") {
+              const prev = blocks[last] as { type: "text"; content: string };
+              blocks[last] = { type: "text", content: prev.content + stoppedText };
+            } else {
+              blocks.push({ type: "text", content: stoppedText });
+            }
+            set({
+              messages: [...smsgs, { ...sm, content: sm.content + stoppedText, blocks }],
+              isStreaming: false,
+              streamingMessage: null,
+              stopPending: false,
+            });
+          } else {
+            set({ isStreaming: false, streamingMessage: null, stopPending: false });
+          }
+          get().refreshWorkspace();
+          setTimeout(() => get().dispatchQueuedMessage(), 0);
+          break;
+        }
+
         case "error": {
+          // A `busy` rejection is informational (the server refused a frame it
+          // received mid-run) — the turn is still streaming, don't finalize.
+          if (data.code === "busy") break;
           terminalReceived = true;
           // Keep whatever streamed so far instead of discarding the trace.
           const { streamingMessage: em, messages: emsgs } = get();
@@ -966,7 +1043,11 @@ export const useStore = create<AppState>((set, get) => ({
             chatErrorCode: data.code ?? null,
             isStreaming: false,
             streamingMessage: null,
+            stopPending: false,
           });
+          // Attempt queued follow-ups too — each gets an honest error frame if
+          // the condition persists, and the queue never silently swallows them.
+          setTimeout(() => get().dispatchQueuedMessage(), 0);
           break;
         }
       }
@@ -991,6 +1072,7 @@ export const useStore = create<AppState>((set, get) => ({
         messages: keep ? [...dmsgs, dm!] : dmsgs,
         streamingMessage: null,
         isStreaming: false,
+        stopPending: false,
         ws: null,
         wsSessionId: null,
         wsThreadId: null,
@@ -1004,6 +1086,8 @@ export const useStore = create<AppState>((set, get) => ({
         attempt += 1;
         void get().loadChatHistory().finally(() => {
           if (attempt < 3) setTimeout(poll, attempt * 2000);
+          // Once reconciled, let a queued follow-up go out on a fresh socket.
+          else get().dispatchQueuedMessage();
         });
       };
       setTimeout(poll, 1500);
@@ -1014,27 +1098,38 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   stopStreaming: () => {
-    const { ws, streamingMessage, messages } = get();
-    if (ws) ws.close();
-    if (streamingMessage) {
-      const stoppedText = "\n\n[Stopped]";
-      const blocks = [...(streamingMessage.blocks ?? [])];
-      const last = blocks.length - 1;
-      if (last >= 0 && blocks[last].type === "text") {
-        const prev = blocks[last] as { type: "text"; content: string };
-        blocks[last] = { type: "text", content: prev.content + stoppedText };
-      } else {
-        blocks.push({ type: "text", content: stoppedText });
-      }
-      set({
-        messages: [...messages, { ...streamingMessage, content: streamingMessage.content + stoppedText, blocks }],
-        isStreaming: false,
-        streamingMessage: null,
-        ws: null,
-        wsSessionId: null,
-        wsThreadId: null,
-      });
+    const { ws, isStreaming, stopPending, activeTurnId } = get();
+    if (!isStreaming || stopPending) return; // duplicate stops are no-ops
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // Real server-side cancel: the backend aborts the agent run and replies
+      // with a terminal `stopped` frame (handled in onmessage). The socket
+      // stays open, so the next message reuses it. `stopPending` drives the
+      // "Stopping…" button state until that confirmation lands.
+      set({ stopPending: true });
+      ws.send(JSON.stringify({ type: "stop", turn_id: activeTurnId }));
+      // Fallback: if no terminal frame lands (older backend, wedged run),
+      // close the socket — finalizeDrop preserves the partial and recovers.
+      const socket = ws;
+      setTimeout(() => {
+        if (get().ws === socket && get().isStreaming) socket.close();
+      }, 4000);
+    } else if (ws) {
+      ws.close(); // not OPEN — closing triggers the drop-recovery path
+    } else {
+      set({ isStreaming: false, streamingMessage: null, stopPending: false });
     }
+  },
+
+  removeQueuedMessage: (id: string) => {
+    set({ queuedMessages: get().queuedMessages.filter((q) => q.id !== id) });
+  },
+
+  dispatchQueuedMessage: () => {
+    const { queuedMessages, isStreaming, currentSession } = get();
+    if (isStreaming || !currentSession || queuedMessages.length === 0) return;
+    const [next, ...rest] = queuedMessages;
+    set({ queuedMessages: rest });
+    get().sendMessage(next.content);
   },
 
   // Chat thread actions — many conversations per workspace. Threads share the
@@ -1072,6 +1167,7 @@ export const useStore = create<AppState>((set, get) => ({
       threads: [thread, ...state.threads],
       activeThreadId: thread.id,
       messages: [],
+      queuedMessages: [],
       ws: null,
       wsSessionId: null,
       wsThreadId: null,
@@ -1083,7 +1179,7 @@ export const useStore = create<AppState>((set, get) => ({
     const { currentSession, activeThreadId, ws } = get();
     if (!currentSession || threadId === activeThreadId) return;
     if (ws) ws.close();
-    set({ activeThreadId: threadId, messages: [], ws: null, wsSessionId: null, wsThreadId: null });
+    set({ activeThreadId: threadId, messages: [], queuedMessages: [], ws: null, wsSessionId: null, wsThreadId: null });
     await get().loadChatHistory();
   },
 
@@ -1097,7 +1193,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({
       threads: remaining,
       activeThreadId: wasActive ? remaining[0]?.id ?? null : activeThreadId,
-      ...(wasActive ? { messages: [], ws: null, wsSessionId: null, wsThreadId: null } : {}),
+      ...(wasActive ? { messages: [], queuedMessages: [], ws: null, wsSessionId: null, wsThreadId: null } : {}),
     });
     if (wasActive) {
       // Reload the list (it may come back EMPTY — listing is read-only; the
