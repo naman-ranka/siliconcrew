@@ -20,7 +20,7 @@ beforeEach(() => {
 });
 
 describe("reopen reconciliation of an interrupted trace (F4)", () => {
-  it("appends an 'interrupted' marker when the last assistant turn ends on a tool call", async () => {
+  it("appends a connection-lost marker when the last assistant turn ends on a tool call", async () => {
     (chatApi.getHistory as any).mockResolvedValue([
       { role: "user", content: "synthesize it", tool_calls: [], tool_results: [] },
       {
@@ -37,7 +37,10 @@ describe("reopen reconciliation of an interrupted trace (F4)", () => {
     const last = msgs[msgs.length - 1];
     const lastBlock = last.blocks[last.blocks.length - 1];
     expect(lastBlock.type).toBe("text");
-    expect((lastBlock as any).content).toMatch(/interrupted/i);
+    // Honest phrasing: the run may STILL be running server-side after a drop,
+    // so the marker must not declare it dead.
+    expect((lastBlock as any).content).toMatch(/connection was lost/i);
+    expect((lastBlock as any).content).toMatch(/may still be running/i);
   });
 
   it("does NOT add a marker when the turn ends with a text summary", async () => {
@@ -50,6 +53,6 @@ describe("reopen reconciliation of an interrupted trace (F4)", () => {
     const msgs = useStore.getState().messages;
     const last = msgs[msgs.length - 1];
     const texts = last.blocks.filter((b: any) => b.type === "text");
-    expect(texts.every((b: any) => !/interrupted/i.test(b.content))).toBe(true);
+    expect(texts.every((b: any) => !/connection was lost/i.test(b.content))).toBe(true);
   });
 });

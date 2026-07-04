@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
-import { Send, Square } from "lucide-react";
+import { Send, Square, X, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelPicker } from "./ModelPicker";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export function ChatInput() {
-  const { currentSession, isStreaming, sendMessage, stopStreaming } = useStore();
+  const { currentSession, isStreaming, sendMessage, stopStreaming, queuedMessages, removeQueuedMessage } = useStore();
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -22,7 +22,9 @@ export function ChatInput() {
   }, [input]);
 
   const handleSubmit = () => {
-    if (!input.trim() || isStreaming || !currentSession) return;
+    if (!input.trim() || !currentSession) return;
+    // While a response is streaming, sendMessage queues the follow-up (shown
+    // as a removable chip below) and dispatches it when the turn completes.
     sendMessage(input);
     setInput("");
   };
@@ -34,12 +36,34 @@ export function ChatInput() {
     }
   };
 
-  const isDisabled = !currentSession || (!input.trim() && !isStreaming);
+  const isDisabled = !currentSession || !input.trim();
 
   return (
     <div className="border-t border-border bg-surface-0 px-4 py-4">
       <div className="max-w-3xl mx-auto">
         <div className="relative">
+          {queuedMessages.length > 0 && (
+            <div className="flex flex-col gap-1.5 mb-2" data-testid="queued-messages">
+              {queuedMessages.map((q) => (
+                <div
+                  key={q.id}
+                  className="flex items-center gap-2 rounded-lg border border-border bg-surface-1 px-3 py-1.5 text-xs text-muted-foreground"
+                >
+                  <Clock className="h-3 w-3 shrink-0 opacity-60" />
+                  <span className="truncate flex-1" title={q.content}>{q.content}</span>
+                  <span className="shrink-0 opacity-50">queued</span>
+                  <button
+                    aria-label="Remove queued message"
+                    className="shrink-0 rounded p-0.5 hover:bg-surface-2 hover:text-foreground transition-colors"
+                    onClick={() => removeQueuedMessage(q.id)}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="relative rounded-xl border border-border bg-surface-1 shadow-sm focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary/50 transition-all">
             <textarea
               ref={textareaRef}
@@ -47,11 +71,13 @@ export function ChatInput() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={
-                currentSession
-                  ? "Describe your RTL design requirements..."
-                  : "Select or create a session to start"
+                !currentSession
+                  ? "Select or create a session to start"
+                  : isStreaming
+                    ? "Ask a follow-up — it'll be sent when this response finishes…"
+                    : "Describe your RTL design requirements..."
               }
-              disabled={!currentSession || isStreaming}
+              disabled={!currentSession}
               className={cn(
                 "w-full resize-none bg-transparent px-4 py-3.5 pr-28 text-sm",
                 "placeholder:text-muted-foreground/60",
@@ -62,6 +88,18 @@ export function ChatInput() {
               rows={1}
             />
             <div className="absolute right-2 bottom-2 flex items-center gap-1.5">
+              {isStreaming && input.trim() && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-9 px-3 gap-2 font-medium"
+                  onClick={handleSubmit}
+                  title="Queue this message — it sends when the current response finishes"
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  Queue
+                </Button>
+              )}
               {isStreaming ? (
                 <Button
                   variant="destructive"
