@@ -9,7 +9,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("@/lib/api", () => ({
   projectsApi: {},
-  sessionsApi: {},
+  sessionsApi: {
+    create: vi.fn(),
+  },
   chatApi: {},
   threadsApi: {},
   modelsApi: {},
@@ -22,7 +24,7 @@ vi.mock("@/lib/api", () => ({
 
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
-import { workbenchApi } from "@/lib/api";
+import { sessionsApi, workbenchApi } from "@/lib/api";
 import type { ActivityEvent, RunSummary } from "@/types";
 
 const SESSION = {
@@ -193,6 +195,49 @@ describe("activity observer (new run-scoped event → loadRuns)", () => {
     await useStore.getState().loadActivity();
 
     expect(loadRuns).not.toHaveBeenCalled();
+  });
+});
+
+// ---- 2b. session switch resets the runs slice ------------------------------------
+// (F4) A stale runs list from the previous session would make the transition
+// detector false-fire (old running row seen "terminal" in the new session) or
+// miss real transitions — selectSession AND createSession must clear all three.
+
+describe("session switch resets runs/selectedRunId/synthJob", () => {
+  const dirtyRunsSlice = () => {
+    useStore.setState({
+      runs: [synthRun("synth_0001", "running")],
+      selectedRunId: "synth_0001",
+      synthJob: { runId: "synth_0001", status: "running", currentStage: "route" },
+    } as never);
+  };
+
+  it("selectSession clears the previous session's runs slice", async () => {
+    dirtyRunsSlice();
+
+    await useStore.getState().selectSession(null);
+
+    const s = useStore.getState();
+    expect(s.runs).toEqual([]);
+    expect(s.selectedRunId).toBeNull();
+    expect(s.synthJob).toBeNull();
+  });
+
+  it("createSession clears the previous session's runs slice", async () => {
+    dirtyRunsSlice();
+    vi.mocked(sessionsApi.create).mockResolvedValue({ ...SESSION, id: "s2" } as never);
+    useStore.setState({
+      sessions: [],
+      loadThreads: vi.fn().mockResolvedValue(undefined),
+    } as never);
+
+    await useStore.getState().createSession("fresh", "m");
+
+    const s = useStore.getState();
+    expect(s.currentSession?.id).toBe("s2");
+    expect(s.runs).toEqual([]);
+    expect(s.selectedRunId).toBeNull();
+    expect(s.synthJob).toBeNull();
   });
 });
 

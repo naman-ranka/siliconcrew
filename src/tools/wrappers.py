@@ -381,11 +381,9 @@ def _wait_for_synthesis_job(
     start = time.time()
     max_wait = max(1, min(int(max_wait_sec), WAIT_MAX_WAIT_SEC))
     poll_interval = max(1, int(poll_interval_sec))
-    last = None
 
     while (time.time() - start) < max_wait:
         status = collect_synthesis_status(run_id, workspace=workspace)
-        last = status
         if status.get("status") in {"completed", "failed"}:
             status["waited_sec"] = round(time.time() - start, 2)
             status["timed_out"] = False
@@ -400,10 +398,15 @@ def _wait_for_synthesis_job(
             break
         time.sleep(min(sleep_s, max(1, int(remaining))))
 
-    # timeout path returns latest known status with explicit timeout flag
-    if last is None:
-        last = {"run_id": run_id, "status": "running"}
+    # One final sample after the wait loop: the run may have gone terminal
+    # during the last sleep — report that, not a stale pre-sleep snapshot.
+    last = collect_synthesis_status(run_id, workspace=workspace)
     last["waited_sec"] = round(time.time() - start, 2)
+    if last.get("status") in {"completed", "failed"}:
+        last["timed_out"] = False
+        return last
+
+    # timeout path returns latest known status with explicit timeout flag
     last["timed_out"] = True
     last["next_action"] = "Call wait_for_synthesis again or poll with get_synthesis_status."
     return last

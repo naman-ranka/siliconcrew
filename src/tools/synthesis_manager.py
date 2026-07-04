@@ -288,6 +288,24 @@ def _submit_with_quota_release(reservation, fn, *fn_args):
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _POLL_CACHE: Dict[str, Dict[str, Any]] = {}
 _POLL_BACKOFF_STATE: Dict[str, Dict[str, Any]] = {}
+
+
+def _job_key(workspace: Optional[str], run_id: str) -> str:
+    """Workspace-scoped key for the in-memory bookkeeping maps.
+
+    run_ids (synth_NNNN) are unique per WORKSPACE, not globally: on a hosted
+    instance two tenants' synth_0001 must never share a _JOBS/_POLL_CACHE/
+    _POLL_BACKOFF_STATE slot. Callers without a workspace fall back to the
+    bare run_id (which then simply never matches a scoped entry).
+    """
+    if not workspace:
+        return run_id
+    return f"{os.path.abspath(workspace)}::{run_id}"
+
+
+def _workspace_from_run_dir(run_dir: str) -> str:
+    """Workspace root for a run dir (<workspace>/synth_runs/<run_id>)."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(run_dir)))
 _ORFS_OVERRIDE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 # Prevent aggressive status polling loops from burning recursion/context.
@@ -846,18 +864,32 @@ def stage_progress_from_files(run_dir: str, meta: Dict[str, Any]) -> Dict[str, A
     if dispatched:
         try:
             dt = datetime.fromisoformat(dispatched)
-            if dt.tzinfo is not None:
-                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            # Naive timestamps are assumed UTC (same rule as
+            # _reconcile_stale_status). Never call .timestamp() on a NAIVE
+            # datetime — that interprets the wall time in the HOST timezone,
+            # skewing the floor by the UTC offset on non-UTC hosts.
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
             floor_ts = dt.timestamp()
         except Exception:
             floor_ts = None
 
+    # PD retries execute only from retry_start_stage onward: earlier stages
+    # belong to the parent (their checkpoints are copied in, sometimes with
+    # clobbered mtimes). They render "inherited" unless a demonstrably fresh
+    # marker exists, and are never picked as this run's `current` stage.
+    retry_start = meta.get("retry_start_stage")
+    retry_start_idx = (
+        PD_STAGE_SEQUENCE.index(retry_start) if retry_start in PD_STAGE_SEQUENCE else None
+    )
+
     history: List[Dict[str, Any]] = []
     current: Optional[str] = None
-    for stage in PD_STAGE_SEQUENCE:
+    for idx, stage in enumerate(PD_STAGE_SEQUENCE):
         if stage not in plan:
             history.append({"stage": stage, "status": "skipped"})
             continue
+        inherited_slot = retry_start_idx is not None and idx < retry_start_idx
         marker = _find_stage_completion_marker(run_dir, stage)
         if marker:
             try:
@@ -869,12 +901,22 @@ def stage_progress_from_files(run_dir: str, meta: Dict[str, Any]) -> Dict[str, A
                 # retry — evidence of the PARENT's work, not this run's.
                 history.append({"stage": stage, "status": "inherited"})
                 continue
+            if inherited_slot and (floor_ts is None or mtime is None):
+                # A pre-retry_start stage without a provably-fresh marker is
+                # the parent's work.
+                history.append({"stage": stage, "status": "inherited"})
+                continue
             ended = (
                 datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
                 if mtime is not None
                 else None
             )
             history.append({"stage": stage, "status": "completed", "ended_at": ended})
+            continue
+        if inherited_slot:
+            # No marker at all for a stage this retry never runs: implicit
+            # parent state — not "running", never `current`.
+            history.append({"stage": stage, "status": "inherited"})
             continue
         if current is None:
             current = stage
@@ -1898,7 +1940,7 @@ def start_synthesis_job(
 
     with _JOB_LOCK:
         future = _submit_with_quota_release(reservation, _job_worker, workspace, run_dir, args)
-        _JOBS[run_id] = {
+        _JOBS[_job_key(workspace, run_id)] = {
             "future": future,
             "workspace": workspace,
             "run_dir": run_dir,
@@ -2007,7 +2049,7 @@ def retry_pd_job(
 
     with _JOB_LOCK:
         future = _submit_with_quota_release(reservation, _retry_pd_worker, workspace, run_dir, args)
-        _JOBS[run_id] = {
+        _JOBS[_job_key(workspace, run_id)] = {
             "future": future,
             "workspace": workspace,
             "run_dir": run_dir,
@@ -2036,14 +2078,17 @@ def _read_run_meta(run_dir: str) -> Dict[str, Any]:
         return {}
 
 
-def _recommended_poll_after_sec(run_id: str, status: str, stage: str, last_log_lines: List[str]) -> int:
+def _recommended_poll_after_sec(
+    run_id: str, status: str, stage: str, last_log_lines: List[str], workspace: Optional[str] = None
+) -> int:
+    key = _job_key(workspace, run_id)
     if status not in {"queued", "running"}:
-        _POLL_BACKOFF_STATE.pop(run_id, None)
+        _POLL_BACKOFF_STATE.pop(key, None)
         return 0
 
-    state = _POLL_BACKOFF_STATE.get(run_id, {"count": 0})
+    state = _POLL_BACKOFF_STATE.get(key, {"count": 0})
     state["count"] = int(state.get("count", 0)) + 1
-    _POLL_BACKOFF_STATE[run_id] = state
+    _POLL_BACKOFF_STATE[key] = state
 
     poll_after = POLL_BACKOFF_START_SEC * (2 ** (state["count"] - 1))
     return min(POLL_BACKOFF_MAX_SEC, max(POLL_BACKOFF_START_SEC, poll_after))
@@ -2071,13 +2116,20 @@ def _elapsed_seconds(meta: Dict[str, Any], status: str) -> Optional[float]:
     return persisted
 
 
-def _build_status_response(run_id: str, run_dir: str, status: str, meta: Dict[str, Any], recovered: bool = False) -> Dict[str, Any]:
+def _build_status_response(
+    run_id: str,
+    run_dir: str,
+    status: str,
+    meta: Dict[str, Any],
+    recovered: bool = False,
+    workspace: Optional[str] = None,
+) -> Dict[str, Any]:
     last_log_lines = _collect_log_tail(run_dir)
     # Stage truth from the deterministic file trail (Wave 9 Item 1) — the log
     # tail stays as detail, never as the stage source.
     progress = stage_progress_from_files(run_dir, meta)
     stage = progress["current_stage"]
-    poll_after = _recommended_poll_after_sec(run_id, status, stage, last_log_lines)
+    poll_after = _recommended_poll_after_sec(run_id, status, stage, last_log_lines, workspace=workspace)
 
     next_action = (
         "Use search_logs_tool for detailed PPA/error verification."
@@ -2162,14 +2214,15 @@ def _with_rate_limit_fields(resp: Dict[str, Any], retry_after_sec: float) -> Dic
     return out
 
 
-def _maybe_cache_poll_response(run_id: str, response: Dict[str, Any]) -> None:
+def _maybe_cache_poll_response(run_id: str, response: Dict[str, Any], workspace: Optional[str] = None) -> None:
+    key = _job_key(workspace, run_id)
     status = response.get("status")
     if status in {"running", "queued"}:
-        _POLL_CACHE[run_id] = {"ts": time.time(), "response": dict(response)}
-    elif run_id in _POLL_CACHE:
-        del _POLL_CACHE[run_id]
-    if status not in {"running", "queued"} and run_id in _POLL_BACKOFF_STATE:
-        del _POLL_BACKOFF_STATE[run_id]
+        _POLL_CACHE[key] = {"ts": time.time(), "response": dict(response)}
+    elif key in _POLL_CACHE:
+        del _POLL_CACHE[key]
+    if status not in {"running", "queued"} and key in _POLL_BACKOFF_STATE:
+        del _POLL_BACKOFF_STATE[key]
 
 
 def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[str, Any]:
@@ -2180,19 +2233,13 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
     artifacts as completed, or declare an expired silent run failed). The
     payload shape is identical from every source.
     """
+    # All in-memory bookkeeping is keyed by workspace+run_id: run_ids
+    # (synth_NNNN) are unique per WORKSPACE, not globally, so the same id in a
+    # different workspace never hits this process's entry for someone else's
+    # run — it falls through to that workspace's disk meta below.
+    key = _job_key(workspace, run_id)
     with _JOB_LOCK:
-        data = _JOBS.get(run_id)
-
-    # run_ids (synth_NNNN) are unique per WORKSPACE, not globally: the same id
-    # in a different workspace must fall through to that workspace's disk meta,
-    # never to this process's in-memory entry for someone else's run.
-    if (
-        data
-        and workspace
-        and data.get("workspace")
-        and os.path.abspath(data["workspace"]) != os.path.abspath(workspace)
-    ):
-        data = None
+        data = _JOBS.get(key)
 
     if not data:
         run_dir = get_run_dir(workspace, run_id) if workspace else None
@@ -2208,6 +2255,7 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
                 status=status,
                 meta=meta,
                 recovered=True,
+                workspace=workspace,
             )
         return {"run_id": run_id, "status": "failed", "error": "unknown_run", "check_notes": "Unknown run_id", "next_action": "Start a new synthesis run."}
 
@@ -2217,7 +2265,7 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
     # Throttle aggressive polling while job is non-terminal.
     # Terminal states are never rate-limited.
     if not future.done():
-        cached = _POLL_CACHE.get(run_id)
+        cached = _POLL_CACHE.get(key)
         if cached:
             elapsed = time.time() - cached["ts"]
             if elapsed < POLL_MIN_INTERVAL_SEC:
@@ -2228,15 +2276,15 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
     if future.running():
         if not meta.get("check_notes"):
             meta["check_notes"] = "Synthesis in progress."
-        resp = _build_status_response(run_id, run_dir, "running", meta)
-        _maybe_cache_poll_response(run_id, resp)
+        resp = _build_status_response(run_id, run_dir, "running", meta, workspace=workspace)
+        _maybe_cache_poll_response(run_id, resp, workspace=workspace)
         return resp
 
     if not future.done():
         if not meta.get("check_notes"):
             meta["check_notes"] = "Queued."
-        resp = _build_status_response(run_id, run_dir, "queued", meta)
-        _maybe_cache_poll_response(run_id, resp)
+        resp = _build_status_response(run_id, run_dir, "queued", meta, workspace=workspace)
+        _maybe_cache_poll_response(run_id, resp, workspace=workspace)
         return resp
 
     try:
@@ -2244,13 +2292,13 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
     except Exception as exc:
         meta["check_notes"] = f"Job execution error: {exc}"
         meta["auto_checks"] = meta.get("auto_checks", {"constraints": "fail", "signoff": "fail", "equiv": "skip"})
-        resp = _build_status_response(run_id, run_dir, "failed", meta)
-        _maybe_cache_poll_response(run_id, resp)
+        resp = _build_status_response(run_id, run_dir, "failed", meta, workspace=workspace)
+        _maybe_cache_poll_response(run_id, resp, workspace=workspace)
         return resp
 
     final_status = final.get("status", "failed")
-    resp = _build_status_response(run_id, run_dir, final_status, final)
-    _maybe_cache_poll_response(run_id, resp)
+    resp = _build_status_response(run_id, run_dir, final_status, final, workspace=workspace)
+    _maybe_cache_poll_response(run_id, resp, workspace=workspace)
     return resp
 
 
@@ -2376,6 +2424,19 @@ def _reconcile_stale_status(
         return meta
     run_id = meta.get("run_id") or os.path.basename(run_dir)
 
+    # A live worker (in THIS process, for THIS workspace) owns the run: its
+    # verdict always wins. Checked before BOTH the completed-marker leg and
+    # the death leg — the target-stage marker can exist while the worker is
+    # still running signoff/equiv guardrails that may yet fail the run, so
+    # adopting "completed" under a live future would lie.
+    if has_live_future is None:
+        ws = workspace or _workspace_from_run_dir(run_dir)
+        with _JOB_LOCK:
+            data = _JOBS.get(_job_key(ws, run_id))
+        has_live_future = bool(data and not data["future"].done())
+    if has_live_future:
+        return meta  # this process owns it — trust the worker
+
     def _finalize_completed(m: Dict[str, Any]) -> Dict[str, Any]:
         # Shared COMPLETED leg (also re-run after cloud-output adoption).
         # Terminal write goes through the durable wrapper: a reconciling
@@ -2399,14 +2460,19 @@ def _reconcile_stale_status(
         return _finalize_completed(meta)
 
     # ---- death verdict ----
-    if has_live_future is None:
-        with _JOB_LOCK:
-            data = _JOBS.get(run_id)
-        has_live_future = bool(data and not data["future"].done())
-    if has_live_future:
-        return meta  # this process owns it — trust the worker
-
-    started = meta.get("dispatched_at") or meta.get("created_at")
+    timeout_sec = meta.get("timeout_sec") or SYNTH_HARD_TIMEOUT_SEC
+    if meta.get("status") == "queued":
+        # Worker never started: queue backlog is legitimate wait, so the
+        # ceiling gets a full extra timeout past dispatch before a silent
+        # queued run is declared dead.
+        started = meta.get("dispatched_at") or meta.get("created_at")
+        extra_sec = float(timeout_sec)
+    else:
+        # Deadline base is the WORKER start (created_at, written when the
+        # worker takes over) when present — time spent queued must not eat
+        # into the execution ceiling. dispatched_at is the fallback.
+        started = meta.get("created_at") or meta.get("dispatched_at")
+        extra_sec = 0.0
     if not started:
         return meta  # legacy meta without timestamps: never guess
     try:
@@ -2416,8 +2482,7 @@ def _reconcile_stale_status(
         started_ts = started_dt.timestamp()
     except Exception:
         return meta
-    timeout_sec = meta.get("timeout_sec") or SYNTH_HARD_TIMEOUT_SEC
-    deadline = started_ts + float(timeout_sec) + STALE_RUN_GRACE_SEC
+    deadline = started_ts + float(timeout_sec) + extra_sec + STALE_RUN_GRACE_SEC
     now_ts = time.time()
     if now_ts < deadline:
         return meta  # ceiling not reached — honestly still "running"

@@ -601,6 +601,11 @@ export const useStore = create<AppState>((set, get) => ({
         codeFiles: [],
         synthesisRuns: [],
         selectedSynthesisRunId: null,
+        // v2 runs slice is per-session too — a stale runs list would make the
+        // transition detector fire (or miss) across sessions.
+        runs: [],
+        selectedRunId: null,
+        synthJob: null,
         report: null,
         artifactsVisible: false,
         // v2 caches are per-session — never leak across a switch.
@@ -673,6 +678,11 @@ export const useStore = create<AppState>((set, get) => ({
       waveformData: null,
       synthesisRuns: [],
       selectedSynthesisRunId: null,
+      // v2 runs slice is per-session too — a stale runs list would make the
+      // transition detector fire (or miss) across sessions.
+      runs: [],
+      selectedRunId: null,
+      synthJob: null,
       report: null,
       files: [],
       // v2 caches are per-session — never leak across a switch.

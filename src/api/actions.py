@@ -971,6 +971,11 @@ def build_actions_router(
             _err((result.get("error") or {}).get("code", "quota_exceeded"),
                  (result.get("error") or {}).get("message", "Quota exceeded."),
                  details=result.get("error"), status=429)
+        # Validation errors (unsupported stage, missing source run/prereqs)
+        # surface as 400, exactly like /synthesize does.
+        if isinstance(result, dict) and result.get("status") == "error":
+            _err("invalid_request", result.get("message", "Invalid retry request."),
+                 details={"supported_stages": result.get("supported_stages")}, status=400)
         return _ok({"runId": result.get("run_id"), "pollAfterSec": result.get("poll_after_sec"), "raw": result})
 
     @router.post("/runs/{run_id}/pin")

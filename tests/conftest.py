@@ -10,9 +10,10 @@ if ROOT not in sys.path:
 
 @pytest.fixture(autouse=True)
 def _clear_synthesis_memory_state():
-    """Synthesis bookkeeping is keyed by run_id (Wave 9) and run ids repeat
-    across the temp workspaces tests create (every workspace starts at
-    synth_0001), so process-memory caches must not leak between tests."""
+    """Synthesis bookkeeping is keyed by workspace::run_id and the temp
+    workspaces tests create repeat both parts across tests (tmp_path reuse,
+    every workspace starts at synth_0001), so process-memory caches must not
+    leak between tests."""
     try:
         from src.tools import synthesis_manager as _sm
     except Exception:

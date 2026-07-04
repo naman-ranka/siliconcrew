@@ -1,4 +1,4 @@
-# Wave 9 adversarial review findings (to fix, F1-F8)
+# Wave 9 adversarial review findings — ALL FIXED (see test_synth_review_fixes.py)
 
 F1 HIGH stage_progress_from_files floor: naive .timestamp() is LOCAL-tz
   (synthesis_manager.py:845-853). Fix: keep tz-aware; floor_ts =
