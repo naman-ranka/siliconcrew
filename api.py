@@ -1365,19 +1365,74 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 runtime_registry.resolve_runtime(_turn_thread_row)
             )
             if _ext_runtime is not None:
+                _ext_client_gone = False
+
                 async def _ext_send(frame: dict) -> None:
+                    nonlocal _ext_client_gone
+                    if _ext_client_gone:
+                        return
                     frame.setdefault("turn_id", turn_id)
                     try:
                         await websocket.send_json(frame)
                     except Exception:
-                        pass  # client gone; the extension turn still completes
+                        _ext_client_gone = True  # keep the turn going headless
 
-                await _ext_runtime.run_turn(runtime_registry.RuntimeTurnContext(
-                    message=message, turn_id=turn_id, thread_id=thread_id,
-                    session_id=session_id, workspace=workspace, user_id=uid,
-                    thread_row=_turn_thread_row, send=_ext_send,
-                    tier=identity.tier, auth_token=token,
+                # Run the extension turn as a task so we can (a) emit heartbeat
+                # pings during long MCP tool calls — else the client's liveness
+                # watchdog closes the socket ~45s in and drops the turn — and
+                # (b) read a `stop` frame concurrently and cancel mid-run. Mirrors
+                # the native path's ping/stop handling.
+                _ext_turn = asyncio.create_task(_ext_runtime.run_turn(
+                    runtime_registry.RuntimeTurnContext(
+                        message=message, turn_id=turn_id, thread_id=thread_id,
+                        session_id=session_id, workspace=workspace, user_id=uid,
+                        thread_row=_turn_thread_row, send=_ext_send,
+                        tier=identity.tier, auth_token=token,
+                    )
                 ))
+
+                async def _ext_watch_stop():
+                    # Return "stop" on a stop frame, "disconnect" if the socket
+                    # drops. Non-stop frames are ignored (UI queues follow-ups).
+                    while True:
+                        try:
+                            frame = await websocket.receive_json()
+                        except Exception:
+                            return "disconnect"
+                        if isinstance(frame, dict) and frame.get("type") == "stop":
+                            return "stop"
+
+                _ext_stop = asyncio.create_task(_ext_watch_stop())
+                _ext_stopped = False
+                try:
+                    while True:
+                        done, _ = await asyncio.wait(
+                            {_ext_turn, _ext_stop},
+                            timeout=_WS_HEARTBEAT_SEC,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if not done:
+                            await _ext_send({"type": "ping"})
+                            continue
+                        if _ext_stop in done:
+                            if _ext_stop.result() == "disconnect":
+                                _ext_client_gone = True
+                            else:
+                                _ext_stopped = True
+                            if not _ext_turn.done():
+                                _ext_turn.cancel()
+                        break
+                finally:
+                    for _t in (_ext_turn, _ext_stop):
+                        if not _t.done():
+                            _t.cancel()
+                        try:
+                            await _t
+                        except (asyncio.CancelledError, Exception):
+                            pass
+
+                if _ext_stopped:
+                    await _ext_send({"type": "stopped", "tokens": {"input": 0, "output": 0}})
                 continue
             # --- native LangChain turn (unchanged) ----------------------------
 
