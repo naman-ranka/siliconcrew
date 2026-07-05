@@ -371,6 +371,11 @@ class SessionManager:
     def set_thread_model(self, thread_id, model, user_id=None):
         self._store.update_thread(thread_id, user_id=user_id, model=model)
 
+    def set_thread_runtime(self, thread_id, runtime, user_id=None):
+        """Set the shell-level runtime marker that drives dispatch (which
+        registered agent runtime owns this thread). See runtime_registry."""
+        self._store.update_thread(thread_id, user_id=user_id, runtime=runtime)
+
     def touch_thread(self, thread_id, user_id=None, auto_title_from: str | None = None):
         """Bump last_active; auto-title an untitled/default thread on first message."""
         now = datetime.datetime.now()
