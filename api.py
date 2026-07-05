@@ -88,6 +88,11 @@ if get_settings().codex_enabled:
         _CODEX_AUTH_MANAGER = CodexAccountAuthManager(_DATA_DIR)
 
         def _codex_account_home_for(uid):
+            # Normalize to match the /api/codex/auth endpoints, which store the
+            # login under (uid or "anonymous"). In self-host uid is None, so
+            # without this the turn would look up None, miss the "anonymous"
+            # login, and wrongly fall back to a BYOK key.
+            uid = uid or "anonymous"
             # DEFAULT path: the per-user ChatGPT login the user completed via the
             # in-app device-auth flow (/api/codex/auth). This is the only account
             # source out of the box — no credential copying.
