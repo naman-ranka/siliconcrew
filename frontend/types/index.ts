@@ -59,6 +59,8 @@ export interface ToolResult {
 
 export type ContentBlock =
   | { type: "text"; content: string }
+  | { type: "reasoning"; content: string } // agent "thinking" stream (Codex)
+  | { type: "plan"; content: string }       // agent plan/todo (Codex)
   | { type: "tool"; toolCall: ToolCall; result?: ToolResult };
 
 export interface Message {

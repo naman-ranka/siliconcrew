@@ -16,6 +16,7 @@ export function CodexAccountControl() {
   const [status, setStatus] = useState<CodexAuthStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -60,10 +61,11 @@ export function CodexAccountControl() {
 
   const start = async () => {
     setBusy(true);
+    setError(null);
     try {
       setStatus(await codexApi.startDeviceAuth());
     } catch (e) {
-      alert("Could not start Codex login: " + (e instanceof Error ? e.message : String(e)));
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -159,6 +161,11 @@ export function CodexAccountControl() {
               <p className="text-muted-foreground">
                 Sign in with your ChatGPT account so Codex uses your subscription instead of an API key.
               </p>
+              {(error || (status?.message && status.message !== "Not connected" && status.message !== "Connected")) && (
+                <p className="text-[11px] text-destructive" role="alert">
+                  {error || status?.message}. The one-time code expires after ~15 min — click again for a fresh one.
+                </p>
+              )}
               <button
                 type="button"
                 onClick={start}

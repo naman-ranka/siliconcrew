@@ -112,17 +112,23 @@ export function ChatArea({
             <p className="text-xs text-info truncate">{chatError}</p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            <Button
-              size="sm"
-              className="h-7 gap-1.5 text-xs"
-              data-testid="chat-add-key"
-              onClick={() => {
-                useStore.setState({ chatError: null, chatErrorCode: null });
-                useStore.getState().setSettingsOpen(true);
-              }}
-            >
-              <KeyRound className="h-3.5 w-3.5" /> Add an API key
-            </Button>
+            {agentRuntime === "codex" ? (
+              // Codex runs on a ChatGPT account (or its own quota) — the remedy
+              // is the "Connect ChatGPT" control, not adding an LLM API key.
+              <span className="text-xs text-info whitespace-nowrap">Use “Connect ChatGPT” above, or check your plan’s quota.</span>
+            ) : (
+              <Button
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
+                data-testid="chat-add-key"
+                onClick={() => {
+                  useStore.setState({ chatError: null, chatErrorCode: null });
+                  useStore.getState().setSettingsOpen(true);
+                }}
+              >
+                <KeyRound className="h-3.5 w-3.5" /> Add an API key
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"

@@ -949,6 +949,31 @@ export const useStore = create<AppState>((set, get) => ({
           break;
         }
 
+        case "reasoning": {
+          // Agent "thinking" stream (Codex) — accumulate deltas into a single
+          // reasoning block (rendered collapsed).
+          if (!msg) break;
+          const blocks = [...(msg.blocks ?? [])];
+          const last = blocks.length - 1;
+          if (last >= 0 && blocks[last].type === "reasoning") {
+            blocks[last] = { type: "reasoning", content: (blocks[last] as { content: string }).content + data.content };
+          } else {
+            blocks.push({ type: "reasoning", content: data.content });
+          }
+          set({ streamingMessage: { ...msg, blocks } });
+          break;
+        }
+
+        case "plan": {
+          // Agent plan/todo (Codex) — full snapshot each update; replace the
+          // single plan block.
+          if (!msg) break;
+          const blocks: ContentBlock[] = (msg.blocks ?? []).filter((b) => b.type !== "plan");
+          blocks.push({ type: "plan", content: data.content });
+          set({ streamingMessage: { ...msg, blocks } });
+          break;
+        }
+
         case "tool_call": {
           if (!msg) break;
           const newToolBlock: ContentBlock = { type: "tool", toolCall: data.tool as ToolCall };
@@ -1213,7 +1238,12 @@ export const useStore = create<AppState>((set, get) => ({
       const active = cur && threads.some((t) => t.id === cur)
         ? cur
         : mine[0]?.id ?? threads[0]?.id ?? null;
-      set({ threads, activeThreadId: active, threadsLoading: false });
+      // Derive the agent runtime from the ACTIVE thread, so opening a Codex
+      // thread (e.g. via URL on reload) puts the panel in Codex mode (violet
+      // theme + OpenAI model filter) instead of defaulting to Workbench.
+      const activeThread = threads.find((t) => t.id === active);
+      const agentRuntime = activeThread?.runtime === "codex" ? "codex" : "langchain";
+      set({ threads, activeThreadId: active, threadsLoading: false, agentRuntime });
     } catch (error) {
       if (get().currentSession?.id !== sid) return;
       set({
