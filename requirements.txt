@@ -37,3 +37,8 @@ google-cloud-logging
 # Remote-MCP auth (hosted only): validate WorkOS-issued JWTs (RS256 via JWKS).
 # Standard JWT-verify library — no hand-rolled crypto. Unused in local/self-host.
 pyjwt[crypto]>=2.0.0
+# Codex agent runtime (optional, flag-gated by CODEX_ENABLED — see
+# src/agents/codex/). Lazily imported, so this is only needed when the flag is
+# on; pinned to the beta the reference capture (plans/codex-engine-reference.md)
+# was written against.
+openai-codex==0.1.0b3
