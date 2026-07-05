@@ -6,6 +6,7 @@ contract frames -> transcript persistence -> external_thread_id (only on
 success) -> registry cleanup wiring. The real beta-SDK surface is the only thing
 these can't confirm (plans/codex-engine-reference.md §8).
 """
+import asyncio
 import datetime
 import types
 
@@ -133,8 +134,7 @@ def _ctx(wiring, frames):
 
 # --- a plain text turn ------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_text_turn_streams_persists_and_records_external_id(wiring):
+def test_text_turn_streams_persists_and_records_external_id(wiring):
     events = [
         _ev("item/agentMessage/delta", delta="Hello "),
         _ev("item/agentMessage/delta", delta="world"),
@@ -142,7 +142,7 @@ async def test_text_turn_streams_persists_and_records_external_id(wiring):
         _ev("turn/completed"),
     ]
     frames = []
-    await _handler(wiring, events).run_turn(_ctx(wiring, frames))
+    asyncio.run(_handler(wiring, events).run_turn(_ctx(wiring, frames)))
 
     types_seen = [f["type"] for f in frames]
     assert types_seen[0] == "start"
@@ -161,8 +161,7 @@ async def test_text_turn_streams_persists_and_records_external_id(wiring):
 
 # --- a tool-call turn -------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_tool_call_turn_maps_and_persists(wiring):
+def test_tool_call_turn_maps_and_persists(wiring):
     tool_item = types.SimpleNamespace(type="mcptoolcall", id="c1", tool="read_file",
                                       arguments={"path": "a.v"})
     done_item = types.SimpleNamespace(type="mcptoolcall", id="c1",
@@ -177,7 +176,7 @@ async def test_tool_call_turn_maps_and_persists(wiring):
         _ev("turn/completed"),
     ]
     frames = []
-    await _handler(wiring, events).run_turn(_ctx(wiring, frames))
+    asyncio.run(_handler(wiring, events).run_turn(_ctx(wiring, frames)))
 
     types_seen = [f["type"] for f in frames]
     assert "tool_call" in types_seen and "tool_result" in types_seen
@@ -194,10 +193,9 @@ async def test_tool_call_turn_maps_and_persists(wiring):
 
 # --- no key + no account => structured error, nothing persisted -------------
 
-@pytest.mark.asyncio
-async def test_no_key_no_account_emits_structured_error(wiring):
+def test_no_key_no_account_emits_structured_error(wiring):
     frames = []
-    await _handler(wiring, [], key=None).run_turn(_ctx(wiring, frames))
+    asyncio.run(_handler(wiring, [], key=None).run_turn(_ctx(wiring, frames)))
     assert frames == [] or frames[-1]["type"] == "error"
     err = [f for f in frames if f["type"] == "error"]
     assert err and err[0].get("code") == "no_key"
