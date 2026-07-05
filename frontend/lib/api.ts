@@ -145,10 +145,10 @@ export const threadsApi = {
   list: (sessionId: string) =>
     apiFetch<ChatThread[]>(`/api/sessions/${encodeSessionId(sessionId)}/threads`),
 
-  create: (sessionId: string, title?: string, model?: string) =>
+  create: (sessionId: string, title?: string, model?: string, runtime?: string) =>
     apiFetch<ChatThread>(`/api/sessions/${encodeSessionId(sessionId)}/threads`, {
       method: "POST",
-      body: JSON.stringify({ title: title ?? null, model: model ?? null }),
+      body: JSON.stringify({ title: title ?? null, model: model ?? null, runtime: runtime ?? null }),
     }),
 
   getHistory: (sessionId: string, threadId: string) =>

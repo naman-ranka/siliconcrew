@@ -39,6 +39,7 @@ export interface ChatThread {
   session_id: string;
   title: string | null;
   model: string | null;
+  runtime?: string | null; // 'langchain' (native) | 'codex'
   created_at: string | null;
   last_active: string | null;
 }

@@ -356,7 +356,7 @@ interface AppState {
 
   // Chat thread actions
   loadThreads: () => Promise<void>;
-  newThread: () => Promise<void>;
+  newThread: (runtime?: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   deleteThread: (threadId: string) => Promise<void>;
   renameThread: (threadId: string, title: string) => Promise<void>;
@@ -1206,10 +1206,10 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  newThread: async () => {
+  newThread: async (runtime?: string) => {
     const { currentSession, ws } = get();
     if (!currentSession) return;
-    const thread = await threadsApi.create(currentSession.id);
+    const thread = await threadsApi.create(currentSession.id, undefined, undefined, runtime);
     if (ws) ws.close();
     set((state) => ({
       threads: [thread, ...state.threads],

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
 import { replaceThreadUrl } from "@/lib/nav";
-import { ChevronDown, Check, Trash2, MessageSquarePlus } from "lucide-react";
+import { ChevronDown, Check, Trash2, MessageSquarePlus, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn, formatRelativeTime } from "@/lib/utils";
 
@@ -77,6 +77,18 @@ export function ThreadSwitcher() {
     syncThreadUrl(useStore.getState().activeThreadId);
   };
 
+  const onNewCodex = async () => {
+    setOpen(false);
+    try {
+      await newThread("codex");
+      syncThreadUrl(useStore.getState().activeThreadId);
+    } catch (e) {
+      // Codex may be disabled server-side (409) — surface it, don't crash.
+      console.error("Codex chat unavailable:", e);
+      alert("Codex is not enabled on this server.");
+    }
+  };
+
   const onPick = async (id: string) => {
     setOpen(false);
     await selectThread(id);
@@ -127,6 +139,13 @@ export function ThreadSwitcher() {
           >
             <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
           </button>
+          <button
+            type="button"
+            onClick={onNewCodex}
+            className="w-full flex items-center gap-2 text-xs px-2 py-1.5 rounded hover:bg-surface-2 text-violet-500 outline-none focus-visible:ring-2 focus-visible:ring-violet-500/60"
+          >
+            <Sparkles className="h-3.5 w-3.5" /> New Codex chat
+          </button>
           <div className="h-px bg-border my-1" />
 
           {threads.length === 0 && (
@@ -172,7 +191,12 @@ export function ThreadSwitcher() {
                     className="flex-1 min-w-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/60 rounded"
                     title="Click to open · double-click to rename"
                   >
-                    <div className="text-xs truncate text-foreground">{t.title || "Untitled chat"}</div>
+                    <div className="text-xs truncate text-foreground flex items-center gap-1">
+                      {t.runtime === "codex" && (
+                        <span className="text-[9px] px-1 rounded bg-violet-500/15 text-violet-500 font-medium shrink-0">Codex</span>
+                      )}
+                      <span className="truncate">{t.title || "Untitled chat"}</span>
+                    </div>
                     {t.last_active && (
                       <div className="text-[10px] text-muted-foreground">
                         {formatRelativeTime(t.last_active)}
