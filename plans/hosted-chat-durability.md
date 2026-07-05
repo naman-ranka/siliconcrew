@@ -1,6 +1,6 @@
 # Wave 10 — Hosted chat durability (Postgres checkpointer)
 
-Status: DRAFT (implementation-grade; user reviews in parallel; I implement now)
+Status: IMPLEMENTED + reviewed (adversarial pass F1-F4 fixed; commits through the fix push)
 
 ## The bug (grounded)
 
