@@ -214,3 +214,101 @@ def test_delete_session_wrong_tenant_leaves_everything(mgr):
     with pytest.raises(PermissionError):
         mgr.delete_session("hers", user_id="mallory")
     assert {t["id"] for t in mgr.list_threads("hers", user_id="alice")} == {"hers"}
+
+
+# --- Wave 10: delete_session checkpoint-purge routing ------------------------
+#
+# SessionManager routes the conversation-checkpoint purge by the store's shape:
+#   * store has delete_thread_checkpoints  -> Postgres store purges (Cloud SQL);
+#   * store has neither hook               -> legacy local-sqlite purge;
+#   * a real SqliteMetadataStore has _CHECKPOINT_TABLES and self-purges inside
+#     delete_session (covered by test_delete_session_cascades_… above).
+
+
+class _FakeStore:
+    """Minimal store to exercise SessionManager.delete_session routing.
+
+    ``delete_thread_checkpoints`` / ``_CHECKPOINT_TABLES`` are set per subclass
+    to select which purge branch SessionManager takes.
+    """
+
+    def __init__(self, deleted=("t1", "t2")):
+        self._deleted = list(deleted)
+        self.delete_session_calls = []
+
+    def init_schema(self):
+        pass
+
+    def get_session(self, session_id, user_id=None):
+        return {"session_id": session_id}
+
+    def delete_session(self, session_id, user_id=None):
+        self.delete_session_calls.append((session_id, user_id))
+        return list(self._deleted)
+
+
+def test_delete_session_prefers_store_checkpoint_purge_hook(tmp_path):
+    """A store exposing delete_thread_checkpoints gets it called with the
+    session id + every cascaded thread id (the Postgres/Cloud SQL path)."""
+
+    class StoreWithHook(_FakeStore):
+        def __init__(self):
+            super().__init__(deleted=("t1", "t2"))
+            self.purged = None
+
+        def delete_thread_checkpoints(self, thread_ids):
+            self.purged = set(thread_ids)
+
+    store = StoreWithHook()
+    mgr = SessionManager(base_dir=str(tmp_path / "ws"), db_path=str(tmp_path / "state.db"),
+                         metadata_store=store)
+    mgr.delete_session("sess", user_id=None)
+
+    assert store.delete_session_calls == [("sess", None)]
+    assert store.purged == {"sess", "t1", "t2"}
+
+
+def test_delete_session_purge_failure_never_propagates(tmp_path):
+    """A purge that raises must never block the session delete."""
+
+    class ExplodingStore(_FakeStore):
+        def delete_thread_checkpoints(self, thread_ids):
+            raise RuntimeError("purge boom")
+
+    store = ExplodingStore()
+    mgr = SessionManager(base_dir=str(tmp_path / "ws"), db_path=str(tmp_path / "state.db"),
+                         metadata_store=store)
+    # No exception escapes; the delete itself still ran.
+    mgr.delete_session("sess", user_id=None)
+    assert store.delete_session_calls == [("sess", None)]
+
+
+def test_delete_session_falls_back_to_local_sqlite_purge(tmp_path):
+    """A store with NEITHER delete_thread_checkpoints NOR _CHECKPOINT_TABLES
+    (legacy shape) routes to the local state.db checkpoint purge."""
+    import sqlite3
+
+    db_path = str(tmp_path / "state.db")
+    # LangGraph's lazily-created checkpoint table with rows for the doomed
+    # threads and a survivor from another session.
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE checkpoints (thread_id TEXT, blob TEXT)")
+        conn.execute("CREATE TABLE checkpoint_writes (thread_id TEXT, blob TEXT)")
+        for tid in ("sess", "t1", "keep"):
+            conn.execute("INSERT INTO checkpoints VALUES (?, 'x')", (tid,))
+            conn.execute("INSERT INTO checkpoint_writes VALUES (?, 'x')", (tid,))
+        conn.commit()
+
+    store = _FakeStore(deleted=("t1",))  # no purge hook, no _CHECKPOINT_TABLES
+    assert not hasattr(store, "delete_thread_checkpoints")
+    assert not hasattr(store, "_CHECKPOINT_TABLES")
+    mgr = SessionManager(base_dir=str(tmp_path / "ws"), db_path=db_path,
+                         metadata_store=store)
+
+    mgr.delete_session("sess", user_id=None)
+
+    with sqlite3.connect(db_path) as conn:
+        left_ck = {r[0] for r in conn.execute("SELECT thread_id FROM checkpoints")}
+        left_cw = {r[0] for r in conn.execute("SELECT thread_id FROM checkpoint_writes")}
+    assert left_ck == {"keep"}   # sess + t1 purged locally
+    assert left_cw == {"keep"}

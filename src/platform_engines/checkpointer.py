@@ -80,10 +80,16 @@ async def init_checkpointer(settings) -> None:
         kwargs={"autocommit": True, "row_factory": dict_row},
     )
     await pool.open()
-    saver = AsyncPostgresSaver(pool)
-    # Idempotent: creates checkpoints / checkpoint_blobs / checkpoint_writes /
-    # checkpoint_migrations and runs pending migrations.
-    await saver.setup()
+    try:
+        saver = AsyncPostgresSaver(pool)
+        # Idempotent: creates checkpoints / checkpoint_blobs / checkpoint_writes /
+        # checkpoint_migrations and runs pending migrations.
+        await saver.setup()
+    except BaseException:
+        # Fail-fast still owns the pool it opened: close it before re-raising so
+        # a failed startup never leaks an open Cloud SQL connection pool.
+        await pool.close()
+        raise
     _POOL = pool
     _SHARED_SAVER = saver
     print(f"[API] Checkpointer: Postgres (pool {pmin}-{pmax})")
