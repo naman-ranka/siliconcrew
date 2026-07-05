@@ -88,13 +88,15 @@ if get_settings().codex_enabled:
         _CODEX_AUTH_MANAGER = CodexAccountAuthManager(_DATA_DIR)
 
         def _codex_account_home_for(uid):
+            # DEFAULT path: the per-user ChatGPT login the user completed via the
+            # in-app device-auth flow (/api/codex/auth). This is the only account
+            # source out of the box — no credential copying.
             if _CODEX_AUTH_MANAGER and _CODEX_AUTH_MANAGER.is_connected(uid):
                 return _CODEX_AUTH_MANAGER.auth_home(uid)
-            # Fallback: a host-provided Codex login exposed via CODEX_ACCOUNT_HOME
-            # (e.g. your local ~/.codex). Lets the runtime reuse an existing
-            # ChatGPT-account login without per-user device-auth. The engine
-            # copies its auth.json into a per-thread CODEX_HOME, so a read-only
-            # source is fine.
+            # ADVANCED, OFF BY DEFAULT: point CODEX_ACCOUNT_HOME at a
+            # pre-provisioned CODEX_HOME (e.g. a mounted service-account login for
+            # headless/CI). Unset by default; never mounts a user's personal
+            # ~/.codex — the device-auth flow above is the intended path.
             host = os.environ.get("CODEX_ACCOUNT_HOME")
             if host and os.path.exists(os.path.join(host, "auth.json")):
                 return host
