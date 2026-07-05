@@ -1427,20 +1427,31 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         if not done:
                             await _ext_send({"type": "ping"})
                             continue
-                        if _ext_stop in done:
-                            if _ext_stop.result() == "disconnect":
-                                _ext_client_gone = True
-                            elif not _ext_turn.done():
-                                # Only treat as a stop if the turn was still
-                                # running; a stop racing an already-finished turn
-                                # would otherwise emit both 'done' and 'stopped'.
+                        if _ext_turn in done:
+                            break  # turn finished on its own (persisted in run_turn)
+                        # The stop-watcher fired first.
+                        if _ext_stop.result() == "stop":
+                            # Explicit stop: cancel the turn (unless it just finished).
+                            if not _ext_turn.done():
                                 _ext_stopped = True
                                 _ext_turn.cancel()
+                            break
+                        # Client disconnected: stop framing, but let the turn run to
+                        # completion HEADLESS so it still persists and a reload
+                        # refetches it — do NOT cancel it (native-parity, inv #9).
+                        _ext_client_gone = True
+                        try:
+                            await _ext_turn
+                        except Exception:
+                            pass  # run_turn handles its own errors; nothing to send
                         break
                 finally:
+                    # Only ever cancel the stop-watcher here; the turn was finished,
+                    # explicitly cancelled above, or completed headless — never
+                    # cancelled on disconnect.
+                    if not _ext_stop.done():
+                        _ext_stop.cancel()
                     for _t in (_ext_turn, _ext_stop):
-                        if not _t.done():
-                            _t.cancel()
                         try:
                             await _t
                         except (asyncio.CancelledError, Exception):
