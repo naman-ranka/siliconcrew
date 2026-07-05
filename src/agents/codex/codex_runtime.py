@@ -102,7 +102,9 @@ class CodexRuntimeHandler:
                 api_key=api_key, external_thread_id=external_id,
                 system_prompt=self._load_system_prompt(), tier=ctx.tier,
                 codex_account_home=None if api_key else account_home,
-                sandbox=os.environ.get("CODEX_SANDBOX", "workspace_write"),
+                # LangChain-parity default: read-only so Codex acts only through
+                # the SiliconCrew MCP tools (override with CODEX_SANDBOX).
+                sandbox=os.environ.get("CODEX_SANDBOX", "read-only"),
                 mcp_token=ctx.auth_token,
             )):
                 if ev.type == "start":
