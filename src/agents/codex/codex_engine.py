@@ -166,7 +166,9 @@ def _format_plan(payload: Any) -> str:
     """Render a plan-update payload (steps + optional explanation) to text."""
     plan = getattr(payload, "plan", None) or []
     expl = _stringify_content(getattr(payload, "explanation", ""))
-    marks = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]"}
+    # SDK status enum values are pending / inProgress / completed; _enum_value
+    # lowercases to "inprogress".
+    marks = {"completed": "[x]", "inprogress": "[~]", "pending": "[ ]"}
     lines: list[str] = []
     for s in plan:
         step = (getattr(s, "step", None) or getattr(s, "text", None)
@@ -377,7 +379,7 @@ class CodexEngine:
         sandbox_cls = getattr(openai_codex, "Sandbox", None)
         if sandbox_cls is None:
             return None
-        name = (sandbox or os.environ.get("CODEX_SANDBOX") or "workspace_write").replace("-", "_")
+        name = (sandbox or os.environ.get("CODEX_SANDBOX") or "read-only").replace("-", "_")
         return getattr(sandbox_cls, name, None)
 
     def _sdk_approval_mode(self, openai_codex: Any) -> Any:
@@ -431,8 +433,10 @@ class CodexEngine:
                     yield CodexEvent(type="reasoning", content=delta)
                 continue
 
-            # Plan / todo updates.
-            if method in ("turn/plan/updated", "item/plan/delta"):
+            # Plan / todo updates. Only the full snapshot (turn/plan/updated)
+            # carries the plan list; item/plan/delta has just a text delta and no
+            # .plan, so we don't route it here (the snapshot is sufficient).
+            if method == "turn/plan/updated":
                 body = _format_plan(payload)
                 if body:
                     yield CodexEvent(type="plan", content=body)
