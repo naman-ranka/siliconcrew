@@ -133,6 +133,12 @@ class CodexAccountAuthManager:
     def status(self, user_id: str) -> dict[str, Any]:
         job = self._jobs.get(user_id)
         connected = self.is_connected(user_id)
+        # Prune a finished login job once its credential landed — its daemon
+        # thread has exited, so keeping the entry only leaks. Errored jobs are
+        # kept so status() still surfaces the error (replaced on the next start).
+        if job is not None and job.done and connected:
+            self._jobs.pop(user_id, None)
+            job = None
         resp: dict[str, Any] = {
             "connected": connected, "in_progress": False, "login_url": None,
             "user_code": None, "message": "Connected" if connected else "Not connected",

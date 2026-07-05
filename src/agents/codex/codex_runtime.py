@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Optional
 
-from src.agents.codex.codex_engine import CodexEngine, CodexTurn, CodexUnavailable
+from src.agents.codex.codex_engine import CodexEngine, CodexTurn, CodexTurnError, CodexUnavailable
 from src.agents.runtime_registry import RuntimeEvent, RuntimeTurnContext
 
 
@@ -155,10 +155,15 @@ class CodexRuntimeHandler:
                     if ev.type == "done":
                         completed = True
         except CodexUnavailable as exc:
+            # Availability — Codex not enabled/installed; UI prompts to enable/connect.
             await ctx.emit(RuntimeEvent.error(exc.message, code="codex_unavailable"))
             return
-        except Exception as exc:  # noqa: BLE001
-            await ctx.emit(RuntimeEvent.error(f"Codex turn failed: {exc}"))
+        except CodexTurnError as exc:
+            # A real turn failure (SDK/model/quota) — distinct from availability.
+            await ctx.emit(RuntimeEvent.error(exc.message, code="codex_turn_failed"))
+            return
+        except Exception as exc:  # noqa: BLE001  (CancelledError is BaseException; it propagates for stop/supersede)
+            await ctx.emit(RuntimeEvent.error(f"Codex turn failed: {exc}", code="codex_turn_failed"))
             return
 
         # Close the authoritative text block, then persist once.

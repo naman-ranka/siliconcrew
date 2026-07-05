@@ -112,7 +112,11 @@ export function CodexAccountControl() {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-1 w-80 rounded-md border border-border bg-popover shadow-e2 p-3 text-xs animate-in fade-in-0 zoom-in-95">
+        <div
+          role="dialog"
+          aria-label="Connect ChatGPT account"
+          className="absolute right-0 z-50 mt-1 w-80 rounded-md border border-border bg-popover shadow-e2 p-3 text-xs animate-in fade-in-0 zoom-in-95"
+        >
           <div className="flex items-center gap-2 font-medium text-foreground mb-2">
             <Sparkles className="h-3.5 w-3.5 text-violet-500" /> Codex — ChatGPT account
           </div>
@@ -152,7 +156,7 @@ export function CodexAccountControl() {
                 {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
                 {status.user_code || "…"}
               </button>
-              <p className="flex items-center gap-1.5 text-muted-foreground">
+              <p className="flex items-center gap-1.5 text-muted-foreground" aria-live="polite">
                 <Loader2 className="h-3 w-3 animate-spin" /> Waiting for you to finish in the browser…
               </p>
             </div>

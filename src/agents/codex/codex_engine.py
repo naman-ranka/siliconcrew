@@ -26,7 +26,18 @@ CodexEventType = str  # start | text | tool_call | tool_result | usage | done
 
 
 class CodexUnavailable(RuntimeError):
-    """Codex is valid but not configured/available (rendered as a clean error)."""
+    """Codex isn't configured/enabled/installed — an AVAILABILITY error (the UI
+    should prompt to enable/connect, not treat it as a failed turn)."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+class CodexTurnError(RuntimeError):
+    """A Codex turn FAILED at runtime (SDK/model/quota error) — distinct from
+    CodexUnavailable, so the UI can show the real failure instead of an
+    availability CTA."""
 
     def __init__(self, message: str):
         super().__init__(message)
@@ -276,10 +287,10 @@ class CodexEngine:
                 turn_handle = await thread.turn(turn.message, **turn_kwargs)
                 async for event in self._stream_sdk_events(turn_handle):
                     yield event
-        except CodexUnavailable:
+        except (CodexUnavailable, CodexTurnError):
             raise
-        except Exception as exc:  # noqa: BLE001 - structured error for the WS layer
-            raise CodexUnavailable(f"Codex runtime failed: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - a turn-level failure, not availability
+            raise CodexTurnError(f"Codex turn failed: {exc}") from exc
 
     # -- path + config setup --
     def _prepare_paths(self, turn: CodexTurn) -> None:
@@ -412,7 +423,7 @@ class CodexEngine:
                 elif hasattr(payload, "message"):
                     error_msg = payload.message
                 if error_msg:
-                    raise CodexUnavailable(f"Codex turn failed: {error_msg}")
+                    raise CodexTurnError(f"Codex turn failed: {error_msg}")
 
             if method == "item/agentMessage/delta":
                 delta = _stringify_content(getattr(payload, "delta", ""))
