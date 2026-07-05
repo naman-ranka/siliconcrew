@@ -82,10 +82,15 @@ _CODEX_AUTH_MANAGER = None
 _CODEX_STORE = None
 if get_settings().codex_enabled:
     try:
-        from src.agents.codex.codex_auth import CodexAccountAuthManager
+        from src.agents.codex.codex_auth import CodexAccountAuthManager, VaultCodexCredentialStore
         from src.agents.codex.register import register_codex_runtime
 
-        _CODEX_AUTH_MANAGER = CodexAccountAuthManager(_DATA_DIR)
+        # Durable per-user credential store (hosted): reuse the encrypted,
+        # tenant-keyed BYOK vault so the ChatGPT login survives redeploy/scale.
+        # None in self-host (no vault) → the local auth_home file is the durable
+        # copy, i.e. today's behavior.
+        _codex_creds = VaultCodexCredentialStore(_KEY_VAULT) if _KEY_VAULT is not None else None
+        _CODEX_AUTH_MANAGER = CodexAccountAuthManager(_DATA_DIR, credential_store=_codex_creds)
 
         def _codex_account_home_for(uid):
             # Normalize to match the /api/codex/auth endpoints, which store the
@@ -97,7 +102,9 @@ if get_settings().codex_enabled:
             # in-app device-auth flow (/api/codex/auth). This is the only account
             # source out of the box — no credential copying.
             if _CODEX_AUTH_MANAGER and _CODEX_AUTH_MANAGER.is_connected(uid):
-                return _CODEX_AUTH_MANAGER.auth_home(uid)
+                # Restore the durable credential to local disk on a fresh instance
+                # (hosted); a no-op when the local file already exists (self-host).
+                return _CODEX_AUTH_MANAGER.ensure_local(uid) or _CODEX_AUTH_MANAGER.auth_home(uid)
             # ADVANCED, OFF BY DEFAULT: point CODEX_ACCOUNT_HOME at a
             # pre-provisioned CODEX_HOME (e.g. a mounted service-account login for
             # headless/CI). Unset by default; never mounts a user's personal
@@ -116,6 +123,7 @@ if get_settings().codex_enabled:
             default_model=DEFAULT_MODEL,
             normalize_model=normalize_model_name,
             enabled=True,
+            persist_credential=lambda uid: _CODEX_AUTH_MANAGER.persist(uid),
         )
         print("[API] Codex runtime extension: ENABLED")
     except Exception as exc:  # noqa: BLE001 - codex wiring must never break startup

@@ -29,6 +29,36 @@ class CodexAuthUnavailable(RuntimeError):
     """Raised when the device-code login could not be started."""
 
 
+# Reserved provider slot under which the Codex ChatGPT auth.json is stored in the
+# shared envelope key vault (same tenant-keyed, encryption-at-rest, Postgres-
+# durable store as BYOK keys). Not a real LLM provider — a namespaced slot.
+CODEX_ACCOUNT_PROVIDER = "codex_account"
+
+
+class VaultCodexCredentialStore:
+    """Durable per-user Codex credential (auth.json) over the shared envelope key
+    vault: encrypted at rest, Postgres-backed in hosted, tenant-keyed. Lets the
+    ChatGPT login survive redeploy/scale (gap #2) instead of living only on an
+    instance's ephemeral disk. Duck-typed: any vault with store_key/get_key/
+    has_key/delete_key works (so tests can inject a fake)."""
+
+    def __init__(self, vault: Any):
+        self._vault = vault
+
+    def save(self, user_id: str, auth_json: str) -> None:
+        self._vault.store_key(user_id, CODEX_ACCOUNT_PROVIDER, auth_json)
+
+    def load(self, user_id: str) -> Optional[str]:
+        return self._vault.get_key(user_id, CODEX_ACCOUNT_PROVIDER)
+
+    def has(self, user_id: str) -> bool:
+        return self._vault.has_key(user_id, CODEX_ACCOUNT_PROVIDER)
+
+    def delete(self, user_id: str) -> None:
+        with suppress(Exception):
+            self._vault.delete_key(user_id, CODEX_ACCOUNT_PROVIDER)
+
+
 def _safe_component(value: Optional[str], fallback: str = "anonymous") -> str:
     raw = (value or fallback).strip() or fallback
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
@@ -110,9 +140,14 @@ class _LoginJob:
 class CodexAccountAuthManager:
     """Start and track per-user ChatGPT device-code logins via the Codex SDK."""
 
-    def __init__(self, state_dir: str, *, sdk_factory: Optional[Callable[[str], Any]] = None):
+    def __init__(self, state_dir: str, *, sdk_factory: Optional[Callable[[str], Any]] = None,
+                 credential_store: Optional[Any] = None):
         self.state_dir = Path(state_dir).resolve()
         self._sdk_factory = sdk_factory  # injectable for tests
+        # Optional durable credential store (VaultCodexCredentialStore). When set
+        # (hosted), the login is persisted encrypted + shared across instances;
+        # when None (self-host), the local auth_home file is the durable copy.
+        self._creds = credential_store
         self._jobs: dict[str, _LoginJob] = {}
         self._lock = threading.Lock()
         # SQLite/rollout scratch on local disk (never the durable auth home).
@@ -124,11 +159,51 @@ class CodexAccountAuthManager:
     def auth_file(self, user_id: str) -> Path:
         return Path(self.auth_home(user_id)) / "auth.json"
 
+    def _local_exists(self, user_id: str) -> bool:
+        f = self.auth_file(user_id)
+        return f.exists() and f.stat().st_size > 0
+
     def is_connected(self, user_id: Optional[str]) -> bool:
         if not user_id:
             return False
-        f = self.auth_file(user_id)
-        return f.exists() and f.stat().st_size > 0
+        # Durable store is authoritative in hosted (a fresh instance has no local
+        # file yet); self-host relies on the local file.
+        if self._creds is not None:
+            with suppress(Exception):
+                if self._creds.has(user_id):
+                    return True
+        return self._local_exists(user_id)
+
+    def ensure_local(self, user_id: str) -> Optional[str]:
+        """Make sure auth_home has a local auth.json (restoring it from the
+        durable store on a fresh instance), and return the home path if a
+        credential is available, else None. Called before a turn."""
+        if not user_id:
+            return None
+        if self._local_exists(user_id):
+            return self.auth_home(user_id)
+        if self._creds is not None:
+            with suppress(Exception):
+                blob = self._creds.load(user_id)
+                if blob:
+                    home = Path(self.auth_home(user_id))
+                    _mkdir_private(home)
+                    dest = home / "auth.json"
+                    dest.write_text(blob, encoding="utf-8")
+                    with suppress(OSError, NotImplementedError):
+                        dest.chmod(0o600)
+                    return str(home)
+        return self.auth_home(user_id) if self._local_exists(user_id) else None
+
+    def persist(self, user_id: Optional[str]) -> None:
+        """Save the current local auth.json to the durable store (call after a
+        turn so a refreshed/rotated token is not lost). No-op without a store."""
+        if not user_id or self._creds is None:
+            return
+        with suppress(Exception):
+            f = self.auth_file(user_id)
+            if f.exists() and f.stat().st_size > 0:
+                self._creds.save(user_id, f.read_text(encoding="utf-8"))
 
     def status(self, user_id: str) -> dict[str, Any]:
         job = self._jobs.get(user_id)
@@ -137,6 +212,7 @@ class CodexAccountAuthManager:
         # thread has exited, so keeping the entry only leaks. Errored jobs are
         # kept so status() still surfaces the error (replaced on the next start).
         if job is not None and job.done and connected:
+            self.persist(user_id)  # save the just-completed login to the durable store
             self._jobs.pop(user_id, None)
             job = None
         resp: dict[str, Any] = {
@@ -184,4 +260,6 @@ class CodexAccountAuthManager:
         home = Path(self.auth_home(user_id))
         if home.exists():
             shutil.rmtree(home, ignore_errors=True)
+        if self._creds is not None:  # also drop the durable copy (hosted)
+            self._creds.delete(user_id)
         return self.status(user_id)

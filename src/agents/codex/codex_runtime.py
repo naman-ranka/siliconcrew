@@ -55,11 +55,15 @@ class CodexRuntimeHandler:
         enabled: bool,
         mcp_data_dir: Optional[str] = None,
         engine_factory: Optional[Callable[..., CodexEngine]] = None,
+        persist_credential: Optional[Callable[[Optional[str]], None]] = None,
     ):
         self._store = codex_store
         self._sessions = session_manager
         self._resolve_key = llm_key_resolve
         self._account_home_for = account_home_for
+        # Called after an account-auth turn to save the (refreshed) auth.json to
+        # the durable credential store (hosted). No-op in self-host.
+        self._persist_credential = persist_credential or (lambda _uid: None)
         self._load_system_prompt = system_prompt_loader
         self._default_model = default_model
         self._normalize_model = normalize_model
@@ -165,6 +169,11 @@ class CodexRuntimeHandler:
         except Exception as exc:  # noqa: BLE001  (CancelledError is BaseException; it propagates for stop/supersede)
             await ctx.emit(RuntimeEvent.error(f"Codex turn failed: {exc}", code="codex_turn_failed"))
             return
+
+        # Account-auth turn may have refreshed/rotated the token (the engine
+        # synced it back to the account home) — persist it to the durable store.
+        if account_home and not api_key:
+            self._persist_credential(ctx.user_id)
 
         # Close the authoritative text block, then persist once.
         if assistant_content:

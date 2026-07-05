@@ -291,6 +291,8 @@ class CodexEngine:
             raise
         except Exception as exc:  # noqa: BLE001 - a turn-level failure, not availability
             raise CodexTurnError(f"Codex turn failed: {exc}") from exc
+        finally:
+            self._sync_auth_back(turn)
 
     # -- path + config setup --
     def _prepare_paths(self, turn: CodexTurn) -> None:
@@ -350,6 +352,24 @@ class CodexEngine:
         ]
         ov += [f"mcp_servers.siliconcrew.env.{k}={json.dumps(v)}" for k, v in sorted(env.items())]
         return tuple(ov)
+
+    def _sync_auth_back(self, turn: CodexTurn) -> None:
+        """After an account-auth turn, copy the (possibly refreshed/rotated)
+        auth.json from the per-turn CODEX_HOME back to the shared account home, so
+        a rotated token isn't lost with the ephemeral per-turn dir. Best-effort;
+        never breaks the turn. No-op for BYOK / no account."""
+        if turn.api_key or not turn.codex_account_home or self._codex_home is None:
+            return
+        with suppress(OSError, NotImplementedError):
+            src = Path(self._codex_home) / "auth.json"
+            if not (src.exists() and src.stat().st_size > 0):
+                return
+            dest_home = Path(turn.codex_account_home)
+            _mkdir_private(dest_home)
+            dest = dest_home / "auth.json"
+            shutil.copyfile(src, dest)
+            with suppress(OSError, NotImplementedError):
+                dest.chmod(0o600)
 
     def _sync_auth_file(self, source_home: Path, dest_home: Path) -> None:
         source = source_home / "auth.json"

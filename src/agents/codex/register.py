@@ -26,6 +26,7 @@ def register_codex_runtime(
     normalize_model: Callable[[str], str],
     enabled: bool,
     engine_factory: Optional[Callable[..., Any]] = None,
+    persist_credential: Optional[Callable[[Optional[str]], None]] = None,
 ) -> None:
     """Build the Codex store + handler and register them as the 'codex' runtime.
 
@@ -47,6 +48,7 @@ def register_codex_runtime(
         # The bound MCP subprocess must open the same DB as the app.
         mcp_data_dir=os.path.dirname(db_path),
         engine_factory=engine_factory,
+        persist_credential=persist_credential,
     )
 
     register_runtime(
