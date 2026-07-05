@@ -7,6 +7,7 @@ arguments (dependency injection); nothing here reaches back into api.py.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Optional
 
 from src.agents.codex.codex_runtime import CodexRuntimeHandler
@@ -43,6 +44,8 @@ def register_codex_runtime(
         default_model=default_model,
         normalize_model=normalize_model,
         enabled=enabled,
+        # The bound MCP subprocess must open the same DB as the app.
+        mcp_data_dir=os.path.dirname(db_path),
         engine_factory=engine_factory,
     )
 

@@ -32,6 +32,7 @@ class CodexRuntimeHandler:
         default_model: str,
         normalize_model: Callable[[str], str],
         enabled: bool,
+        mcp_data_dir: Optional[str] = None,
         engine_factory: Optional[Callable[..., CodexEngine]] = None,
     ):
         self._store = codex_store
@@ -42,10 +43,14 @@ class CodexRuntimeHandler:
         self._default_model = default_model
         self._normalize_model = normalize_model
         self._enabled = enabled
+        # The bound MCP subprocess must read the SAME state.db as the app (so it
+        # finds the session it is bound to). Pass the app's data dir through as
+        # the engine's mcp_data_dir → config.toml's RTL_DATA_DIR.
         self._engine_factory = engine_factory or (lambda: CodexEngine(
             enabled=enabled,
             state_dir=os.environ.get("SILICONCREW_CODEX_STATE_DIR", "/app/codex-state"),
             local_sqlite_dir=os.environ.get("SILICONCREW_CODEX_SQLITE_DIR", "/app/codex-sqlite"),
+            mcp_data_dir=mcp_data_dir,
         ))
 
     def _model_for(self, thread_row: Optional[dict]) -> str:
