@@ -16,6 +16,27 @@ from src.agents.codex.codex_engine import CodexEngine, CodexTurn, CodexUnavailab
 from src.agents.runtime_registry import RuntimeEvent, RuntimeTurnContext
 
 
+# Appended to the architect system prompt for Codex turns so the agent behaves
+# like the native tool-calling agent: SiliconCrew MCP tools are its ONLY levers.
+# Paired with deny_all approval (exec is blocked at the gate), but the prompt is
+# what makes Codex reach for the right tool in the first place rather than shell.
+_CODEX_TOOL_POLICY = """
+
+# Tool policy — STRICT (SiliconCrew)
+You are the SiliconCrew RTL agent. Use ONLY the SiliconCrew MCP tools (the
+`siliconcrew` server: get_manifest, list_files_tool, read_file, write_file,
+edit_file_tool, linter_tool, simulation_tool, run_isolated_simulation,
+cocotb_tool, sby_tool, schematic_tool, waveform_tool, start_synthesis, etc.)
+for EVERYTHING — inspecting, reading, editing, linting, simulation, formal,
+and synthesis.
+
+Do NOT use the shell/bash/exec (no cat, ls, sed, printf, rg, grep, python, git)
+and do NOT use apply_patch. To read a file, call read_file. To change a file,
+call the SiliconCrew write/edit tool. If no SiliconCrew tool fits a request,
+say so plainly — never fall back to the shell.
+"""
+
+
 class CodexRuntimeHandler:
     """Runs one Codex turn end to end for the chat shell."""
 
@@ -100,7 +121,9 @@ class CodexRuntimeHandler:
                 session_id=ctx.session_id, thread_id=ctx.thread_id, message=ctx.message,
                 workspace=ctx.workspace, user_id=ctx.user_id, model_name=model,
                 api_key=api_key, external_thread_id=external_id,
-                system_prompt=self._load_system_prompt(), tier=ctx.tier,
+                system_prompt=self._load_system_prompt()
+                    + (_CODEX_TOOL_POLICY if os.environ.get("CODEX_TOOL_POLICY", "1").lower() not in ("0", "false", "no") else ""),
+                tier=ctx.tier,
                 codex_account_home=None if api_key else account_home,
                 # LangChain-parity default: read-only so Codex acts only through
                 # the SiliconCrew MCP tools (override with CODEX_SANDBOX).

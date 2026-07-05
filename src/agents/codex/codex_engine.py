@@ -303,6 +303,14 @@ class CodexEngine:
             # native shell + web + image tools are turned off; approval_policy
             # 'never' auto-runs MCP calls (no human approver in the chat loop).
             'sandbox_mode = "read-only"',
+            # approval_policy=never + approval_mode=deny_all: Codex may not
+            # escalate a command outside the sandbox. In THIS container
+            # unprivileged user namespaces are disabled, so bwrap (Codex's
+            # sandbox) can't start either — verified: every exec_command fails
+            # with "bwrap: No permissions to create a new namespace" and cannot
+            # escalate. Net: native exec is dead; MCP tools (pre-approved) are the
+            # only path. NOTE the block is contingent on the container denying
+            # unprivileged userns — keep it disabled; do NOT run Codex privileged.
             'approval_policy = "never"',
             # Steer Codex toward the SiliconCrew MCP tools by removing its native
             # edit tool (apply_patch_tool=false — openai/codex#8161) and shell.
@@ -379,12 +387,18 @@ class CodexEngine:
         return getattr(sandbox_cls, name, None)
 
     def _sdk_approval_mode(self, openai_codex: Any) -> Any:
+        # deny_all: deny any command that requests approval/escalation. Combined
+        # with approval_policy=never and the container disallowing unprivileged
+        # user namespaces (bwrap can't start), Codex's exec is left with no way
+        # to run — verified: shell commands fail with a bwrap namespace error and
+        # cannot escalate. MCP tools are pre-approved (default_tools_approval_mode
+        # ="approve") and unaffected.
         if openai_codex is None:
             return None
         approval_cls = getattr(openai_codex, "ApprovalMode", None)
         if approval_cls is None:
             return None
-        return getattr(approval_cls, "auto_review", None)
+        return getattr(approval_cls, "deny_all", None) or getattr(approval_cls, "auto_review", None)
 
     async def _stream_sdk_events(self, turn_handle: Any) -> AsyncIterator[CodexEvent]:
         completed_texts: list[str] = []
