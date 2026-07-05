@@ -61,12 +61,19 @@ function InlineActionsTail() {
   const threadLastActive =
     threads.find((t) => t.id === activeThreadId)?.last_active ?? null;
 
+  // Temporarily hidden: the "From your AI (MCP)" inline action cards duplicate
+  // the in-message tool cards during Codex turns (Codex drives the SiliconCrew
+  // tools over the bound MCP server, which also logs them here). Flip to true to
+  // restore, or make it runtime-aware later so it only shows external-MCP-client
+  // actions.
+  const SHOW_INLINE_MCP_ACTIONS = false;
+
   const { live, whileAway } = useMemo(
     () => splitInlineActions(events, mountTsRef.current, threadLastActive),
     [events, threadLastActive]
   );
 
-  if (live.length === 0 && whileAway.length === 0) return null;
+  if (!SHOW_INLINE_MCP_ACTIONS || (live.length === 0 && whileAway.length === 0)) return null;
 
   return (
     <div className="mx-auto w-full max-w-3xl shrink-0 space-y-3 px-4 pb-3">
