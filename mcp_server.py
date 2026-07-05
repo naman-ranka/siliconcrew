@@ -166,8 +166,12 @@ def langchain_to_mcp_schema(langchain_tool) -> Tool:
 # =============================================================================
 
 class RTLDesignMCPServer:
-    def __init__(self, codex_tools: bool = False):
+    def __init__(self, codex_tools: bool = False, bound_session: str | None = None):
         self.server = Server("rtl-design-agent")
+        # Bound-session mode (Codex): this server instance is locked to exactly
+        # one session. Session-management + cross-session tool access are refused
+        # so an embedded Codex agent can only ever touch its own workspace.
+        self.bound_session = (bound_session or "").strip() or None
         # Respect mounted workspace path when running in Docker.
         # Falls back to repo-local workspace for non-container/local usage.
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -193,6 +197,14 @@ class RTLDesignMCPServer:
         # / stdio keeps the single trusted process identity above, unchanged.
         from src.platform_engines.settings import get_settings
         self._hosted = get_settings().hosted
+
+        # In bound mode, verify ownership and lock the active session up front so
+        # every subsequent tool call operates only within it. (After _hosted is
+        # set — _scoped_user_id resolves identity through it.)
+        if self.bound_session:
+            if not self.session_manager.owns_session(self.bound_session, self._scoped_user_id()):
+                raise RuntimeError(f"Bound session '{self.bound_session}' not found for this MCP identity.")
+            self.current_session = self.bound_session
 
         # Wire cloud engines once (no-op in self-host).
         from src.platform_engines.settings import apply_platform_wiring
@@ -646,7 +658,20 @@ Ready to design! What would you like to create?"""
         """
         if arguments is None:
             arguments = {}
-        
+
+        # Bound-session isolation (Codex): refuse session management and any tool
+        # aimed at a different session, and pin the active session to the bound
+        # one. Defense-in-depth — config.toml also lists these in disabled_tools.
+        if self.bound_session:
+            if name in {"create_session_tool", "list_sessions_tool", "delete_session_tool", "set_active_session"}:
+                return [TextContent(type="text",
+                    text=f"Session management is disabled; this server is bound to '{self.bound_session}'.")]
+            req_sid = arguments.get("session_id")
+            if req_sid and req_sid != self.bound_session:
+                return [TextContent(type="text",
+                    text=f"Access denied; this server is bound to session '{self.bound_session}'.")]
+            self.current_session = self.bound_session
+
         # Handle session management tools
         if name == "create_session_tool":
             session_name = arguments["session_name"]
@@ -1094,9 +1119,14 @@ async def main():
         action="store_true",
         help="Expose Codex-only helper tools (e.g., inject_architect_prompt)."
     )
+    parser.add_argument(
+        "--bound-session",
+        default=None,
+        help="Lock this server to one session id (Codex): blocks session management + cross-session access."
+    )
     args = parser.parse_args()
 
-    server = RTLDesignMCPServer(codex_tools=args.codex_tools)
+    server = RTLDesignMCPServer(codex_tools=args.codex_tools, bound_session=args.bound_session)
     await server.run(transport=args.transport, host=args.host, port=args.port)
 
 
