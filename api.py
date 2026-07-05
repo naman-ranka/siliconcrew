@@ -90,6 +90,14 @@ if get_settings().codex_enabled:
         def _codex_account_home_for(uid):
             if _CODEX_AUTH_MANAGER and _CODEX_AUTH_MANAGER.is_connected(uid):
                 return _CODEX_AUTH_MANAGER.auth_home(uid)
+            # Fallback: a host-provided Codex login exposed via CODEX_ACCOUNT_HOME
+            # (e.g. your local ~/.codex). Lets the runtime reuse an existing
+            # ChatGPT-account login without per-user device-auth. The engine
+            # copies its auth.json into a per-thread CODEX_HOME, so a read-only
+            # source is fine.
+            host = os.environ.get("CODEX_ACCOUNT_HOME")
+            if host and os.path.exists(os.path.join(host, "auth.json")):
+                return host
             return None
 
         _CODEX_STORE = register_codex_runtime(
