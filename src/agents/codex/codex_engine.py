@@ -321,11 +321,21 @@ class CodexEngine:
         - Tool policy: apply_patch_tool/shell_tool/web_search/view_image off,
           approval_policy=never (see the class docstring for why native exec is
           effectively blocked in this container).
+        - Env: this is OUR OWN trusted server code (mcp_server.py), not the
+          external agent's exec sandbox (contrast _sdk_config's scrubbed env,
+          which the model/tool surface can see) — so it inherits the full
+          process environment. Without this, the subprocess loses
+          SILICONCREW_HOSTED/DATABASE_URL/etc., get_settings() silently
+          resolves to self-host defaults (sqlite), and owns_session() on the
+          real (Postgres-backed) session fails, killing the server before it
+          answers the MCP initialize handshake — surfaced as a generic
+          "connection closed" error with no server-side trace.
         """
         python_exe = os.environ.get("CODEX_MCP_PYTHON", sys.executable)
         mcp_server = os.environ.get("CODEX_MCP_SERVER", os.path.join(self.repo_root, "mcp_server.py"))
         args = [mcp_server, "--transport", "stdio", "--codex-tools", "--bound-session", turn.session_id]
-        env = {"RTL_WORKSPACE": self._workspace_base, "RTL_DATA_DIR": self.mcp_data_dir, "PYTHONUNBUFFERED": "1"}
+        env = dict(os.environ)
+        env.update({"RTL_WORKSPACE": self._workspace_base, "RTL_DATA_DIR": self.mcp_data_dir, "PYTHONUNBUFFERED": "1"})
         token = turn.mcp_token or os.environ.get("CODEX_MCP_BEARER_TOKEN") or os.environ.get("SILICONCREW_MCP_TOKEN")
         if token:
             env["SILICONCREW_MCP_TOKEN"] = token
