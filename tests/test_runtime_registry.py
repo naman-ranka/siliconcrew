@@ -6,6 +6,7 @@ receive turns; native is always the fallthrough; removing the extension returns
 the app to native-only; and the shared registry never imports an extension.
 """
 import ast
+import asyncio
 import os
 
 import pytest
@@ -80,15 +81,14 @@ def test_register_then_resolve_and_dispatch():
     assert rr.handler_for("stub") is stub
 
 
-@pytest.mark.asyncio
-async def test_stub_turn_emits_presentation_frames():
+def test_stub_turn_emits_presentation_frames():
     stub = _StubRuntime()
     rr.register_runtime(STUB, stub)
 
     ctx, sent = _make_ctx(message="hello", thread_row={"runtime": "stub"})
     handler = rr.handler_for(rr.resolve_runtime(ctx.thread_row))
     assert handler is stub
-    await handler.run_turn(ctx)
+    asyncio.run(handler.run_turn(ctx))
 
     assert [f["type"] for f in sent] == ["start", "text", "done"]
     assert sent[1]["content"] == "stub saw: hello"
