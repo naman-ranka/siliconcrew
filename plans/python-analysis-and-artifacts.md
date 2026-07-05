@@ -1,7 +1,89 @@
 # Wave 10 — Python analysis tool + rich artifact viewing
 
-Status: DRAFT (implementation-grade; pending 2nd-agent review, then normal-agent implementation + my adversarial pass)
+Status: ACCEPTED w/ amendments (2nd-agent review folded in below; then
+normal-agent implementation + my adversarial pass)
 Supersedes the intent doc plans/python-analysis-artifacts.md (that stays as the "why").
+
+## Amendments from 2nd-agent review (AUTHORITATIVE over the body where they conflict)
+
+Several "reuse existing X" claims in the body are wrong at the code level.
+Net effect: the tool is a **bespoke gated subprocess**, not a ride on the
+existing tool-engine seam. Still bounded (~one new module), but not the
+one-liner the body implied.
+
+- **PA1 (env-scrub → bespoke subprocess, not the engine seam):**
+  `NativeToolEngine.run` merges `{**os.environ, **env}` (tool_engine.py:110)
+  and is shared by xls/sby/cocotb — you can ADD keys there, never REMOVE
+  os.environ. So `run_python_analysis` must NOT route through
+  NativeToolEngine/DockerToolEngine; it builds its own `subprocess.Popen`
+  with an explicit scrubbed `env=` dict + POSIX `preexec_fn` rlimits. This
+  is the single most important correction and it cascades into PA2.
+- **PA2 (docker isolation flags don't exist on the helper):**
+  `run_docker_command` (run_docker.py:43,95-113) hardcodes `docker run --rm
+  [-v ws] [-e] -w cwd image bash -c` — NO `--network/--user/--memory/--cpus/
+  --pids-limit/--read-only/tmpfs`. The docker engine must be a bespoke
+  `docker run` invocation (or an extended helper) that adds those flags AND
+  routes every bespoke `-v` through `_translate_dood_volume`
+  (run_docker.py:9-40) for docker-outside-docker. Don't claim "reuse
+  run_docker_command" as-is.
+- **PA3 (hosted gate is settings.hosted, NOT the Action enum):**
+  `authorize()` (identity.py:60-70) only knows anonymous vs
+  ANONYMOUS_ALLOWED — a signed-in HOSTED user passes any Action. So adding
+  `Action.PYTHON` gates anonymous, not hosted. The "hosted OFF" switch must
+  consult `get_settings().hosted` EXPLICITLY at the gate. Keep
+  `Action.PYTHON` out of ANONYMOUS_ALLOWED too (defense in depth), but the
+  load-bearing check is `if settings.hosted: reject`.
+- **PA4 (gate sites — the /invoke path has NO authorize() today):**
+  `authorize(...)` is called at exactly ONE site (mcp_server.py:799-803
+  ternary). REST `/invoke` (actions.py:746-763) only checks
+  `flags["requiresSignIn"] and identity.anonymous` — it cannot express
+  "hosted-unavailable". So the PYTHON gate is NET-NEW logic at: (a)
+  mcp_server.py:801 (extend the ternary, else PYTHON→SAVE); (b)
+  actions.py /invoke (add a hosted-aware reject); (c) the wrapper entry
+  itself (agent path has no authorize gate at all) — put the
+  `settings.hosted` check INSIDE `run_python_analysis` so every path
+  (agent/MCP/REST) is covered by construction. Self-host: `authenticate`
+  returns LOCAL_IDENTITY when `not settings.hosted` (auth.py:131-132) →
+  never anonymous → allowed.
+- **PA5 (containment is auto ONLY on /invoke):** `enforce_file_containment`
+  (tool_catalog.py:197-206) runs only inside `validate_and_execute`
+  (:219) — the MCP (mcp_server.py:834) and agent paths never call it. So
+  `run_python_analysis` must call containment on `script_file` ITSELF
+  (realpath/symlink-safe via paths.py is_within; `script_file` matches
+  `_FILE_ARG_KEYS`). Don't rely on the catalog for it.
+- **PA6 (artifact scan — reuse the MANIFEST iterator/excludes):** no
+  existing tool does a "mtime ≥ start" scan (existing ones sort newest).
+  Reuse `manifest.iter_workspace_files` + `_IGNORED_DIRS` (manifest.py:36-39
+  = synth_runs/sim_runs/orfs_*/results/__pycache__/node_modules + dotdirs,
+  depth 6) — NOT the smaller `workspace_fs._EXCLUDED_DIRS`.
+- **PA7 (image needs a blob URL, not the download URL):** `/file?raw=1`
+  (api.py:2083) requires a Bearer HEADER; `downloadRawFile` force-downloads
+  and returns nothing renderable. ImageArtifact needs a NEW helper:
+  fetch raw with authHeader → `blob()` → `URL.createObjectURL` → revoke on
+  unmount. "reuse the download URL as <img src>" would 401/download.
+- **PA8 (ArtifactKind is a closed union → 4 edit sites):** adding
+  image/data/text requires editing ALL of: the `ArtifactKind` union
+  (types/index.ts:316), `KIND_ICON` (ArtifactCenter.tsx:29-36), the
+  no-default `ArtifactBody` switch (:46-59), and `REF_KINDS`
+  (artifactKeys.ts:14-20) — or tsc breaks / parseArtifactKey returns null.
+- **PA9 (toolArtifacts is single-key, string-only):**
+  `artifactKeyForToolCall` (toolArtifacts.ts:58) gets `(name,args,
+  resultText:string)` and returns ONE key — it never sees the structured
+  artifacts array. The mapping must parse artifacts out of the result JSON;
+  "card lists multiple artifacts" is a NEW multi-artifact card shape in
+  ToolCallCard, not supported today. Scope it or ship single-primary-artifact
+  first.
+- **PA10 (FILE_KEYS doesn't exist):** schemaForm has RUN_ID_KEYS/
+  MANIFEST_KEYS/BASIC_KEYS only; `*_file` params render as plain text. Add
+  a FILE_KEYS set + a `conventionOptions` branch returning workspace files
+  so `script_file` gets a file combo.
+- **PA11 (Item 4 is net-new fields):** `read_smart_file`/`list_dir` return
+  no kind/MIME — the plan ADDS those fields to `/file`,`/dir` (reusing the
+  null-byte sniff is fine).
+- **PA12 (docker image is net-new):** numpy/matplotlib/pyyaml/vcdvcd are
+  already in requirements + the app image (native mode ready), but there is
+  NO small pinned python-analysis image — the docker engine needs a new
+  image/Dockerfile layer.
 
 ## Intent (locked)
 

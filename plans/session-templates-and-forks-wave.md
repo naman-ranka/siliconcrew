@@ -1,7 +1,60 @@
 # Wave 11 — Session templates & forks (Level 1: bundles, not sessions)
 
-Status: DRAFT (implementation-grade; pending 2nd-agent review, then normal-agent implementation + my adversarial pass)
+Status: ACCEPTED w/ amendments (2nd-agent review folded in below; then
+normal-agent implementation + my adversarial pass)
 Supersedes the roadmap plans/session-templates-and-forks.md (that stays as the "why" + future levels).
+
+## Amendments from 2nd-agent review (authoritative over the body where they conflict)
+
+- **A1 (C1, ordering):** do NOT copy-then-create — `create_session` raises
+  FileExistsError on a pre-populated dir (session_manager.py:142-143).
+  Sequence: `create_session(...)` FIRST (makes the empty dir + metadata +
+  seeds Chat 1), THEN `shutil.copytree(examples/<id>/workspace,
+  workspace/<new_id>, dirs_exist_ok=True)` into it.
+- **A2 (C2, REAL leak — rewrite REQUIRED):** `run_meta.json.netlist_path`
+  is ABSOLUTE (synthesis_manager.py:1007/1020/1405/1861/1912) and is
+  CONSUMED at read time — post-synth sim does
+  `os.path.exists(meta["netlist_path"])` (run_simulation.py:327-330) and
+  fails in the fork. Fork MUST rewrite `netlist_path` in every copied
+  `run_meta.json` to the fork's run dir. `docker_command`/`*_tail` fields
+  embed the source workspace path too — historical evidence, leave as-is
+  (never consumed as a path), but note the FS-layout leak.
+- **A3 (C3, manifest leak):** `manifest.json.sessionId` carries the SOURCE
+  id and `read_manifest` won't overwrite a non-empty one (manifest.py:378).
+  Fork MUST clear `sessionId` in the copied manifest (reconcile re-seeds it)
+  — add to the rewrite set.
+- **A4 (C4, provenance):** there is NO metadata column for `source_template`
+  (fixed schema, metadata_store.py:107-123/526-543) — do NOT migrate the
+  schema for Level 1. Write provenance to a workspace file
+  `.source_template.json` `{id, name, forked_at}`; the frontend chip reads
+  it via the manifest/file API.
+- **A5 (R1, hosted):** Level 1 is LOCAL/self-host ONLY. In cloud mode the
+  copytree target (base_dir) is invisible to tools (they read provider
+  scratch, workspace_provider.py:242-243). HARD-GATE fork to non-cloud this
+  wave with a clear "templates available in self-host; hosted gallery is a
+  later wave" message. (Hosted path = workspace_for→copytree-into-scratch→
+  sync; documented, deferred.)
+- **A6 (R2, rollback):** on ANY failure after `create_session`, call
+  `delete_session(new_id, user_id)` to undo the dir + metadata + seeded
+  Chat 1 (Wave 9 cascade handles threads/checkpoints) — no bespoke temp+
+  rename. Guard the copytree with a total-bytes + file-count ceiling
+  (net-new util; no existing one).
+- **A7 (R3, offline export):** the transcript renderer must NOT import
+  api.py (that drags in the whole FastAPI app + agent construction). Factor
+  a lightweight checkpoint reader (AsyncSqliteSaver over DB_PATH,
+  `aget_state` only — no LLM). Note honestly: on a Postgres/hosted
+  deployment checkpoints may not live in the local sqlite — export is a
+  self-host authoring tool.
+- **A8 (M4, preview):** ThreadDrawer is Session-bound (owner-checked
+  session endpoints) — NOT reusable for a template preview. Build a NEW
+  preview component mirroring its layout over `templatesApi.get`.
+- Confirmed by review (no change): copied `completion.event` + terminal-
+  status reconcile short-circuit + `completion:<run_id>` dedup make
+  re-announce triple-safe (M1); activity jsonl is thread-agnostic so the
+  copied log renders the whole trajectory (M2); `/api/templates*` doesn't
+  collide with the `/api/sessions/{id:path}` catch-all as long as template
+  routes use single-segment `{template_id}` (M3); public GET via
+  get_identity + fork via require_signed_in matches the plan (M3).
 
 ## The reframe (locked)
 
