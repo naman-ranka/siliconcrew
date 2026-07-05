@@ -439,7 +439,7 @@ class RTLDesignMCPServer:
                         TextResourceContents(
                             uri=uri,
                             mimeType="application/json",
-                            text=json.dumps(session_info, indent=2),
+                            text=json.dumps(session_info, indent=2, default=str),
                         )
                     ]
                 )
@@ -766,7 +766,7 @@ Ready to design! What would you like to create?"""
                 "workspace": workspace,
                 "metadata": meta
             }
-            return [TextContent(type="text", text=json.dumps(info, indent=2))]
+            return [TextContent(type="text", text=json.dumps(info, indent=2, default=str))]
         
         elif name == "delete_session_tool":
             session_id = arguments["session_id"]

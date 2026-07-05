@@ -24,6 +24,23 @@ from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 CodexEventType = str  # start | text | tool_call | tool_result | usage | done
 
+# get_settings() keys mcp_server.py needs to resolve the SAME engine the
+# parent process uses (hosted flag, persistence/workspace/ORFS backends, sim
+# engine, quota policy, WorkOS client id for identity verification). No LLM
+# provider key, no KMS/BYOK material, no WorkOS API key, no test bearer —
+# nothing an MCP tool doesn't itself read from settings. See _config_overrides
+# for why this is an explicit allowlist rather than the full environment.
+_SETTINGS_PASSTHROUGH = (
+    "SILICONCREW_HOSTED",
+    "PERSISTENCE_ENGINE", "DATABASE_URL",
+    "WORKSPACE_ENGINE", "WORKSPACE_BUCKET", "WORKSPACE_SCRATCH_DIR",
+    "ORFS_ENGINE", "ORFS_IMAGE", "ORFS_CLOUD_RUN_JOB", "GCP_PROJECT", "GCP_REGION", "ORFS_NUM_CORES",
+    "SIM_ENGINE",
+    "WORKOS_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_ID",
+    "SYNTH_RUNS_PER_DAY", "SYNTH_COMPUTE_MINUTES_PER_MONTH",
+    "SYNTH_MAX_CONCURRENT_PER_USER", "SYNTH_QUEUE_GLOBAL_WORKERS",
+)
+
 
 class CodexUnavailable(RuntimeError):
     """Codex isn't configured/enabled/installed — an AVAILABILITY error (the UI
@@ -321,20 +338,25 @@ class CodexEngine:
         - Tool policy: apply_patch_tool/shell_tool/web_search/view_image off,
           approval_policy=never (see the class docstring for why native exec is
           effectively blocked in this container).
-        - Env: this is OUR OWN trusted server code (mcp_server.py), not the
-          external agent's exec sandbox (contrast _sdk_config's scrubbed env,
-          which the model/tool surface can see) — so it inherits the full
-          process environment. Without this, the subprocess loses
-          SILICONCREW_HOSTED/DATABASE_URL/etc., get_settings() silently
-          resolves to self-host defaults (sqlite), and owns_session() on the
-          real (Postgres-backed) session fails, killing the server before it
-          answers the MCP initialize handshake — surfaced as a generic
-          "connection closed" error with no server-side trace.
+        - Env: mcp_server.py is OUR OWN trusted server code, so it needs
+          get_settings() to resolve identically to the parent (hosted flag,
+          persistence/workspace backends, etc.) — without that it silently
+          falls back to self-host defaults (sqlite), owns_session() on the
+          real (Postgres-backed) session fails, and the server dies before
+          answering the MCP initialize handshake (a generic "connection
+          closed" error with no server-side trace). BUT this env transits
+          through the Codex CLI's own config/argv to reach it — an
+          untrusted-ish hop, unlike a same-process call — so only the
+          specific settings keys mcp_server.py actually needs are forwarded
+          (_SETTINGS_PASSTHROUGH below), never the LLM provider keys or other
+          secrets no MCP tool touches (mirrors _sdk_config's scrub, which
+          exists for exactly that reason: keep the server's keys off the
+          Codex surface).
         """
         python_exe = os.environ.get("CODEX_MCP_PYTHON", sys.executable)
         mcp_server = os.environ.get("CODEX_MCP_SERVER", os.path.join(self.repo_root, "mcp_server.py"))
         args = [mcp_server, "--transport", "stdio", "--codex-tools", "--bound-session", turn.session_id]
-        env = dict(os.environ)
+        env = {k: os.environ[k] for k in _SETTINGS_PASSTHROUGH if k in os.environ}
         env.update({"RTL_WORKSPACE": self._workspace_base, "RTL_DATA_DIR": self.mcp_data_dir, "PYTHONUNBUFFERED": "1"})
         token = turn.mcp_token or os.environ.get("CODEX_MCP_BEARER_TOKEN") or os.environ.get("SILICONCREW_MCP_TOKEN")
         if token:
