@@ -25,6 +25,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, Tool
 # in src/platform_engines/checkpointer.py; api.py imports open_checkpointer below.
 
 from src.agents.architect import create_architect_agent, load_system_prompt
+from src.agents import runtime_registry
 from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name, model_catalog_entries
 from src.utils.session_manager import SessionManager
 from src.utils.session_context import SessionContext, set_current_session, session_scope
@@ -1224,6 +1225,33 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 continue
             # Bump activity + auto-title an untitled thread from the first message.
             session_manager.touch_thread(thread_id, user_id=uid, auto_title_from=message)
+
+            # --- Runtime dispatch seam (plans/codex-runtime-extension.md) ------
+            # Extensions (e.g. Codex) register a handler + own a per-thread
+            # `runtime` marker; the shell routes their turns here. The native
+            # LangChain turn below is the DEFAULT and runs UNCHANGED whenever the
+            # thread resolves to native — which is always, until an extension +
+            # a `runtime` column land. Shipping with zero extensions registered
+            # makes this a no-op today: removability is the default state.
+            _turn_thread_row = session_manager.get_thread(thread_id, user_id=uid)
+            _ext_runtime = runtime_registry.handler_for(
+                runtime_registry.resolve_runtime(_turn_thread_row)
+            )
+            if _ext_runtime is not None:
+                async def _ext_send(frame: dict) -> None:
+                    frame.setdefault("turn_id", turn_id)
+                    try:
+                        await websocket.send_json(frame)
+                    except Exception:
+                        pass  # client gone; the extension turn still completes
+
+                await _ext_runtime.run_turn(runtime_registry.RuntimeTurnContext(
+                    message=message, turn_id=turn_id, thread_id=thread_id,
+                    session_id=session_id, workspace=workspace, user_id=uid,
+                    thread_row=_turn_thread_row, send=_ext_send,
+                ))
+                continue
+            # --- native LangChain turn (unchanged) ----------------------------
 
             # One live run per thread: a new message SUPERSEDES a run that is
             # still executing for this thread (left running headless after a
