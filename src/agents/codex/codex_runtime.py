@@ -137,6 +137,10 @@ class CodexRuntimeHandler:
                     # cumulative content, matching the shared renderer.
                     assistant_content += ev.content
                     await ctx.emit(RuntimeEvent.text_delta(assistant_content))
+                elif ev.type == "reasoning" and ev.content:
+                    await ctx.emit(RuntimeEvent.reasoning(ev.content))
+                elif ev.type == "plan" and ev.content:
+                    await ctx.emit(RuntimeEvent.plan(ev.content))
                 elif ev.type == "tool_call" and ev.tool:
                     tool_calls.append(ev.tool)
                     await ctx.emit(RuntimeEvent.tool_call(ev.tool))

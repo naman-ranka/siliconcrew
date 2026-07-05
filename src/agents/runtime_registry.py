@@ -45,6 +45,8 @@ NATIVE_RUNTIME = "langchain"
 EVENT_START = "start"
 EVENT_TEXT = "text"
 EVENT_TEXT_DELTA = "text_delta"
+EVENT_REASONING = "reasoning"   # agent "thinking" stream (optional; UI may collapse)
+EVENT_PLAN = "plan"             # agent plan/todo update (optional)
 EVENT_TOOL_CALL = "tool_call"
 EVENT_TOOL_RESULT = "tool_result"
 EVENT_DONE = "done"
@@ -78,6 +80,14 @@ class RuntimeEvent:
     @classmethod
     def text_delta(cls, content: str) -> "RuntimeEvent":
         return cls(EVENT_TEXT_DELTA, {"content": content})
+
+    @classmethod
+    def reasoning(cls, content: str) -> "RuntimeEvent":
+        return cls(EVENT_REASONING, {"content": content})
+
+    @classmethod
+    def plan(cls, content: str) -> "RuntimeEvent":
+        return cls(EVENT_PLAN, {"content": content})
 
     @classmethod
     def tool_call(cls, tool: Any) -> "RuntimeEvent":

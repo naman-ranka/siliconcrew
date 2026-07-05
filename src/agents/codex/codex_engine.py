@@ -162,6 +162,22 @@ def _tool_result_from_item(item: Any) -> Optional[dict[str, str]]:
     return {"tool_call_id": call_id, "status": status or "success", "content": content}
 
 
+def _format_plan(payload: Any) -> str:
+    """Render a plan-update payload (steps + optional explanation) to text."""
+    plan = getattr(payload, "plan", None) or []
+    expl = _stringify_content(getattr(payload, "explanation", ""))
+    marks = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]"}
+    lines: list[str] = []
+    for s in plan:
+        step = (getattr(s, "step", None) or getattr(s, "text", None)
+                or (s.get("step") if isinstance(s, dict) else None) or "")
+        status = _enum_value(getattr(s, "status", "") or (s.get("status") if isinstance(s, dict) else "")).lower()
+        if step:
+            lines.append(f"{marks.get(status, '[ ]')} {step}")
+    body = "\n".join(lines)
+    return (f"{expl}\n{body}".strip()) if expl else body
+
+
 def _usage_from_payload(payload: Any) -> CodexUsage:
     token_usage = getattr(payload, "token_usage", None) or getattr(payload, "tokenUsage", None)
     last = getattr(token_usage, "last", None) or token_usage
@@ -406,6 +422,29 @@ class CodexEngine:
             if method == "thread/tokenUsage/updated":
                 latest_usage = _usage_from_payload(payload)
                 yield CodexEvent(type="usage", usage=latest_usage)
+                continue
+
+            # Reasoning ("thinking") stream — surface it instead of dropping it.
+            if method.startswith("item/reasoning/"):
+                delta = _stringify_content(getattr(payload, "delta", "") or getattr(payload, "text", ""))
+                if delta:
+                    yield CodexEvent(type="reasoning", content=delta)
+                continue
+
+            # Plan / todo updates.
+            if method in ("turn/plan/updated", "item/plan/delta"):
+                body = _format_plan(payload)
+                if body:
+                    yield CodexEvent(type="plan", content=body)
+                continue
+
+            # SDK deprecation / config-warning notices — log so we hear about
+            # config-key deprecations at runtime (free future-proofing).
+            if "deprecat" in method.lower() or "configwarning" in method.replace("_", "").lower():
+                summary = _stringify_content(getattr(payload, "summary", "") or getattr(payload, "message", ""))
+                details = _stringify_content(getattr(payload, "details", ""))
+                if summary or details:
+                    print(f"[CODEX][sdk-notice] {method}: {summary} {details}".strip(), file=sys.stderr)
                 continue
 
             if method == "item/started":
