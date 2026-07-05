@@ -8,7 +8,7 @@ import datetime
 
 import pytest
 
-from src.agents.codex.codex_store import SqliteCodexStore, build_codex_store
+from src.agents.codex.codex_store import PostgresCodexStore, SqliteCodexStore, build_codex_store
 from src.platform_engines.metadata_store import SqliteMetadataStore
 
 
@@ -94,3 +94,92 @@ def test_build_codex_store_returns_sqlite_for_selfhost(tmp_path, monkeypatch):
     store = build_codex_store(str(tmp_path / "state.db"))
     assert isinstance(store, SqliteCodexStore)
     settings_mod.reset_settings_cache()
+
+
+# --- Postgres store (hosted parity) -----------------------------------------
+
+class _FakePgCur:
+    """Recording cursor: logs SQL, returns canned rows for the read paths."""
+
+    # cols for list_messages' SELECT (order matters for dict(zip(...)))
+    _MSG_COLS = ("id", "thread_id", "role", "content", "message_type",
+                 "event_type", "tool_metadata", "created_at")
+
+    def __init__(self, sink):
+        self._sink = sink
+        self.description = None
+
+    def execute(self, sql, params=()):
+        self._sink.append((sql, params))
+        self._last = sql
+
+    def fetchone(self):
+        return ("ext-abc",)  # get_external_thread_id
+
+    def fetchall(self):
+        self.description = [(c,) for c in self._MSG_COLS]
+        return [("m1", "th1", "user", "hi", None, None,
+                 '{"tool_calls": [{"name": "read_file"}]}', None)]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakePgConn:
+    def __init__(self, sink):
+        self._sink = sink
+
+    def cursor(self):
+        return _FakePgCur(self._sink)
+
+    def commit(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_postgres_codex_store_sql_shape_and_roundtrip():
+    """Smoke the PG store via a recording fake connection: %s placeholders,
+    codex tables, and the read/write paths decode/return correctly."""
+    sink = []
+    store = PostgresCodexStore("dsn", connect=lambda d: _FakePgConn(sink))
+
+    store.init_schema()
+    store.set_external_thread_id("th1", "ext-abc")
+    assert store.get_external_thread_id("th1") == "ext-abc"
+
+    msg = store.append_message("th1", "user", "hi",
+                               tool_metadata={"tool_calls": [{"name": "read_file"}]})
+    assert msg["id"] and msg["tool_metadata"] == {"tool_calls": [{"name": "read_file"}]}
+
+    rows = store.list_messages("th1")
+    assert len(rows) == 1 and rows[0]["role"] == "user"
+    # tool_metadata is decoded from its JSON string, mirroring SqliteCodexStore.
+    assert rows[0]["tool_metadata"] == {"tool_calls": [{"name": "read_file"}]}
+
+    store.delete_for_thread("th1")
+
+    joined = " ".join(s for s, _ in sink)
+    assert "%s" in joined and "?" not in joined            # PG placeholders, not sqlite
+    assert "codex_messages" in joined and "codex_threads" in joined
+    assert "ON CONFLICT(thread_id)" in joined              # upsert on resume-id map
+    assert joined.count("DELETE FROM") == 2                # transcript + map cleanup
+
+
+def test_build_codex_store_returns_postgres_for_hosted(tmp_path, monkeypatch):
+    from src.platform_engines import settings as settings_mod
+    monkeypatch.setenv("PERSISTENCE_ENGINE", "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgres://x")
+    settings_mod.reset_settings_cache()
+    try:
+        store = build_codex_store(str(tmp_path / "state.db"))
+        assert isinstance(store, PostgresCodexStore)
+    finally:
+        settings_mod.reset_settings_cache()

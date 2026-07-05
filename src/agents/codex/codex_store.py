@@ -182,21 +182,140 @@ class SqliteCodexStore:
             conn.commit()
 
 
+class PostgresCodexStore:
+    """Codex transcript + thread-map over Postgres — hosted parity for
+    :class:`SqliteCodexStore` (durable across redeploy/scale). Same operations
+    and shape, ``%s`` placeholders, ``TIMESTAMPTZ``; psycopg is imported lazily
+    so self-host never needs it. ``tool_metadata`` is stored as TEXT (a JSON
+    string) exactly like SQLite, so ``_decode_message`` is shared.
+    """
+
+    def __init__(self, dsn: str, connect=None):
+        self._dsn = dsn
+        self._connect_fn = connect  # injectable for tests
+
+    def _connect(self):
+        if self._connect_fn is not None:
+            return self._connect_fn(self._dsn)
+        import psycopg  # lazy — self-host without Postgres never imports it
+
+        return psycopg.connect(self._dsn)
+
+    def init_schema(self) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS codex_threads (
+                    thread_id TEXT PRIMARY KEY
+                        REFERENCES chat_threads(id) ON DELETE CASCADE,
+                    external_thread_id TEXT,
+                    updated_at TIMESTAMPTZ
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS codex_messages (
+                    id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL
+                        REFERENCES chat_threads(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    message_type TEXT,
+                    event_type TEXT,
+                    tool_metadata TEXT,
+                    created_at TIMESTAMPTZ
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_codex_messages_thread_created "
+                "ON codex_messages(thread_id, created_at)"
+            )
+            conn.commit()
+
+    def set_external_thread_id(self, thread_id: str, external_thread_id: str,
+                               now: Optional[datetime.datetime] = None) -> None:
+        now = now or datetime.datetime.now(datetime.timezone.utc)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO codex_threads (thread_id, external_thread_id, updated_at) "
+                "VALUES (%s, %s, %s) "
+                "ON CONFLICT(thread_id) DO UPDATE SET "
+                "external_thread_id = excluded.external_thread_id, "
+                "updated_at = excluded.updated_at",
+                (thread_id, external_thread_id, now),
+            )
+            conn.commit()
+
+    def get_external_thread_id(self, thread_id: str) -> Optional[str]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT external_thread_id FROM codex_threads WHERE thread_id = %s",
+                (thread_id,),
+            )
+            row = cur.fetchone()
+        return row[0] if row else None
+
+    def append_message(
+        self,
+        thread_id: str,
+        role: str,
+        content: str,
+        *,
+        message_type: Optional[str] = None,
+        event_type: Optional[str] = None,
+        tool_metadata: Optional[Dict[str, Any]] = None,
+        message_id: Optional[str] = None,
+        created_at: Optional[datetime.datetime] = None,
+    ) -> Dict[str, Any]:
+        message_id = message_id or uuid.uuid4().hex
+        created_at = created_at or datetime.datetime.now(datetime.timezone.utc)
+        blob = _encode_tool_metadata(tool_metadata)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO codex_messages "
+                "(id, thread_id, role, content, message_type, event_type, tool_metadata, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (message_id, thread_id, role, content, message_type, event_type, blob, created_at),
+            )
+            conn.commit()
+        return _decode_message({
+            "id": message_id, "thread_id": thread_id, "role": role, "content": content,
+            "message_type": message_type, "event_type": event_type,
+            "tool_metadata": blob, "created_at": created_at,
+        })
+
+    def list_messages(self, thread_id: str) -> List[Dict[str, Any]]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, thread_id, role, content, message_type, event_type, "
+                "tool_metadata, created_at FROM codex_messages WHERE thread_id = %s "
+                "ORDER BY created_at ASC, id ASC",
+                (thread_id,),
+            )
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+        return [_decode_message(dict(zip(cols, r))) for r in rows]
+
+    def delete_for_thread(self, thread_id: str) -> None:
+        """Remove a thread's transcript + external-id map (the cleanup hook)."""
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM codex_messages WHERE thread_id = %s", (thread_id,))
+            cur.execute("DELETE FROM codex_threads WHERE thread_id = %s", (thread_id,))
+            conn.commit()
+
+
 def build_codex_store(db_path: str):
     """Engine-selected Codex store (mirrors build_metadata_store).
 
-    SQLite for self-host. Postgres parity is required before hosted Codex launch
-    (so Codex history is durable across redeploy/scale, like the native
-    checkpointer now is) — until then, enabling Codex under a Postgres engine
-    fails loudly rather than silently losing history on a local disk.
+    SQLite for self-host; Postgres for a hosted (``persistence_engine=postgres``)
+    deployment, so Codex history is durable across redeploy/scale like the native
+    checkpointer — mirrors ``build_metadata_store``.
     """
     from src.platform_engines.settings import get_settings
 
     settings = get_settings()
     if getattr(settings, "persistence_engine", "sqlite") == "postgres" and getattr(settings, "database_url", ""):
-        raise NotImplementedError(
-            "Postgres Codex transcript store is not implemented yet — required "
-            "before hosted Codex launch (see plans/codex-engine-reference.md §7). "
-            "Refusing to run Codex on ephemeral SQLite in a Postgres deployment."
-        )
+        return PostgresCodexStore(settings.database_url)
     return SqliteCodexStore(db_path)
