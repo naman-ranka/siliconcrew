@@ -31,7 +31,7 @@ export function ChatArea({
    * not chrome. */
   hideHeader?: boolean;
 }) {
-  const { currentSession, chatError, chatErrorCode } = useStore();
+  const { currentSession, chatError, chatErrorCode, agentRuntime } = useStore();
   // The API-key note competes with toasts as a second notification channel, so
   // make its dismissal sticky (localStorage) — once waved off it stays gone.
   const [apiNoticeDismissed, setApiNoticeDismissed] = useState(false);
@@ -44,7 +44,10 @@ export function ChatArea({
   }, []);
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    // data-runtime scopes the Codex theme accent (see globals.css): all
+    // text-primary / ring-primary inside recolor to violet without touching
+    // component classes — same shared components, a different paint.
+    <div className="flex flex-col h-full bg-background" data-runtime={agentRuntime}>
       {/* Header */}
       {!hideHeader && (
       <div className="flex items-center justify-between h-14 px-4 border-b border-border bg-surface-0">

@@ -38,6 +38,7 @@ export function ModelPicker() {
     models,
     loadModels,
     setActiveThreadModel,
+    agentRuntime,
   } = useStore();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -72,11 +73,17 @@ export function ModelPicker() {
   const currentLabel = models.find((m) => m.id === currentId)?.label || currentId;
   const currentProvider = models.find((m) => m.id === currentId)?.provider;
 
+  // The Codex agent runs on OpenAI models only — show just those in its picker.
+  const visibleModels = useMemo(
+    () => (agentRuntime === "codex" ? models.filter((m) => m.provider === "openai") : models),
+    [models, agentRuntime]
+  );
+
   const grouped = useMemo(() => {
     const by: Record<string, ModelInfo[]> = {};
-    for (const m of models) (by[m.provider] ??= []).push(m);
+    for (const m of visibleModels) (by[m.provider] ??= []).push(m);
     return by;
-  }, [models]);
+  }, [visibleModels]);
 
   const pick = async (m: ModelInfo) => {
     if (!m.available) return;
@@ -117,7 +124,7 @@ export function ModelPicker() {
           aria-label="Select model"
           className="absolute bottom-full mb-1 left-0 z-50 w-80 max-h-[26rem] overflow-y-auto rounded-md border border-border bg-popover shadow-e2 p-1 animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 motion-reduce:animate-none"
         >
-          {models.length === 0 && (
+          {visibleModels.length === 0 && (
             <div className="px-3 py-3 text-xs text-muted-foreground">No models available.</div>
           )}
           {PROVIDER_ORDER.filter((p) => grouped[p]?.length).map((provider) => (

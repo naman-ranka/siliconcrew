@@ -27,7 +27,7 @@ import type {
   SmartFile,
   ToolCatalogEntry,
 } from "@/types";
-import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi } from "./api";
+import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi, codexApi } from "./api";
 import { generateId } from "./utils";
 import { makeArtifactKey, type ArtifactKey } from "./artifactKeys";
 import { isDuplicateOfServer, mergeActivity, upsertActivityEvent } from "./activityMerge";
@@ -295,6 +295,13 @@ interface AppState {
   activeThreadId: string | null;
   threadsLoading: boolean;
 
+  // Active agent runtime for the chat surface: native 'langchain' | 'codex'.
+  // ONE agent occupies the panel at a time; switching filters the thread list +
+  // model picker and applies the Codex theme scope. codexEnabled gates the
+  // toggle (server capability).
+  agentRuntime: "langchain" | "codex";
+  codexEnabled: boolean;
+
   // Model registry (the picker). The active thread's model is what the WS uses.
   models: ModelInfo[];
   modelsLoaded: boolean;
@@ -357,6 +364,8 @@ interface AppState {
   // Chat thread actions
   loadThreads: () => Promise<void>;
   newThread: (runtime?: string) => Promise<void>;
+  setAgentRuntime: (runtime: "langchain" | "codex") => void;
+  loadCodexCapability: () => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   deleteThread: (threadId: string) => Promise<void>;
   renameThread: (threadId: string, title: string) => Promise<void>;
@@ -492,6 +501,8 @@ export const useStore = create<AppState>((set, get) => ({
   threads: [],
   activeThreadId: null,
   threadsLoading: false,
+  agentRuntime: "langchain",
+  codexEnabled: false,
 
   models: [],
   modelsLoaded: false,
@@ -1194,8 +1205,14 @@ export const useStore = create<AppState>((set, get) => ({
       // own loadThreads is already running. Same guard loadWorkbench uses.
       if (get().currentSession?.id !== sid) return;
       const cur = get().activeThreadId;
-      // Keep the active thread if it still exists; else land on newest-active.
-      const active = cur && threads.some((t) => t.id === cur) ? cur : threads[0]?.id ?? null;
+      // Keep the active thread if it still exists; else land on the newest-active
+      // thread of the CURRENT agent runtime (so the panel stays on its agent),
+      // falling back to any thread.
+      const isCodex = get().agentRuntime === "codex";
+      const mine = threads.filter((t) => (t.runtime === "codex") === isCodex);
+      const active = cur && threads.some((t) => t.id === cur)
+        ? cur
+        : mine[0]?.id ?? threads[0]?.id ?? null;
       set({ threads, activeThreadId: active, threadsLoading: false });
     } catch (error) {
       if (get().currentSession?.id !== sid) return;
@@ -1221,6 +1238,26 @@ export const useStore = create<AppState>((set, get) => ({
       wsThreadId: null,
       ...chatTurnResetFields(),
     }));
+  },
+
+  setAgentRuntime: (runtime) => {
+    const { agentRuntime, threads } = get();
+    if (runtime === agentRuntime) return;
+    set({ agentRuntime: runtime });
+    // Move the panel onto this agent's newest thread, or start a fresh one.
+    const isCodex = runtime === "codex";
+    const mine = threads.filter((t) => (t.runtime === "codex") === isCodex);
+    if (mine.length) void get().selectThread(mine[0].id);
+    else void get().newThread(isCodex ? "codex" : undefined);
+  },
+
+  loadCodexCapability: async () => {
+    try {
+      const s = await codexApi.status();
+      set({ codexEnabled: !!s.runtime_enabled });
+    } catch {
+      set({ codexEnabled: false });
+    }
   },
 
   selectThread: async (threadId: string) => {

@@ -20,6 +20,10 @@ export function ThreadSwitcher() {
     currentSession,
     threads,
     activeThreadId,
+    agentRuntime,
+    codexEnabled,
+    setAgentRuntime,
+    loadCodexCapability,
     newThread,
     selectThread,
     deleteThread,
@@ -66,27 +70,30 @@ export function ThreadSwitcher() {
     };
   }, [open]);
 
+  // Discover whether the Codex runtime is enabled on this server (gates the
+  // agent toggle). Cheap, once per mount.
+  useEffect(() => {
+    void loadCodexCapability();
+  }, [loadCodexCapability]);
+
   if (!currentSession) return null;
 
-  const active = threads.find((t) => t.id === activeThreadId);
-  const activeTitle = active?.title || "Chat 1";
+  const isCodex = agentRuntime === "codex";
+  // One agent occupies the panel at a time: show only this agent's threads.
+  const visibleThreads = threads.filter((t) => (t.runtime === "codex") === isCodex);
+  const active = visibleThreads.find((t) => t.id === activeThreadId);
+  const activeTitle = active?.title || (isCodex ? "New Codex chat" : "Chat 1");
 
   const onNew = async () => {
     setOpen(false);
-    await newThread();
+    await newThread(isCodex ? "codex" : undefined);
     syncThreadUrl(useStore.getState().activeThreadId);
   };
 
-  const onNewCodex = async () => {
+  const onSwitchAgent = (rt: "langchain" | "codex") => {
     setOpen(false);
-    try {
-      await newThread("codex");
-      syncThreadUrl(useStore.getState().activeThreadId);
-    } catch (e) {
-      // Codex may be disabled server-side (409) — surface it, don't crash.
-      console.error("Codex chat unavailable:", e);
-      alert("Codex is not enabled on this server.");
-    }
+    setAgentRuntime(rt);
+    syncThreadUrl(useStore.getState().activeThreadId);
   };
 
   const onPick = async (id: string) => {
@@ -113,10 +120,37 @@ export function ThreadSwitcher() {
   };
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="flex items-center gap-2">
+      {/* Agent switcher: one agent occupies the panel at a time (not tabs).
+          Only shown when the Codex runtime is enabled on the server. */}
+      {codexEnabled && (
+        <div className="inline-flex items-center rounded-md border border-border p-0.5 text-[11px]" role="group" aria-label="Agent">
+          <button
+            type="button"
+            aria-pressed={!isCodex}
+            onClick={() => onSwitchAgent("langchain")}
+            className={cn("px-2 py-0.5 rounded transition-colors",
+              !isCodex ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
+          >
+            Workbench
+          </button>
+          <button
+            type="button"
+            aria-pressed={isCodex}
+            onClick={() => onSwitchAgent("codex")}
+            className={cn("px-2 py-0.5 rounded flex items-center gap-1 transition-colors",
+              isCodex ? "bg-violet-500 text-white" : "text-muted-foreground hover:text-foreground")}
+          >
+            <Sparkles className="h-3 w-3" /> Codex
+          </button>
+        </div>
+      )}
+
+      <div className="relative" ref={ref}>
       <button
         type="button"
-        className="flex items-center gap-1.5 text-xs rounded-md px-2 py-1 text-muted-foreground hover:bg-surface-2 hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+        className={cn("flex items-center gap-1.5 text-xs rounded-md px-2 py-1 text-muted-foreground hover:bg-surface-2 hover:text-foreground outline-none focus-visible:ring-2",
+          isCodex ? "focus-visible:ring-violet-500/60" : "focus-visible:ring-primary/60")}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Switch chat"
@@ -135,24 +169,21 @@ export function ThreadSwitcher() {
           <button
             type="button"
             onClick={onNew}
-            className="w-full flex items-center gap-2 text-xs px-2 py-1.5 rounded hover:bg-surface-2 text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            className={cn("w-full flex items-center gap-2 text-xs px-2 py-1.5 rounded hover:bg-surface-2 outline-none focus-visible:ring-2",
+              isCodex ? "text-violet-500 focus-visible:ring-violet-500/60" : "text-primary focus-visible:ring-primary/60")}
           >
-            <MessageSquarePlus className="h-3.5 w-3.5" /> New chat
-          </button>
-          <button
-            type="button"
-            onClick={onNewCodex}
-            className="w-full flex items-center gap-2 text-xs px-2 py-1.5 rounded hover:bg-surface-2 text-violet-500 outline-none focus-visible:ring-2 focus-visible:ring-violet-500/60"
-          >
-            <Sparkles className="h-3.5 w-3.5" /> New Codex chat
+            {isCodex ? <Sparkles className="h-3.5 w-3.5" /> : <MessageSquarePlus className="h-3.5 w-3.5" />}
+            {isCodex ? "New Codex chat" : "New chat"}
           </button>
           <div className="h-px bg-border my-1" />
 
-          {threads.length === 0 && (
-            <div className="px-2 py-2 text-xs text-muted-foreground">No chats yet</div>
+          {visibleThreads.length === 0 && (
+            <div className="px-2 py-2 text-xs text-muted-foreground">
+              {isCodex ? "No Codex chats yet" : "No chats yet"}
+            </div>
           )}
 
-          {threads.map((t) => {
+          {visibleThreads.map((t) => {
             const isActive = t.id === activeThreadId;
             const isEditing = editingId === t.id;
             return (
@@ -205,7 +236,7 @@ export function ThreadSwitcher() {
                   </button>
                 )}
 
-                {!isEditing && threads.length > 1 && (
+                {!isEditing && visibleThreads.length > 1 && (
                   <button
                     type="button"
                     onClick={() => void onDelete(t.id)}
@@ -223,7 +254,8 @@ export function ThreadSwitcher() {
 
       {/* Live count for screen readers (the visible "New chat" action lives
           inside the open menu). */}
-      <span className="sr-only">{threads.length} chats in this workspace</span>
+      <span className="sr-only">{visibleThreads.length} chats in this workspace</span>
+      </div>
     </div>
   );
 }

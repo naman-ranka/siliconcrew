@@ -169,6 +169,13 @@ export const threadsApi = {
     ),
 };
 
+// Codex runtime capability + account-auth status. runtime_enabled reflects the
+// CODEX_ENABLED server flag; connected reflects a device-auth account.
+export const codexApi = {
+  status: () =>
+    apiFetch<{ connected: boolean; runtime_enabled: boolean; message?: string }>("/api/codex/auth"),
+};
+
 // Chat API
 export const chatApi = {
   // Legacy session-level history (defaults to the session's "Chat 1").
