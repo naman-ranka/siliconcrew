@@ -120,6 +120,9 @@ class RuntimeTurnContext:
     send: Callable[[Dict[str, Any]], Awaitable[None]]
     user_id: Optional[str] = None
     thread_row: Optional[Dict[str, Any]] = None
+    # Generic per-turn context any runtime may use (not runtime-specific).
+    tier: Optional[str] = None
+    auth_token: Optional[str] = None
 
     async def emit(self, event: RuntimeEvent) -> None:
         await self.send(event.to_frame())
@@ -151,11 +154,24 @@ NATIVE_DESCRIPTOR = RuntimeDescriptor(id=NATIVE_RUNTIME, display_name="Workbench
 
 _HANDLERS: Dict[str, RuntimeHandler] = {}
 _DESCRIPTORS: Dict[str, RuntimeDescriptor] = {}
+# Optional per-runtime "a thread was deleted, clean up your state" callbacks.
+_CLEANUP_HOOKS: Dict[str, Callable[[str, Optional[str]], None]] = {}
 
 
-def register_runtime(descriptor: RuntimeDescriptor, handler: RuntimeHandler) -> None:
+def register_runtime(
+    descriptor: RuntimeDescriptor,
+    handler: RuntimeHandler,
+    *,
+    on_thread_deleted: Optional[Callable[[str, Optional[str]], None]] = None,
+) -> None:
     """Register an extension runtime. Called by an extension's own setup (gated by
     its feature flag), never by the shared layer itself.
+
+    ``on_thread_deleted(thread_id, user_id)`` — optional cleanup callback the
+    shell invokes via :func:`notify_thread_deleted` when a thread/session is
+    deleted, so an extension can drop its own per-thread state. This is how the
+    shared delete path stays codex-agnostic: it calls the registry, the registry
+    calls the extension — the shell never references the extension directly.
 
     Rejects the native id (native is the fallthrough, not an extension) and
     double-registration (a duplicate id is a wiring bug, not a silent override).
@@ -170,18 +186,36 @@ def register_runtime(descriptor: RuntimeDescriptor, handler: RuntimeHandler) -> 
         raise TypeError(f"handler for '{descriptor.id}' must define async run_turn(ctx)")
     _HANDLERS[descriptor.id] = handler
     _DESCRIPTORS[descriptor.id] = descriptor
+    if on_thread_deleted is not None:
+        _CLEANUP_HOOKS[descriptor.id] = on_thread_deleted
 
 
 def unregister_runtime(runtime_id: str) -> None:
     """Remove an extension (idempotent). The removability seam — and a test hook."""
     _HANDLERS.pop(runtime_id, None)
     _DESCRIPTORS.pop(runtime_id, None)
+    _CLEANUP_HOOKS.pop(runtime_id, None)
 
 
 def clear_extensions() -> None:
     """Drop all registered extensions — back to native-only (test hook)."""
     _HANDLERS.clear()
     _DESCRIPTORS.clear()
+    _CLEANUP_HOOKS.clear()
+
+
+def notify_thread_deleted(thread_id: str, user_id: Optional[str] = None) -> None:
+    """Tell every registered extension a thread was deleted (best-effort).
+
+    Called from the shared delete_thread/delete_session path. With zero
+    extensions this is a no-op. A hook that raises is swallowed (cleanup must
+    never break the user-facing delete) but never silently — the shell logs it.
+    """
+    for runtime_id, hook in list(_CLEANUP_HOOKS.items()):
+        try:
+            hook(thread_id, user_id)
+        except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
+            print(f"[runtime_registry] cleanup hook '{runtime_id}' failed for thread {thread_id}: {exc}")
 
 
 def is_registered(runtime_id: str) -> bool:

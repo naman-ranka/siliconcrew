@@ -73,6 +73,41 @@ _KEY_VAULT = build_key_vault(get_settings(), db_path=os.path.join(_DATA_DIR, "by
 # capped hosted tier) instead of always reading process env.
 _LLM_KEY_PROVIDER = build_llm_key_provider(get_settings(), _KEY_VAULT)
 
+# --- Codex runtime extension (optional, flag-gated, removable) --------------
+# The ONE sanctioned point where shared code names the Codex package. Guarded by
+# the CODEX_ENABLED flag AND a try/except import: with the flag off (or the
+# src/agents/codex package deleted) the app is exactly the native-only workbench.
+# Nothing else in the shared path imports codex.
+_CODEX_AUTH_MANAGER = None
+_CODEX_STORE = None
+if get_settings().codex_enabled:
+    try:
+        from src.agents.codex.codex_auth import CodexAccountAuthManager
+        from src.agents.codex.register import register_codex_runtime
+
+        _CODEX_AUTH_MANAGER = CodexAccountAuthManager(_DATA_DIR)
+
+        def _codex_account_home_for(uid):
+            if _CODEX_AUTH_MANAGER and _CODEX_AUTH_MANAGER.is_connected(uid):
+                return _CODEX_AUTH_MANAGER.auth_home(uid)
+            return None
+
+        _CODEX_STORE = register_codex_runtime(
+            db_path=DB_PATH,
+            session_manager=session_manager,
+            llm_key_resolve=lambda uid, model: _LLM_KEY_PROVIDER.resolve(uid, model),
+            account_home_for=_codex_account_home_for,
+            system_prompt_loader=load_system_prompt,
+            default_model=DEFAULT_MODEL,
+            normalize_model=normalize_model_name,
+            enabled=True,
+        )
+        print("[API] Codex runtime extension: ENABLED")
+    except Exception as exc:  # noqa: BLE001 - codex wiring must never break startup
+        print(f"[API] Codex runtime extension disabled (wiring failed): {exc}")
+        _CODEX_AUTH_MANAGER = None
+        _CODEX_STORE = None
+
 
 # =============================================================================
 # PYDANTIC MODELS
@@ -135,6 +170,7 @@ class MessageResponse(BaseModel):
 class ThreadCreate(BaseModel):
     title: Optional[str] = None
     model: Optional[str] = None
+    runtime: Optional[str] = None  # 'langchain' (default) | 'codex'
 
 
 class ThreadPatch(BaseModel):
@@ -151,6 +187,7 @@ class ThreadResponse(BaseModel):
     session_id: str
     title: Optional[str] = None
     model: Optional[str] = None
+    runtime: Optional[str] = None
     created_at: Optional[str] = None
     last_active: Optional[str] = None
 
@@ -161,6 +198,7 @@ def _thread_to_response(t: dict) -> "ThreadResponse":
         session_id=t.get("session_id"),
         title=t.get("title"),
         model=t.get("model"),
+        runtime=t.get("runtime"),
         created_at=str(t["created_at"]) if t.get("created_at") else None,
         last_active=str(t["last_active"]) if t.get("last_active") else None,
     )
@@ -800,6 +838,52 @@ async def delete_key(provider: str, identity: Identity = Depends(require_signed_
 
 
 # =============================================================================
+# CODEX ACCOUNT AUTH (device-auth). Always present; degrade cleanly when the
+# Codex extension is off/absent (runtime_enabled=false, not connected).
+# =============================================================================
+
+def _codex_auth_payload(status: Dict[str, Any]) -> Dict[str, Any]:
+    return {**status, "runtime_enabled": get_settings().codex_enabled}
+
+
+def _codex_disabled_status() -> Dict[str, Any]:
+    return {"connected": False, "in_progress": False, "login_url": None,
+            "user_code": None, "message": "Codex runtime is not enabled."}
+
+
+@app.get("/api/codex/auth")
+async def codex_auth_status(identity: Identity = Depends(require_signed_in)):
+    if _CODEX_AUTH_MANAGER is None:
+        return _codex_auth_payload(_codex_disabled_status())
+    return _codex_auth_payload(_CODEX_AUTH_MANAGER.status(_uid(identity) or "anonymous"))
+
+
+@app.post("/api/codex/auth/device/start")
+async def codex_auth_device_start(identity: Identity = Depends(require_signed_in)):
+    """Start `codex login --device-auth` for the signed-in user."""
+    if _CODEX_AUTH_MANAGER is None:
+        raise HTTPException(status_code=409, detail="Codex runtime is not enabled.")
+    try:
+        return _codex_auth_payload(_CODEX_AUTH_MANAGER.start_device_auth(_uid(identity) or "anonymous"))
+    except Exception as exc:  # noqa: BLE001 - structured error, never a 500 page
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/api/codex/auth/device/cancel")
+async def codex_auth_device_cancel(identity: Identity = Depends(require_signed_in)):
+    if _CODEX_AUTH_MANAGER is None:
+        raise HTTPException(status_code=409, detail="Codex runtime is not enabled.")
+    return _codex_auth_payload(_CODEX_AUTH_MANAGER.cancel(_uid(identity) or "anonymous"))
+
+
+@app.delete("/api/codex/auth")
+async def codex_auth_disconnect(identity: Identity = Depends(require_signed_in)):
+    if _CODEX_AUTH_MANAGER is None:
+        return _codex_auth_payload(_codex_disabled_status())
+    return _codex_auth_payload(_CODEX_AUTH_MANAGER.disconnect(_uid(identity) or "anonymous"))
+
+
+# =============================================================================
 # MODELS ENDPOINT (availability from usable provider keys; tenant-scoped)
 # =============================================================================
 
@@ -858,6 +942,24 @@ async def _read_thread_history(thread_id: str, model_name: str, uid: Optional[st
     if construction still fails for lack of a key the callers treat it as "no
     history" so viewing never 500s.
     """
+    # Codex threads persist their own transcript (no checkpointer). Read it from
+    # the codex store and return the same history shape the native path yields.
+    if _CODEX_STORE is not None:
+        _row = session_manager.get_thread(thread_id, user_id=uid)
+        if _row and _row.get("runtime") == "codex":
+            history: List[Dict[str, Any]] = []
+            for m in _CODEX_STORE.list_messages(thread_id):
+                if m["role"] == "user":
+                    history.append({"role": "user", "content": m["content"]})
+                elif m["role"] == "assistant":
+                    meta = m.get("tool_metadata") or {}
+                    history.append({
+                        "role": "assistant", "content": m["content"],
+                        "tool_calls": meta.get("tool_calls", []),
+                        "tool_results": meta.get("tool_results", []),
+                    })
+            return history
+
     api_key: Optional[str] = None
     try:
         api_key = _LLM_KEY_PROVIDER.resolve(uid, model_name).api_key
@@ -950,10 +1052,20 @@ async def list_threads(session_id: str, identity: Identity = Depends(get_identit
 
 @app.post("/api/sessions/{session_id:path}/threads", response_model=ThreadResponse, status_code=201)
 async def create_thread(session_id: str, data: ThreadCreate, identity: Identity = Depends(get_identity)):
-    """Start a fresh chat in this workspace (own conversation; shared files)."""
+    """Start a fresh chat in this workspace (own conversation; shared files).
+
+    ``runtime`` picks the agent: native by default, or a registered extension
+    (e.g. 'codex'). An unknown/disabled runtime is rejected — you can't create a
+    thread for a runtime the server doesn't have.
+    """
     uid = _require_owned(session_id, identity)
     model = normalize_model_name(data.model) if data.model else None
-    t = session_manager.create_thread(session_id, user_id=uid, title=data.title, model=model)
+    runtime = runtime_registry.NATIVE_RUNTIME
+    if data.runtime and data.runtime != runtime_registry.NATIVE_RUNTIME:
+        if not runtime_registry.is_registered(data.runtime):
+            raise HTTPException(status_code=409, detail=f"Runtime '{data.runtime}' is not enabled on this server.")
+        runtime = data.runtime
+    t = session_manager.create_thread(session_id, user_id=uid, title=data.title, model=model, runtime=runtime)
     return _thread_to_response(t)
 
 
@@ -1249,6 +1361,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     message=message, turn_id=turn_id, thread_id=thread_id,
                     session_id=session_id, workspace=workspace, user_id=uid,
                     thread_row=_turn_thread_row, send=_ext_send,
+                    tier=identity.tier, auth_token=token,
                 ))
                 continue
             # --- native LangChain turn (unchanged) ----------------------------
