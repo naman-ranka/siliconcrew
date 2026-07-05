@@ -62,6 +62,38 @@ def test_persist_saves_local_to_durable(tmp_path):
     assert creds.load("alice") == '{"tokens": "refreshed"}'
 
 
+def test_ensure_local_prefers_durable_over_stale_local(tmp_path):
+    # Durable store is the source of truth: restore it OVER a stale local copy.
+    creds = FakeCredStore()
+    creds.save("alice", '{"tokens": "durable_new"}')
+    mgr = CodexAccountAuthManager(str(tmp_path), credential_store=creds)
+    _write_local(mgr, "alice", '{"tokens": "local_stale"}')
+    home = mgr.ensure_local("alice")
+    assert (Path(home) / "auth.json").read_text(encoding="utf-8") == '{"tokens": "durable_new"}'
+
+
+def test_persist_does_not_clobber_concurrent_refresh(tmp_path):
+    # A restores T0; another instance refreshes to T1; A's non-refreshing turn
+    # must NOT overwrite T1 with the unchanged T0.
+    creds = FakeCredStore()
+    creds.save("alice", '{"tokens": "T0"}')
+    mgr = CodexAccountAuthManager(str(tmp_path), credential_store=creds)
+    mgr.ensure_local("alice")                      # restore T0, record its hash
+    creds.save("alice", '{"tokens": "T1"}')        # another instance refreshed
+    mgr.persist("alice")                           # local still T0 (unchanged)
+    assert creds.load("alice") == '{"tokens": "T1"}'   # T1 not clobbered
+
+
+def test_persist_saves_when_token_changed_since_restore(tmp_path):
+    creds = FakeCredStore()
+    creds.save("alice", '{"tokens": "T0"}')
+    mgr = CodexAccountAuthManager(str(tmp_path), credential_store=creds)
+    mgr.ensure_local("alice")                      # restore T0
+    _write_local(mgr, "alice", '{"tokens": "T1_refreshed"}')  # this instance refreshed
+    mgr.persist("alice")
+    assert creds.load("alice") == '{"tokens": "T1_refreshed"}'
+
+
 def test_disconnect_clears_local_and_durable(tmp_path):
     creds = FakeCredStore()
     creds.save("alice", '{"t": "x"}')

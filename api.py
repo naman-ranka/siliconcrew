@@ -102,9 +102,14 @@ if get_settings().codex_enabled:
             # in-app device-auth flow (/api/codex/auth). This is the only account
             # source out of the box — no credential copying.
             if _CODEX_AUTH_MANAGER and _CODEX_AUTH_MANAGER.is_connected(uid):
-                # Restore the durable credential to local disk on a fresh instance
-                # (hosted); a no-op when the local file already exists (self-host).
-                return _CODEX_AUTH_MANAGER.ensure_local(uid) or _CODEX_AUTH_MANAGER.auth_home(uid)
+                # Restore the durable credential to local disk (hosted) / use the
+                # local file (self-host). ensure_local returns None if the
+                # credential can't be staged — do NOT fall back to an empty home
+                # (that would run an account turn with no auth.json); let it
+                # resolve BYOK / fail cleanly instead.
+                staged = _CODEX_AUTH_MANAGER.ensure_local(uid)
+                if staged:
+                    return staged
             # ADVANCED, OFF BY DEFAULT: point CODEX_ACCOUNT_HOME at a
             # pre-provisioned CODEX_HOME (e.g. a mounted service-account login for
             # headless/CI). Unset by default; never mounts a user's personal
@@ -1425,9 +1430,11 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         if _ext_stop in done:
                             if _ext_stop.result() == "disconnect":
                                 _ext_client_gone = True
-                            else:
+                            elif not _ext_turn.done():
+                                # Only treat as a stop if the turn was still
+                                # running; a stop racing an already-finished turn
+                                # would otherwise emit both 'done' and 'stopped'.
                                 _ext_stopped = True
-                            if not _ext_turn.done():
                                 _ext_turn.cancel()
                         break
                 finally:

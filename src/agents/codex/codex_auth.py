@@ -16,6 +16,7 @@ while in progress and "connected" once auth.json exists.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -23,6 +24,10 @@ import threading
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class CodexAuthUnavailable(RuntimeError):
@@ -148,6 +153,10 @@ class CodexAccountAuthManager:
         # (hosted), the login is persisted encrypted + shared across instances;
         # when None (self-host), the local auth_home file is the durable copy.
         self._creds = credential_store
+        # Hash of the auth.json last synced with the durable store per uid, so
+        # persist() only writes when THIS instance actually changed the token —
+        # a non-refreshing turn won't clobber a concurrent instance's refresh.
+        self._synced_hash: dict[str, str] = {}
         self._jobs: dict[str, _LoginJob] = {}
         self._lock = threading.Lock()
         # SQLite/rollout scratch on local disk (never the durable auth home).
@@ -175,35 +184,52 @@ class CodexAccountAuthManager:
         return self._local_exists(user_id)
 
     def ensure_local(self, user_id: str) -> Optional[str]:
-        """Make sure auth_home has a local auth.json (restoring it from the
-        durable store on a fresh instance), and return the home path if a
-        credential is available, else None. Called before a turn."""
+        """Stage a usable local auth.json and return its home, or None if no
+        credential is available. Called before a turn.
+
+        The durable store is the source of truth: when present it is restored
+        over the local copy each turn, so an instance never runs on a stale
+        local token. Only if the durable load fails (transient decrypt) AND no
+        local copy exists do we return None — we never return a home without a
+        real auth.json (which would make the runtime run an account turn with no
+        credential)."""
         if not user_id:
             return None
-        if self._local_exists(user_id):
-            return self.auth_home(user_id)
         if self._creds is not None:
+            blob = None
             with suppress(Exception):
                 blob = self._creds.load(user_id)
-                if blob:
-                    home = Path(self.auth_home(user_id))
-                    _mkdir_private(home)
-                    dest = home / "auth.json"
-                    dest.write_text(blob, encoding="utf-8")
-                    with suppress(OSError, NotImplementedError):
-                        dest.chmod(0o600)
-                    return str(home)
+            if blob:
+                home = Path(self.auth_home(user_id))
+                _mkdir_private(home)
+                dest = home / "auth.json"
+                dest.write_text(blob, encoding="utf-8")
+                with suppress(OSError, NotImplementedError):
+                    dest.chmod(0o600)
+                self._synced_hash[user_id] = _content_hash(blob)
+                return str(home)
+            # Durable load failed/empty — fall back to a valid local copy if one
+            # exists (best-effort), else signal unavailable (no empty home).
+            return self.auth_home(user_id) if self._local_exists(user_id) else None
+        # Self-host: the local file is the durable copy.
         return self.auth_home(user_id) if self._local_exists(user_id) else None
 
     def persist(self, user_id: Optional[str]) -> None:
         """Save the current local auth.json to the durable store (call after a
-        turn so a refreshed/rotated token is not lost). No-op without a store."""
+        turn so a refreshed/rotated token is not lost). No-op without a store, or
+        when the token is unchanged since it was restored — so a non-refreshing
+        turn on one instance can't clobber a refresh persisted by another."""
         if not user_id or self._creds is None:
             return
         with suppress(Exception):
             f = self.auth_file(user_id)
-            if f.exists() and f.stat().st_size > 0:
-                self._creds.save(user_id, f.read_text(encoding="utf-8"))
+            if not (f.exists() and f.stat().st_size > 0):
+                return
+            content = f.read_text(encoding="utf-8")
+            if _content_hash(content) == self._synced_hash.get(user_id):
+                return  # unchanged since restore — nothing to persist (no clobber)
+            self._creds.save(user_id, content)
+            self._synced_hash[user_id] = _content_hash(content)
 
     def status(self, user_id: str) -> dict[str, Any]:
         job = self._jobs.get(user_id)

@@ -112,7 +112,12 @@ class CodexRuntimeHandler:
         engine = self._engine_factory()
 
         await ctx.emit(RuntimeEvent.start())
-        assistant_content = ""
+        assistant_content = ""   # full turn text (for persistence)
+        current_segment = ""     # text of the CURRENT block; resets when a tool/
+                                 # reasoning/plan block interrupts, so a follow-up
+                                 # text segment renders fresh instead of repeating
+                                 # the earlier segment (the shared renderer starts a
+                                 # new text block after any non-text block).
         tool_calls: list = []
         tool_results: list = []
         in_tokens = 0
@@ -137,15 +142,21 @@ class CodexRuntimeHandler:
                 if ev.type == "start":
                     new_external_id = ev.external_thread_id or new_external_id
                 elif ev.type == "text" and ev.content:
-                    # Engine emits deltas as `text`; stream as text_delta with
-                    # cumulative content, matching the shared renderer.
+                    # Engine emits deltas as `text`; stream the CURRENT segment
+                    # (cumulative within the block, not the whole turn) so a text
+                    # segment after a tool/reasoning block doesn't repeat earlier
+                    # text. assistant_content keeps the full turn for persistence.
+                    current_segment += ev.content
                     assistant_content += ev.content
-                    await ctx.emit(RuntimeEvent.text_delta(assistant_content))
+                    await ctx.emit(RuntimeEvent.text_delta(current_segment))
                 elif ev.type == "reasoning" and ev.content:
+                    current_segment = ""  # a new (non-text) block ends the segment
                     await ctx.emit(RuntimeEvent.reasoning(ev.content))
                 elif ev.type == "plan" and ev.content:
+                    current_segment = ""
                     await ctx.emit(RuntimeEvent.plan(ev.content))
                 elif ev.type == "tool_call" and ev.tool:
+                    current_segment = ""
                     tool_calls.append(ev.tool)
                     await ctx.emit(RuntimeEvent.tool_call(ev.tool))
                 elif ev.type == "tool_result" and ev.tool_call_id:
@@ -175,9 +186,10 @@ class CodexRuntimeHandler:
         if account_home and not api_key:
             self._persist_credential(ctx.user_id)
 
-        # Close the authoritative text block, then persist once.
-        if assistant_content:
-            await ctx.emit(RuntimeEvent.text(assistant_content))
+        # Close the authoritative text block (the LAST segment only — earlier
+        # segments were already finalized before their interrupting block).
+        if current_segment:
+            await ctx.emit(RuntimeEvent.text(current_segment))
         if assistant_content or tool_calls or tool_results:
             self._store.append_message(
                 ctx.thread_id, "assistant", assistant_content,
