@@ -364,7 +364,7 @@ interface AppState {
   // Chat thread actions
   loadThreads: () => Promise<void>;
   newThread: (runtime?: string) => Promise<void>;
-  setAgentRuntime: (runtime: "langchain" | "codex") => void;
+  setAgentRuntime: (runtime: "langchain" | "codex") => Promise<void>;
   loadCodexCapability: () => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   deleteThread: (threadId: string) => Promise<void>;
@@ -1270,15 +1270,18 @@ export const useStore = create<AppState>((set, get) => ({
     }));
   },
 
-  setAgentRuntime: (runtime) => {
+  setAgentRuntime: async (runtime) => {
     const { agentRuntime, threads } = get();
     if (runtime === agentRuntime) return;
     set({ agentRuntime: runtime });
     // Move the panel onto this agent's newest thread, or start a fresh one.
+    // AWAIT it so callers can sync the URL against the resulting active thread
+    // (URL is the source of truth — a fire-and-forget select would let the URL
+    // read the OLD thread and desync the panel from its runtime).
     const isCodex = runtime === "codex";
     const mine = threads.filter((t) => (t.runtime === "codex") === isCodex);
-    if (mine.length) void get().selectThread(mine[0].id);
-    else void get().newThread(isCodex ? "codex" : undefined);
+    if (mine.length) await get().selectThread(mine[0].id);
+    else await get().newThread(isCodex ? "codex" : undefined);
   },
 
   loadCodexCapability: async () => {

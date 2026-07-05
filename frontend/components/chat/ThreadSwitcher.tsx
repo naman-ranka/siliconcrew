@@ -91,9 +91,12 @@ export function ThreadSwitcher() {
     syncThreadUrl(useStore.getState().activeThreadId);
   };
 
-  const onSwitchAgent = (rt: "langchain" | "codex") => {
+  const onSwitchAgent = async (rt: "langchain" | "codex") => {
     setOpen(false);
-    setAgentRuntime(rt);
+    // Await the runtime switch (it selects/creates this agent's thread) BEFORE
+    // syncing the URL, so ?chat= reflects the actually-selected thread — not the
+    // previous one (URL is the source of truth).
+    await setAgentRuntime(rt);
     syncThreadUrl(useStore.getState().activeThreadId);
   };
 
