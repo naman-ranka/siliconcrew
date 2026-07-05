@@ -6,6 +6,7 @@ import { replaceThreadUrl } from "@/lib/nav";
 import { ChevronDown, Check, Trash2, MessageSquarePlus, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn, formatRelativeTime } from "@/lib/utils";
+import { CodexAccountControl } from "./CodexAccountControl";
 
 /**
  * Chat thread switcher — many conversations per workspace.
@@ -145,6 +146,8 @@ export function ThreadSwitcher() {
           </button>
         </div>
       )}
+
+      {codexEnabled && isCodex && <CodexAccountControl />}
 
       <div className="relative" ref={ref}>
       <button

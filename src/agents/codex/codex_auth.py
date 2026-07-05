@@ -18,7 +18,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _URL_RE = re.compile(r"https?://[^\s)>\]]+")
+
+
+def _discover_codex_command() -> str:
+    """Locate the codex CLI. It ships inside the ``codex_cli_bin`` package (not on
+    PATH), so bare ``codex`` fails in the container — resolve the real binary."""
+    import shutil
+
+    found = shutil.which("codex")
+    if found:
+        return found
+    try:
+        import codex_cli_bin  # type: ignore
+
+        cand = os.path.join(os.path.dirname(codex_cli_bin.__file__), "bin", "codex")
+        if os.path.exists(cand):
+            return cand
+    except Exception:
+        pass
+    return "codex"
 _CODE_RE = re.compile(r"(?:user[_ ]?code|code)[^A-Z0-9]*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})*)", re.IGNORECASE)
 _STANDALONE_CODE_RE = re.compile(r"\b([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)\b")
 
@@ -77,6 +97,9 @@ class _DeviceAuthJob:
             self._parse_line(line)
 
     def _parse_line(self, line: str) -> None:
+        # The CLI colorizes the URL/code with ANSI escapes — strip them or the
+        # scraped URL/code would carry trailing "\x1b[0m" garbage.
+        line = _ANSI_RE.sub("", line)
         try:
             payload = json.loads(line)
         except json.JSONDecodeError:
@@ -113,7 +136,7 @@ class CodexAccountAuthManager:
     def __init__(self, state_dir: str, *, command: Optional[str] = None,
                  process_factory: Optional[Callable[..., Any]] = None):
         self.state_dir = Path(state_dir).resolve()
-        self.command = command or os.environ.get("CODEX_LOGIN_COMMAND") or "codex"
+        self.command = command or os.environ.get("CODEX_LOGIN_COMMAND") or _discover_codex_command()
         self.process_factory = process_factory or subprocess.Popen
         self._jobs: dict[str, _DeviceAuthJob] = {}
         self._lock = threading.Lock()

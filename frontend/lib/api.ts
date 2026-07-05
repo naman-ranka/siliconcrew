@@ -169,11 +169,24 @@ export const threadsApi = {
     ),
 };
 
-// Codex runtime capability + account-auth status. runtime_enabled reflects the
-// CODEX_ENABLED server flag; connected reflects a device-auth account.
+// Codex runtime capability + account-auth (ChatGPT device-code login) status.
+// runtime_enabled reflects the CODEX_ENABLED server flag; connected reflects a
+// completed device-auth login; while in_progress the login_url + user_code are
+// what the user opens/enters to sign in.
+export interface CodexAuthStatus {
+  connected: boolean;
+  runtime_enabled: boolean;
+  in_progress?: boolean;
+  login_url?: string | null;
+  user_code?: string | null;
+  message?: string;
+}
+
 export const codexApi = {
-  status: () =>
-    apiFetch<{ connected: boolean; runtime_enabled: boolean; message?: string }>("/api/codex/auth"),
+  status: () => apiFetch<CodexAuthStatus>("/api/codex/auth"),
+  startDeviceAuth: () => apiFetch<CodexAuthStatus>("/api/codex/auth/device/start", { method: "POST" }),
+  cancelDeviceAuth: () => apiFetch<CodexAuthStatus>("/api/codex/auth/device/cancel", { method: "POST" }),
+  disconnect: () => apiFetch<CodexAuthStatus>("/api/codex/auth", { method: "DELETE" }),
 };
 
 // Chat API
