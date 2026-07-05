@@ -669,11 +669,10 @@ class PostgresMetadataStore:
         deleted: list[str] = []
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(f"DELETE FROM session_metadata WHERE session_id = %s{owner}", (session_id, *oparams))
-            # Same manual cascade as SQLite (no FK). Checkpoints are NOT here:
-            # they live in the local sqlite state DB even in Postgres mode —
-            # SessionManager.delete_session purges them from the RETURNING ids
-            # (never a separate pre-read that can go stale or fail apart from
-            # the delete itself).
+            # Same manual cascade as SQLite (no FK). Conversation checkpoints
+            # (Wave 10) live in THIS same Postgres DB; SessionManager purges
+            # them via delete_thread_checkpoints from the RETURNING ids — never
+            # a separate pre-read that can go stale or fail apart from the delete.
             if cur.rowcount or user_id is None:
                 cur.execute(
                     "DELETE FROM chat_threads WHERE session_id = %s RETURNING id",
@@ -682,6 +681,30 @@ class PostgresMetadataStore:
                 deleted = [r[0] for r in cur.fetchall()]
             conn.commit()
         return deleted
+
+    # LangGraph Postgres-checkpointer tables (Wave 10) — the conversation
+    # content, keyed by thread_id. checkpoint_migrations is schema state, never
+    # deleted.
+    _CKPT_TABLES = ("checkpoint_writes", "checkpoint_blobs", "checkpoints")
+
+    def delete_thread_checkpoints(self, thread_ids) -> None:
+        """Best-effort purge of conversation checkpoints for deleted threads
+        (Postgres mode). Same DB as metadata, so one sync connection reaches
+        them. Guarded per table — the tables exist only after the saver's first
+        write; a purge failure must never block the session delete."""
+        ids = [t for t in thread_ids if t]
+        if not ids:
+            return
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                for table in self._CKPT_TABLES:
+                    try:
+                        cur.execute(f"DELETE FROM {table} WHERE thread_id = ANY(%s)", (ids,))
+                    except Exception:
+                        conn.rollback()  # table absent / transient — skip it
+                conn.commit()
+        except Exception:
+            pass
 
     # -- chat threads --
 

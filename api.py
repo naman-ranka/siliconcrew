@@ -18,11 +18,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 import yaml
-import aiosqlite
 
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+# The checkpointer (sqlite self-host / pooled Postgres hosted) is engine-selected
+# in src/platform_engines/checkpointer.py; api.py imports open_checkpointer below.
 
 from src.agents.architect import create_architect_agent, load_system_prompt
 from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name, model_catalog_entries
@@ -295,25 +295,12 @@ def resolve_report_path(workspace: str, run_id: Optional[str] = None) -> tuple[O
     return None, None
 
 
-@asynccontextmanager
-async def open_checkpointer(db_path: str):
-    """
-    Open AsyncSqliteSaver with compatibility for aiosqlite variants that do not
-    expose Connection.is_alive().
-    """
-    conn = await aiosqlite.connect(db_path)
-
-    # langgraph.checkpoint.sqlite.aio.AsyncSqliteSaver expects this method.
-    if not hasattr(conn, "is_alive"):
-        def _is_alive() -> bool:
-            return bool(getattr(conn, "_running", False))
-        setattr(conn, "is_alive", _is_alive)
-
-    memory = AsyncSqliteSaver(conn)
-    try:
-        yield memory
-    finally:
-        await conn.close()
+# Engine-selected checkpointer (Wave 10): SQLite per-call on self-host, a
+# shared app-scoped pooled AsyncPostgresSaver on hosted so conversation content
+# survives restart/redeploy/scale and is shared across instances. The seam is
+# unchanged for callers — `create_architect_agent(checkpointer=…)` and the
+# thread-history reads stay engine-agnostic.
+from src.platform_engines.checkpointer import open_checkpointer  # noqa: E402,F401
 
 
 # =============================================================================
@@ -339,6 +326,13 @@ async def lifespan(app: FastAPI):
     # Mount and run MCP server if in hosted mode
     from src.platform_engines.settings import get_settings
     settings = get_settings()
+
+    # Durable checkpointer: build the shared Postgres pool + saver (hosted).
+    # Fail-fast — a checkpointer that can't init must abort startup rather than
+    # silently run on ephemeral SQLite in production (the data-loss bug). No-op
+    # in self-host (stays SQLite per-call).
+    from src.platform_engines.checkpointer import init_checkpointer, close_checkpointer
+    await init_checkpointer(settings)
     if settings.hosted:
         print("[API] Hosted mode: initializing remote MCP server integration")
         from mcp_server import RTLDesignMCPServer
@@ -368,6 +362,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("[API] Shutting down...")
+    await close_checkpointer()
     if hasattr(app.state, "mcp_task"):
         print("[API] Stopping remote MCP server...")
         app.state.mcp_task.cancel()
@@ -1245,7 +1240,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
             print(f"[CHAT] Session: {session_id} | Thread: {thread_id} | Message: {message[:50]}...")
 
-            # Initialize agent with AsyncSqliteSaver (supports async streaming/state).
+            # Initialize agent with the engine-selected checkpointer (async).
             # The model is read from the ACTIVE THREAD (falls back to the session's
             # model, then DEFAULT) so each chat can use a different model.
             async with open_checkpointer(DB_PATH) as memory:

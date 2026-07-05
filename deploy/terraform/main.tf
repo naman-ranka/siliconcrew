@@ -120,6 +120,16 @@ resource "google_sql_database_instance" "metadata" {
       ipv4_enabled    = var.vpc_self_link == null ? true : false
       private_network = var.vpc_self_link
     }
+    # Connection budget (Wave 10 — the LangGraph checkpointer now pools against
+    # this same instance): CHECKPOINT_POOL_MAX (default 3) × backend_max_instances
+    # + metadata connect-per-op headroom must stay under max_connections. With
+    # the default 3 × 10 = 30, keep a floor of 50 so a small db_tier's ~25
+    # default cannot starve the pool. Raise this (or lower max_instances /
+    # CHECKPOINT_POOL_MAX) if you scale wider. See plans/hosted-chat-durability.md.
+    database_flags {
+      name  = "max_connections"
+      value = var.db_max_connections
+    }
   }
   deletion_protection = var.environment == "prod"
 }

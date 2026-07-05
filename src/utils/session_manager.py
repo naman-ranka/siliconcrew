@@ -222,11 +222,19 @@ class SessionManager:
         # deleted (no separate pre-read that could fail or go stale apart
         # from the delete itself).
         deleted_threads = self._store.delete_session(session_id, user_id=user_id) or []
-        # The SQLite store purges checkpoints itself (same file). A Postgres
-        # metadata store can't reach them — best-effort local cleanup here
-        # (on multi-instance deployments this only cleans the serving
-        # instance's state DB; accepted as best-effort).
-        if not hasattr(self._store, "_CHECKPOINT_TABLES"):
+        # Purge the conversation checkpoints for the deleted threads (+ the
+        # legacy session-id default thread). Wave 10: in Postgres mode
+        # checkpoints live in the shared Cloud SQL DB, so the store purges them
+        # there; the SQLite store already purges its own (same file) inside
+        # delete_session. Best-effort — never blocks the delete.
+        purge = getattr(self._store, "delete_thread_checkpoints", None)
+        if callable(purge):
+            try:
+                purge({session_id, *deleted_threads})
+            except Exception:
+                pass
+        elif not hasattr(self._store, "_CHECKPOINT_TABLES"):
+            # Legacy fallback (metadata store with neither hook): local sqlite.
             self._purge_local_checkpoints({session_id, *deleted_threads})
 
     def _purge_local_checkpoints(self, thread_ids):

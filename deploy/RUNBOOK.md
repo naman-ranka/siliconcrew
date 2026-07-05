@@ -129,12 +129,23 @@ frontend's auth seam / `sessionStorage["sc-auth-token"]`).
 
 ## 4. Initialize the database
 
-The backend calls `MetadataStore.init_schema()` on boot (idempotent). Verify:
+The backend calls `MetadataStore.init_schema()` on boot (idempotent), and — in
+hosted/Postgres mode — the LangGraph checkpointer runs its own `.setup()` on
+startup to create the conversation tables (Wave 10). Verify:
 
 ```bash
 gcloud sql connect siliconcrew-metadata --user=siliconcrew --database=siliconcrew \
-  -e "\dt"   # expect: projects, session_metadata
+  -e "\dt"   # expect: projects, session_metadata, chat_threads,
+             #         checkpoints, checkpoint_blobs, checkpoint_writes, checkpoint_migrations
 ```
+
+**Connection budget (Wave 10).** The checkpointer pools against this same
+instance. Keep `CHECKPOINT_POOL_MAX` (default 3) × `backend_max_instances`
+(default 10) + metadata connect-per-op headroom **under** Cloud SQL
+`max_connections` (the terraform `db_max_connections`, default 50). `min_size`
+is 0, so idle/scaled-to-zero instances hold no connections — the budget is a
+peak-load ceiling. If you raise `backend_max_instances` or `CHECKPOINT_POOL_MAX`,
+raise `db_max_connections` to match. See `plans/hosted-chat-durability.md`.
 
 ## 5. Smoke test
 
