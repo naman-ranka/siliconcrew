@@ -35,18 +35,20 @@ def _pool_sizes() -> tuple[int, int]:
     """(min, max) pool size from env — scale-to-zero friendly defaults.
 
     min=0 holds no idle connections when an instance is idle, so the Cloud SQL
-    connection budget is a peak-load ceiling, not an idle cost. max is
-    deliberately small: budget = max × backend_max_instances must stay under
-    Cloud SQL max_connections (see plans/hosted-chat-durability.md Item 4).
+    connection budget is a peak-load ceiling, not an idle cost. max=10 gives
+    per-instance headroom under Cloud Run request concurrency (checkpoint ops
+    are short, so this rarely saturates); budget = max × backend_max_instances
+    must stay under Cloud SQL max_connections — the custom tier's default
+    (~400) is ample for 10 × 10 (see plans/hosted-chat-durability.md Item 4).
     """
     try:
         pmin = int(os.environ.get("CHECKPOINT_POOL_MIN", "0"))
     except ValueError:
         pmin = 0
     try:
-        pmax = int(os.environ.get("CHECKPOINT_POOL_MAX", "3"))
+        pmax = int(os.environ.get("CHECKPOINT_POOL_MAX", "10"))
     except ValueError:
-        pmax = 3
+        pmax = 10
     return max(0, pmin), max(1, pmax)
 
 
@@ -59,10 +61,18 @@ async def init_checkpointer(settings) -> None:
     engine is not postgres.
     """
     global _SHARED_SAVER, _POOL
-    if getattr(settings, "persistence_engine", "sqlite") != "postgres" or not getattr(
-        settings, "database_url", ""
-    ):
-        return
+    if getattr(settings, "persistence_engine", "sqlite") != "postgres":
+        return  # sqlite mode (self-host) — nothing to build
+    # Postgres engine but no DSN → REFUSE to boot. Silently returning here would
+    # leave the app on ephemeral per-instance SQLite (build_metadata_store does
+    # the same fallback) — the exact conversation-loss bug this wave fixes, but
+    # invisible. A misconfigured secret must fail startup loudly, not degrade.
+    if not getattr(settings, "database_url", ""):
+        raise RuntimeError(
+            "persistence_engine=postgres but DATABASE_URL is empty — refusing to "
+            "boot on ephemeral SQLite (conversations + session rows would be lost "
+            "on restart/scale). Populate the database-url secret."
+        )
 
     # Imported lazily so self-host never needs these packages installed.
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver

@@ -140,12 +140,19 @@ gcloud sql connect siliconcrew-metadata --user=siliconcrew --database=siliconcre
 ```
 
 **Connection budget (Wave 10).** The checkpointer pools against this same
-instance. Keep `CHECKPOINT_POOL_MAX` (default 3) × `backend_max_instances`
-(default 10) + metadata connect-per-op headroom **under** Cloud SQL
-`max_connections` (the terraform `db_max_connections`, default 50). `min_size`
-is 0, so idle/scaled-to-zero instances hold no connections — the budget is a
-peak-load ceiling. If you raise `backend_max_instances` or `CHECKPOINT_POOL_MAX`,
-raise `db_max_connections` to match. See `plans/hosted-chat-durability.md`.
+instance. Keep `CHECKPOINT_POOL_MAX` (default 10) × `backend_max_instances`
+(default 10) + metadata connect-per-op headroom **under** Postgres
+`max_connections`. On the default `db_tier` (db-custom-1-3840, 3.75 GB)
+Postgres's computed default is in the hundreds — ample for 10 × 10 = 100 — so
+the terraform pins no lower value. `min_size` is 0, so idle/scaled-to-zero
+instances hold no connections; the budget is a peak-load ceiling. If you shrink
+`db_tier` to a shared-core micro, add an explicit `database_flags`
+`max_connections` ≥ the budget. See `plans/hosted-chat-durability.md`.
+
+**Config fail-fast.** With `persistence_engine=postgres` (the hosted default) and
+an empty `DATABASE_URL`, the backend **refuses to boot** (rather than silently
+degrading to ephemeral SQLite and losing conversations). If startup logs show
+that RuntimeError, the `database-url` secret is unpopulated or mis-resolved.
 
 ## 5. Smoke test
 

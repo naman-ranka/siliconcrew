@@ -90,15 +90,6 @@ variable "db_tier" {
   default = "db-custom-1-3840"
 }
 
-# Cloud SQL max_connections — must exceed CHECKPOINT_POOL_MAX (default 3) ×
-# backend_max_instances (default 10) + metadata connect-per-op headroom. See
-# plans/hosted-chat-durability.md Item 4. db-custom-1-3840's stock default is
-# already comfortable; the explicit floor guards against smaller tiers.
-variable "db_max_connections" {
-  type    = number
-  default = 50
-}
-
 variable "db_password" {
   type      = string
   sensitive = true

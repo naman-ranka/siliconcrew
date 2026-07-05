@@ -696,13 +696,20 @@ class PostgresMetadataStore:
         if not ids:
             return
         try:
-            with self._connect() as conn, conn.cursor() as cur:
-                for table in self._CKPT_TABLES:
-                    try:
-                        cur.execute(f"DELETE FROM {table} WHERE thread_id = ANY(%s)", (ids,))
-                    except Exception:
-                        conn.rollback()  # table absent / transient — skip it
-                conn.commit()
+            with self._connect() as conn:
+                # Autocommit so each table's DELETE is independent: a transient
+                # failure on one table can't roll back another's already-applied
+                # delete (a non-autocommit transaction would also poison every
+                # subsequent statement after the first error).
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    for table in self._CKPT_TABLES:
+                        try:
+                            cur.execute(
+                                f"DELETE FROM {table} WHERE thread_id = ANY(%s)", (ids,)
+                            )
+                        except Exception:
+                            pass  # table absent / transient — skip, others stand
         except Exception:
             pass
 

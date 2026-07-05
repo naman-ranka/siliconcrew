@@ -142,9 +142,12 @@ def test_init_checkpointer_noop_in_sqlite_mode():
     assert ckpt.shared_saver() is None
 
 
-def test_init_checkpointer_noop_postgres_without_database_url():
-    # Postgres engine but no DSN → still a no-op (never yields a broken app).
-    asyncio.run(ckpt.init_checkpointer(FakeSettings("postgres", "")))
+def test_init_checkpointer_fail_fast_postgres_without_database_url():
+    # Postgres engine but empty DSN → REFUSE to boot (adversarial review F2):
+    # a silent no-op would leave the app on ephemeral SQLite and lose
+    # conversations + session rows on restart/scale, invisibly.
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        asyncio.run(ckpt.init_checkpointer(FakeSettings("postgres", "")))
     assert ckpt.shared_saver() is None
 
 
@@ -225,7 +228,9 @@ def test_init_checkpointer_fail_fast_propagates_and_closes_pool(monkeypatch):
 def test_pool_sizes_defaults(monkeypatch):
     monkeypatch.delenv("CHECKPOINT_POOL_MIN", raising=False)
     monkeypatch.delenv("CHECKPOINT_POOL_MAX", raising=False)
-    assert ckpt._pool_sizes() == (0, 3)
+    # max default 10 (review F1: per-instance headroom under Cloud Run
+    # concurrency; the custom tier's max_connections covers 10 x 10).
+    assert ckpt._pool_sizes() == (0, 10)
 
 
 def test_pool_sizes_from_env(monkeypatch):
@@ -237,7 +242,7 @@ def test_pool_sizes_from_env(monkeypatch):
 def test_pool_sizes_garbage_falls_back_to_defaults(monkeypatch):
     monkeypatch.setenv("CHECKPOINT_POOL_MIN", "abc")
     monkeypatch.setenv("CHECKPOINT_POOL_MAX", "not-a-number")
-    assert ckpt._pool_sizes() == (0, 3)
+    assert ckpt._pool_sizes() == (0, 10)
 
 
 def test_pool_sizes_max_floored_to_at_least_one(monkeypatch):

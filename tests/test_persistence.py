@@ -173,6 +173,7 @@ class _RecordingCkptConn:
         self.sink = sink
         self.events = events
         self.fail_table = fail_table
+        self.autocommit = False
 
     def cursor(self):
         return _RecordingCkptCursor(self.sink, self.fail_table)
@@ -195,6 +196,13 @@ def test_delete_thread_checkpoints_issues_one_delete_per_table_with_any():
     store = PostgresMetadataStore(
         "postgres://x", connect=lambda dsn: _RecordingCkptConn(sink, events)
     )
+    conn_holder = {}
+
+    def _connect(dsn):
+        conn_holder["conn"] = _RecordingCkptConn(sink, events)
+        return conn_holder["conn"]
+
+    store = PostgresMetadataStore("postgres://x", connect=_connect)
     store.delete_thread_checkpoints({"sess", "t1"})
 
     # One DELETE per checkpoint table, each ``thread_id = ANY(%s)`` with the ids.
@@ -206,12 +214,16 @@ def test_delete_thread_checkpoints_issues_one_delete_per_table_with_any():
         assert sorted(ids_param) == ["sess", "t1"]
         tables_hit.append(sql.split("FROM ")[1].split(" ")[0])
     assert tuple(tables_hit) == store._CKPT_TABLES
-    assert events == ["commit"]      # committed once, no rollback
+    # Autocommit (review F3): each DELETE is independent — no shared
+    # transaction to commit/rollback, so a mid-loop failure can't undo an
+    # earlier table's delete.
+    assert conn_holder["conn"].autocommit is True
+    assert events == []  # no explicit commit/rollback under autocommit
 
 
-def test_delete_thread_checkpoints_skips_missing_table_without_aborting_others():
-    """A table that doesn't exist yet (no saver write) is rolled back and
-    skipped; the other tables still get their DELETE and the batch commits."""
+def test_delete_thread_checkpoints_skips_failing_table_without_aborting_others():
+    """A table whose DELETE fails (transient / absent) is skipped; the other
+    tables' deletes still apply — autocommit isolates each (review F3)."""
     sink, events = [], []
     absent = "checkpoint_blobs"
     store = PostgresMetadataStore(
@@ -223,8 +235,8 @@ def test_delete_thread_checkpoints_skips_missing_table_without_aborting_others()
     # Every table was attempted (the failing one did not abort the loop).
     attempted = [sql.split("FROM ")[1].split(" ")[0] for sql, _ in sink]
     assert set(attempted) == set(store._CKPT_TABLES)
-    assert "rollback" in events   # the absent table was rolled back
-    assert events[-1] == "commit"  # the surviving tables still committed
+    # No rollback that could undo a sibling table's already-applied delete.
+    assert "rollback" not in events
 
 
 def test_delete_thread_checkpoints_noop_on_empty_or_none_ids():
