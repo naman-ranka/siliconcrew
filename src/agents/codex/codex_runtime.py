@@ -10,7 +10,9 @@ dependency arrow stays codex → shared.
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Optional
+import sys
+import time
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from src.agents.codex.codex_engine import CodexEngine, CodexTurn, CodexTurnError, CodexUnavailable
 from src.agents.runtime_registry import RuntimeEvent, RuntimeTurnContext
@@ -83,6 +85,29 @@ class CodexRuntimeHandler:
         return self._normalize_model(model)
 
     async def run_turn(self, ctx: RuntimeTurnContext) -> None:
+        # --- server-side timing instrumentation (additive; logging only) ---
+        # Cloud Run shows nothing today about where a Codex turn spends its
+        # time (see plans note); these lines are the only place that sees
+        # every tool call uniformly, regardless of which tool it is. Grep for
+        # "[CODEX-TIMING]" in logs. time.monotonic() for durations,
+        # wall-clock only for the human-readable start line.
+        turn_start = time.monotonic()
+        # call_id -> (monotonic start, tool name), so a tool_result (which
+        # only carries the call_id) can be matched back to its tool_call.
+        _tool_call_starts: Dict[str, Tuple[float, str]] = {}
+        print(
+            f"[CODEX-TIMING] thread={ctx.thread_id} turn={ctx.turn_id} event=turn_start",
+            file=sys.stderr,
+        )
+
+        def _log_turn_end(status: str) -> None:
+            elapsed = time.monotonic() - turn_start
+            print(
+                f"[CODEX-TIMING] thread={ctx.thread_id} turn={ctx.turn_id} "
+                f"event=turn_end status={status} elapsed={elapsed:.2f}s",
+                file=sys.stderr,
+            )
+
         # Persist the user message first (mirrors the native path's ordering).
         self._store.append_message(ctx.thread_id, "user", ctx.message)
 
@@ -98,6 +123,7 @@ class CodexRuntimeHandler:
                 await ctx.emit(RuntimeEvent.error(
                     "Codex needs an OpenAI API key or a connected Codex account. "
                     f"({exc})", code="no_key"))
+                _log_turn_end("no_key")
                 return
             api_key = getattr(key, "api_key", None)
             if getattr(key, "model", None):
@@ -106,6 +132,7 @@ class CodexRuntimeHandler:
                 await ctx.emit(RuntimeEvent.error(
                     "Codex needs an OpenAI API key or a connected Codex account.",
                     code="no_key"))
+                _log_turn_end("no_key")
                 return
 
         external_id = self._store.get_external_thread_id(ctx.thread_id)
@@ -158,11 +185,39 @@ class CodexRuntimeHandler:
                 elif ev.type == "tool_call" and ev.tool:
                     current_segment = ""
                     tool_calls.append(ev.tool)
+                    tool_name = ev.tool.get("name", "unknown") if isinstance(ev.tool, dict) else "unknown"
+                    call_id = ev.tool_call_id or (ev.tool.get("id") if isinstance(ev.tool, dict) else None)
+                    if call_id:
+                        _tool_call_starts[call_id] = (time.monotonic(), tool_name)
+                    print(
+                        f"[CODEX-TIMING] thread={ctx.thread_id} turn={ctx.turn_id} "
+                        f"tool={tool_name} call_id={call_id} event=tool_call_start",
+                        file=sys.stderr,
+                    )
                     await ctx.emit(RuntimeEvent.tool_call(ev.tool))
                 elif ev.type == "tool_result" and ev.tool_call_id:
                     result = {"tool_call_id": ev.tool_call_id,
                               "status": ev.status or "success", "content": ev.content or ""}
                     tool_results.append(result)
+                    started = _tool_call_starts.pop(ev.tool_call_id, None)
+                    if started is not None:
+                        start_ts, tool_name = started
+                        elapsed = time.monotonic() - start_ts
+                        print(
+                            f"[CODEX-TIMING] thread={ctx.thread_id} turn={ctx.turn_id} "
+                            f"tool={tool_name} call_id={ev.tool_call_id} status={result['status']} "
+                            f"elapsed={elapsed:.2f}s",
+                            file=sys.stderr,
+                        )
+                    else:
+                        # No matching tool_call seen (shouldn't happen; logged
+                        # anyway so the log stream is never silently missing).
+                        print(
+                            f"[CODEX-TIMING] thread={ctx.thread_id} turn={ctx.turn_id} "
+                            f"tool=unknown call_id={ev.tool_call_id} status={result['status']} "
+                            f"elapsed=unknown (no matching tool_call_start)",
+                            file=sys.stderr,
+                        )
                     await ctx.emit(RuntimeEvent.tool_result(**result))
                 elif ev.type in {"usage", "done"}:
                     in_tokens = ev.usage.input_tokens or in_tokens
@@ -172,13 +227,16 @@ class CodexRuntimeHandler:
         except CodexUnavailable as exc:
             # Availability — Codex not enabled/installed; UI prompts to enable/connect.
             await ctx.emit(RuntimeEvent.error(exc.message, code="codex_unavailable"))
+            _log_turn_end("codex_unavailable")
             return
         except CodexTurnError as exc:
             # A real turn failure (SDK/model/quota) — distinct from availability.
             await ctx.emit(RuntimeEvent.error(exc.message, code="codex_turn_failed"))
+            _log_turn_end("codex_turn_failed")
             return
         except Exception as exc:  # noqa: BLE001  (CancelledError is BaseException; it propagates for stop/supersede)
             await ctx.emit(RuntimeEvent.error(f"Codex turn failed: {exc}", code="codex_turn_failed"))
+            _log_turn_end("error")
             return
 
         # Account-auth turn may have refreshed/rotated the token (the engine
@@ -199,4 +257,5 @@ class CodexRuntimeHandler:
         if completed and new_external_id and new_external_id != external_id:
             self._store.set_external_thread_id(ctx.thread_id, new_external_id)
 
+        _log_turn_end("completed" if completed else "incomplete")
         await ctx.emit(RuntimeEvent.done({"input": in_tokens, "output": out_tokens}))

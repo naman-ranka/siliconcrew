@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -266,6 +267,10 @@ class CodexEngine:
     async def stream_turn(self, turn: CodexTurn) -> AsyncIterator[CodexEvent]:
         if False:  # pragma: no cover - keeps this an async generator
             yield CodexEvent(type="done")
+        # [CODEX-TIMING] setup: SDK/thread bring-up before the turn is even
+        # issued (login, thread_start/resume) — a separate bucket from the
+        # per-tool-call timing codex_runtime.py logs around the event loop.
+        setup_start = time.monotonic()
         openai_codex = self.check_available()
         self._prepare_paths(turn)
         config = self._sdk_config(openai_codex, turn)
@@ -295,13 +300,24 @@ class CodexEngine:
                         base_instructions=turn.system_prompt, config=self._thread_config(), **thread_kwargs)
 
                 external_thread_id = str(getattr(thread, "id", "") or turn.external_thread_id or "")
+                print(
+                    f"[CODEX-TIMING] thread={turn.thread_id} event=sdk_thread_ready "
+                    f"elapsed_setup={time.monotonic() - setup_start:.2f}s",
+                    file=sys.stderr,
+                )
                 yield CodexEvent(type="start", external_thread_id=external_thread_id)
 
                 turn_kwargs = {k: v for k, v in {
                     "cwd": turn.workspace, "model": effective_model, "sandbox": sandbox,
                     "approval_mode": self._sdk_approval_mode(openai_codex), "service_tier": turn.tier,
                 }.items() if v is not None}
+                turn_issue_start = time.monotonic()
                 turn_handle = await thread.turn(turn.message, **turn_kwargs)
+                print(
+                    f"[CODEX-TIMING] thread={turn.thread_id} event=sdk_turn_issued "
+                    f"elapsed={time.monotonic() - turn_issue_start:.2f}s",
+                    file=sys.stderr,
+                )
                 async for event in self._stream_sdk_events(turn_handle):
                     yield event
         except (CodexUnavailable, CodexTurnError):

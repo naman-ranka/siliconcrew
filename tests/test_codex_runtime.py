@@ -191,6 +191,58 @@ def test_tool_call_turn_maps_and_persists(wiring):
     assert assistant["tool_metadata"]["tool_results"][0]["tool_call_id"] == "c1"
 
 
+# --- server-side timing instrumentation (Cloud Run observability) -----------
+
+def test_tool_call_turn_logs_timing_lines(wiring, capsys):
+    """[CODEX-TIMING] lines are the only server-side signal for how long each
+    tool call and the overall turn take (nothing else is logged/printed from
+    run_turn today). This asserts the tag, tool name, and thread/turn id are
+    present — loose on exact timing values, strict on presence/shape."""
+    tool_item = types.SimpleNamespace(type="mcptoolcall", id="c1", tool="get_cts_summary",
+                                      arguments={})
+    done_item = types.SimpleNamespace(type="mcptoolcall", id="c1",
+                                      status="completed",
+                                      result=types.SimpleNamespace(content="cts ok"),
+                                      error=None)
+    events = [
+        _ev("item/started", item=tool_item),
+        _ev("item/completed", item=done_item),
+        _ev("item/agentMessage/delta", delta="done"),
+        _usage_event(4, 2),
+        _ev("turn/completed"),
+    ]
+    frames = []
+    asyncio.run(_handler(wiring, events).run_turn(_ctx(wiring, frames)))
+
+    err = capsys.readouterr().err
+    all_lines = [l for l in err.splitlines() if l.startswith("[CODEX-TIMING]")]
+    assert all_lines, "expected at least one [CODEX-TIMING] line"
+    # codex_engine.py's optional setup-timing lines carry thread= but no per-
+    # turn turn= (CodexTurn has no turn_id) — the run_turn-level lines below
+    # are the primary, must-have instrumentation and carry both.
+    lines = [l for l in all_lines if "turn=" in l]
+
+    # thread/turn id present on every run_turn-level line (multiple
+    # concurrent/sequential turns in a shared log stream must be
+    # distinguishable).
+    assert lines, "expected at least one run_turn-level [CODEX-TIMING] line"
+    assert all("thread=th1" in l and "turn=t1" in l for l in lines)
+
+    # turn_start at the top, turn_end (with a real elapsed=...s) at the end.
+    assert any("event=turn_start" in l for l in lines)
+    end_lines = [l for l in lines if "event=turn_end" in l]
+    assert end_lines and "status=completed" in end_lines[0]
+    assert "elapsed=" in end_lines[0] and end_lines[0].rstrip().endswith("s")
+
+    # the tool_call_start / tool_result pair for the actual tool, matched by
+    # call_id, with a numeric elapsed duration on the result line.
+    start_lines = [l for l in lines if "event=tool_call_start" in l]
+    assert start_lines and "tool=get_cts_summary" in start_lines[0] and "call_id=c1" in start_lines[0]
+    result_lines = [l for l in lines if "tool=get_cts_summary" in l and "call_id=c1" in l and "status=" in l]
+    assert result_lines
+    assert "elapsed=" in result_lines[0] and result_lines[0].rstrip().endswith("s")
+
+
 # --- no key + no account => structured error, nothing persisted -------------
 
 def test_no_key_no_account_emits_structured_error(wiring):
