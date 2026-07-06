@@ -38,6 +38,8 @@ export function ModelPicker() {
     models,
     loadModels,
     setActiveThreadModel,
+    agentRuntime,
+    codexAccountConnected,
   } = useStore();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -72,11 +74,25 @@ export function ModelPicker() {
   const currentLabel = models.find((m) => m.id === currentId)?.label || currentId;
   const currentProvider = models.find((m) => m.id === currentId)?.provider;
 
+  // The Codex agent runs on OpenAI models only — show just those in its picker.
+  // A connected ChatGPT account also makes them available with no BYOK key:
+  // codex_runtime.py skips key resolution entirely once an account is
+  // connected (account auth wins over BYOK), so /api/models' key-based
+  // `available` flag — which knows nothing about the Codex account — would
+  // otherwise wrongly grey out every OpenAI model here.
+  const visibleModels = useMemo(() => {
+    if (agentRuntime !== "codex") return models;
+    const bypassesKey = codexAccountConnected;
+    return models
+      .filter((m) => m.provider === "openai")
+      .map((m) => (bypassesKey ? { ...m, available: true } : m));
+  }, [models, agentRuntime, codexAccountConnected]);
+
   const grouped = useMemo(() => {
     const by: Record<string, ModelInfo[]> = {};
-    for (const m of models) (by[m.provider] ??= []).push(m);
+    for (const m of visibleModels) (by[m.provider] ??= []).push(m);
     return by;
-  }, [models]);
+  }, [visibleModels]);
 
   const pick = async (m: ModelInfo) => {
     if (!m.available) return;
@@ -117,7 +133,7 @@ export function ModelPicker() {
           aria-label="Select model"
           className="absolute bottom-full mb-1 left-0 z-50 w-80 max-h-[26rem] overflow-y-auto rounded-md border border-border bg-popover shadow-e2 p-1 animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 motion-reduce:animate-none"
         >
-          {models.length === 0 && (
+          {visibleModels.length === 0 && (
             <div className="px-3 py-3 text-xs text-muted-foreground">No models available.</div>
           )}
           {PROVIDER_ORDER.filter((p) => grouped[p]?.length).map((provider) => (

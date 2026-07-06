@@ -55,9 +55,11 @@ class MetadataStore(Protocol):
     def delete_session(self, session_id: str, user_id: Optional[str] = None) -> List[str]: ...
     # chat threads (a chat = a LangGraph thread_id; many per session/workspace)
     def create_thread(self, thread_id: str, session_id: str, user_id: Optional[str],
-                      title: str, model: Optional[str], now: Any) -> None: ...
+                      title: str, model: Optional[str], now: Any,
+                      runtime: str = "langchain") -> None: ...
     def ensure_thread(self, thread_id: str, session_id: str, user_id: Optional[str],
-                      title: str, model: Optional[str], now: Any) -> None: ...
+                      title: str, model: Optional[str], now: Any,
+                      runtime: str = "langchain") -> None: ...
     def get_thread(self, thread_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
     def list_threads(self, session_id: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
     def count_threads(self, session_id: str, user_id: Optional[str] = None) -> int: ...
@@ -65,7 +67,7 @@ class MetadataStore(Protocol):
     def count_threads_by_session(self, user_id: Optional[str] = None) -> Dict[str, int]: ...
     def update_thread(self, thread_id: str, user_id: Optional[str] = None, *,
                       title: Optional[str] = None, model: Optional[str] = None,
-                      last_active: Any = None) -> None: ...
+                      last_active: Any = None, runtime: Optional[str] = None) -> None: ...
     def delete_thread(self, thread_id: str, user_id: Optional[str] = None) -> None: ...
     # identity migration (operator tool, Slice 3): re-key every row owned by
     # old_user_id to new_user_id. Used to unify google_<sub> -> workos_<sub>
@@ -129,6 +131,7 @@ class SqliteMetadataStore:
                     user_id TEXT,
                     title TEXT,
                     model TEXT,
+                    runtime TEXT NOT NULL DEFAULT 'langchain',
                     created_at TIMESTAMP,
                     last_active TIMESTAMP
                 )
@@ -166,6 +169,14 @@ class SqliteMetadataStore:
         proj_cols = {row[1] for row in cur.execute("PRAGMA table_info(projects)")}
         if "user_id" not in proj_cols:
             cur.execute("ALTER TABLE projects ADD COLUMN user_id TEXT")
+        # Shell-level runtime marker: which registered agent runtime owns a thread
+        # (see src/agents/runtime_registry.py). Generic dispatch infra, not a
+        # Codex primitive — legacy rows backfill to the native default.
+        thread_cols = {row[1] for row in cur.execute("PRAGMA table_info(chat_threads)")}
+        if "runtime" not in thread_cols:
+            cur.execute(
+                "ALTER TABLE chat_threads ADD COLUMN runtime TEXT NOT NULL DEFAULT 'langchain'"
+            )
 
     def _migrate_existing_groups(self, cur) -> None:
         rows = cur.execute("SELECT session_id FROM session_metadata").fetchall()
@@ -351,22 +362,22 @@ class SqliteMetadataStore:
 
     # -- chat threads --
 
-    def create_thread(self, thread_id, session_id, user_id, title, model, now):
+    def create_thread(self, thread_id, session_id, user_id, title, model, now, runtime="langchain"):
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (thread_id, session_id, user_id, title, model, now, now),
+                "INSERT INTO chat_threads (id, session_id, user_id, title, model, runtime, created_at, last_active) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (thread_id, session_id, user_id, title, model, runtime, now, now),
             )
             conn.commit()
 
-    def ensure_thread(self, thread_id, session_id, user_id, title, model, now):
+    def ensure_thread(self, thread_id, session_id, user_id, title, model, now, runtime="langchain"):
         """Insert the thread row only if absent (idempotent; never clobbers)."""
         with self._connect() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (thread_id, session_id, user_id, title, model, now, now),
+                "INSERT OR IGNORE INTO chat_threads (id, session_id, user_id, title, model, runtime, created_at, last_active) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (thread_id, session_id, user_id, title, model, runtime, now, now),
             )
             conn.commit()
 
@@ -415,7 +426,7 @@ class SqliteMetadataStore:
             rows = conn.execute(sql, params).fetchall()
         return {r[0]: int(r[1]) for r in rows}
 
-    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None):
+    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None, runtime=None):
         sets, params = [], []
         if title is not None:
             sets.append("title = ?"); params.append(title)
@@ -423,6 +434,8 @@ class SqliteMetadataStore:
             sets.append("model = ?"); params.append(model)
         if last_active is not None:
             sets.append("last_active = ?"); params.append(last_active)
+        if runtime is not None:
+            sets.append("runtime = ?"); params.append(runtime)
         if not sets:
             return
         owner, oparams = self._owner_clause(user_id)
@@ -549,10 +562,18 @@ class PostgresMetadataStore:
                     user_id TEXT,
                     title TEXT,
                     model TEXT,
+                    runtime TEXT NOT NULL DEFAULT 'langchain',
                     created_at TIMESTAMPTZ,
                     last_active TIMESTAMPTZ
                 )
                 """
+            )
+            # Shell-level runtime marker (parity with SqliteMetadataStore) — add
+            # to pre-existing hosted tables. Idempotent; legacy rows backfill to
+            # the native default via the column DEFAULT.
+            cur.execute(
+                "ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS "
+                "runtime TEXT NOT NULL DEFAULT 'langchain'"
             )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_session_user_created "
@@ -715,21 +736,21 @@ class PostgresMetadataStore:
 
     # -- chat threads --
 
-    def create_thread(self, thread_id, session_id, user_id, title, model, now):
+    def create_thread(self, thread_id, session_id, user_id, title, model, now, runtime="langchain"):
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (thread_id, session_id, user_id, title, model, now, now),
+                "INSERT INTO chat_threads (id, session_id, user_id, title, model, runtime, created_at, last_active) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (thread_id, session_id, user_id, title, model, runtime, now, now),
             )
             conn.commit()
 
-    def ensure_thread(self, thread_id, session_id, user_id, title, model, now):
+    def ensure_thread(self, thread_id, session_id, user_id, title, model, now, runtime="langchain"):
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
-                (thread_id, session_id, user_id, title, model, now, now),
+                "INSERT INTO chat_threads (id, session_id, user_id, title, model, runtime, created_at, last_active) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                (thread_id, session_id, user_id, title, model, runtime, now, now),
             )
             conn.commit()
 
@@ -765,7 +786,7 @@ class PostgresMetadataStore:
             rows = cur.fetchall()
         return {r[0]: int(r[1]) for r in rows}
 
-    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None):
+    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None, runtime=None):
         sets, params = [], []
         if title is not None:
             sets.append("title = %s"); params.append(title)
@@ -773,6 +794,8 @@ class PostgresMetadataStore:
             sets.append("model = %s"); params.append(model)
         if last_active is not None:
             sets.append("last_active = %s"); params.append(last_active)
+        if runtime is not None:
+            sets.append("runtime = %s"); params.append(runtime)
         if not sets:
             return
         owner, oparams = self._owner_clause(user_id)

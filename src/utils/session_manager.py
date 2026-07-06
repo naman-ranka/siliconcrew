@@ -2,6 +2,7 @@ import datetime
 import os
 import shutil
 
+from src.agents import runtime_registry
 from src.platform_engines.metadata_store import (
     DuplicateProject,
     SqliteMetadataStore,
@@ -222,6 +223,9 @@ class SessionManager:
         # deleted (no separate pre-read that could fail or go stale apart
         # from the delete itself).
         deleted_threads = self._store.delete_session(session_id, user_id=user_id) or []
+        # Notify extension runtimes for every deleted thread (+ legacy default).
+        for _tid in {session_id, *deleted_threads}:
+            runtime_registry.notify_thread_deleted(_tid, user_id)
         # Purge the conversation checkpoints for the deleted threads (+ the
         # legacy session-id default thread). Wave 10: in Postgres mode
         # checkpoints live in the shared Cloud SQL DB, so the store purges them
@@ -323,10 +327,12 @@ class SessionManager:
         meta = self._store.get_session(session_id, user_id=user_id)
         return (meta or {}).get("model_name")
 
-    def create_thread(self, session_id, user_id=None, title=None, model=None) -> dict:
+    def create_thread(self, session_id, user_id=None, title=None, model=None, runtime="langchain") -> dict:
         """Create a new chat thread (fresh UUID id) under a session.
 
         New threads inherit the creator's last-used model when one isn't given.
+        ``runtime`` is the shell-level marker that selects the agent runtime
+        (native 'langchain', or a registered extension like 'codex').
         """
         import uuid
 
@@ -338,7 +344,7 @@ class SessionManager:
         if not title:
             n = self._store.count_threads(session_id, user_id=user_id) + 1
             title = f"Chat {n}"
-        self._store.create_thread(thread_id, session_id, user_id, title, model, now)
+        self._store.create_thread(thread_id, session_id, user_id, title, model, now, runtime=runtime)
         return self._store.get_thread(thread_id, user_id=user_id)
 
     def list_threads(self, session_id, user_id=None) -> list[dict]:
@@ -371,6 +377,11 @@ class SessionManager:
     def set_thread_model(self, thread_id, model, user_id=None):
         self._store.update_thread(thread_id, user_id=user_id, model=model)
 
+    def set_thread_runtime(self, thread_id, runtime, user_id=None):
+        """Set the shell-level runtime marker that drives dispatch (which
+        registered agent runtime owns this thread). See runtime_registry."""
+        self._store.update_thread(thread_id, user_id=user_id, runtime=runtime)
+
     def touch_thread(self, thread_id, user_id=None, auto_title_from: str | None = None):
         """Bump last_active; auto-title an untitled/default thread on first message."""
         now = datetime.datetime.now()
@@ -385,6 +396,9 @@ class SessionManager:
     def delete_thread(self, thread_id, user_id=None):
         """Delete a conversation only — never the workspace files/runs."""
         self._store.delete_thread(thread_id, user_id=user_id)
+        # Let extension runtimes (e.g. Codex) drop their own per-thread state.
+        # No-op with zero extensions registered; the shell never names Codex.
+        runtime_registry.notify_thread_deleted(thread_id, user_id)
 
     def thread_belongs_to_session(self, thread_id, session_id, user_id=None) -> bool:
         t = self._store.get_thread(thread_id, user_id=user_id)

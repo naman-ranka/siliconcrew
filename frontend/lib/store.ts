@@ -27,7 +27,7 @@ import type {
   SmartFile,
   ToolCatalogEntry,
 } from "@/types";
-import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi } from "./api";
+import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi, codexApi } from "./api";
 import { generateId } from "./utils";
 import { makeArtifactKey, type ArtifactKey } from "./artifactKeys";
 import { isDuplicateOfServer, mergeActivity, upsertActivityEvent } from "./activityMerge";
@@ -295,6 +295,18 @@ interface AppState {
   activeThreadId: string | null;
   threadsLoading: boolean;
 
+  // Active agent runtime for the chat surface: native 'langchain' | 'codex'.
+  // ONE agent occupies the panel at a time; switching filters the thread list +
+  // model picker and applies the Codex theme scope. codexEnabled gates the
+  // toggle (server capability).
+  agentRuntime: "langchain" | "codex";
+  codexEnabled: boolean;
+  // Mirrors CodexAuthStatus.connected (ChatGPT device-auth login) so the model
+  // picker can treat OpenAI models as available without a BYOK key while on
+  // the Codex agent — codex_runtime.py skips key resolution entirely once an
+  // account is connected, so the picker's usual key-based gate doesn't apply.
+  codexAccountConnected: boolean;
+
   // Model registry (the picker). The active thread's model is what the WS uses.
   models: ModelInfo[];
   modelsLoaded: boolean;
@@ -356,7 +368,10 @@ interface AppState {
 
   // Chat thread actions
   loadThreads: () => Promise<void>;
-  newThread: () => Promise<void>;
+  newThread: (runtime?: string) => Promise<void>;
+  setAgentRuntime: (runtime: "langchain" | "codex") => Promise<void>;
+  loadCodexCapability: () => Promise<void>;
+  setCodexAccountConnected: (connected: boolean) => void;
   selectThread: (threadId: string) => Promise<void>;
   deleteThread: (threadId: string) => Promise<void>;
   renameThread: (threadId: string, title: string) => Promise<void>;
@@ -492,6 +507,9 @@ export const useStore = create<AppState>((set, get) => ({
   threads: [],
   activeThreadId: null,
   threadsLoading: false,
+  agentRuntime: "langchain",
+  codexEnabled: false,
+  codexAccountConnected: false,
 
   models: [],
   modelsLoaded: false,
@@ -938,6 +956,31 @@ export const useStore = create<AppState>((set, get) => ({
           break;
         }
 
+        case "reasoning": {
+          // Agent "thinking" stream (Codex) — accumulate deltas into a single
+          // reasoning block (rendered collapsed).
+          if (!msg) break;
+          const blocks = [...(msg.blocks ?? [])];
+          const last = blocks.length - 1;
+          if (last >= 0 && blocks[last].type === "reasoning") {
+            blocks[last] = { type: "reasoning", content: (blocks[last] as { content: string }).content + data.content };
+          } else {
+            blocks.push({ type: "reasoning", content: data.content });
+          }
+          set({ streamingMessage: { ...msg, blocks } });
+          break;
+        }
+
+        case "plan": {
+          // Agent plan/todo (Codex) — full snapshot each update; replace the
+          // single plan block.
+          if (!msg) break;
+          const blocks: ContentBlock[] = (msg.blocks ?? []).filter((b) => b.type !== "plan");
+          blocks.push({ type: "plan", content: data.content });
+          set({ streamingMessage: { ...msg, blocks } });
+          break;
+        }
+
         case "tool_call": {
           if (!msg) break;
           const newToolBlock: ContentBlock = { type: "tool", toolCall: data.tool as ToolCall };
@@ -1194,9 +1237,20 @@ export const useStore = create<AppState>((set, get) => ({
       // own loadThreads is already running. Same guard loadWorkbench uses.
       if (get().currentSession?.id !== sid) return;
       const cur = get().activeThreadId;
-      // Keep the active thread if it still exists; else land on newest-active.
-      const active = cur && threads.some((t) => t.id === cur) ? cur : threads[0]?.id ?? null;
-      set({ threads, activeThreadId: active, threadsLoading: false });
+      // Keep the active thread if it still exists; else land on the newest-active
+      // thread of the CURRENT agent runtime (so the panel stays on its agent),
+      // falling back to any thread.
+      const isCodex = get().agentRuntime === "codex";
+      const mine = threads.filter((t) => (t.runtime === "codex") === isCodex);
+      const active = cur && threads.some((t) => t.id === cur)
+        ? cur
+        : mine[0]?.id ?? threads[0]?.id ?? null;
+      // Derive the agent runtime from the ACTIVE thread, so opening a Codex
+      // thread (e.g. via URL on reload) puts the panel in Codex mode (violet
+      // theme + OpenAI model filter) instead of defaulting to Workbench.
+      const activeThread = threads.find((t) => t.id === active);
+      const agentRuntime = activeThread?.runtime === "codex" ? "codex" : "langchain";
+      set({ threads, activeThreadId: active, threadsLoading: false, agentRuntime });
     } catch (error) {
       if (get().currentSession?.id !== sid) return;
       set({
@@ -1206,10 +1260,10 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  newThread: async () => {
+  newThread: async (runtime?: string) => {
     const { currentSession, ws } = get();
     if (!currentSession) return;
-    const thread = await threadsApi.create(currentSession.id);
+    const thread = await threadsApi.create(currentSession.id, undefined, undefined, runtime);
     if (ws) ws.close();
     set((state) => ({
       threads: [thread, ...state.threads],
@@ -1222,6 +1276,31 @@ export const useStore = create<AppState>((set, get) => ({
       ...chatTurnResetFields(),
     }));
   },
+
+  setAgentRuntime: async (runtime) => {
+    const { agentRuntime, threads } = get();
+    if (runtime === agentRuntime) return;
+    set({ agentRuntime: runtime });
+    // Move the panel onto this agent's newest thread, or start a fresh one.
+    // AWAIT it so callers can sync the URL against the resulting active thread
+    // (URL is the source of truth — a fire-and-forget select would let the URL
+    // read the OLD thread and desync the panel from its runtime).
+    const isCodex = runtime === "codex";
+    const mine = threads.filter((t) => (t.runtime === "codex") === isCodex);
+    if (mine.length) await get().selectThread(mine[0].id);
+    else await get().newThread(isCodex ? "codex" : undefined);
+  },
+
+  loadCodexCapability: async () => {
+    try {
+      const s = await codexApi.status();
+      set({ codexEnabled: !!s.runtime_enabled, codexAccountConnected: !!s.connected });
+    } catch {
+      set({ codexEnabled: false, codexAccountConnected: false });
+    }
+  },
+
+  setCodexAccountConnected: (connected) => set({ codexAccountConnected: connected }),
 
   selectThread: async (threadId: string) => {
     const { currentSession, activeThreadId, ws } = get();

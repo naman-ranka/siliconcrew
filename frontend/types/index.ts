@@ -39,6 +39,7 @@ export interface ChatThread {
   session_id: string;
   title: string | null;
   model: string | null;
+  runtime?: string | null; // 'langchain' (native) | 'codex'
   created_at: string | null;
   last_active: string | null;
 }
@@ -58,6 +59,8 @@ export interface ToolResult {
 
 export type ContentBlock =
   | { type: "text"; content: string }
+  | { type: "reasoning"; content: string } // agent "thinking" stream (Codex)
+  | { type: "plan"; content: string }       // agent plan/todo (Codex)
   | { type: "tool"; toolCall: ToolCall; result?: ToolResult };
 
 export interface Message {

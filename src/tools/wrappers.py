@@ -26,7 +26,7 @@ from src.tools.file_patch import apply_unified_patch
 # so the tenancy seam and its concurrency gate test do not require this heavy
 # tool/agent module. Re-exported here for backward compatibility — ~30 call
 # sites in this file resolve the workspace via get_workspace_path().
-from src.utils.workspace import get_workspace_path
+from src.utils.workspace import get_workspace_path, resolve_in_workspace
 
 
 def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
@@ -95,6 +95,7 @@ def write_file(filename: str, content: str | None = None) -> str:
     from src.tools.file_ops import write_file as _write_file
     workspace = get_workspace_path()
     try:
+        resolve_in_workspace(filename, workspace=workspace)  # confine to workspace
         _write_file(workspace, filename, content)
     except ValueError as exc:
         return f"Error: {exc}"
@@ -108,11 +109,14 @@ def read_file(filename: str) -> str:
         filename: Name of the file to read.
     """
     workspace = get_workspace_path()
-    filepath = os.path.join(workspace, filename)
-    
+    try:
+        filepath = resolve_in_workspace(filename, workspace=workspace)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
     if not os.path.exists(filepath):
         return f"Error: File {filename} does not exist."
-        
+
     with open(filepath, "r", encoding="utf-8", errors="replace") as f:
         return f.read()
 
@@ -550,8 +554,11 @@ def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> st
         replacement_text: The new text to insert.
     """
     workspace = get_workspace_path()
-    abs_file = os.path.join(workspace, filename)
-    
+    try:
+        abs_file = resolve_in_workspace(filename, workspace=workspace)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
     result = replace_in_file(abs_file, target_text, replacement_text)
     
     if result["success"]:

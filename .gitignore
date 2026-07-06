@@ -225,3 +225,6 @@ gcp-key.json
 tests/fixtures/**/attempt_events.jsonl
 tests/fixtures/**/attempt_log.json
 tests/fixtures/**/completion.event
+
+# Local docker data dir (DBs, encrypted keys) — never commit
+.siliconcrew_data/

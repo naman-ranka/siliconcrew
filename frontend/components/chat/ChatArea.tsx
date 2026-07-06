@@ -31,7 +31,7 @@ export function ChatArea({
    * not chrome. */
   hideHeader?: boolean;
 }) {
-  const { currentSession, chatError, chatErrorCode } = useStore();
+  const { currentSession, chatError, chatErrorCode, agentRuntime } = useStore();
   // The API-key note competes with toasts as a second notification channel, so
   // make its dismissal sticky (localStorage) — once waved off it stays gone.
   const [apiNoticeDismissed, setApiNoticeDismissed] = useState(false);
@@ -44,7 +44,10 @@ export function ChatArea({
   }, []);
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    // data-runtime scopes the Codex theme accent (see globals.css): all
+    // text-primary / ring-primary inside recolor to violet without touching
+    // component classes — same shared components, a different paint.
+    <div className="flex flex-col h-full bg-background" data-runtime={agentRuntime}>
       {/* Header */}
       {!hideHeader && (
       <div className="flex items-center justify-between h-14 px-4 border-b border-border bg-surface-0">
@@ -109,17 +112,23 @@ export function ChatArea({
             <p className="text-xs text-info truncate">{chatError}</p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            <Button
-              size="sm"
-              className="h-7 gap-1.5 text-xs"
-              data-testid="chat-add-key"
-              onClick={() => {
-                useStore.setState({ chatError: null, chatErrorCode: null });
-                useStore.getState().setSettingsOpen(true);
-              }}
-            >
-              <KeyRound className="h-3.5 w-3.5" /> Add an API key
-            </Button>
+            {agentRuntime === "codex" ? (
+              // Codex runs on a ChatGPT account (or its own quota) — the remedy
+              // is the "Connect ChatGPT" control, not adding an LLM API key.
+              <span className="text-xs text-info whitespace-nowrap">Use “Connect ChatGPT” above, or check your plan’s quota.</span>
+            ) : (
+              <Button
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
+                data-testid="chat-add-key"
+                onClick={() => {
+                  useStore.setState({ chatError: null, chatErrorCode: null });
+                  useStore.getState().setSettingsOpen(true);
+                }}
+              >
+                <KeyRound className="h-3.5 w-3.5" /> Add an API key
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
