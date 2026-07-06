@@ -49,24 +49,43 @@ export function CreateSessionModal({ presetGroup, defaultStartIn, onClose }: Cre
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Latest `onClose` for the Escape handler below — kept out of that effect's
+  // deps (and out of the mount-only effect entirely) so a parent re-render
+  // that hands us a brand-new `onClose` closure never re-fires either effect.
+  // See WaveformViewer's `xToTicksRef` for the same "update ref during
+  // render" pattern used elsewhere in this codebase.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // Mount-only: fetch the data the form needs and focus the name input.
+  // `loadProjects`/`loadModels` are stable Zustand action references (bound
+  // once in the store's `create()` initializer), so this really only runs
+  // once per modal open — it must NOT depend on `onClose`, which is a fresh
+  // closure on every parent render and previously caused this effect (and
+  // the loadProjects() call inside it) to re-fire in a tight loop every time
+  // the parent re-rendered after the projects list updated.
   useEffect(() => {
     loadProjects();
     loadModels();
     const t = setTimeout(() => inputRef.current?.focus(), 30);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Separate, mount-only Escape listener. Reads onCloseRef.current so it
+  // always calls the latest onClose without needing it as a dependency.
+  useEffect(() => {
     // Consume the Esc (see ThreadSwitcher) — the modal is open for as long as
     // this component is mounted, so an Escape here always closes it.
     const h = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     };
     window.addEventListener("keydown", h);
-    return () => {
-      clearTimeout(t);
-      window.removeEventListener("keydown", h);
-    };
-  }, [loadProjects, loadModels, onClose]);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
 
   const slug = slugify(name) || "untitled";
 
