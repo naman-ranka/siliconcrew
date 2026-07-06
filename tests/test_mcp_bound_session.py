@@ -10,6 +10,12 @@ import os
 
 import pytest
 
+# The MCP package is an optional integration dependency in this container (the
+# main backend gate already excludes the broader MCP suites when it is absent).
+# Keep this focused Codex-boundary test honest: run it when MCP is installed,
+# skip it cleanly otherwise instead of failing at mcp_server import time.
+pytest.importorskip("mcp", reason="MCP package is not installed in this environment")
+
 
 @pytest.fixture
 def bound_server(tmp_path, monkeypatch):
