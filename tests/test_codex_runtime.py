@@ -47,9 +47,11 @@ class _FakeThread:
 
 
 class _FakeCodex:
-    def __init__(self, events, **kw):
+    def __init__(self, events, resume_fails=False, **kw):
         self._events = events
         self.logged_in = False
+        self.resume_fails = resume_fails
+        self.thread_start_calls = []  # each entry is the kwargs dict
 
     async def __aenter__(self):
         return self
@@ -61,14 +63,23 @@ class _FakeCodex:
         self.logged_in = True
 
     async def thread_start(self, **kw):
+        self.thread_start_calls.append(kw)
         return _FakeThread(self._events)
 
     async def thread_resume(self, ext_id, **kw):
+        if self.resume_fails:
+            raise RuntimeError("no rollout for this thread on this instance")
         return _FakeThread(self._events, thread_id=ext_id)
 
 
 def _sdk_factory_for(events):
     return lambda config=None: _FakeCodex(events)
+
+
+def _sdk_factory_returning(fake_codex):
+    """Always hand back the SAME fake Codex instance, so a test can inspect
+    calls made to it (e.g. thread_start_calls) after run_turn completes."""
+    return lambda config=None: fake_codex
 
 
 # token-usage payload shaped like the SDK's nested object
@@ -106,7 +117,7 @@ def wiring(tmp_path):
                                  state_dir=str(tmp_path / "codex-state"))
 
 
-def _handler(wiring, events, *, key="sk-test", account_home=None):
+def _handler(wiring, events, *, key="sk-test", account_home=None, sdk_factory=None):
     fake_key = types.SimpleNamespace(api_key=key, model=None, source="byok")
     return CodexRuntimeHandler(
         codex_store=wiring.store,
@@ -118,7 +129,7 @@ def _handler(wiring, events, *, key="sk-test", account_home=None):
         normalize_model=lambda m: m,
         enabled=True,
         engine_factory=lambda: CodexEngine(
-            enabled=True, sdk_factory=_sdk_factory_for(events),
+            enabled=True, sdk_factory=sdk_factory or _sdk_factory_for(events),
             state_dir=wiring.state_dir, local_sqlite_dir=wiring.state_dir),
     )
 
@@ -189,6 +200,72 @@ def test_tool_call_turn_maps_and_persists(wiring):
     assistant = wiring.store.list_messages("th1")[-1]
     assert assistant["tool_metadata"]["tool_calls"][0]["name"] == "read_file"
     assert assistant["tool_metadata"]["tool_results"][0]["tool_call_id"] == "c1"
+
+
+# --- resume-failure fallback replays prior history into base_instructions ---
+
+def test_resume_failure_seeds_fresh_thread_with_prior_history(wiring):
+    # Simulate a thread that already had a turn (external_thread_id + prior
+    # transcript), but whose Codex-side rollout is gone on this instance (e.g.
+    # a fresh Cloud Run cold start after scale-to-zero) — thread_resume raises.
+    wiring.store.append_message("th1", "user", "let's build a fifo")
+    wiring.store.append_message("th1", "assistant", "Sure, I'll scaffold fifo.sv")
+    wiring.store.set_external_thread_id("th1", "ext-thread-1")
+
+    events = [_ev("item/agentMessage/delta", delta="back again"), _ev("turn/completed")]
+    fake_codex = _FakeCodex(events, resume_fails=True)
+    frames = []
+    asyncio.run(_handler(wiring, events, sdk_factory=_sdk_factory_returning(fake_codex))
+                .run_turn(_ctx(wiring, frames)))
+
+    # The turn still completes fine via the fresh thread_start fallback.
+    assert frames[-1]["type"] == "done"
+    assert len(fake_codex.thread_start_calls) == 1
+    base = fake_codex.thread_start_calls[0]["base_instructions"]
+    assert "Prior conversation" in base
+    assert "let's build a fifo" in base
+    assert "Sure, I'll scaffold fifo.sv" in base
+    # The original system prompt is still present, appended after the replay.
+    assert "system" in base
+
+    # The CURRENT turn's own user message (persisted before stream_turn runs)
+    # must not leak into the replayed history block (it's passed separately as
+    # the turn message, not as history).
+    assert "hi codex" not in base
+
+
+def test_resume_failure_without_prior_history_is_unchanged(wiring):
+    # A thread with an external_thread_id but no transcript rows yet (edge
+    # case) — the fallback must behave exactly like today: base_instructions
+    # is just the original system prompt, no history block added.
+    wiring.store.set_external_thread_id("th1", "ext-thread-1")
+
+    events = [_ev("item/agentMessage/delta", delta="hi"), _ev("turn/completed")]
+    fake_codex = _FakeCodex(events, resume_fails=True)
+    frames = []
+    asyncio.run(_handler(wiring, events, sdk_factory=_sdk_factory_returning(fake_codex))
+                .run_turn(_ctx(wiring, frames)))
+
+    assert len(fake_codex.thread_start_calls) == 1
+    base = fake_codex.thread_start_calls[0]["base_instructions"]
+    assert "Prior conversation" not in base
+    assert base.startswith("system")
+
+
+def test_successful_resume_never_calls_thread_start(wiring):
+    # Happy path: resume succeeds, so the fallback (and any history replay)
+    # must never trigger, and no thread_start call is made at all.
+    wiring.store.append_message("th1", "user", "earlier turn")
+    wiring.store.append_message("th1", "assistant", "earlier reply")
+    wiring.store.set_external_thread_id("th1", "ext-thread-1")
+
+    events = [_ev("item/agentMessage/delta", delta="hi"), _ev("turn/completed")]
+    fake_codex = _FakeCodex(events, resume_fails=False)
+    frames = []
+    asyncio.run(_handler(wiring, events, sdk_factory=_sdk_factory_returning(fake_codex))
+                .run_turn(_ctx(wiring, frames)))
+
+    assert fake_codex.thread_start_calls == []
 
 
 # --- no key + no account => structured error, nothing persisted -------------
