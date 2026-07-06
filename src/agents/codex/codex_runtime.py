@@ -108,6 +108,12 @@ class CodexRuntimeHandler:
                 file=sys.stderr,
             )
 
+        # Snapshot prior transcript BEFORE persisting this turn's own user
+        # message, so it never leaks into itself: if thread_resume later fails
+        # (its rollout lost on a dead Cloud Run instance), the engine seeds the
+        # fresh thread with exactly what happened before this turn (see
+        # CodexTurn.history / codex_engine.stream_turn's fallback branch).
+        prior_messages = self._store.list_messages(ctx.thread_id)
         # Persist the user message first (mirrors the native path's ordering).
         self._store.append_message(ctx.thread_id, "user", ctx.message)
 
@@ -165,6 +171,7 @@ class CodexRuntimeHandler:
                 # the SiliconCrew MCP tools (override with CODEX_SANDBOX).
                 sandbox=os.environ.get("CODEX_SANDBOX", "read-only"),
                 mcp_token=ctx.auth_token,
+                history=prior_messages,
             )):
                 if ev.type == "start":
                     new_external_id = ev.external_thread_id or new_external_id
