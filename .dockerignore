@@ -38,6 +38,11 @@ docs/
 *.vvp
 *.out
 state.db
+# Runtime data (bind-mounted, gitignored) — never part of the image. The Codex
+# SDK writes special-mode temp files under here that also break the build tar.
+.siliconcrew_data/
+codex-state/
+codex-sqlite/
 state.db-wal
 state.db-shm
 p*.json
