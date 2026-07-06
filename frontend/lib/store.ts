@@ -301,6 +301,11 @@ interface AppState {
   // toggle (server capability).
   agentRuntime: "langchain" | "codex";
   codexEnabled: boolean;
+  // Mirrors CodexAuthStatus.connected (ChatGPT device-auth login) so the model
+  // picker can treat OpenAI models as available without a BYOK key while on
+  // the Codex agent — codex_runtime.py skips key resolution entirely once an
+  // account is connected, so the picker's usual key-based gate doesn't apply.
+  codexAccountConnected: boolean;
 
   // Model registry (the picker). The active thread's model is what the WS uses.
   models: ModelInfo[];
@@ -366,6 +371,7 @@ interface AppState {
   newThread: (runtime?: string) => Promise<void>;
   setAgentRuntime: (runtime: "langchain" | "codex") => Promise<void>;
   loadCodexCapability: () => Promise<void>;
+  setCodexAccountConnected: (connected: boolean) => void;
   selectThread: (threadId: string) => Promise<void>;
   deleteThread: (threadId: string) => Promise<void>;
   renameThread: (threadId: string, title: string) => Promise<void>;
@@ -503,6 +509,7 @@ export const useStore = create<AppState>((set, get) => ({
   threadsLoading: false,
   agentRuntime: "langchain",
   codexEnabled: false,
+  codexAccountConnected: false,
 
   models: [],
   modelsLoaded: false,
@@ -1287,11 +1294,13 @@ export const useStore = create<AppState>((set, get) => ({
   loadCodexCapability: async () => {
     try {
       const s = await codexApi.status();
-      set({ codexEnabled: !!s.runtime_enabled });
+      set({ codexEnabled: !!s.runtime_enabled, codexAccountConnected: !!s.connected });
     } catch {
-      set({ codexEnabled: false });
+      set({ codexEnabled: false, codexAccountConnected: false });
     }
   },
+
+  setCodexAccountConnected: (connected) => set({ codexAccountConnected: connected }),
 
   selectThread: async (threadId: string) => {
     const { currentSession, activeThreadId, ws } = get();

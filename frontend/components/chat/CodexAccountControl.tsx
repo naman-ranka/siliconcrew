@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { codexApi, type CodexAuthStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useStore } from "@/lib/store";
 import { Sparkles, ExternalLink, Copy, Check, Loader2 } from "lucide-react";
 
 /**
@@ -19,14 +20,19 @@ export function CodexAccountControl() {
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const setCodexAccountConnected = useStore((s) => s.setCodexAccountConnected);
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await codexApi.status());
+      const s = await codexApi.status();
+      setStatus(s);
+      // Mirror into the shared store — the model picker needs this to know
+      // OpenAI models don't require a BYOK key while an account is connected.
+      setCodexAccountConnected(!!s.connected);
     } catch {
       /* ignore transient */
     }
-  }, []);
+  }, [setCodexAccountConnected]);
 
   useEffect(() => {
     void refresh();
@@ -74,7 +80,9 @@ export function CodexAccountControl() {
   const disconnect = async () => {
     setBusy(true);
     try {
-      setStatus(await codexApi.disconnect());
+      const s = await codexApi.disconnect();
+      setStatus(s);
+      setCodexAccountConnected(!!s.connected);
     } finally {
       setBusy(false);
     }

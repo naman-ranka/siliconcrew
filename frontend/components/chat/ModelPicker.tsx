@@ -39,6 +39,7 @@ export function ModelPicker() {
     loadModels,
     setActiveThreadModel,
     agentRuntime,
+    codexAccountConnected,
   } = useStore();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -74,10 +75,18 @@ export function ModelPicker() {
   const currentProvider = models.find((m) => m.id === currentId)?.provider;
 
   // The Codex agent runs on OpenAI models only — show just those in its picker.
-  const visibleModels = useMemo(
-    () => (agentRuntime === "codex" ? models.filter((m) => m.provider === "openai") : models),
-    [models, agentRuntime]
-  );
+  // A connected ChatGPT account also makes them available with no BYOK key:
+  // codex_runtime.py skips key resolution entirely once an account is
+  // connected (account auth wins over BYOK), so /api/models' key-based
+  // `available` flag — which knows nothing about the Codex account — would
+  // otherwise wrongly grey out every OpenAI model here.
+  const visibleModels = useMemo(() => {
+    if (agentRuntime !== "codex") return models;
+    const bypassesKey = codexAccountConnected;
+    return models
+      .filter((m) => m.provider === "openai")
+      .map((m) => (bypassesKey ? { ...m, available: true } : m));
+  }, [models, agentRuntime, codexAccountConnected]);
 
   const grouped = useMemo(() => {
     const by: Record<string, ModelInfo[]> = {};
