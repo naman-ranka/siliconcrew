@@ -422,12 +422,21 @@ async def lifespan(app: FastAPI):
         mcp_conn_context = mcp_transport.connect()
         streams = await mcp_conn_context.__aenter__()
 
-        # Start the MCP server processing task
+        # Start the MCP server processing task.
+        # stateless=True MUST match get_http_app()'s session-less transport
+        # (mcp_session_id=None): the default leaves the long-lived ServerSession
+        # NotInitialized, so a client reusing its connection after a Cloud Run
+        # revision swap (no re-handshake) hits the SDK's pre-init guard, which
+        # its receive loop blanket-maps to -32602 "Invalid request parameters"
+        # — the bad-argument lie of F9c, and the reason every deploy broke the
+        # claude.ai connector until a manual reconnect (F15). See
+        # tests/test_mcp_preinit_error_mapping.py for the mechanism.
         mcp_task = asyncio.create_task(
             mcp_server.server.run(
                 streams[0],
                 streams[1],
-                mcp_server.server.create_initialization_options()
+                mcp_server.server.create_initialization_options(),
+                stateless=True,
             )
         )
         app.state.mcp_task = mcp_task
