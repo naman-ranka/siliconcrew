@@ -1,0 +1,13 @@
+{
+  "id": "seven_seg_seconds",
+  "name": "Seven-Segment Seconds",
+  "description": "A seconds counter driving a 7-segment display (0->9), adapted from Tiny Tapeout's Apache-2.0 tt05-verilog-demo (commit a7e71a2), taken spec -> lint -> simulation -> GDS on sky130hd entirely through the platform.",
+  "highlights": [
+    "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
+    "Timing met: WNS 0.0 ns; 194 std cells",
+    "Self-checking testbench (independent golden 7-seg oracle) PASSED"
+  ],
+  "top_module": "seven_segment_seconds",
+  "platform": "sky130hd",
+  "source_note": "RTL adapted from Tiny Tapeout tt05-verilog-demo (Apache-2.0, commit a7e71a2); original self-checking TB; authored by dogfooding SiliconCrew locally (native iverilog sim + local ORFS synth)."
+}

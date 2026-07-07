@@ -1,0 +1,27 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T06:56:59.269452+00:00",
+  "top": "seven_segment_seconds_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "835c1e68e830186952789da18b7f12a86320cb05",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\seven_segment_seconds_tb.vcd",
+  "passMarkerFound": true,
+  "passMarker": "TEST PASSED",
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s seven_segment_seconds_tb -o <workspace>\\sim_runs\\sim_0001\\seven_segment_seconds_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog_vjguxx8t.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\seven_segment_seconds_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile seven_segment_seconds_tb.vcd opened for output.\nTEST PASSED\n<workspace>/seven_segment_seconds_tb.v:74: $finish called at 1216000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

@@ -1,0 +1,31 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "seg7.v",
+      "role": "rtl",
+      "path": "seg7.v"
+    },
+    {
+      "name": "seven_segment_seconds.v",
+      "role": "rtl",
+      "path": "seven_segment_seconds.v"
+    },
+    {
+      "name": "seven_segment_seconds_tb.v",
+      "role": "tb",
+      "path": "seven_segment_seconds_tb.v"
+    }
+  ],
+  "synthTop": "seven_segment_seconds",
+  "simTop": "seven_segment_seconds_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "seven_segment_seconds_tb.v",
+      "module": "seven_segment_seconds_tb"
+    }
+  ]
+}

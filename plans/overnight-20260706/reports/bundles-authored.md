@@ -1,5 +1,8 @@
 # Showcase bundles authored (dogfood, self-host)
 
+> Update: a third bundle, `examples/seven_seg_seconds`, was added after the two
+> below — see the "seven_seg_seconds" section at the end.
+
 Branch: `claude/overnight-showcase`. Two new `examples/` bundles authored by
 DOGFOODING the platform locally, the same way `examples/seq_detector_0011` and
 `examples/sync_fifo` were: clean-room spec + RTL + self-checking TB, a GENUINE
@@ -87,3 +90,59 @@ closed both FSMs on the first attempt at the default 10 ns clock.
 - traffic_light's 32-bit phase timer inflates cell count (172) relative to a
   minimal FSM; kept as-authored because it is honest and gives a meatier PPA
   report than a near-empty design.
+
+---
+
+## seven_seg_seconds (third bundle — adapted from Apache-2.0 upstream)
+
+`examples/seven_seg_seconds` — a seconds counter driving a 7-segment display
+(BCD digit 0→9), **full flow to GDSII** on sky130hd. Real result: **WNS 0.0 ns,
+194 std cells, 1817.99 µm², 0.307 mW.**
+
+**Provenance (attribution path, not clean-room).** Per the team lead's preference
+order, the actual Tiny Tapeout design was obtained and its license verified
+before adapting:
+- Source: `github.com/TinyTapeout/tt05-verilog-demo`, commit
+  `a7e71a2f1b954fff59597838ef1453dba01f8861`.
+- License: **Apache-2.0**, verified from the repo's `LICENSE` (header "Apache
+  License / Version 2.0"). The full upstream LICENSE is copied to the bundle
+  root `examples/seven_seg_seconds/LICENSE`; origin repo+commit are noted in
+  `spec.md` and the `template.json` description/source_note, and in a header on
+  each adapted RTL file.
+- Adaptation: stripped the fixed Tiny Tapeout `tt_um_*` pin wrapper
+  (`ui_in`/`uo_out`/`uio_*`/`ena`) down to real ports (`clk`, `rst_n`,
+  `seg[6:0]`) and added a sim-friendly `MAX_COUNT` divider parameter. The
+  seven-segment decoder (`seg7.v`) is kept verbatim. The self-checking testbench
+  is **original** to this bundle.
+
+**What is real.** `workspace/attempt_events.jsonl` (session_id `seven_seg_seconds`)
+is a genuine tool trajectory driven through the same action-layer functions:
+- `linter_tool` → iverilog, **passed** (both RTL files).
+- `run_isolated_simulation` → **sim_0001 passed** (`TEST PASSED`; VCD shipped).
+  The TB's oracle is independent of the DUT counter: expected digit at sample k
+  is `floor(k/(MAX_COUNT+1)) % 10`, and the expected segments come from a golden
+  7-seg table (the spec encoding); it also asserts the digit reached 9 and
+  wrapped to 0.
+- `start_synthesis` → **synth_0001 completed** on sky130hd (real ORFS `make -B`
+  in Docker), WNS 0.0 ns, 194 cells, elapsed ~118 s. Synthesis uses the RTL's
+  default 24-bit `MAX_COUNT` divider (a meatier real design than the sim's tiny
+  value). `6_final.gds` + netlist + reports + logs shipped.
+
+**Sanitization (same as the others).** `--prune-pnr` dropped 21 intermediates;
+leak-grep for `C:\Users` / `/Users/` / `naman` across the bundle = **zero hits**
+(the copied Apache LICENSE is clean text). `manifest.sessionId` cleared,
+`netlist_path` nulled, `docker_command` redacted to `<workspace>`, no stray
+`*.out`/`*.vvp`/`*.odb`. Bundle size 4.3 MB.
+
+**Tests.** `tests/test_templates_fork.py` = **29 passed**. `list_templates()` now
+returns `lfsr8`, `seq_detector_0011`, `seven_seg_seconds`, `sync_fifo`,
+`traffic_light`; `get_template('seven_seg_seconds')` previews top
+`seven_segment_seconds`, 2 runs, `spec.md`, one `6_final.gds`.
+
+**Product bugs found:** none — the dogfood path worked end-to-end again with no
+app-code changes; ORFS closed the 24-bit divider first try at 10 ns.
+
+**Honest note:** no `conversations/` dir (no LLM key → export skips empty
+transcripts, same posture as the other bundles). The `LICENSE` file sits at the
+bundle root; the export utility copies only the `workspace/` subtree, so it was
+added by hand after export — a curator step, noted here for reproducibility.
