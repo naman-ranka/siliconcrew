@@ -2,22 +2,38 @@
 
 The EDA flow expects a POSIX filesystem (ORFS, iverilog, yosys all assume real
 files). So we do **not** pretend object storage is a filesystem to the tools.
-Instead the cloud provider *stages*: on acquire it downloads the session's
-tarball from object storage into a local scratch directory and hands the tools a
-real POSIX path; on sync it tars the scratch dir back up to object storage. The
-Phase 0 ``WorkspaceProvider`` interface (``workspace_for``) is unchanged, so the
-tool layer never knows which backend is active.
+Instead the cloud provider *stages*: on acquire it materializes the session's
+stored workspace into a local scratch directory and hands the tools a real
+POSIX path; on sync it persists local changes back. The Phase 0
+``WorkspaceProvider`` interface (``workspace_for``) is unchanged, so the tool
+layer never knows which backend is active.
+
+Persistence format (4A, hosted-latency plan): a workspace is stored as
+content-addressed per-file blobs plus one small manifest object written LAST —
+the atomic commit point. A sync therefore costs time proportional to *what
+changed* (a one-file save uploads one blob + the manifest), not to the total
+workspace size; deletes/renames propagate because a cold reader reconstructs
+exactly the manifest's tree. The previous single-``.tar.gz``-per-session format
+remains a read fallback: the first incremental sync converts a legacy
+workspace and cleans the tar up. Blob GC for superseded content is deferred
+with run retention/GC (orphaned blobs are unreferenced garbage, never
+incorrect state).
 
 ``LocalWorkspaceProvider`` (Phase 0) stays the default for self-host.
 """
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import os
 import shutil
+import stat as stat_module
 import tarfile
 import threading
+import time
 import uuid
+from contextlib import suppress
 from typing import Callable, List, Optional, Protocol, Tuple
 
 
@@ -47,6 +63,10 @@ class ObjectStore(Protocol):
     # Used by the workspace provider to skip re-downloading an unchanged object
     # (F3). Optional — a store that doesn't implement it disables the cache.
     def generation(self, key: str) -> Optional[str]: ...
+    # Delete the tar blob at ``key`` (may raise if absent). Optional — used only
+    # for the one-time legacy-tar cleanup after a workspace converts to the
+    # incremental per-file format; the provider guards with getattr + suppress.
+    def delete_tree(self, key: str) -> None: ...
 
 
 def _store_generation(store, key: str) -> Optional[str]:
@@ -58,6 +78,17 @@ def _store_generation(store, key: str) -> Optional[str]:
         return fn(key)
     except Exception:
         return None
+
+
+def _sha256_file(path: str, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _tar_dir_to_bytes(local_dir: str) -> bytes:
@@ -131,6 +162,10 @@ class InMemoryObjectStore:
         g = self._gen.get(key)
         return str(g) if g is not None else None
 
+    def delete_tree(self, key: str) -> None:
+        self._blobs.pop(key, None)
+        self._gen.pop(key, None)
+
 
 class GcsObjectStore:
     """Google Cloud Storage tar-blob store (lazy SDK import).
@@ -197,6 +232,10 @@ class GcsObjectStore:
         blob = self._bucket().get_blob(path)
         return str(blob.generation) if blob is not None else None
 
+    def delete_tree(self, key: str) -> None:
+        # Raises NotFound when absent — callers doing best-effort cleanup suppress.
+        self._blob(key).delete()
+
 
 # ---------------------------------------------------------------------------
 # Cloud workspace provider — stage in / hand POSIX path / sync back.
@@ -206,10 +245,30 @@ class GcsObjectStore:
 class CloudWorkspaceProvider:
     """Materialize a session workspace from object storage onto local scratch.
 
-    ``workspace_for`` downloads the session tarball (if any) into a per-session
-    scratch directory and returns that POSIX path — exactly what the tools expect.
-    ``sync`` persists local changes back. The request lifecycle calls
+    ``workspace_for`` materializes the session's stored workspace (manifest +
+    per-file blobs; legacy single tarball as read fallback) into a per-session
+    scratch directory and returns that POSIX path — exactly what the tools
+    expect. ``sync`` persists local changes back **incrementally** (4A): only
+    content not already in storage is uploaded, then one small manifest object
+    is written LAST as the atomic commit point. The request lifecycle calls
     ``workspace_for`` on entry and ``sync`` on exit (see ``api.py`` integration).
+
+    Consistency story (replaces the old blob's atomic-by-accident put):
+
+      * Blobs are content-addressed (sha256) and therefore immutable — the file
+        set named by any manifest is internally consistent forever.
+      * The manifest is written last; a reader (any instance, any time) sees
+        either the previous manifest or the new one, never a mix. A crash
+        mid-sync leaves orphan blobs (garbage, GC deferred) but a fully
+        consistent readable state.
+      * Deletes/renames propagate because hydration reconstructs exactly the
+        manifest's tree — nothing else.
+      * The manifest records mode + mtime_ns (+ symlinks + empty dirs) so a
+        cold hydrate is tree-faithful — tar preserved mtimes, and downstream
+        "did THIS run produce it" logic depends on them (see CLAUDE.md).
+
+    A store without the raw-object surface (``put_file``/``get_file`` — e.g.
+    minimal test fakes) keeps the previous whole-tar behavior end to end.
 
     Concurrency (F2 + F3) — mandatory once hydration runs off the event loop
     (F6), because every session open now hydrates the SAME session twice **in
@@ -269,10 +328,223 @@ class CloudWorkspaceProvider:
         except OSError:
             pass  # marker is a best-effort cache; a miss only costs a re-download
 
+    # -- incremental format plumbing (4A) ------------------------------------
+
+    _BLOB_WORKERS = 8  # bounded parallelism for per-file GCS transfers
+
+    def _manifest_key(self, session_id: str) -> str:
+        # ``.`` never survives session-id normalization, so the ``.sc_*`` names
+        # can never collide with a real session path.
+        return f"{self._key(session_id)}/.sc_manifest.json"
+
+    def _blob_key(self, session_id: str, content_hash: str) -> str:
+        return f"{self._key(session_id)}/.sc_blobs/{content_hash}"
+
+    def _index_path(self, session_id: str) -> str:
+        # Sibling of the scratch dir, like the generation marker: never synced,
+        # never listed. A pure cache — losing it only costs a re-hash/re-check.
+        return self._scratch(session_id) + ".sc_index.json"
+
+    def _store_supports_files(self) -> bool:
+        return callable(getattr(self._store, "put_file", None)) and callable(
+            getattr(self._store, "get_file", None)
+        )
+
+    def _read_index(self, session_id: str) -> Optional[dict]:
+        try:
+            with open(self._index_path(session_id), "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
+    def _write_index(self, session_id: str, index: dict) -> None:
+        path = self._index_path(session_id)
+        try:
+            tmp = f"{path}.tmp.{uuid.uuid4().hex}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(index, f)
+            os.replace(tmp, path)
+        except OSError:
+            pass  # cache only; a miss costs a re-hash, never correctness
+
+    def _fetch_manifest(self, session_id: str) -> Optional[Tuple[str, dict]]:
+        """(manifest_content_hash, manifest_dict) from storage, or None.
+
+        The content hash doubles as the cache token (marker ``m:<hash>``), so
+        no separate generation/metadata API is needed for the new format.
+        """
+        if not self._store_supports_files():
+            return None
+        tmp = self._scratch(session_id) + f".manifest.{uuid.uuid4().hex}"
+        try:
+            if not self._store.get_file(self._manifest_key(session_id), tmp):
+                return None
+            with open(tmp, "rb") as f:
+                raw = f.read()
+            return hashlib.sha256(raw).hexdigest(), json.loads(raw.decode("utf-8"))
+        finally:
+            with suppress(OSError):
+                os.remove(tmp)
+
+    @staticmethod
+    def _guard_member(dest: str, rel: str) -> str:
+        """Reject manifest entries that would escape ``dest`` (parity with the
+        tar path's ``_safe_extract`` traversal guard)."""
+        target = os.path.realpath(os.path.join(dest, rel))
+        dest_real = os.path.realpath(dest)
+        if not (target == dest_real or target.startswith(dest_real + os.sep)):
+            raise ValueError(f"Refusing path-traversal manifest entry: {rel}")
+        return os.path.join(dest, rel)
+
+    def _materialize_manifest(self, session_id: str, manifest: dict, dest: str) -> None:
+        """Reconstruct the manifest's exact tree under ``dest`` (a private temp
+        dir — the caller swaps it in atomically)."""
+        os.makedirs(dest, exist_ok=True)
+        for rel in manifest.get("dirs", []):
+            os.makedirs(self._guard_member(dest, rel), exist_ok=True)
+
+        files: dict = manifest.get("files", {})
+        by_hash: dict[str, list[str]] = {}
+        for rel, ent in files.items():
+            self._guard_member(dest, rel)
+            by_hash.setdefault(ent["h"], []).append(rel)
+
+        def fetch(content_hash: str, rels: List[str]) -> None:
+            first = os.path.join(dest, rels[0])
+            os.makedirs(os.path.dirname(first), exist_ok=True)
+            if not self._store.get_file(self._blob_key(session_id, content_hash), first):
+                raise RuntimeError(
+                    f"workspace blob missing for '{session_id}': {content_hash} ({rels[0]})"
+                )
+            for rel in rels[1:]:  # duplicate content: one download, N placements
+                target = os.path.join(dest, rel)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.copyfile(first, target)
+
+        items = list(by_hash.items())
+        if len(items) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=self._BLOB_WORKERS) as pool:
+                list(pool.map(lambda kv: fetch(*kv), items))  # list() re-raises
+        elif items:
+            fetch(*items[0])
+
+        for rel, ent in files.items():
+            full = os.path.join(dest, rel)
+            mode = ent.get("mode")
+            if mode is not None:
+                with suppress(OSError):
+                    os.chmod(full, mode & 0o7777)
+            mtime_ns = ent.get("mtime_ns")
+            if mtime_ns is not None:
+                with suppress(OSError):
+                    os.utime(full, ns=(mtime_ns, mtime_ns))
+
+        # Symlinks last, so no file/dir placement above ever routes through one.
+        for rel, link_target in manifest.get("symlinks", {}).items():
+            full = self._guard_member(dest, rel)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with suppress(OSError):
+                os.symlink(link_target, full)
+
+    @staticmethod
+    def _index_after_hydration(manifest: dict) -> dict:
+        """Stat-cache entries matching the tree just materialized (sizes and
+        mtimes were restored from the manifest), so the next sync re-hashes
+        nothing that didn't change."""
+        entries = {
+            rel: {"size": ent.get("size"), "mtime_ns": ent.get("mtime_ns"), "h": ent["h"]}
+            for rel, ent in manifest.get("files", {}).items()
+        }
+        remote = sorted({ent["h"] for ent in manifest.get("files", {}).values()})
+        return {"scan_ns": time.time_ns(), "entries": entries, "remote_hashes": remote}
+
+    def _scan_tree(self, scratch: str, prev_entries: dict, prev_scan_ns: Optional[int]):
+        """Walk the scratch tree into (manifest, index_entries, scan_ns).
+
+        Hash reuse mirrors git's index rules: a file whose (size, mtime_ns)
+        match the previous scan AND whose mtime predates that scan keeps its
+        recorded hash; anything else is re-hashed (the racy-timestamp guard).
+        """
+        scan_ns = time.time_ns()
+        files: dict = {}
+        symlinks: dict = {}
+        dirs: list[str] = []
+        entries: dict = {}
+        for root, dirnames, filenames in os.walk(scratch, followlinks=False):
+            rel_root = os.path.relpath(root, scratch)
+            rel_root = "" if rel_root == "." else rel_root.replace(os.sep, "/")
+            kept_dirs = []
+            for name in dirnames:
+                rel = f"{rel_root}/{name}" if rel_root else name
+                full = os.path.join(root, name)
+                if os.path.islink(full):  # walk won't descend; record the link
+                    symlinks[rel] = os.readlink(full)
+                else:
+                    dirs.append(rel)
+                    kept_dirs.append(name)
+            dirnames[:] = kept_dirs
+            for name in filenames:
+                rel = f"{rel_root}/{name}" if rel_root else name
+                full = os.path.join(root, name)
+                st = os.lstat(full)
+                if stat_module.S_ISLNK(st.st_mode):
+                    symlinks[rel] = os.readlink(full)
+                    continue
+                if not stat_module.S_ISREG(st.st_mode):
+                    continue  # fifos/sockets: never legitimately in a workspace
+                size, mtime_ns = st.st_size, st.st_mtime_ns
+                prev = prev_entries.get(rel)
+                if (
+                    prev
+                    and prev.get("size") == size
+                    and prev.get("mtime_ns") == mtime_ns
+                    and prev_scan_ns is not None
+                    and mtime_ns < prev_scan_ns
+                ):
+                    content_hash = prev["h"]
+                else:
+                    content_hash = _sha256_file(full)
+                files[rel] = {
+                    "h": content_hash,
+                    "size": size,
+                    "mode": st.st_mode & 0o7777,
+                    "mtime_ns": mtime_ns,
+                }
+                entries[rel] = {"size": size, "mtime_ns": mtime_ns, "h": content_hash}
+        manifest = {
+            "format": 1,
+            "files": files,
+            "symlinks": symlinks,
+            "dirs": sorted(dirs),
+        }
+        return manifest, entries, scan_ns
+
+    # -- the WorkspaceProvider surface ----------------------------------------
+
     def workspace_for(self, session_id: str) -> str:
         scratch = self._scratch(session_id)
         key = self._key(session_id)
         with self._lock_for(session_id):
+            # Incremental format first: when a manifest exists it IS the truth
+            # (a leftover legacy tar is stale after conversion).
+            fetched = self._fetch_manifest(session_id)
+            if fetched is not None:
+                manifest_hash, manifest = fetched
+                if os.path.isdir(scratch) and self._read_marker(session_id) == f"m:{manifest_hash}":
+                    return scratch  # F3 cache hit: one small GET, no downloads
+                tmp = f"{scratch}.tmp.{uuid.uuid4().hex}"
+                try:
+                    self._materialize_manifest(session_id, manifest, tmp)
+                    self._atomic_swap(tmp, scratch)
+                    self._write_marker(session_id, f"m:{manifest_hash}")
+                    self._write_index(session_id, self._index_after_hydration(manifest))
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
+                return scratch
+
+            # Legacy single-tar fallback (pre-4A sessions, minimal stores).
             generation = _store_generation(self._store, key)
 
             if generation is None:
@@ -325,17 +597,100 @@ class CloudWorkspaceProvider:
     def sync(self, session_id: str) -> None:
         """Persist the local scratch workspace back to object storage.
 
-        Under the per-session lock so an upload never races a hydration swap, and
-        the generation marker is refreshed to the just-written object so a
-        subsequent read on this instance doesn't re-download our own write (F3).
+        4A: incremental — upload only content not already stored, then commit
+        by writing the manifest last. Cost is proportional to what changed
+        (a one-file save = one blob + one small manifest), not to workspace
+        size. Under the per-session lock so an upload never races a hydration
+        swap; the marker is refreshed to the just-written manifest so a
+        subsequent read on this instance doesn't re-download its own write (F3).
         """
         key = self._key(session_id)
         scratch = self._scratch(session_id)
         with self._lock_for(session_id):
-            self._store.put_tree(key, scratch)
-            new_gen = _store_generation(self._store, key)
-            if new_gen is not None and os.path.isdir(scratch):
-                self._write_marker(session_id, new_gen)
+            if not self._store_supports_files():
+                # Minimal store surface (tar-only fakes): previous behavior.
+                self._store.put_tree(key, scratch)
+                new_gen = _store_generation(self._store, key)
+                if new_gen is not None and os.path.isdir(scratch):
+                    self._write_marker(session_id, new_gen)
+                return
+            self._sync_incremental(session_id, key, scratch)
+
+    def _sync_incremental(self, session_id: str, key: str, scratch: str) -> None:
+        prior_marker = self._read_marker(session_id)
+        index = self._read_index(session_id)
+        if index is not None:
+            known_hashes = set(index.get("remote_hashes", []))
+            prev_entries = index.get("entries", {})
+            prev_scan_ns = index.get("scan_ns")
+        else:
+            # Cold instance / lost cache: learn what storage already holds from
+            # the remote manifest (one small GET) instead of re-uploading all.
+            fetched = self._fetch_manifest(session_id)
+            known_hashes = (
+                {ent["h"] for ent in fetched[1].get("files", {}).values()} if fetched else set()
+            )
+            prev_entries = {}
+            prev_scan_ns = None  # unknown history → hash everything once
+
+        manifest, entries, scan_ns = self._scan_tree(scratch, prev_entries, prev_scan_ns)
+        raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        manifest_hash = hashlib.sha256(raw).hexdigest()
+
+        to_upload: dict[str, str] = {}
+        for rel, ent in manifest["files"].items():
+            if ent["h"] not in known_hashes:
+                to_upload.setdefault(ent["h"], rel)
+
+        if not to_upload and prior_marker == f"m:{manifest_hash}":
+            # Nothing changed since the commit this instance last made/saw — a
+            # no-change sync costs ZERO writes (the common case now that Codex
+            # syncs once per turn, including turns that only read).
+            self._write_index(session_id, {
+                "scan_ns": scan_ns,
+                "entries": entries,
+                "remote_hashes": sorted(known_hashes),
+            })
+            return
+
+        def push(content_hash: str, rel: str) -> None:
+            self._store.put_file(
+                self._blob_key(session_id, content_hash), os.path.join(scratch, rel)
+            )
+
+        items = list(to_upload.items())
+        if len(items) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=self._BLOB_WORKERS) as pool:
+                list(pool.map(lambda kv: push(*kv), items))  # list() re-raises
+        elif items:
+            push(*items[0])
+
+        # The commit point: blobs are all in place, now flip the manifest.
+        tmp = scratch + f".manifest-out.{uuid.uuid4().hex}"
+        try:
+            with open(tmp, "wb") as f:
+                f.write(raw)
+            self._store.put_file(self._manifest_key(session_id), tmp)
+        finally:
+            with suppress(OSError):
+                os.remove(tmp)
+        self._write_marker(session_id, f"m:{manifest_hash}")
+        self._write_index(session_id, {
+            "scan_ns": scan_ns,
+            "entries": entries,
+            "remote_hashes": sorted({ent["h"] for ent in manifest["files"].values()}),
+        })
+
+        # One-time conversion cleanup: this workspace was last hydrated from the
+        # legacy tar (marker without the manifest prefix) — the tar is now stale
+        # and must not shadow the manifest for any reader. Best-effort.
+        if prior_marker is not None and not prior_marker.startswith("m:"):
+            delete = getattr(self._store, "delete_tree", None)
+            if callable(delete):
+                with suppress(Exception):
+                    delete(key)
 
 
 # ---------------------------------------------------------------------------
