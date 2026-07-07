@@ -202,6 +202,18 @@ all verified safe.
 | AR-1 | MED | ASSIGNED (fixer) | run_python.py docker timeout SIGKILLs the CLI client, not the container; build_docker_argv sets --rm but NO --name → a `while True` script's container survives the 30s timeout indefinitely at its cpu/mem cap. Fix: --name sc_py_<uid> + docker kill on timeout. Native mode unaffected. |
 | AR-2 | MED (inv 4/7) | ASSIGNED (fixer) | store.ts loadManifest AND loadRuns (wired to WS frames by X2A-4, e25207c) lack a post-await stale-session guard and blank on error (manifest→null, runs→[]). (a) transient 500 mid-turn flash-empties the Index; (b) A→B switch mid-flight cross-writes A's manifest/runs into B + detectRunTransitions announces A's transitions against B. Fix: capture sid + loadThreads-style guard; stop blanking on error. (Correction to the frontend lane's note: loadRuns lacks the guard too.) |
 
+## TT bundle production — findings surfaced while dogfooding (reports/tt-bundles-{a,b,c}.md)
+
+Gallery grew 5 → 13 bundles: producer A (alu4, pwm_generator, sn74169), producer
+B (cla4, ubcd_decoder, aes_invsbox), producer C (simon_game, simon128) — all real
+spec→lint→sim→GDS on sky130hd, all Apache-2.0 upstreams verified in-repo, all
+leak-grep clean, test_templates_fork green. Two findings surfaced:
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| TTB-1 | MED (honest metrics) | OPEN (documented) | A synth run that reaches finish with keep_hierarchy preserved reports `cell_count: 1` — the metrics summary counts only TOP-LEVEL std cells, not leaf cells through the hierarchy → a hundreds-of-cells design reads as "1 cell" (honest-state violation on a headline metric). Producer B worked around it by flattening aes_invsbox. Fix: the metrics extractor (synthesis_manager summary path) should count leaf cells through hierarchy, or the flow should flatten before counting. Connects to X2M-9 (power metric sanity) as a "metrics extraction correctness" cluster. Deferred tonight (edge: only keep_hierarchy; near deploy) — owner-visible. |
+| TTG-1 | PROCESS | NOTED | Multiple agents in ONE shared working tree: a bare `git commit` commits the whole index and sweeps in another agent's staged files (simon128 landed under the AR-1 commit 9248cce — content valid, attribution blurred; NOT rewritten, since force-push on a shared branch is the destructive option). Lesson for future fleets: agents must commit with explicit paths (`git commit -- <paths>`), or use per-agent worktrees. |
+
 ## Wave 11 adversarial review (reports/review-templates.md) — SAFE TO KEEP
 
 Verdict: safe; build the landing gallery on it. A1–A8 all verified honored (create-first,
