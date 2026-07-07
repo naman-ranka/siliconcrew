@@ -44,6 +44,16 @@ to size each bucket (the server is already instrumented).
   endgame full-flow session. explore-mcp is running ASU p1 now → flagship-bundle
   candidate if it reaches synth/GDS.
 
+## Decisions for the owner (surfaced, not guessed)
+
+- **D1 — `.agents/` is gitignored** ("Local agent customizations and skills",
+  .gitignore:220-221). Tonight's skills (gcp_logs verified-working, ui_navigation)
+  and the pre-existing gcp_deployment skill live there → functional for local/future
+  agent runs on this machine, but NOT in the repo/PR and lost if the dir is cleared.
+  The "mature repository for future agents" goal may want them tracked. I HONORED the
+  gitignore (did not override an explicit, commented convention). If you want them in
+  the repo, say so and I'll move skills to a tracked path (e.g. `docs/agent-skills/`).
+
 ## Notes
 
 - Discovered during setup (2026-07-07 ~04:30 UTC) before the run proper.
