@@ -199,8 +199,8 @@ all verified safe.
 
 | ID | Severity | Status | Summary |
 |----|----------|--------|---------|
-| AR-1 | MED | ASSIGNED (fixer) | run_python.py docker timeout SIGKILLs the CLI client, not the container; build_docker_argv sets --rm but NO --name → a `while True` script's container survives the 30s timeout indefinitely at its cpu/mem cap. Fix: --name sc_py_<uid> + docker kill on timeout. Native mode unaffected. |
-| AR-2 | MED (inv 4/7) | ASSIGNED (fixer) | store.ts loadManifest AND loadRuns (wired to WS frames by X2A-4, e25207c) lack a post-await stale-session guard and blank on error (manifest→null, runs→[]). (a) transient 500 mid-turn flash-empties the Index; (b) A→B switch mid-flight cross-writes A's manifest/runs into B + detectRunTransitions announces A's transitions against B. Fix: capture sid + loadThreads-style guard; stop blanking on error. (Correction to the frontend lane's note: loadRuns lacks the guard too.) |
+| AR-1 | MED | FIXED (9248cce) | run_python.py docker timeout SIGKILLed the CLI client, not the container; --rm + no --name → orphan survives at cpu/mem cap. Fixed: unique --name sc_py_<uuid> + best-effort docker kill on timeout; native unaffected. 2 regression tests proven failing pre-fix. |
+| AR-2 | MED (inv 4/7) | FIXED (in 4338423; verified complete at HEAD) | store.ts loadManifest + loadRuns now capture sid, guard after await (loadThreads idiom) so an A→B switch mid-flight can't cross-write or mis-toast, and NO LONGER blank to null/[] on error (populated data survives a transient 500). 4 regression tests proven failing pre-fix; 15/15 store.runEvents green. (Fix diff verified byte-complete despite being swept into a producer's commit by a concurrent `git add -A` — TTG-1.) |
 
 ## TT bundle production — findings surfaced while dogfooding (reports/tt-bundles-{a,b,c}.md)
 
