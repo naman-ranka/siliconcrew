@@ -53,7 +53,7 @@ to size each bucket (the server is already instrumented).
 | ID | Severity | Status | Summary |
 |----|----------|--------|---------|
 | F5 | MEDIUM (a11y) | FIXED (31a45db hidden DialogTitle) | ⌘K/Ctrl+K command palette fires a Radix console error every open: `DialogContent requires a DialogTitle`. Missing accessible title on the palette Dialog → screen-reader + console noise. Fix: add a visually-hidden DialogTitle. |
-| F6 | MEDIUM (UX/layout) | OPEN | Agent posture: open pinned nav rail (264px) shoves the artifacts slide-over tab strip off the right edge on viewports <~1650px → tabs become unclickable until the rail is closed. Real usability break at common laptop widths. |
+| F6 | MEDIUM (UX/layout) | QUESTIONED (X2U-4: NOT reproducible live at 1278-1866px — rail is an overlay; original report likely misread the closed slide-over's off-screen parking) — frontend lane verifying in code before any change | Agent posture: open pinned nav rail (264px) shoves the artifacts slide-over tab strip off the right edge on viewports <~1650px → tabs become unclickable until the rail is closed. Real usability break at common laptop widths. |
 | F7 | LOW (UX) | OPEN | Open nav rail overlays its own header hamburger → can only be closed via ⌘O / the rail's collapse control, not the toggle that opened it. |
 | F8 | LOW (UX) | FIXED (ee5d0e6 — success toast existed; failure path now toasts the real error) | File save gives no toast/confirmation — the only signal is the Save button re-disabling. Easy to miss. |
 
@@ -100,6 +100,22 @@ coin-flip a 3rd time (synth_0001 fail → synth_0002 pass → GDS).
 
 (Confirmed dups: U5 = F8 no-save-toast; U7 = F5 ⌘K Radix a11y; U2 = F9 CTS SIGILL.)
 Positives to NOT regress (explore-ui): manifest auto-population; /invoke tags UI gestures as "You" in Activity (inv.3); honest per-run status + retained failures (inv.4); dispatch→poll(Refresh)→read behaved as documented; good waveform / GDS-layout / report viewers.
+
+## Explore round 2 — UI-as-human (reports/explore2-ui.md, session x2_debounce_ui_20260707)
+
+Headline: first-timer reached routed GDS BY HAND on the FIRST synth attempt (F9
+fix live-confirmed again); F11 confirmed+strengthened with a real injected bug
+(fix already landed tonight: 4b9993c renders exactly the fields the report asks
+for); F8 correction — the "Saved" toast already existed on deployed (X2U-3);
+F5/F7/F13 confirmed (F5 fixed tonight; F13 trigger pinned: line ending in bare
+`(`).
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| X2U-1 | LOW (ops) | EXPECTED-RESOLVED by landing deploy | favicon.ico 404 on every page load — pre-landing frontend rev has no favicon. Verify gone at endgame live-check. |
+| X2U-2 | LOW (honesty) | ASSIGNED (backend lane) | Synth Design Report claims "Simulation ⏳ Not Run" despite passed sims in-session, and "No specification file found" despite spec.md. Report generator reads stale locations. |
+| X2U-3 | POSITIVE | — | Save already toasts "Saved · <file>" on deployed; tonight's ee5d0e6 adds the missing FAILURE toast. F8 fully closed. |
+| X2U-4 | correction | — | F6 not reproducible live; see F6 row. |
 
 ## Wave 11 adversarial review (reports/review-templates.md) — SAFE TO KEEP
 
