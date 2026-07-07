@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronDown,
-  CircuitBoard,
+  CircleDot,
   Clock,
   Columns2,
   FolderPlus,
   Folder,
+  Github,
   Hash,
   Layers,
   MessageSquare,
@@ -38,6 +39,10 @@ import {
 } from "@/components/ui/dialog";
 import { AccountChip } from "@/components/auth/AccountChip";
 import { ThemeToggle } from "@/components/workbench/ThemeToggle";
+import { Logo } from "@/components/branding/Logo";
+import { Hero } from "@/components/branding/Hero";
+import { LandingFooter } from "@/components/branding/LandingFooter";
+import { REPO_URL, ISSUES_URL } from "@/components/branding/links";
 import { SessionCard } from "./SessionCard";
 import { ThreadDrawer } from "./ThreadDrawer";
 import { ExampleCard } from "./ExampleCard";
@@ -388,8 +393,8 @@ export function Launcher() {
         {/* Toolbar */}
         <header className="h-14 px-6 flex items-center gap-3 border-b border-border shrink-0">
           <div className="flex items-center gap-2 shrink-0">
-            <div className="w-6 h-6 rounded-md bg-primary/15 grid place-items-center">
-              <CircuitBoard className="h-3.5 w-3.5 text-primary" />
+            <div className="w-6 h-6 rounded-md bg-primary/15 grid place-items-center text-primary">
+              <Logo className="h-3.5 w-3.5" />
             </div>
             <span className="text-[13px] font-semibold tracking-tight hidden md:block">
               SiliconCrew
@@ -434,6 +439,29 @@ export function Launcher() {
             <Button size="sm" className="h-9 px-3.5" onClick={() => startCreate(null)}>
               <Plus className="h-4 w-4 mr-1.5" /> New session
             </Button>
+            {/* Open-source chrome: repo + issues, always visible. */}
+            <div className="flex items-center gap-0.5 pl-1 ml-0.5 border-l border-border">
+              <a
+                href={REPO_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                aria-label="GitHub repository"
+                title="GitHub repository"
+                className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground hover:text-foreground hover:bg-surface-2"
+              >
+                <Github className="h-4 w-4" />
+              </a>
+              <a
+                href={ISSUES_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                aria-label="Issues"
+                title="Issues"
+                className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground hover:text-foreground hover:bg-surface-2"
+              >
+                <CircleDot className="h-4 w-4" />
+              </a>
+            </div>
             <AccountChip />
             <ThemeToggle />
             <Button
@@ -468,20 +496,22 @@ export function Launcher() {
             </div>
           </div>
         ) : isEmpty ? (
-          examplesBlock ? (
-            <div className="flex-1 overflow-y-auto px-6 py-6">
-              <div className="max-w-[860px] w-full mx-auto">
-                {examplesBlock}
-                <EmptyLauncher onCreate={() => startCreate(null)} inline />
-              </div>
+          // Signed-out / empty account: sell the project first — identity + what
+          // it is + forkable examples — with the create CTA below, so an empty
+          // account is never a dead end.
+          <div className="flex-1 overflow-y-auto px-6 py-6" onContextMenu={openBgMenu}>
+            <div className="max-w-[860px] w-full mx-auto">
+              <Hero />
+              {examplesBlock}
+              <EmptyLauncher onCreate={() => startCreate(null)} inline />
+              <LandingFooter />
             </div>
-          ) : (
-            <EmptyLauncher onCreate={() => startCreate(null)} />
-          )
+          </div>
         ) : (
           <div className="flex-1 overflow-y-auto px-6 py-6" onContextMenu={openBgMenu}>
             <div className="max-w-[860px] w-full mx-auto">
-              {examplesBlock}
+              {/* Signed-in with work: their workspaces come first; the examples
+                  gallery stays available below, and the OSS footer anchors it. */}
               {filtered.length === 0 ? (
                 <div className="grid place-items-center py-24 text-center">
                   <div className="w-11 h-11 rounded-xl bg-surface-2 grid place-items-center mb-3">
@@ -611,6 +641,8 @@ export function Launcher() {
                   </button>
                 </div>
               )}
+              {examplesBlock && <div className="mt-10">{examplesBlock}</div>}
+              <LandingFooter />
             </div>
           </div>
         )}
