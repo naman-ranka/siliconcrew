@@ -204,14 +204,19 @@ all verified safe.
 
 ## TT bundle production — findings surfaced while dogfooding (reports/tt-bundles-{a,b,c}.md)
 
-Gallery grew 5 → 13 bundles: producer A (alu4, pwm_generator, sn74169), producer
-B (cla4, ubcd_decoder, aes_invsbox), producer C (simon_game, simon128) — all real
-spec→lint→sim→GDS on sky130hd, all Apache-2.0 upstreams verified in-repo, all
-leak-grep clean, test_templates_fork green. Two findings surfaced:
+Gallery grew 5 → 14 bundles: producer A (alu4, pwm_generator, sn74169), producer
+B (cla4, ubcd_decoder, aes_invsbox), producer C (simon_game, simon128,
+array_multiplier bonus) — all real spec→lint→sim→GDS on sky130hd, all upstreams
+verified in-repo, all leak-grep clean, test_templates_fork green. LICENSING:
+simon_game is DUAL — repo Apache-2.0 but core simon.v is per-file MIT (© 2023 Uri
+Shaked); VERIFIED the MIT SPDX header is preserved in the shipped simon.v and both
+licenses are documented in template.json + LICENSE (MIT compliance intact). Three
+findings surfaced:
 
 | ID | Severity | Status | Summary |
 |----|----------|--------|---------|
 | TTB-1 | MED (honest metrics) | OPEN (documented) | A synth run that reaches finish with keep_hierarchy preserved reports `cell_count: 1` — the metrics summary counts only TOP-LEVEL std cells, not leaf cells through the hierarchy → a hundreds-of-cells design reads as "1 cell" (honest-state violation on a headline metric). Producer B worked around it by flattening aes_invsbox. Fix: the metrics extractor (synthesis_manager summary path) should count leaf cells through hierarchy, or the flow should flatten before counting. Connects to X2M-9 (power metric sanity) as a "metrics extraction correctness" cluster. Deferred tonight (edge: only keep_hierarchy; near deploy) — owner-visible. |
+| TTC-1 | LOW (DX) | OPEN (documented) | start_synthesis_job needs ABSOLUTE verilog_files paths; a relative path fails with WinError2 at the "constraints" stage (opaque). Producer C worked around it with abspaths. Fix: resolve verilog_files to absolute at the tool boundary, or validate + give a clear error. |
 | TTG-1 | PROCESS | NOTED | Multiple agents in ONE shared working tree: a bare `git commit` commits the whole index and sweeps in another agent's staged files (simon128 landed under the AR-1 commit 9248cce — content valid, attribution blurred; NOT rewritten, since force-push on a shared branch is the destructive option). Lesson for future fleets: agents must commit with explicit paths (`git commit -- <paths>`), or use per-agent worktrees. |
 
 ## Wave 11 adversarial review (reports/review-templates.md) — SAFE TO KEEP
