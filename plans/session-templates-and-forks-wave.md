@@ -1,6 +1,12 @@
 # Wave 11 — Session templates & forks (Level 1: bundles, not sessions)
 
-Status: ACCEPTED w/ amendments (2nd-agent review folded in below; then
+Status: IMPLEMENTED (Wave 11, branch claude/overnight-showcase). All 5 items
+landed as amended (A1-A8); gates green (pytest 0 new failures, tsc/next build
+clean, vitest 0 new failures, templates e2e passes). Shipped a dogfood-authored
+sync_fifo bundle (real lint + fail→fix→pass sim trajectory). See
+plans/overnight-20260706/reports/impl-templates.md. Deferred list below stands.
+
+Previously: ACCEPTED w/ amendments (2nd-agent review folded in below; then
 normal-agent implementation + my adversarial pass)
 Supersedes the roadmap plans/session-templates-and-forks.md (that stays as the "why" + future levels).
 
