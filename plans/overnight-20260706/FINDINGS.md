@@ -101,6 +101,20 @@ coin-flip a 3rd time (synth_0001 fail → synth_0002 pass → GDS).
 (Confirmed dups: U5 = F8 no-save-toast; U7 = F5 ⌘K Radix a11y; U2 = F9 CTS SIGILL.)
 Positives to NOT regress (explore-ui): manifest auto-population; /invoke tags UI gestures as "You" in Activity (inv.3); honest per-run status + retained failures (inv.4); dispatch→poll(Refresh)→read behaved as documented; good waveform / GDS-layout / report viewers.
 
+## Wave 11 adversarial review (reports/review-templates.md) — SAFE TO KEEP
+
+Verdict: safe; build the landing gallery on it. A1–A8 all verified honored (create-first,
+netlist rewrite over every run_meta, manifest sessionId clear, aware-UTC forked_at,
+hosted hard-gate as first statement, delete_session rollback, no api.py import in the
+reader, single-segment template routes avoid the greedy /sessions catch-all, caller-owned
+fork). Gate claims re-verified true (26 pytest pass; the 1 vitest failure is pre-existing
+from af0124b). Two real-but-minor defects to fix:
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| F16 | MEDIUM (privacy) | FIX QUEUED | Export sanitizer (`templates.py:383` `_sanitize_exported_workspace`) redacts author host-paths ONLY in run_meta.json; `attempt_events.jsonl`/`attempt_log.json` are copied verbatim and `conversations/*.md` are rendered post-sanitize with no redaction. A future export of a synthesis/chat session could leak `C:\Users\<name>\…` into the PUBLIC examples repo. Docstring overstates ("strips author identity"). Shipped sync_fifo bundle is verified clean. Fix: redact events + transcript too, or narrow docstring + rely on curator review. Matters for the flagship p1 export. |
+| F17 | LOW-MED (invariant 7) | FIX QUEUED | Provenance chip blanks after renaming/moving a forked session: `patch_session` (api.py:1275) builds SessionResponse WITHOUT source_template (→null), and store `renameSession`/`moveSession` overwrite currentSession with it → chip disappears until next loadSessions (SWR "populated data never blanks" violation). Fix: include source_template in patch_session response (like list/get). |
+
 ## Decisions for the owner (surfaced, not guessed)
 
 - **D1 — `.agents/` is gitignored** ("Local agent customizations and skills",
