@@ -370,5 +370,78 @@ class TestRunScopedMetrics(unittest.TestCase):
         self.assertIn("| Timing Target Source | requested |", report)
 
 
+class TestReportHonestyX2U2(unittest.TestCase):
+    """X2U-2: the report must reflect the truth the session already holds —
+    sim status from the isolated sim_runs, and a present markdown spec — instead
+    of "Not Run" / "No specification file found"."""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        rtl = os.path.join(self.test_dir, "widget.v")
+        with open(rtl, "w", encoding="utf-8") as f:
+            f.write("module widget(); endmodule")
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir)
+
+    def _seed_sim_run(self, run_id, status, created_at):
+        run_dir = os.path.join(self.test_dir, "sim_runs", run_id)
+        os.makedirs(run_dir, exist_ok=True)
+        meta = {
+            "id": run_id, "kind": "sim", "status": status,
+            "createdAt": created_at, "top": "widget_tb",
+            "passMarkerFound": status == "passed", "pinned": False,
+        }
+        with open(os.path.join(run_dir, "run_meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+        idx_path = os.path.join(self.test_dir, "sim_runs", "index.json")
+        idx = {"runs": []}
+        if os.path.exists(idx_path):
+            with open(idx_path, "r", encoding="utf-8") as f:
+                idx = json.load(f)
+        idx["runs"] = [r for r in idx["runs"] if r.get("run_id") != run_id]
+        idx["runs"].append({"run_id": run_id, "status": status,
+                            "created_at": created_at, "pinned": False})
+        with open(idx_path, "w", encoding="utf-8") as f:
+            json.dump(idx, f)
+
+    def test_sim_status_reads_passing_isolated_run(self):
+        self._seed_sim_run("sim_0001", "passed", "2026-07-06T10:00:00+00:00")
+        report = generate_design_report(self.test_dir)
+        self.assertIn("| Simulation | ✅ Pass", report)
+        self.assertNotIn("Not Run", report)
+        self.assertIn("sim_0001", report)
+
+    def test_sim_status_reads_failing_isolated_run(self):
+        self._seed_sim_run("sim_0001", "failed", "2026-07-06T10:00:00+00:00")
+        report = generate_design_report(self.test_dir)
+        self.assertIn("| Simulation | ❌ Fail", report)
+        self.assertNotIn("Not Run", report)
+
+    def test_sim_status_reports_latest_of_several_runs(self):
+        self._seed_sim_run("sim_0001", "failed", "2026-07-06T10:00:00+00:00")
+        self._seed_sim_run("sim_0003", "passed", "2026-07-06T11:00:00+00:00")
+        report = generate_design_report(self.test_dir)
+        # Latest (sim_0003, passed) wins, and the count is disclosed.
+        self.assertIn("| Simulation | ✅ Pass", report)
+        self.assertIn("sim_0003", report)
+        self.assertIn("latest of 2 runs", report)
+
+    def test_sim_status_not_run_only_when_truly_absent(self):
+        report = generate_design_report(self.test_dir)
+        self.assertIn("| Simulation | ⏳ Not Run |", report)
+
+    def test_markdown_spec_is_recognized(self):
+        with open(os.path.join(self.test_dir, "spec.md"), "w", encoding="utf-8") as f:
+            f.write("# Widget spec\n\nAn 8-bit widget.\n")
+        report = generate_design_report(self.test_dir)
+        self.assertNotIn("No specification file found", report)
+        self.assertIn("spec.md", report)
+
+    def test_no_spec_message_when_nothing_present(self):
+        report = generate_design_report(self.test_dir)
+        self.assertIn("No specification file found", report)
+
+
 if __name__ == "__main__":
     unittest.main()
