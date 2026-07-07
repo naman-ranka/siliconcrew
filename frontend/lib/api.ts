@@ -325,6 +325,23 @@ export const workspaceApi = {
     a.remove();
     URL.revokeObjectURL(url);
   },
+
+  // Raw bytes as an in-app object URL (for <img> rendering). `/file?raw=1`
+  // requires a Bearer HEADER, so a bare `<img src=…?raw=1>` would 401 and the
+  // download helper above force-downloads — neither is renderable. Fetch with
+  // the auth header → blob → object URL. The CALLER owns the URL and MUST
+  // `URL.revokeObjectURL` it on unmount/path change.
+  fetchRawObjectUrl: async (sessionId: string, path: string): Promise<string> => {
+    const response = await fetchWithAuthRecovery(() =>
+      fetch(
+        `${getApiBase()}/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(path)}?raw=1`,
+        { headers: { ...authHeader() } }
+      )
+    );
+    if (!response.ok) throw new Error(`Load failed (HTTP ${response.status})`);
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  },
 };
 
 // Workbench action layer — manifest, IDE-first buttons, unified runs.
