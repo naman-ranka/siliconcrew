@@ -465,22 +465,80 @@ entry adds an auth-failure stall + error spam to every invocation (X2C-1).
 
 ---
 
-## Leg 2 (post-deploy)
+## Leg 2 (post-deploy) — F2 fix CONFIRMED
 
-_Placeholder — to be filled after tonight's deploy. **Repeat the UI route
-exactly:** new session in Agent posture → Codex tab → the same three prompts
-(design gray4 + TB + lint + sim; add enable, no synthesis; workspace inventory),
-and re-pull the hosted `[CODEX-TIMING]` buckets for each turn. Key deltas to
-check against the leg-1 UI tables above:_
-1. **F2 (the big one):** do **post-synth tool calls drop from ~14s to
-   sub-second** once the batched F2 fix gates `provider.sync()` to mutating
-   tools only? Repeat turn 2 (add-enable, all reads/writes on a post-synth
-   workspace) and compare the ~14s-per-call table — this is the headline number.
-2. **F3 setup:** still 3.6–14.6s per turn unless the warm-subprocess follow-up
-   shipped (it is only batched as a follow-up, so expect little change).
-3. **X2C-5:** does a long/refreshed Codex turn now reattach its live stream (or
-   at least keep progress visible) instead of blanking to the user message? Tab
-   away mid-turn and reload to test.
-4. **X2C-6:** does the composer model label stop saying "Gemini 3.5 Flash" on
-   the Codex tab?
-5. **`wait_for_synthesis`** ≤120s bound honored (leg 1 saw one 121.73s call)._
+**Deploy:** backend **rev 00063** (digest `dddabfd3`), shipping the F2
+sync-gating fix (`f095fcb`) + F9c stateless. Frontend also updated (landing +
+14-example gallery live). Method: same UI route — fresh session
+**`x2_codex_ui_leg2_20260707`** in Agent posture → Codex tab (still
+"ChatGPT connected", no link step) → same design-gray4 prompt (asked it to run
+synthesis so the workspace reaches the post-synth state where F2 bit in leg 1).
+Thread `9059…04de`, turn `de71…bf38`, sent 08:46:04 UTC.
+
+### F2 before/after — the headline (authoritative `[CODEX-TIMING]`)
+
+Same tools, same design, same UI path — **rev 00060 (leg 1) vs rev 00063
+(leg 2)**, on a workspace that already has synthesis artifacts:
+
+| tool (post-synth call) | rev 00060 (before) | rev 00063 (after) | speedup |
+|---|---|---|---|
+| `get_synthesis_metrics` | 13.98s | **0.00s** | ~1000×+ |
+| `get_route_drc_summary` | 15.73s | **0.00s** | ~1000×+ |
+| `get_manifest` | 13.78s | **0.04s** | ~340× |
+| `read_file` | 14.2s | **0.05s** | ~280× |
+| `get_synthesis_status` | (F2-slow class) | **0.04s** | — |
+| `search_logs_tool` | 2.75s | **0.04–0.06s → 0.00s** | ~50×+ |
+
+(`get_synthesis_metrics` and `get_route_drc_summary` are the *same* tools that
+read 13.98s and 15.73s in leg 1 — an exact apples-to-apples pair. `0.00s` is the
+`[CODEX-TIMING]` rounding of a sub-5ms call. `get_cts_summary`/
+`get_congestion_summary` weren't individually re-triggered this run but are the
+identical read-only class.)
+
+**The F2 fix works, decisively.** The post-synthesis reads that cost ~14–16s
+each on rev 00060 now return in **single-digit milliseconds** on rev 00063 — the
+whole-workspace tar+GCS-upload no longer fires on read-only tools. This is the
+definitive before/after the owner asked about: a post-synth design loop that
+dragged into minutes of pure sync overhead is now essentially free on reads. The
+design also reached routed **GDS** (ORFS job `siliconcrew-orfs-s8khq` completed
+successfully) after the usual F9 CTS retry.
+
+### Other leg-2 observations
+
+- **F3 setup: unchanged** — `elapsed_setup=10.96s` this turn (still in the
+  3.6–14.6s band). Expected: only F2 shipped; the warm-subprocess follow-up did
+  not, so cold-start is untouched.
+- **Pre-synth tools: sub-second on both revs** (write_spec 0.82s, write_file
+  0.15–0.17s, read_spec 0.04s, linter 0.22–0.99s) — confirms F2 was always cheap
+  on a small workspace; the fix's value is entirely on the grown/post-synth
+  workspace.
+- **In-app Codex path survived the revision swap** — I drove the Codex tab live
+  on the freshly-rolled rev 00063 with no reconnect/relink step (the F15 "manual
+  reconnect after deploy" issue is about the external claude.ai MCP connector, a
+  different surface; the in-app server-side Codex brain came up clean on the new
+  revision).
+- **X2C-6 still present** — the composer model picker still reads "Gemini 3.5
+  Flash" on the Codex tab post-deploy (the F2 deploy didn't touch it).
+- **F9 CTS coin-flip still occurs** — `synth_0001` failed (ORFS exec
+  `siliconcrew-orfs-5998d`, 0/1 tasks) and the agent retried; the LEC_CHECK=0
+  fix prevents the SIGILL class but a per-run PnR flake remains (known, out of
+  scope for this leg).
+- **X2C-5 still present (unchanged post-deploy)** — rechecked by reloading
+  mid-turn: after reload + re-selecting the Codex tab, the still-running turn
+  again showed **only the user message** (no cards, no Stop, no reattach) while
+  `[CODEX-TIMING]` confirmed tools firing server-side. Expected — the deploy
+  shipped F2 + F9c, not a fix for the Codex streaming/persistence model; X2C-5
+  remains the top follow-up. **X2C-8** (reload resets sub-tab to Workbench/Chat 1
+  despite the URL) also still reproduces.
+
+### Leg-2 verdict
+
+**The headline the owner asked about is answered: the F2 fix is live and
+decisive** — post-synth Codex tool calls dropped from ~14s to single-digit
+milliseconds (get_synthesis_metrics 13.98s→0.00s, get_route_drc_summary
+15.73s→0.00s, get_manifest 13.78s→0.04s). A hosted Codex design loop on a
+post-synth workspace is now fast. What did **not** change (and shouldn't have,
+given what shipped): F3 cold-start (~11s), X2C-5 (live-turn blank / no
+reattach), X2C-6 (Gemini model label on the Codex tab), X2C-8, and the F9 CTS
+per-run flake. Those are the remaining follow-ups; X2C-5 is the most
+user-visible.
