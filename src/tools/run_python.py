@@ -25,6 +25,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from typing import List, Optional
 
 from src.utils.paths import is_within
@@ -128,18 +129,26 @@ def _posix_rlimits():
     return _apply
 
 
-def build_docker_argv(*, image: str, workspace: str, rel_script: str, args: List[str]) -> List[str]:
+def build_docker_argv(*, image: str, workspace: str, rel_script: str, args: List[str],
+                      container_name: str) -> List[str]:
     """The isolated ``docker run`` argv (pure — unit-testable without Docker).
 
     Real isolation: no network, non-root, memory/cpu/pids caps, read-only rootfs
     with only the workspace (rw) and a small ``/tmp`` tmpfs writable. The single
     ``-v`` is routed through ``_translate_dood_volume`` for docker-outside-docker
-    (PA2)."""
+    (PA2).
+
+    ``container_name`` (``--name``) must be UNIQUE per invocation — the caller
+    generates it and keeps it so the timeout path can ``docker kill`` the
+    container. Without it, SIGKILLing the foreground CLI client (which we started)
+    does NOT stop the container dockerd owns, so an unbounded script would run
+    past the wall timeout forever (AR-1)."""
     from src.tools.run_docker import _translate_dood_volume
 
     volume = _translate_dood_volume(f"{workspace}:/workspace:rw")
     return [
         "docker", "run", "--rm",
+        "--name", container_name,
         "--network=none",
         "--user", "1000:1000",
         "--memory", "1g", "--memory-swap", "1g",
@@ -158,10 +167,15 @@ def build_docker_argv(*, image: str, workspace: str, rel_script: str, args: List
     ]
 
 
-def _run_argv(argv, *, cwd=None, env=None, preexec_fn=None, timeout=_WALL_TIMEOUT_SEC):
+def _run_argv(argv, *, cwd=None, env=None, preexec_fn=None, timeout=_WALL_TIMEOUT_SEC,
+              docker_name=None):
     """Run ``argv`` (no shell), capture output, enforce a wall timeout. Returns
     ``(exit_code, stdout, stderr, timed_out)``. Kills the whole process group on
-    timeout where the platform supports it."""
+    timeout where the platform supports it.
+
+    ``docker_name`` (docker mode): on timeout, ``docker kill`` that container
+    BEFORE SIGKILLing the CLI client — dockerd owns the container, so killing the
+    foreground client alone leaves it running past the wall timeout (AR-1)."""
     popen_kwargs = dict(
         cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
@@ -178,6 +192,9 @@ def _run_argv(argv, *, cwd=None, env=None, preexec_fn=None, timeout=_WALL_TIMEOU
         stdout, stderr = proc.communicate(timeout=timeout)
         return proc.returncode, stdout or "", stderr or "", False
     except subprocess.TimeoutExpired:
+        # Stop the container first (dockerd owns it); then the client.
+        if docker_name:
+            _docker_kill(docker_name)
         _kill(proc)
         try:
             stdout, stderr = proc.communicate(timeout=10)
@@ -188,7 +205,26 @@ def _run_argv(argv, *, cwd=None, env=None, preexec_fn=None, timeout=_WALL_TIMEOU
         return None, "", f"executable not found: {exc}", False
     finally:
         if proc and proc.poll() is None:
+            if docker_name:
+                _docker_kill(docker_name)
             _kill(proc)
+
+
+def _docker_kill(name: str) -> None:
+    """Best-effort ``docker kill`` of a named container after a wall-timeout.
+
+    The container is owned by the docker daemon, not the CLI client we started —
+    SIGKILLing that client does NOT stop the container, so an unbounded script
+    would keep consuming its ``--cpus``/``--memory`` past the timeout (AR-1).
+    ``--rm`` reaps it once dead. Errors are swallowed: the container may already
+    have exited (``--rm`` gone) or docker may be unavailable."""
+    try:
+        subprocess.run(
+            ["docker", "kill", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+        )
+    except Exception:
+        pass
 
 
 def _kill(proc) -> None:
@@ -265,8 +301,16 @@ def run_python_analysis(
 
     start = time.time()
     if engine == "docker":
-        argv = build_docker_argv(image=image, workspace=workspace, rel_script=rel_script, args=args)
-        exit_code, stdout, stderr, timed_out = _run_argv(argv, timeout=timeout)
+        # Unique per invocation so concurrent runs never collide, and so the
+        # timeout path can `docker kill` THIS container (AR-1).
+        container_name = f"sc_py_{uuid.uuid4().hex[:16]}"
+        argv = build_docker_argv(
+            image=image, workspace=workspace, rel_script=rel_script, args=args,
+            container_name=container_name,
+        )
+        exit_code, stdout, stderr, timed_out = _run_argv(
+            argv, timeout=timeout, docker_name=container_name,
+        )
     else:
         engine = "native"
         argv = [sys.executable, "-I", candidate, *args]

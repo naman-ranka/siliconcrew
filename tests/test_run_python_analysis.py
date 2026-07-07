@@ -7,6 +7,7 @@ caps (POSIX-only), and the hosted PYTHON gate. No pytest-asyncio; everything is
 synchronous.
 """
 import os
+import subprocess
 import sys
 import textwrap
 
@@ -135,13 +136,18 @@ def test_scrubbed_env_excludes_arbitrary_host_vars(monkeypatch, tmp_path):
 # --- Docker command shape (recording; no real docker) ------------------------
 
 def test_docker_argv_has_isolation_flags():
-    argv = build_docker_argv(image="img:1", workspace="/ws", rel_script="a/gen.py", args=["--n", "4"])
+    argv = build_docker_argv(
+        image="img:1", workspace="/ws", rel_script="a/gen.py", args=["--n", "4"],
+        container_name="sc_py_deadbeef",
+    )
     assert argv[:3] == ["docker", "run", "--rm"]
     assert "--network=none" in argv
     assert "--read-only" in argv
     assert "--user" in argv and "1000:1000" in argv
     assert "--pids-limit" in argv
     assert "--memory" in argv and "--cpus" in argv
+    # A --name so the timeout path can `docker kill` this container (AR-1).
+    assert argv[argv.index("--name") + 1] == "sc_py_deadbeef"
     # workspace mounted rw at /workspace; script + args are the tail
     assert "-v" in argv
     vol_idx = argv.index("-v") + 1
@@ -150,11 +156,86 @@ def test_docker_argv_has_isolation_flags():
         argv[-5:] == ["python", "-I", "/workspace/a/gen.py", "--n", "4"]
 
 
+class _FakeTimeoutPopen:
+    """A Popen stand-in that always times out on the first communicate() — models
+    a runaway script so we can assert the docker-mode kill path without Docker."""
+
+    def __init__(self, argv, **kw):
+        self.argv = argv
+        self.pid = 2 ** 30  # not a real pid → _kill's killpg raises → swallowed
+        self._n = 0
+
+    def communicate(self, timeout=None):
+        self._n += 1
+        if self._n == 1:
+            raise subprocess.TimeoutExpired(cmd=self.argv, timeout=timeout)
+        return ("", "")
+
+    def poll(self):
+        return 0  # "already exited" so the finally-branch does not re-kill
+
+    def kill(self):
+        pass
+
+
+def _drive_docker_timeout(tmp_path, monkeypatch):
+    """Run run_python_analysis in docker mode against a faked subprocess layer
+    that times out; return (captured_argv, docker_kill_calls)."""
+    import subprocess as _sp
+    import src.tools.run_python as rp
+
+    monkeypatch.setattr(rp.shutil, "which", lambda _n: "/usr/bin/docker")  # keep docker engine
+    ws = str(tmp_path)
+    _write(ws, "loop.py", "while True:\n    pass\n")
+
+    captured = {}
+    kills = []
+
+    def fake_popen(argv, **kw):
+        captured["argv"] = argv
+        return _FakeTimeoutPopen(argv, **kw)
+
+    def fake_run(cmd, *a, **k):
+        if isinstance(cmd, (list, tuple)) and list(cmd[:2]) == ["docker", "kill"]:
+            kills.append(list(cmd))
+            return _sp.CompletedProcess(cmd, 0)
+        raise AssertionError(f"unexpected subprocess.run: {cmd}")
+
+    monkeypatch.setattr(rp.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(rp.subprocess, "run", fake_run)
+
+    result = rp.run_python_analysis(ws, "loop.py", engine="docker", timeout=1)
+    assert result["timed_out"] is True
+    return captured["argv"], kills
+
+
+def test_docker_timeout_kills_container(tmp_path, monkeypatch):
+    # AR-1: on timeout the container (dockerd-owned) must be `docker kill`ed —
+    # SIGKILLing the CLI client alone leaves it running. Fails pre-fix: today the
+    # timeout path issues NO docker kill.
+    argv, kills = _drive_docker_timeout(tmp_path, monkeypatch)
+    name = argv[argv.index("--name") + 1]
+    assert name.startswith("sc_py_")
+    assert kills == [["docker", "kill", name]]
+
+
+def test_docker_container_name_is_unique_per_run(tmp_path, monkeypatch):
+    # Two invocations must not collide on --name (concurrent runs).
+    name1 = _drive_docker_timeout(tmp_path, monkeypatch)[0]
+    name1 = name1[name1.index("--name") + 1]
+    name2 = _drive_docker_timeout(tmp_path, monkeypatch)[0]
+    name2 = name2[name2.index("--name") + 1]
+    assert name1 != name2
+
+
 def test_docker_volume_translated_for_dood(monkeypatch):
     # In docker-outside-docker, the -v host path is rewritten to HOST_WORKSPACE.
     import src.tools.run_docker as rd
     monkeypatch.setattr(rd, "_HOST_WORKSPACE", "/host/mount")
-    argv = build_docker_argv(image="img:1", workspace="/workspace", rel_script="g.py", args=[])
+    argv = build_docker_argv(
+        image="img:1", workspace="/workspace", rel_script="g.py", args=[],
+        container_name="sc_py_cafef00d",
+    )
     vol = argv[argv.index("-v") + 1]
     assert vol == "/host/mount:/workspace:rw"
 

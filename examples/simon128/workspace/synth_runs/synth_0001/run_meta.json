@@ -1,0 +1,128 @@
+{
+  "run_id": "synth_0001",
+  "dispatched_at": "2026-07-07T08:13:05.236815+00:00",
+  "timeout_sec": 1200,
+  "created_at": "2026-07-07T08:13:05.251739+00:00",
+  "backend": "local_docker",
+  "status": "completed",
+  "current_stage": "finish",
+  "max_stage": "finish",
+  "platform": "sky130hd",
+  "top_module": "simon128_cipher",
+  "input_files": [
+    "simon_datapath_shiftreg.v",
+    "simon_key_expansion_shiftreg.v",
+    "simon_module.v",
+    "simon128_cipher.v"
+  ],
+  "spec_file": null,
+  "requested_clock_period_ns": 10.0,
+  "effective_clock_period_ns": 10.0,
+  "clock_period_ns": 10.0,
+  "clock_source": "requested",
+  "constraints_mode": "auto",
+  "utilization": 5,
+  "aspect_ratio": 1.0,
+  "core_margin": 2.0,
+  "pd_parameters": {
+    "utilization": 5,
+    "aspect_ratio": 1.0,
+    "core_margin": 2.0
+  },
+  "auto_checks": {
+    "constraints": "pass",
+    "signoff": "pass",
+    "equiv": "skip"
+  },
+  "check_notes": "All guardrails passed",
+  "stages": {
+    "constraints": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "synth": {
+      "status": "completed",
+      "artifacts": {
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\1_synth.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\1_synth.sdc",
+        "stat_report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\simon128_cipher\\base\\synth_stat.txt"
+      }
+    },
+    "floorplan": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\simon128_cipher\\base\\2_floorplan_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\2_floorplan.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\2_floorplan.sdc"
+      }
+    },
+    "place": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\simon128_cipher\\base\\3_3_place_gp.json",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\3_place.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\3_place.sdc"
+      }
+    },
+    "cts": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\simon128_cipher\\base\\4_cts_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\4_cts.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\4_cts.sdc"
+      }
+    },
+    "grt": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\simon128_cipher\\base\\5_1_grt.log",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\5_1_grt.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\5_1_grt.sdc"
+      }
+    },
+    "route": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\simon128_cipher\\base\\5_route_drc.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\5_route.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\5_route.sdc"
+      }
+    },
+    "finish": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\simon128_cipher\\base\\6_finish.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\6_final.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\6_final.sdc",
+        "netlist": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\6_final.v",
+        "gds": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon128_cipher\\base\\6_final.gds"
+      }
+    }
+  },
+  "provenance": {
+    "repo_commit": "657b32b06defeceeda1e31c6468302ffa214e270",
+    "orfs_image_digest": null,
+    "pdk": "sky130hd",
+    "iverilog_version": "12.0",
+    "num_cores": 4
+  },
+  "docker_command": "docker run --rm -v <workspace>\\synth_runs\\synth_0001:/workspace -v <workspace>\\synth_runs\\synth_0001\\orfs_results:/OpenROAD-flow-scripts/flow/results -v <workspace>\\synth_runs\\synth_0001\\orfs_logs:/OpenROAD-flow-scripts/flow/logs -v <workspace>\\synth_runs\\synth_0001\\orfs_reports:/OpenROAD-flow-scripts/flow/reports -w /OpenROAD-flow-scripts/flow openroad/orfs:latest bash -c make -B DESIGN_CONFIG=/workspace/config.mk",
+  "docker_success": true,
+  "docker_stdout_tail": "       136 29e79e7400320e586929\n2_2_floorplan_macro                0            113 29e79e7400320e586929\n2_3_floorplan_tapcell              0            113 aa498d8526af3b2c22f1\n2_4_floorplan_pdn                  0            126 0fd8ecd61cf5ba3f10a2\n3_1_place_gp_skip_io               1            120 fc1539db2d5ebde0b139\n3_2_place_iop                      0            117 eab9ccffad1318a5d40e\n3_3_place_gp                       3            233 2c9d87b8f89897f36e97\n3_4_place_resized                  2            136 2c9d87b8f89897f36e97\n3_5_place_dp                       2            131 0634195c61813ebf9bdc\n4_1_cts                            3            158 3eeb8b269a2e72454322\n5_1_grt                           11            261 9a37dff957201a6366c6\n5_2_route                         32            807 529731110df9a40a63ff\n5_3_fillcell                       0            141 d25c9d83ba5a030feebc\n6_1_fill                           0            129 d25c9d83ba5a030feebc\n6_1_merge                          2            448                  N/A\n6_report                           6            259                  N/A\nTotal                             64            807                     \n",
+  "docker_stderr_tail": "",
+  "netlist_path": null,
+  "stdcell_manifest_version": null,
+  "stdcell_files_used": [],
+  "summary_metrics": {
+    "area_um2": 10602.6688,
+    "cell_count": 1027,
+    "wns_ns": 0.0,
+    "tns_ns": 0.0,
+    "power_uw": 2390.0,
+    "power_mw": 2.39,
+    "fmax_mhz": 100.0
+  },
+  "next_action": "Use search_logs_tool for detailed PPA/error verification.",
+  "finished_at": "2026-07-07T08:14:35.023867+00:00",
+  "elapsed_sec": 89.78
+}
