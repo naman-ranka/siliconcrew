@@ -1,0 +1,26 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "alu4.v",
+      "role": "rtl",
+      "path": "alu4.v"
+    },
+    {
+      "name": "alu4_tb.v",
+      "role": "tb",
+      "path": "alu4_tb.v"
+    }
+  ],
+  "synthTop": "alu4",
+  "simTop": "alu4_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "alu4_tb.v",
+      "module": "alu4_tb"
+    }
+  ]
+}
