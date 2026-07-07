@@ -1,0 +1,764 @@
+{
+  "creator": "Yosys 0.62+0 (git sha1 UNKNOWN-dirty, g++ 11.4.0-1ubuntu1~22.04.3 -fPIC -O3)",
+  "modules": {
+    "pwm_generator": {
+      "attributes": {
+        "hdlname": "pwm_generator",
+        "top": "00000000000000000000000000000001",
+        "src": "/workspace/inputs/pwm_generator.v:20.1-79.10"
+      },
+      "ports": {
+        "in": {
+          "direction": "input",
+          "bits": [ 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 ]
+        },
+        "sel": {
+          "direction": "input",
+          "bits": [ 14 ]
+        },
+        "wr_en": {
+          "direction": "input",
+          "bits": [ 15 ]
+        },
+        "out_en": {
+          "direction": "input",
+          "bits": [ 16 ]
+        },
+        "clk": {
+          "direction": "input",
+          "bits": [ 17 ]
+        },
+        "rst_n": {
+          "direction": "input",
+          "bits": [ 18 ]
+        },
+        "pwm_out": {
+          "direction": "output",
+          "bits": [ 19 ]
+        }
+      },
+      "cells": {
+        "$auto$alumacc.cc:382:replace_macc$5533": {
+          "hide_name": 1,
+          "type": "$macc_v2",
+          "parameters": {
+            "ADDEND_NEGATED": "x",
+            "A_SIGNED": "0",
+            "A_WIDTHS": "0000000000001100",
+            "B_SIGNED": "0",
+            "B_WIDTHS": "0000000000000111",
+            "C_SIGNED": "x",
+            "C_WIDTHS": "x",
+            "NADDENDS": "00000000000000000000000000000000",
+            "NPRODUCTS": "00000000000000000000000000000001",
+            "PRODUCT_NEGATED": "0",
+            "Y_WIDTH": "00000000000000000000000000010011"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:57.22-57.43"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "C": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 ],
+            "B": [ 32, 33, 34, 35, 36, 37, 38 ],
+            "C": [ ],
+            "Y": [ 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57 ]
+          }
+        },
+        "$auto$alumacc.cc:512:replace_alu$5535": {
+          "hide_name": 1,
+          "type": "$alu",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000001101",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000001101",
+            "Y_WIDTH": "00000000000000000000000000001101"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:73.6-73.20"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "BI": "input",
+            "CI": "input",
+            "CO": "output",
+            "X": "output",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70 ],
+            "B": [ 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83 ],
+            "BI": [ "1" ],
+            "CI": [ "1" ],
+            "CO": [ 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96 ],
+            "X": [ 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109 ],
+            "Y": [ 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122 ]
+          }
+        },
+        "$auto$alumacc.cc:512:replace_alu$5540": {
+          "hide_name": 1,
+          "type": "$alu",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000001101",
+            "Y_WIDTH": "00000000000000000000000000001101"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:68.16-68.27"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "BI": "input",
+            "CI": "input",
+            "CO": "output",
+            "X": "output",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ "1" ],
+            "B": [ 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70 ],
+            "BI": [ "0" ],
+            "CI": [ "0" ],
+            "CO": [ 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135 ],
+            "X": [ 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148 ],
+            "Y": [ 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161 ]
+          }
+        },
+        "$auto$alumacc.cc:512:replace_alu$5543": {
+          "hide_name": 1,
+          "type": "$alu",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000001100",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000001101"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:62.37-62.49"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "BI": "input",
+            "CI": "input",
+            "CO": "output",
+            "X": "output",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 ],
+            "B": [ "1" ],
+            "BI": [ "1" ],
+            "CI": [ "1" ],
+            "CO": [ 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174 ],
+            "X": [ 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187 ],
+            "Y": [ 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200 ]
+          }
+        },
+        "$auto$ff.cc:337:slice$5518": {
+          "hide_name": 1,
+          "type": "$sdffe",
+          "parameters": {
+            "CLK_POLARITY": "00000000000000000000000000000001",
+            "EN_POLARITY": "00000000000000000000000000000001",
+            "SRST_POLARITY": "00000000000000000000000000000001",
+            "SRST_VALUE": "0000000000000",
+            "WIDTH": "00000000000000000000000000001101"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:60.2-70.5"
+          },
+          "port_directions": {
+            "CLK": "input",
+            "D": "input",
+            "EN": "input",
+            "Q": "output",
+            "SRST": "input"
+          },
+          "connections": {
+            "CLK": [ 17 ],
+            "D": [ 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161 ],
+            "EN": [ 201 ],
+            "Q": [ 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70 ],
+            "SRST": [ 202 ]
+          }
+        },
+        "$auto$ff.cc:337:slice$5526": {
+          "hide_name": 1,
+          "type": "$sdffe",
+          "parameters": {
+            "CLK_POLARITY": "00000000000000000000000000000001",
+            "EN_POLARITY": "00000000000000000000000000000001",
+            "SRST_POLARITY": "00000000000000000000000000000000",
+            "SRST_VALUE": "000000000000",
+            "WIDTH": "00000000000000000000000000001100"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:36.2-55.5"
+          },
+          "port_directions": {
+            "CLK": "input",
+            "D": "input",
+            "EN": "input",
+            "Q": "output",
+            "SRST": "input"
+          },
+          "connections": {
+            "CLK": [ 17 ],
+            "D": [ 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 ],
+            "EN": [ 203 ],
+            "Q": [ 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 ],
+            "SRST": [ 18 ]
+          }
+        },
+        "$auto$ff.cc:337:slice$5529": {
+          "hide_name": 1,
+          "type": "$sdffe",
+          "parameters": {
+            "CLK_POLARITY": "00000000000000000000000000000001",
+            "EN_POLARITY": "00000000000000000000000000000001",
+            "SRST_POLARITY": "00000000000000000000000000000000",
+            "SRST_VALUE": "0000000",
+            "WIDTH": "00000000000000000000000000000111"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:36.2-55.5"
+          },
+          "port_directions": {
+            "CLK": "input",
+            "D": "input",
+            "EN": "input",
+            "Q": "output",
+            "SRST": "input"
+          },
+          "connections": {
+            "CLK": [ 17 ],
+            "D": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "EN": [ 204 ],
+            "Q": [ 32, 33, 34, 35, 36, 37, 38 ],
+            "SRST": [ 18 ]
+          }
+        },
+        "$auto$opt_dff.cc:252:make_patterns_logic$5524": {
+          "hide_name": 1,
+          "type": "$reduce_and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 205, 15 ],
+            "Y": [ 204 ]
+          }
+        },
+        "$auto$opt_dff.cc:252:make_patterns_logic$5528": {
+          "hide_name": 1,
+          "type": "$reduce_and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 15, 14 ],
+            "Y": [ 203 ]
+          }
+        },
+        "$auto$opt_dff.cc:81:create_not$5521": {
+          "hide_name": 1,
+          "type": "$not",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 14 ],
+            "Y": [ 205 ]
+          }
+        },
+        "$div$/workspace/inputs/pwm_generator.v:57$5477": {
+          "hide_name": 1,
+          "type": "$div",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000100000",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000100000"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:57.21-57.50"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0" ],
+            "B": [ "0", "0", "1", "0", "0", "1", "1" ],
+            "Y": [ 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224 ]
+          }
+        },
+        "$eq$/workspace/inputs/pwm_generator.v:62$5479": {
+          "hide_name": 1,
+          "type": "$not",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:62.7-62.20"
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 18 ],
+            "Y": [ 225 ]
+          }
+        },
+        "$eq$/workspace/inputs/pwm_generator.v:62$5481": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000001101",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000100000",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:62.26-62.49"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70 ],
+            "B": [ 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200 ],
+            "Y": [ 226 ]
+          }
+        },
+        "$logic_and$/workspace/inputs/pwm_generator.v:67$5485": {
+          "hide_name": 1,
+          "type": "$logic_and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:67.10-67.46"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 227 ],
+            "B": [ 228 ],
+            "Y": [ 201 ]
+          }
+        },
+        "$logic_or$/workspace/inputs/pwm_generator.v:62$5482": {
+          "hide_name": 1,
+          "type": "$logic_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:62.6-62.50"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 225 ],
+            "B": [ 226 ],
+            "Y": [ 202 ]
+          }
+        },
+        "$ne$/workspace/inputs/pwm_generator.v:67$5483": {
+          "hide_name": 1,
+          "type": "$reduce_bool",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000001100",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:67.11-67.26"
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 ],
+            "Y": [ 227 ]
+          }
+        },
+        "$ne$/workspace/inputs/pwm_generator.v:67$5484": {
+          "hide_name": 1,
+          "type": "$reduce_bool",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000001100",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:67.32-67.45"
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 32, 33, 34, 35, 36, 37, 38, "0", "0", "0", "0", "0" ],
+            "Y": [ 228 ]
+          }
+        },
+        "$procdff$5516": {
+          "hide_name": 1,
+          "type": "$dff",
+          "parameters": {
+            "CLK_POLARITY": "1",
+            "WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:72.2-77.5"
+          },
+          "port_directions": {
+            "CLK": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "CLK": [ 17 ],
+            "D": [ 229 ],
+            "Q": [ 230 ]
+          }
+        },
+        "$procmux$5511": {
+          "hide_name": 1,
+          "type": "$mux",
+          "parameters": {
+            "WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/pwm_generator.v:73.6-73.20|/workspace/inputs/pwm_generator.v:73.3-76.23"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "S": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ "1" ],
+            "B": [ "0" ],
+            "S": [ 96 ],
+            "Y": [ 229 ]
+          }
+        },
+        "$ternary$/workspace/inputs/pwm_generator.v:34$5471": {
+          "hide_name": 1,
+          "type": "$mux",
+          "parameters": {
+            "WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:34.19-34.54"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "S": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ "0" ],
+            "B": [ 230 ],
+            "S": [ 16 ],
+            "Y": [ 19 ]
+          }
+        }
+      },
+      "netnames": {
+        "$0\\pwm_out_s[0:0]": {
+          "hide_name": 1,
+          "bits": [ 229 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:72.2-77.5"
+          }
+        },
+        "$add$/workspace/inputs/pwm_generator.v:68$5486_Y": {
+          "hide_name": 1,
+          "bits": [ 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161 ],
+          "attributes": {
+          }
+        },
+        "$auto$alumacc.cc:448:extract_cmp_alu$5534": {
+          "hide_name": 1,
+          "bits": [ 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122 ],
+          "attributes": {
+            "unused_bits": "0 1 2 3 4 5 6 7 8 9 10 11 12"
+          }
+        },
+        "$auto$alumacc.cc:528:replace_alu$5536": {
+          "hide_name": 1,
+          "bits": [ 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109 ],
+          "attributes": {
+            "unused_bits": "0 1 2 3 4 5 6 7 8 9 10 11 12"
+          }
+        },
+        "$auto$alumacc.cc:528:replace_alu$5541": {
+          "hide_name": 1,
+          "bits": [ 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148 ],
+          "attributes": {
+            "unused_bits": "0 1 2 3 4 5 6 7 8 9 10 11 12"
+          }
+        },
+        "$auto$alumacc.cc:528:replace_alu$5544": {
+          "hide_name": 1,
+          "bits": [ 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187 ],
+          "attributes": {
+            "unused_bits": "0 1 2 3 4 5 6 7 8 9 10 11 12"
+          }
+        },
+        "$auto$alumacc.cc:529:replace_alu$5537": {
+          "hide_name": 1,
+          "bits": [ 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96 ],
+          "attributes": {
+            "unused_bits": "0 1 2 3 4 5 6 7 8 9 10 11"
+          }
+        },
+        "$auto$alumacc.cc:529:replace_alu$5542": {
+          "hide_name": 1,
+          "bits": [ 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135 ],
+          "attributes": {
+            "unused_bits": "0 1 2 3 4 5 6 7 8 9 10 11 12"
+          }
+        },
+        "$auto$alumacc.cc:529:replace_alu$5545": {
+          "hide_name": 1,
+          "bits": [ 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174 ],
+          "attributes": {
+            "unused_bits": "0 1 2 3 4 5 6 7 8 9 10 11 12"
+          }
+        },
+        "$auto$opt_dff.cc:251:make_patterns_logic$5523": {
+          "hide_name": 1,
+          "bits": [ 204 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_dff.cc:251:make_patterns_logic$5527": {
+          "hide_name": 1,
+          "bits": [ 203 ],
+          "attributes": {
+          }
+        },
+        "$auto$rtlil.cc:3337:Not$5522": {
+          "hide_name": 1,
+          "bits": [ 205 ],
+          "attributes": {
+          }
+        },
+        "$auto$wreduce.cc:514:run$5531": {
+          "hide_name": 1,
+          "bits": [ 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0" ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:57.22-57.43"
+          }
+        },
+        "$div$/workspace/inputs/pwm_generator.v:57$5477_Y": {
+          "hide_name": 1,
+          "bits": [ 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:57.21-57.50",
+            "unused_bits": "13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31"
+          }
+        },
+        "$eq$/workspace/inputs/pwm_generator.v:62$5479_Y": {
+          "hide_name": 1,
+          "bits": [ 225 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:62.7-62.20"
+          }
+        },
+        "$eq$/workspace/inputs/pwm_generator.v:62$5481_Y": {
+          "hide_name": 1,
+          "bits": [ 226 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:62.26-62.49"
+          }
+        },
+        "$logic_and$/workspace/inputs/pwm_generator.v:67$5485_Y": {
+          "hide_name": 1,
+          "bits": [ 201 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:67.10-67.46"
+          }
+        },
+        "$logic_or$/workspace/inputs/pwm_generator.v:62$5482_Y": {
+          "hide_name": 1,
+          "bits": [ 202 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:62.6-62.50"
+          }
+        },
+        "$ne$/workspace/inputs/pwm_generator.v:67$5483_Y": {
+          "hide_name": 1,
+          "bits": [ 227 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:67.11-67.26"
+          }
+        },
+        "$ne$/workspace/inputs/pwm_generator.v:67$5484_Y": {
+          "hide_name": 1,
+          "bits": [ 228 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:67.32-67.45"
+          }
+        },
+        "$sub$/workspace/inputs/pwm_generator.v:62$5480_Y": {
+          "hide_name": 1,
+          "bits": [ 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:62.37-62.49"
+          }
+        },
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 17 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:25.14-25.17"
+          }
+        },
+        "counter": {
+          "hide_name": 0,
+          "bits": [ 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:58.14-58.21"
+          }
+        },
+        "duty_reg": {
+          "hide_name": 0,
+          "bits": [ 32, 33, 34, 35, 36, 37, 38 ],
+          "attributes": {
+          }
+        },
+        "in": {
+          "hide_name": 0,
+          "bits": [ 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:21.21-21.23"
+          }
+        },
+        "out_en": {
+          "hide_name": 0,
+          "bits": [ 16 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:24.14-24.20"
+          }
+        },
+        "period_reg": {
+          "hide_name": 0,
+          "bits": [ 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:31.13-31.23"
+          }
+        },
+        "pwm_out": {
+          "hide_name": 0,
+          "bits": [ 19 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:27.14-27.21"
+          }
+        },
+        "pwm_out_s": {
+          "hide_name": 0,
+          "bits": [ 230 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:30.6-30.15"
+          }
+        },
+        "rst_n": {
+          "hide_name": 0,
+          "bits": [ 18 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:26.14-26.19"
+          }
+        },
+        "sel": {
+          "hide_name": 0,
+          "bits": [ 14 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:22.14-22.17"
+          }
+        },
+        "t_on": {
+          "hide_name": 0,
+          "bits": [ 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:57.14-57.18"
+          }
+        },
+        "wr_en": {
+          "hide_name": 0,
+          "bits": [ 15 ],
+          "attributes": {
+            "src": "/workspace/inputs/pwm_generator.v:23.15-23.20"
+          }
+        }
+      }
+    }
+  }
+}
