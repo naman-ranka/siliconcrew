@@ -83,6 +83,24 @@ _assert_session_readable. One NON-tenancy note (F10 below).
 |----|----------|--------|---------|
 | F10 | LOW (capability, not tenancy) | OPEN | `update_manifest` is in MUTATING_TOOLS but missing from MCP `_PROTECTED_TOOLS` (mcp_server.py:231) → a hosted ANONYMOUS identity could mutate the manifest (still bounded to its own current_session; not cross-tenant). Already REVIEW_FINDINGS P2. One-liner: add "update_manifest" to _PROTECTED_TOOLS. |
 
+## UI-as-human findings (explore-ui — full spec→GDS by hand, verdict: engine capable, FAILURE-LEGIBILITY is the weak point)
+
+Headline insight: a hardware designer CAN reach spec→GDS unaided, but a first-timer
+would likely quit at an opaque "failure" — the engine is honest+capable; where it
+fails the human is making failures legible. explore-ui independently hit the CTS
+coin-flip a 3rd time (synth_0001 fail → synth_0002 pass → GDS).
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| F11 | HIGH (UX/legibility) | OPEN | A PASSING sim is reported "failed" when the TB prints "ALL TESTS PASSED" but not the exact substring the tool greps ("TEST PASSED", run_simulation.py:11,437). The failed card shows NO reason; the truth (passMarkerFound:false, stdout says PASSED) is buried in sim_runs/.../run_meta.json. Fix: surface the expected pass-marker + stdout tail on the failed card. A first-timer gives up here. |
+| F12 | HIGH (UX/legibility) | OPEN | Synth failure is opaque in the UI: "failed" + partial metrics + a Retry button, but the real error is ~7 folders deep in orfs_logs/.../4_1_cts.log. Fix: surface the FAILING STAGE + that stage's log tail on the run card / Report. |
+| F13 | LOW (editor) | OPEN | Monaco auto-close strands a `)` when a line ends in a bare `(` (U4). |
+| F14 | LOW (UX) | OPEN | Top-module chips are display-only (U6) — can't act on them. |
+| F15 | MEDIUM (ops) | OPEN | The claude.ai Silicon_crew MCP connector does NOT re-handshake after a Cloud Run revision swap — it returns -32602 indefinitely until a MANUAL reconnect on the claude.ai side. So every backend deploy breaks the hosted MCP integration until someone reconnects it. Compounds F9c (backend-unavailable mis-mapped to -32602). Ops implication: MCP-driven verification can't survive a mid-run deploy; the UI/Playwright path can. |
+
+(Confirmed dups: U5 = F8 no-save-toast; U7 = F5 ⌘K Radix a11y; U2 = F9 CTS SIGILL.)
+Positives to NOT regress (explore-ui): manifest auto-population; /invoke tags UI gestures as "You" in Activity (inv.3); honest per-run status + retained failures (inv.4); dispatch→poll(Refresh)→read behaved as documented; good waveform / GDS-layout / report viewers.
+
 ## Decisions for the owner (surfaced, not guessed)
 
 - **D1 — `.agents/` is gitignored** ("Local agent customizations and skills",
