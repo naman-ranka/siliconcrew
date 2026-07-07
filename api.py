@@ -1282,6 +1282,13 @@ async def patch_session(session_id: str, data: SessionPatch, identity: Identity 
         total_tokens=meta.get("total_tokens", 0),
         total_cost=meta.get("total_cost", 0.0),
         thread_count=session_manager.count_threads(session_id, user_id=uid),
+        # Rename/move must NOT blank the "forked from" chip (invariant 7:
+        # populated data never blanks). The store replaces the session in the
+        # list + currentSession with this response, so it has to carry provenance
+        # exactly like the single GET / list do.
+        source_template=templates_mod.read_provenance(
+            session_manager.get_workspace_path(session_id)
+        ),
     )
 
 

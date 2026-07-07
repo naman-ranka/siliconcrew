@@ -40,6 +40,7 @@ from src.utils.bundles import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_FILES,
     copytree_guarded,
+    redact_host_paths,
     scan_for_secrets,
 )
 from src.utils.transcript import read_thread_messages, render_transcript, slugify
@@ -386,19 +387,20 @@ def _sanitize_exported_workspace(ws: str, redact_paths: Optional[List[str]] = No
     * Clear ``manifest.json.sessionId`` (source session id).
     * Null every ``run_meta.json.netlist_path`` — it is an ABSOLUTE path into the
       author's machine; the fork re-derives it against the copied run dir.
-    * Redact the author's absolute paths (source workspace, home dir) from the
-      run_meta command/log-tail strings. The fork leaves these verbatim as
-      historical evidence in a user's PRIVATE workspace (A2), but a bundle bound
-      for a PUBLIC repo must not carry ``C:\\Users\\<name>\\…`` — the command
-      SHAPE is the evidence, not the absolute prefix. Replaced with ``<workspace>``.
+    * Redact the author's absolute paths (source workspace, home dir) from EVERY
+      generated text artifact — run_meta command/log-tail strings AND the actor
+      event logs (``attempt_events.jsonl`` / ``attempt_log.json``), whose tool
+      arguments/results can echo absolute paths. The fork leaves these verbatim
+      as historical evidence in a user's PRIVATE workspace (A2), but a bundle
+      bound for a PUBLIC repo must not carry ``C:\\Users\\<name>\\…`` — the
+      command SHAPE is the evidence, not the absolute prefix. (The rendered chat
+      transcripts are redacted at render time in ``export_session_bundle``.)
     * Drop compiled build artifacts (``*.out``/``*.vvp``) under run dirs.
     * Drop a stale ``.source_template.json`` if this session was itself a fork.
     """
     _clear_manifest_session_id(ws)
 
-    # Longest-first so a nested path (workspace) is redacted before its parent
-    # (home dir) — otherwise the home prefix eats the workspace path first.
-    redactions = sorted({p for p in (redact_paths or []) if p}, key=len, reverse=True)
+    redactions = list(redact_paths or [])
 
     for _run_dir, meta_path in _iter_run_metas(ws):
         try:
@@ -408,9 +410,7 @@ def _sanitize_exported_workspace(ws: str, redact_paths: Optional[List[str]] = No
             continue
         # Redact absolute host paths in the raw JSON text (covers command/tail
         # strings in every separator form: native, JSON-escaped ``\\``, and ``/``).
-        for target in redactions:
-            for variant in {target, target.replace("\\", "/"), target.replace("\\", "\\\\")}:
-                raw = raw.replace(variant, "<workspace>")
+        raw = redact_host_paths(raw, redactions)
         try:
             meta = json.loads(raw)
         except json.JSONDecodeError:
@@ -422,6 +422,26 @@ def _sanitize_exported_workspace(ws: str, redact_paths: Optional[List[str]] = No
                 json.dump(meta, f, indent=2)
         except OSError:
             pass
+
+    # Actor event logs are copied verbatim (they ARE the trajectory), but their
+    # tool arguments/results can carry absolute host paths — redact those too.
+    if redactions:
+        for log_name in ("attempt_events.jsonl", "attempt_log.json"):
+            log_path = os.path.join(ws, log_name)
+            if not os.path.isfile(log_path):
+                continue
+            try:
+                with open(log_path, "r", encoding="utf-8") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            redacted = redact_host_paths(text, redactions)
+            if redacted != text:
+                try:
+                    with open(log_path, "w", encoding="utf-8") as f:
+                        f.write(redacted)
+                except OSError:
+                    pass
 
     for runs_name in ("synth_runs", "sim_runs"):
         runs_root = os.path.join(ws, runs_name)
@@ -505,10 +525,10 @@ def export_session_bundle(
         src_ws, workspace_out, max_bytes=max_bytes, max_files=max_files, dirs_exist_ok=True
     )
     secret_warnings = scan_for_secrets(workspace_out)
-    _sanitize_exported_workspace(
-        workspace_out,
-        redact_paths=[os.path.abspath(src_ws), os.path.expanduser("~")],
-    )
+    # The author's absolute paths to scrub from every generated artifact
+    # (run_meta, event logs, and — below — the rendered transcripts).
+    redactions = [os.path.abspath(src_ws), os.path.expanduser("~")]
+    _sanitize_exported_workspace(workspace_out, redact_paths=redactions)
 
     # Render each thread's transcript into the exported workspace. list_threads
     # is read-only; a session with no separate threads still has its "Chat 1"
@@ -532,7 +552,9 @@ def export_session_bundle(
         if not messages:
             continue
         os.makedirs(conv_dir, exist_ok=True)
-        md = render_transcript(messages, title=title, template_name=display_name)
+        md = render_transcript(
+            messages, title=title, template_name=display_name, redact_paths=redactions
+        )
         fname = f"chat-{i}-{slugify(title, fallback=f'chat-{i}')}.md"
         with open(os.path.join(conv_dir, fname), "w", encoding="utf-8") as f:
             f.write(md)

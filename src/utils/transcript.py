@@ -124,12 +124,17 @@ def render_transcript(
     *,
     title: str,
     template_name: Optional[str] = None,
+    redact_paths: Optional[List[str]] = None,
 ) -> str:
     """Render messages → markdown. Pure (no I/O), so it is fully unit-testable.
 
     User and assistant turns become sections; each assistant tool call becomes a
     bullet with its arguments and a one-line result summary, so the file reads
     like the run trajectory a human (or the fork's own agent) can follow.
+
+    ``redact_paths`` (used by bundle export) scrubs the author's absolute host
+    paths from the rendered markdown — a tool result echoed into the transcript
+    can carry ``C:\\Users\\<name>\\…`` and a PUBLIC bundle must not ship it.
     """
     # Index tool results by call id so each result attaches under its call.
     results_by_id: dict[str, Any] = {}
@@ -198,7 +203,12 @@ def render_transcript(
         lines.append("_(no conversation recorded)_")
         lines.append("")
 
-    return "\n".join(lines).rstrip() + "\n"
+    result = "\n".join(lines).rstrip() + "\n"
+    if redact_paths:
+        from src.utils.bundles import redact_host_paths
+
+        result = redact_host_paths(result, redact_paths)
+    return result
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")

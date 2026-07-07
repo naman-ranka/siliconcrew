@@ -128,6 +128,25 @@ _SECRET_NAME_HINTS = (
 )
 
 
+def redact_host_paths(text: str, paths, placeholder: str = "<workspace>") -> str:
+    """Replace author absolute host paths in ``text`` with ``placeholder``.
+
+    Covers every separator form a path can appear in inside a copied artifact:
+    native (``C:\\Users\\…`` / ``/home/…``), the JSON-escaped double-backslash
+    form (``C:\\\\Users\\\\…`` as it lives inside a serialized run_meta string),
+    and the forward-slash form (as tool logs / ``$finish`` lines often print it).
+    Longest path first so a nested path (the workspace) is redacted before its
+    parent (the home dir) rather than being swallowed by the parent prefix.
+
+    Shared by the export sanitizer (run_meta + attempt logs) and the transcript
+    renderer so a PUBLIC bundle never carries ``C:\\Users\\<name>\\…``.
+    """
+    for target in sorted({p for p in (paths or []) if p}, key=len, reverse=True):
+        for variant in {target, target.replace("\\", "/"), target.replace("\\", "\\\\")}:
+            text = text.replace(variant, placeholder)
+    return text
+
+
 def scan_for_secrets(root: str) -> list[str]:
     """Return workspace-relative paths whose NAME looks secret-bearing.
 

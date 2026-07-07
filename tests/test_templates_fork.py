@@ -287,6 +287,25 @@ def test_render_transcript_empty():
     assert "no conversation recorded" in md
 
 
+def test_render_transcript_redacts_author_paths():
+    """F16: a tool result echoing an absolute host path must not survive into a
+    PUBLIC transcript."""
+    home = r"C:\Users\naman"
+    ws = r"C:\Users\naman\Desktop\Projects\endgame\workspace\uart"
+    messages = [
+        _Msg("human", f"look at {ws}/uart.v"),
+        _Msg("ai", "ok", tool_calls=[{"id": "c1", "name": "read_file", "args": {"path": f"{ws}/uart.v"}}]),
+        _Msg("tool", f'compiled {ws}/sim_runs/sim_0001/a.out ok', tool_call_id="c1"),
+    ]
+    md = render_transcript(messages, title="Chat 1", redact_paths=[ws, home])
+    assert "naman" not in md
+    assert r"C:\Users" not in md and "C:/Users" not in md
+    assert "<workspace>" in md
+    # Without redaction the path would be present (sanity that the test bites).
+    raw = render_transcript(messages, title="Chat 1")
+    assert "naman" in raw
+
+
 def test_slugify():
     assert slugify("Chat 1: The FIFO!") == "chat-1-the-fifo"
     assert slugify("") == "chat"
@@ -307,6 +326,12 @@ def test_export_then_fork_round_trip(sm, tmp_path):
     _write(os.path.join(run_dir, "run_meta.json"),
            {"id": "sim_0001", "status": "passed", "compileCommand": f"iverilog -I {ws} uart.v"})
     _write(os.path.join(run_dir, "uart_tb.out"), "COMPILED-BINARY-WITH-" + ws)
+    # F16: the actor event logs also carry the absolute workspace path in tool
+    # args/results — the exported bundle must not leak them.
+    _write(os.path.join(ws, "attempt_events.jsonl"),
+           '{"tool":"linter_tool","arguments":{"verilog_files":["' + ws.replace("\\", "\\\\") + '/uart.v"]}}\n')
+    _write(os.path.join(ws, "attempt_log.json"),
+           {"events": [{"tool": "read_file", "path": ws + "/uart.v"}]})
     _write(os.path.join(ws, "manifest.json"), {"sessionId": sid, "files": [{"name": "uart.v", "role": "rtl", "path": "uart.v"}], "synthTop": "uart"})
 
     out = str(tmp_path / "examples" / "uart_demo")
@@ -321,6 +346,12 @@ def test_export_then_fork_round_trip(sm, tmp_path):
     meta = json.load(open(os.path.join(bws, "sim_runs", "sim_0001", "run_meta.json")))
     assert ws not in meta["compileCommand"]
     assert not os.path.exists(os.path.join(bws, "sim_runs", "sim_0001", "uart_tb.out"))
+    # F16: the actor event logs are redacted too — no author path survives.
+    for log_name in ("attempt_events.jsonl", "attempt_log.json"):
+        with open(os.path.join(bws, log_name), encoding="utf-8") as f:
+            log_text = f.read()
+        assert ws not in log_text and ws.replace("\\", "/") not in log_text
+        assert "<workspace>" in log_text
 
     # The exported bundle is itself listable + forkable.
     assert T.list_templates(str(tmp_path / "examples"))[0]["id"] == "uart_demo"
@@ -387,6 +418,21 @@ def test_api_fork_returns_session_id(client, sm):
 
 def test_api_fork_unknown_404(client):
     assert client.post("/api/templates/ghost/fork").status_code == 404
+
+
+def test_api_patch_session_preserves_provenance(client, sm):
+    """F17: rename/move must NOT blank the forked-from chip (invariant 7). The
+    store replaces currentSession with the PATCH response, so it must carry
+    source_template."""
+    sid = client.post("/api/templates/demo_fifo/fork").json()["sessionId"]
+    # Rename → provenance still present in the response.
+    r = client.patch(f"/api/sessions/{sid}", json={"name": "My FIFO"})
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "My FIFO"
+    assert r.json()["source_template"]["id"] == "demo_fifo"
+    # And the list keeps it too (chip survives a launcher refresh).
+    listed = {s["id"]: s for s in client.get("/api/sessions").json()}
+    assert listed[sid]["source_template"]["id"] == "demo_fifo"
 
 
 def test_api_fork_hosted_400(client, monkeypatch):
