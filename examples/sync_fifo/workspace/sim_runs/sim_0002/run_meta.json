@@ -1,0 +1,26 @@
+{
+  "id": "sim_0002",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T05:16:46.567423+00:00",
+  "top": "sync_fifo_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "c304a418a3679dd1ac76d058ffdce22b4b971ae3",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0002\\sync_fifo_tb.vcd",
+  "passMarkerFound": true,
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s sync_fifo_tb -o <workspace>\\sim_runs\\sim_0002\\sync_fifo_tb.out -f <workspace>\\sim_runs\\sim_0002\\iverilog_izldg7mc.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0002\\sync_fifo_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile sync_fifo_tb.vcd opened for output.\nTEST PASSED\n<workspace>/sync_fifo_tb.v:72: $finish called at 255000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

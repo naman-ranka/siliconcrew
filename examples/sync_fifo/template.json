@@ -1,0 +1,13 @@
+{
+  "id": "sync_fifo",
+  "name": "Synchronous FIFO",
+  "description": "A parameterized single-clock FIFO taken from a buggy first cut to a clean pass \u2014 lint plus two real iverilog runs (a failing read-ordering bug, then the fix).",
+  "highlights": [
+    "Lint clean (iverilog)",
+    "Self-checking testbench: 10-deep burst read-back",
+    "Real trajectory: 1 failing sim, fixed, then passing"
+  ],
+  "top_module": "sync_fifo",
+  "platform": "sky130hd",
+  "source_note": "Authored by dogfooding the SiliconCrew platform (native iverilog)."
+}

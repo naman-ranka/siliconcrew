@@ -1,0 +1,30 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "failed",
+  "createdAt": "2026-07-07T05:16:45.987859+00:00",
+  "top": "sync_fifo_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "c304a418a3679dd1ac76d058ffdce22b4b971ae3",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\sync_fifo_tb.vcd",
+  "passMarkerFound": false,
+  "failure": {
+    "type": "test_failed",
+    "firstFailureLine": "ERROR: read 0 got xx expected 10",
+    "timeNs": null
+  },
+  "compileCommand": "iverilog -g2012 -I <workspace> -s sync_fifo_tb -o <workspace>\\sim_runs\\sim_0001\\sync_fifo_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog__x0tuuge.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\sync_fifo_tb.out",
+  "simStatus": "test_failed",
+  "stdoutTail": "VCD info: dumpfile sync_fifo_tb.vcd opened for output.\nERROR: read 0 got xx expected 10\nERROR: read 1 got xx expected 11\nERROR: read 2 got xx expected 12\nERROR: read 3 got xx expected 13\nERROR: read 4 got xx expected 14\nERROR: read 5 got xx expected 15\nERROR: read 6 got xx expected 16\nERROR: read 7 got xx expected 17\nERROR: read 8 got xx expected 18\nERROR: read 9 got xx expected 19\nTEST FAILED with 10 error(s)\n<workspace>/sync_fifo_tb.v:72: $finish called at 255000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

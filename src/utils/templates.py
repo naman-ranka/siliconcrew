@@ -374,29 +374,67 @@ def fork_from_template(
 # ---------------------------------------------------------------------------
 
 
-def _sanitize_exported_workspace(ws: str) -> None:
+# Compiled build products that are machine-specific (embed the toolchain's
+# absolute install paths), useless in a template, and pure weight — dropped from
+# an EXPORTED bundle. The waveform (.vcd), logs, and run_meta stay.
+_BUILD_ARTIFACT_EXTS = (".out", ".vvp")
+
+
+def _sanitize_exported_workspace(ws: str, redact_paths: Optional[List[str]] = None) -> None:
     """Strip the author's identity from a workspace about to be committed.
 
     * Clear ``manifest.json.sessionId`` (source session id).
     * Null every ``run_meta.json.netlist_path`` — it is an ABSOLUTE path into the
-      author's machine; the fork re-derives it against the copied run dir, so the
-      committed bundle should not carry a stale local path.
+      author's machine; the fork re-derives it against the copied run dir.
+    * Redact the author's absolute paths (source workspace, home dir) from the
+      run_meta command/log-tail strings. The fork leaves these verbatim as
+      historical evidence in a user's PRIVATE workspace (A2), but a bundle bound
+      for a PUBLIC repo must not carry ``C:\\Users\\<name>\\…`` — the command
+      SHAPE is the evidence, not the absolute prefix. Replaced with ``<workspace>``.
+    * Drop compiled build artifacts (``*.out``/``*.vvp``) under run dirs.
     * Drop a stale ``.source_template.json`` if this session was itself a fork.
     """
     _clear_manifest_session_id(ws)
+
+    # Longest-first so a nested path (workspace) is redacted before its parent
+    # (home dir) — otherwise the home prefix eats the workspace path first.
+    redactions = sorted({p for p in (redact_paths or []) if p}, key=len, reverse=True)
+
     for _run_dir, meta_path in _iter_run_metas(ws):
         try:
             with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-        except (OSError, json.JSONDecodeError):
+                raw = f.read()
+        except OSError:
+            continue
+        # Redact absolute host paths in the raw JSON text (covers command/tail
+        # strings in every separator form: native, JSON-escaped ``\\``, and ``/``).
+        for target in redactions:
+            for variant in {target, target.replace("\\", "/"), target.replace("\\", "\\\\")}:
+                raw = raw.replace(variant, "<workspace>")
+        try:
+            meta = json.loads(raw)
+        except json.JSONDecodeError:
             continue
         if isinstance(meta, dict) and meta.get("netlist_path"):
             meta["netlist_path"] = None
-            try:
-                with open(meta_path, "w", encoding="utf-8") as f:
-                    json.dump(meta, f, indent=2)
-            except OSError:
-                pass
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+        except OSError:
+            pass
+
+    for runs_name in ("synth_runs", "sim_runs"):
+        runs_root = os.path.join(ws, runs_name)
+        if not os.path.isdir(runs_root):
+            continue
+        for root, _dirs, files in os.walk(runs_root):
+            for name in files:
+                if name.lower().endswith(_BUILD_ARTIFACT_EXTS):
+                    try:
+                        os.remove(os.path.join(root, name))
+                    except OSError:
+                        pass
+
     stale = os.path.join(ws, PROVENANCE_FILE)
     if os.path.isfile(stale):
         try:
@@ -467,7 +505,10 @@ def export_session_bundle(
         src_ws, workspace_out, max_bytes=max_bytes, max_files=max_files, dirs_exist_ok=True
     )
     secret_warnings = scan_for_secrets(workspace_out)
-    _sanitize_exported_workspace(workspace_out)
+    _sanitize_exported_workspace(
+        workspace_out,
+        redact_paths=[os.path.abspath(src_ws), os.path.expanduser("~")],
+    )
 
     # Render each thread's transcript into the exported workspace. list_threads
     # is read-only; a session with no separate threads still has its "Chat 1"
@@ -478,7 +519,6 @@ def export_session_bundle(
     if not threads:
         threads = [{"id": session_id, "title": "Chat 1"}]
     conv_dir = os.path.join(workspace_out, CONVERSATIONS_SUBDIR)
-    os.makedirs(conv_dir, exist_ok=True)
     conversations: List[str] = []
     for i, t in enumerate(threads, 1):
         title = t.get("title") or f"Chat {i}"
@@ -486,6 +526,12 @@ def export_session_bundle(
             messages = asyncio.run(read_thread_messages(db_path, t["id"]))
         except Exception:
             messages = []
+        # Only ship a transcript for a thread that actually holds a conversation.
+        # A bundle authored via direct tool calls (no chat) honestly carries no
+        # conversations dir rather than a "no conversation recorded" placeholder.
+        if not messages:
+            continue
+        os.makedirs(conv_dir, exist_ok=True)
         md = render_transcript(messages, title=title, template_name=display_name)
         fname = f"chat-{i}-{slugify(title, fallback=f'chat-{i}')}.md"
         with open(os.path.join(conv_dir, fname), "w", encoding="utf-8") as f:
