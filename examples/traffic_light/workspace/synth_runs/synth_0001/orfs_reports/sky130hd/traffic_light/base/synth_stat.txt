@@ -1,0 +1,62 @@
+
+20. Printing statistics.
+
+=== traffic_light ===
+
+        +----------Local Count, excluding submodules.
+        |        +-Local Area, excluding submodules.
+        |        | 
+      176        - wires
+      176        - wire bits
+       37        - public wires
+       37        - public wire bits
+        5        - ports
+        5        - port bits
+      172 1.84E+03 cells
+        1    7.507   sky130_fd_sc_hd__a211oi_1
+        8   40.038   sky130_fd_sc_hd__a21oi_1
+        5    31.28   sky130_fd_sc_hd__a31oi_1
+        1    6.256   sky130_fd_sc_hd__and2_1
+        2   12.512   sky130_fd_sc_hd__and3_1
+        2   17.517   sky130_fd_sc_hd__and4_1
+        1    10.01   sky130_fd_sc_hd__and4_2
+        2    10.01   sky130_fd_sc_hd__buf_2
+        1    7.507   sky130_fd_sc_hd__buf_4
+        1   11.261   sky130_fd_sc_hd__buf_6
+        2    7.507   sky130_fd_sc_hd__clkbuf_1
+       31  775.744   sky130_fd_sc_hd__dfrtp_1
+        4  105.101   sky130_fd_sc_hd__dfstp_2
+        2   25.024   sky130_fd_sc_hd__ha_1
+        4   15.014   sky130_fd_sc_hd__inv_1
+        8   90.086   sky130_fd_sc_hd__mux2_2
+        2   20.019   sky130_fd_sc_hd__mux2i_1
+        7   26.275   sky130_fd_sc_hd__nand2_1
+        1    6.256   sky130_fd_sc_hd__nand2b_1
+        6   30.029   sky130_fd_sc_hd__nand3_1
+        1    7.507   sky130_fd_sc_hd__nand3b_1
+        3   18.768   sky130_fd_sc_hd__nand4_1
+        1    21.27   sky130_fd_sc_hd__nand4_4
+        1    8.758   sky130_fd_sc_hd__nand4b_1
+       23   86.333   sky130_fd_sc_hd__nor2_1
+        1    6.256   sky130_fd_sc_hd__nor2b_1
+        9   45.043   sky130_fd_sc_hd__nor3_1
+        1    10.01   sky130_fd_sc_hd__nor3_2
+        1   16.266   sky130_fd_sc_hd__nor3_4
+        1    7.507   sky130_fd_sc_hd__nor3b_1
+        5    31.28   sky130_fd_sc_hd__nor4_1
+        2   25.024   sky130_fd_sc_hd__nor4_2
+        3   63.811   sky130_fd_sc_hd__nor4_4
+        1    8.758   sky130_fd_sc_hd__nor4b_1
+        1    5.005   sky130_fd_sc_hd__o21ai_0
+        5   37.536   sky130_fd_sc_hd__o31ai_1
+        2   17.517   sky130_fd_sc_hd__o41ai_1
+        1    6.256   sky130_fd_sc_hd__or2_2
+        1    6.256   sky130_fd_sc_hd__or3_1
+        4   30.029   sky130_fd_sc_hd__or4_1
+        2   22.522   sky130_fd_sc_hd__or4_4
+        4   35.034   sky130_fd_sc_hd__xnor2_1
+        8   70.067   sky130_fd_sc_hd__xor2_1
+
+   Chip area for module '\traffic_light': 1841.766400
+     of which used for sequential elements: 880.844800 (47.83%)
+
