@@ -1,0 +1,126 @@
+{
+  "run_id": "synth_0001",
+  "dispatched_at": "2026-07-07T08:09:44.843796+00:00",
+  "timeout_sec": 1200,
+  "created_at": "2026-07-07T08:09:44.856128+00:00",
+  "backend": "local_docker",
+  "status": "completed",
+  "current_stage": "finish",
+  "max_stage": "finish",
+  "platform": "sky130hd",
+  "top_module": "sbox_aesinv",
+  "input_files": [
+    "sbox_aesinv.v",
+    "sky130.v"
+  ],
+  "spec_file": null,
+  "requested_clock_period_ns": 10.0,
+  "effective_clock_period_ns": 10.0,
+  "clock_period_ns": 10.0,
+  "clock_source": "requested",
+  "constraints_mode": "auto",
+  "utilization": 5,
+  "aspect_ratio": 1.0,
+  "core_margin": 2.0,
+  "pd_parameters": {
+    "utilization": 5,
+    "aspect_ratio": 1.0,
+    "core_margin": 2.0
+  },
+  "auto_checks": {
+    "constraints": "pass",
+    "signoff": "pass",
+    "equiv": "skip"
+  },
+  "check_notes": "All guardrails passed",
+  "stages": {
+    "constraints": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "synth": {
+      "status": "completed",
+      "artifacts": {
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\1_synth.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\1_synth.sdc",
+        "stat_report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\sbox_aesinv\\base\\synth_stat.txt"
+      }
+    },
+    "floorplan": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\sbox_aesinv\\base\\2_floorplan_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\2_floorplan.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\2_floorplan.sdc"
+      }
+    },
+    "place": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\sbox_aesinv\\base\\3_3_place_gp.json",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\3_place.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\3_place.sdc"
+      }
+    },
+    "cts": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\sbox_aesinv\\base\\4_cts_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\4_cts.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\4_cts.sdc"
+      }
+    },
+    "grt": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\sbox_aesinv\\base\\5_1_grt.log",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\5_1_grt.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\5_1_grt.sdc"
+      }
+    },
+    "route": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\sbox_aesinv\\base\\5_route_drc.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\5_route.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\5_route.sdc"
+      }
+    },
+    "finish": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\sbox_aesinv\\base\\6_finish.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\6_final.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\6_final.sdc",
+        "netlist": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\6_final.v",
+        "gds": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\sbox_aesinv\\base\\6_final.gds"
+      }
+    }
+  },
+  "provenance": {
+    "repo_commit": "c75a8df710696ff13d4d47795f7e9ab070641529",
+    "orfs_image_digest": null,
+    "pdk": "sky130hd",
+    "iverilog_version": "12.0",
+    "num_cores": 4
+  },
+  "docker_command": "docker run --rm -v <workspace>\\synth_runs\\synth_0001:/workspace -v <workspace>\\synth_runs\\synth_0001\\orfs_results:/OpenROAD-flow-scripts/flow/results -v <workspace>\\synth_runs\\synth_0001\\orfs_logs:/OpenROAD-flow-scripts/flow/logs -v <workspace>\\synth_runs\\synth_0001\\orfs_reports:/OpenROAD-flow-scripts/flow/reports -w /OpenROAD-flow-scripts/flow openroad/orfs:latest bash -c make -B DESIGN_CONFIG=/workspace/config.mk",
+  "docker_success": true,
+  "docker_stdout_tail": "       135 cd8e0ae7273e9e62fe0f\n2_2_floorplan_macro                0            113 cd8e0ae7273e9e62fe0f\n2_3_floorplan_tapcell              0            113 590702d2b4a59dcbdd29\n2_4_floorplan_pdn                  0            118 30140e51b5c1a3f0341a\n3_1_place_gp_skip_io               1            116 8deab7635d6767f9493b\n3_2_place_iop                      0            113 a8d0351a40d6eaa60ae0\n3_3_place_gp                       2            214 75042501ca6e3c783aa0\n3_4_place_resized                  1            134 75042501ca6e3c783aa0\n3_5_place_dp                       1            121 c528747ce3a1e862b844\n4_1_cts                            2            144 ad01ad58e0ea4b84bc1e\n5_1_grt                            8            250 2c84f34be858eb50d79d\n5_2_route                        182            782 20fe591b970d1f9ca590\n5_3_fillcell                       0            123 c86193f82b43db4030e9\n6_1_fill                           0            118 c86193f82b43db4030e9\n6_1_merge                          2            434                  N/A\n6_report                           3            193                  N/A\nTotal                            203            782                     \n",
+  "docker_stderr_tail": "make: Warning: File 'results/sky130hd/sbox_aesinv/base/1_synth.sdc' has modification time 0.33 s in the future\nmake: warning:  Clock skew detected.  Your build may be incomplete.\n",
+  "netlist_path": null,
+  "stdcell_manifest_version": null,
+  "stdcell_files_used": [],
+  "summary_metrics": {
+    "area_um2": 3251.8688,
+    "cell_count": 540,
+    "wns_ns": 0.0,
+    "tns_ns": 0.0,
+    "power_uw": 283.0,
+    "power_mw": 0.283,
+    "fmax_mhz": 100.0
+  },
+  "next_action": "Use search_logs_tool for detailed PPA/error verification.",
+  "finished_at": "2026-07-07T08:13:35.705703+00:00",
+  "elapsed_sec": 230.86
+}

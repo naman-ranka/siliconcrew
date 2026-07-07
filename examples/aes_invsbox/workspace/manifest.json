@@ -1,0 +1,31 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "aes_invsbox_tb.v",
+      "role": "tb",
+      "path": "aes_invsbox_tb.v"
+    },
+    {
+      "name": "sbox_aesinv.v",
+      "role": "rtl",
+      "path": "sbox_aesinv.v"
+    },
+    {
+      "name": "sky130.v",
+      "role": "rtl",
+      "path": "sky130.v"
+    }
+  ],
+  "synthTop": "sbox_aesinv",
+  "simTop": "aes_invsbox_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "aes_invsbox_tb.v",
+      "module": "aes_invsbox_tb"
+    }
+  ]
+}

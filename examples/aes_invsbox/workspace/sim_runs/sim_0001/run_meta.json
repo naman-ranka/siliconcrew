@@ -1,0 +1,27 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T08:09:44.617982+00:00",
+  "top": "aes_invsbox_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "c75a8df710696ff13d4d47795f7e9ab070641529",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\aes_invsbox_tb.vcd",
+  "passMarkerFound": true,
+  "passMarker": "TEST PASSED",
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s aes_invsbox_tb -o <workspace>\\sim_runs\\sim_0001\\aes_invsbox_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog_7124nct9.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\aes_invsbox_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile aes_invsbox_tb.vcd opened for output.\nTEST PASSED (256 bytes)\n<workspace>/aes_invsbox_tb.v:124: $finish called at 2556000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

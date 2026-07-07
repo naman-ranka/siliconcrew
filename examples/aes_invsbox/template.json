@@ -1,0 +1,13 @@
+{
+  "id": "aes_invsbox",
+  "name": "AES Inverse S-Box",
+  "description": "The AES decryption byte-substitution step, a gate-level GF(2^8) inverse S-box, adapted from Tiny Tapeout's Apache-2.0 tt08-aes-invsbox (commit e786368), taken spec -> lint -> simulation -> GDS on sky130hd entirely through the platform.",
+  "highlights": [
+    "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
+    "Timing met: WNS 0.0 ns; 540 std cells; 3252 um^2",
+    "Self-checking testbench (all 256 bytes vs FIPS-197) PASSED"
+  ],
+  "top_module": "sbox_aesinv",
+  "platform": "sky130hd",
+  "source_note": "RTL adapted from Tiny Tapeout tt08-aes-invsbox (Apache-2.0, commit e786368); kept as-is except removing keep_hierarchy so the flow flattens; original self-checking TB; authored by dogfooding SiliconCrew locally."
+}

@@ -1,0 +1,41 @@
+{
+  "session_id": "aes_invsbox",
+  "attempt_count": 2,
+  "attempts": [
+    {
+      "attempt": 1,
+      "change_type": "unknown",
+      "changes": [],
+      "rtl_lint": "fail",
+      "rtl_sim": "not_run",
+      "synth_status": "not_run",
+      "wns_ns": null,
+      "tns_ns": null,
+      "post_synth_sim": "not_run",
+      "spec_match": "unknown",
+      "started_at": "2026-07-07T08:09:44.520144+00:00",
+      "ended_at": "2026-07-07T08:09:44.834581+00:00"
+    },
+    {
+      "attempt": 2,
+      "change_type": "synth",
+      "changes": [
+        "start_synthesis"
+      ],
+      "rtl_lint": "not_run",
+      "rtl_sim": "not_run",
+      "synth_status": "running",
+      "wns_ns": null,
+      "tns_ns": null,
+      "post_synth_sim": "not_run",
+      "spec_match": "unknown",
+      "started_at": "2026-07-07T08:09:44.834581+00:00",
+      "ended_at": "2026-07-07T08:13:35.741739+00:00"
+    }
+  ],
+  "final": {
+    "success": false,
+    "best_attempt": null
+  },
+  "updated_at": "2026-07-07T08:13:35.754344+00:00"
+}
