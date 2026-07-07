@@ -236,6 +236,7 @@ def run_sim_isolated(
         "mode": mode,
         "vcdPath": vcd_rel,
         "passMarkerFound": bool(sim_result.get("pass_marker_found")),
+        "passMarker": sim_result.get("pass_marker") or pass_marker,
         "failure": failure,
         "compileCommand": sim_result.get("compile_command") or "",
         "simCommand": sim_result.get("sim_command") or "",
