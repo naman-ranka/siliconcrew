@@ -281,8 +281,14 @@ class CodexEngine:
         mcp_data_dir: Optional[str] = None,
         repo_root: Optional[str] = None,
         sdk_factory: Optional[Callable[..., Any]] = None,
+        warm_pool: Optional[Any] = None,
     ):
         self.enabled = enabled
+        # TTFT warm-keep (plans/codex-ttft-remediation.md): when a pool is
+        # injected, workers (app-server + MCP child + SDK thread) are reused
+        # across turns instead of rebuilt per turn. None = per-turn cold start,
+        # byte-for-byte the previous behavior.
+        self.warm_pool = warm_pool
         self.state_dir = os.path.abspath(
             state_dir or os.environ.get("SILICONCREW_CODEX_STATE_DIR")
             or os.path.join(os.path.expanduser("~"), ".siliconcrew", "codex-runtime")
@@ -315,65 +321,116 @@ class CodexEngine:
             ) from exc
         return openai_codex
 
+    # -- worker bring-up (spawn once; warm-keep reuses across turns) ----------
+
+    def _worker_key(self, turn: CodexTurn):
+        return (turn.session_id, turn.thread_id, turn.user_id or "")
+
+    def _worker_fingerprint(self, turn: CodexTurn) -> str:
+        from src.agents.codex.codex_warm import worker_fingerprint
+
+        return worker_fingerprint(
+            api_key=turn.api_key, account_home=turn.codex_account_home,
+            sandbox=turn.sandbox, system_prompt=turn.system_prompt,
+        )
+
+    async def spawn_worker(self, turn: CodexTurn) -> Dict[str, Any]:
+        """Cold bring-up: enter the SDK context (spawns the app-server + the
+        bound MCP child), log in, and resume/start the SDK thread. Returns the
+        parts a :class:`~src.agents.codex.codex_warm.WarmWorker` wraps."""
+        openai_codex = self.check_available()
+        self._prepare_paths(turn)
+        config = self._sdk_config(openai_codex, turn)
+        sdk_factory = self.sdk_factory or getattr(openai_codex, "AsyncCodex")
+        cm = sdk_factory(config=config)
+        codex = await cm.__aenter__()
+        try:
+            if turn.api_key:
+                await codex.login_api_key(turn.api_key)
+            thread_kwargs = self._thread_kwargs(openai_codex, turn)
+            if turn.external_thread_id:
+                try:
+                    thread = await codex.thread_resume(turn.external_thread_id, **thread_kwargs)
+                except Exception as e:
+                    print(f"[CODEX] resume {turn.external_thread_id} failed ({e}); starting fresh", file=sys.stderr)
+                    # The SDK's own conversational state for this thread is
+                    # gone (e.g. its rollout lived on a now-dead Cloud Run
+                    # instance) — replay our durable transcript into
+                    # base_instructions so the model isn't starting from a
+                    # blank slate despite the UI still showing full history.
+                    replay = _format_history_replay(turn.history)
+                    base_instructions = (
+                        f"{replay}\n{turn.system_prompt or ''}".rstrip()
+                        if replay else turn.system_prompt
+                    )
+                    thread = await codex.thread_start(
+                        base_instructions=base_instructions, config=self._thread_config(), **thread_kwargs)
+            else:
+                thread = await codex.thread_start(
+                    base_instructions=turn.system_prompt, config=self._thread_config(), **thread_kwargs)
+            external_thread_id = str(getattr(thread, "id", "") or turn.external_thread_id or "")
+            return {"cm": cm, "client": codex, "thread": thread,
+                    "external_thread_id": external_thread_id}
+        except BaseException:
+            with suppress(Exception):
+                await cm.__aexit__(None, None, None)
+            raise
+
+    def _thread_kwargs(self, openai_codex: Any, turn: CodexTurn) -> Dict[str, Any]:
+        # Account auth: omit model (an unknown name silently returns 0 tokens).
+        effective_model = turn.model_name if turn.api_key else None
+        sandbox = self._sdk_sandbox(openai_codex, turn.sandbox)
+        return {k: v for k, v in {
+            "model": effective_model, "cwd": turn.workspace, "sandbox": sandbox,
+            "approval_mode": self._sdk_approval_mode(openai_codex), "service_tier": turn.tier,
+        }.items() if v is not None}
+
     async def stream_turn(self, turn: CodexTurn) -> AsyncIterator[CodexEvent]:
         if False:  # pragma: no cover - keeps this an async generator
             yield CodexEvent(type="done")
         # [CODEX-TIMING] setup: SDK/thread bring-up before the turn is even
         # issued (login, thread_start/resume) — a separate bucket from the
         # per-tool-call timing codex_runtime.py logs around the event loop.
+        # With warm-keep a pool hit skips the bring-up entirely (warm=hit).
         setup_start = time.monotonic()
         openai_codex = self.check_available()
         self._prepare_paths(turn)
-        config = self._sdk_config(openai_codex, turn)
-        sdk_factory = self.sdk_factory or getattr(openai_codex, "AsyncCodex")
-
+        pool = self.warm_pool
+        worker = None
         try:
-            async with sdk_factory(config=config) as codex:
-                if turn.api_key:
-                    await codex.login_api_key(turn.api_key)
-                # Account auth: omit model (an unknown name silently returns 0 tokens).
-                effective_model = turn.model_name if turn.api_key else None
-                sandbox = self._sdk_sandbox(openai_codex, turn.sandbox)
-                thread_kwargs = {k: v for k, v in {
-                    "model": effective_model, "cwd": turn.workspace, "sandbox": sandbox,
-                    "approval_mode": self._sdk_approval_mode(openai_codex), "service_tier": turn.tier,
-                }.items() if v is not None}
+            if pool is not None:
+                key = self._worker_key(turn)
+                prior_state = pool.state_for(key)
+                worker = await pool.acquire(
+                    key, self._worker_fingerprint(turn),
+                    lambda: self.spawn_worker(turn),
+                    expected_external=turn.external_thread_id,
+                )
+                warm = {"ready": "hit", "starting": "join"}.get(prior_state, "miss")
+            else:
+                from src.agents.codex.codex_warm import WarmWorker
+                import asyncio as _asyncio
 
-                if turn.external_thread_id:
-                    try:
-                        thread = await codex.thread_resume(turn.external_thread_id, **thread_kwargs)
-                    except Exception as e:
-                        print(f"[CODEX] resume {turn.external_thread_id} failed ({e}); starting fresh", file=sys.stderr)
-                        # The SDK's own conversational state for this thread is
-                        # gone (e.g. its rollout lived on a now-dead Cloud Run
-                        # instance) — replay our durable transcript into
-                        # base_instructions so the model isn't starting from a
-                        # blank slate despite the UI still showing full history.
-                        replay = _format_history_replay(turn.history)
-                        base_instructions = (
-                            f"{replay}\n{turn.system_prompt or ''}".rstrip()
-                            if replay else turn.system_prompt
-                        )
-                        thread = await codex.thread_start(
-                            base_instructions=base_instructions, config=self._thread_config(), **thread_kwargs)
-                else:
-                    thread = await codex.thread_start(
-                        base_instructions=turn.system_prompt, config=self._thread_config(), **thread_kwargs)
+                parts = await self.spawn_worker(turn)
+                worker = WarmWorker(
+                    key=self._worker_key(turn), fingerprint="", loop=_asyncio.get_running_loop(),
+                    turn_lock=_asyncio.Lock(), **parts,
+                )
+                warm = "off"
 
-                external_thread_id = str(getattr(thread, "id", "") or turn.external_thread_id or "")
+            async with worker.turn_lock:
                 print(
                     f"[CODEX-TIMING] thread={turn.thread_id} event=sdk_thread_ready "
-                    f"elapsed_setup={time.monotonic() - setup_start:.2f}s",
+                    f"elapsed_setup={time.monotonic() - setup_start:.2f}s warm={warm}",
                     file=sys.stderr,
                 )
-                yield CodexEvent(type="start", external_thread_id=external_thread_id)
+                yield CodexEvent(type="start", external_thread_id=worker.external_thread_id)
 
-                turn_kwargs = {k: v for k, v in {
-                    "cwd": turn.workspace, "model": effective_model, "sandbox": sandbox,
-                    "approval_mode": self._sdk_approval_mode(openai_codex), "service_tier": turn.tier,
-                }.items() if v is not None}
+                turn_kwargs = self._thread_kwargs(openai_codex, turn)
+                turn_kwargs.pop("cwd", None)
+                turn_kwargs["cwd"] = turn.workspace
                 turn_issue_start = time.monotonic()
-                turn_handle = await thread.turn(turn.message, **turn_kwargs)
+                turn_handle = await worker.thread.turn(turn.message, **turn_kwargs)
                 print(
                     f"[CODEX-TIMING] thread={turn.thread_id} event=sdk_turn_issued "
                     f"elapsed={time.monotonic() - turn_issue_start:.2f}s",
@@ -382,11 +439,34 @@ class CodexEngine:
                 async for event in self._stream_sdk_events(turn_handle):
                     yield event
         except (CodexUnavailable, CodexTurnError):
+            await self._retire(pool, turn, worker)
             raise
-        except Exception as exc:  # noqa: BLE001 - a turn-level failure, not availability
+        except BaseException as exc:  # noqa: BLE001 - incl. cancellation (user stop)
+            # Any abnormal end retires the worker: the SDK stream state after a
+            # crash/cancel is unknown, and an honest cold start beats reusing a
+            # worker in doubt.
+            await self._retire(pool, turn, worker)
+            if isinstance(exc, (GeneratorExit, KeyboardInterrupt, SystemExit)):
+                raise
+            import asyncio as _asyncio
+            if isinstance(exc, _asyncio.CancelledError):
+                raise
             raise CodexTurnError(f"Codex turn failed: {exc}") from exc
+        else:
+            if pool is None and worker is not None:
+                await worker.close()
+            # Pool-managed workers stay warm for the next turn.
         finally:
             self._sync_auth_back(turn)
+
+    async def _retire(self, pool, turn: CodexTurn, worker) -> None:
+        if worker is None:
+            return
+        with suppress(Exception):
+            if pool is not None:
+                await pool.discard(self._worker_key(turn), worker)
+            else:
+                await worker.close()
 
     # -- path + config setup --
     def _prepare_paths(self, turn: CodexTurn) -> None:
