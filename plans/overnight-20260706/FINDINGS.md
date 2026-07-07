@@ -113,7 +113,7 @@ F5/F7/F13 confirmed (F5 fixed tonight; F13 trigger pinned: line ending in bare
 | ID | Severity | Status | Summary |
 |----|----------|--------|---------|
 | X2U-1 | LOW (ops) | EXPECTED-RESOLVED by landing deploy | favicon.ico 404 on every page load — pre-landing frontend rev has no favicon. Verify gone at endgame live-check. |
-| X2U-2 | LOW (honesty) | ASSIGNED (backend lane) | Synth Design Report claims "Simulation ⏳ Not Run" despite passed sims in-session, and "No specification file found" despite spec.md. Report generator reads stale locations. |
+| X2U-2 | LOW (honesty) | FIXED (e3f3844) | Report scanned workspace ROOT for .out/simulation.log (isolated sim runs never write there) → always "Not Run"; spec detection matched only *_spec.yaml. Now reads list_sim_runs (latest verdict + "latest of N"), recognizes spec.md/*_spec.md/spec.{yaml,yml,txt}; legacy fallbacks kept. 6 regression tests, 4 proven failing pre-fix. |
 | X2U-3 | POSITIVE | — | Save already toasts "Saved · <file>" on deployed; tonight's ee5d0e6 adds the missing FAILURE toast. F8 fully closed. |
 | X2U-4 | correction | — | F6 not reproducible live; see F6 row. |
 
