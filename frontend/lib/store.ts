@@ -271,6 +271,12 @@ const MANIFEST_REFRESH_TOOLS = new Set([
 ]);
 const RUNS_REFRESH_TOOLS = new Set(["simulation_tool", "start_synthesis", "retry_pd"]);
 
+// X2A-5: which trailing tool a dropped turn ended on decides the reconnect
+// hint. Only synthesis dispatches leave a durable Runs record; agent sims are
+// ephemeral (/tmp, no run row) and report inline only.
+const SYNTH_DISPATCH_TOOLS = new Set(["start_synthesis", "retry_pd", "wait_for_synthesis"]);
+const SIM_TOOLS = new Set(["simulation_tool", "run_isolated_simulation"]);
+
 let _manifestRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleManifestRefresh(get: () => AppState): void {
   if (_manifestRefreshTimer) return;
@@ -899,11 +905,21 @@ export const useStore = create<AppState>((set, get) => ({
       const last = messages[messages.length - 1];
       if (last && last.role === "assistant") {
         const b = last.blocks ?? [];
-        if (b.length > 0 && b[b.length - 1].type === "tool") {
-          last.blocks = [
-            ...b,
-            { type: "text", content: "_The connection was lost during this step — it may still be running. Check the Runs / Signoff panel for live status, or send a message to continue._" },
-          ];
+        const tail = b[b.length - 1];
+        if (tail && tail.type === "tool") {
+          // X2A-5: only synthesis dispatches leave a durable Runs record — a
+          // dropped sim ran ephemerally (/tmp, no run row), so pointing at the
+          // Runs panel would send the user to an empty list. Tailor the hint to
+          // what actually happened.
+          const toolName = tail.toolCall?.name ?? "";
+          const isSynth = SYNTH_DISPATCH_TOOLS.has(toolName);
+          const isSim = SIM_TOOLS.has(toolName);
+          const content = isSynth
+            ? "_The connection was lost during this step — synthesis may still be running. Check the Runs panel for live status, or send a message to continue._"
+            : isSim
+              ? "_The connection was lost during this step — it may still be running. Simulation results are ephemeral and stream inline only (no Runs entry), so send a message to continue._"
+              : "_The connection was lost during this step — it may still be running. Send a message to continue._";
+          last.blocks = [...b, { type: "text", content }];
         }
       }
       set({ messages, chatError: null });
