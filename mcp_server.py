@@ -720,14 +720,18 @@ Ready to design! What would you like to create?"""
                 return [TextContent(type="text", text=f"❌ Error creating session: {str(e)}")]
         
         elif name == "list_sessions_tool":
-            sessions = self.session_manager.get_all_sessions()
+            # Tenant scope (F1): pass the caller's scoped uid so hosted users see
+            # ONLY their own sessions. Self-host uid is None → full list (parity
+            # with the resource path and set_active_session's ownership check).
+            uid = self._scoped_user_id()
+            sessions = self.session_manager.get_all_sessions(user_id=uid)
             if not sessions:
                 return [TextContent(type="text", text="No sessions found. Create one with create_session_tool.")]
-            
+
             import json
             session_list = []
             for session_id in sessions:
-                meta = self.session_manager.get_session_metadata(session_id)
+                meta = self.session_manager.get_session_metadata(session_id, user_id=uid)
                 is_current = "← ACTIVE" if session_id == self.current_session else ""
                 session_list.append({
                     "id": session_id,
@@ -774,8 +778,14 @@ Ready to design! What would you like to create?"""
                 return [TextContent(type="text", text=f"❌ Cannot delete active session. Switch to another session first.")]
             
             try:
-                self.session_manager.delete_session(session_id)
+                # Tenant scope (F1): pass the caller's scoped uid so the
+                # ownership guard in delete_session fires. Without it a hosted
+                # user could rmtree ANY tenant's workspace/chats/checkpoints by id.
+                self.session_manager.delete_session(session_id, user_id=self._scoped_user_id())
                 return [TextContent(type="text", text=f"✅ Deleted session '{session_id}' and all its files.")]
+            except PermissionError:
+                # Do not leak the existence of another tenant's session.
+                return [TextContent(type="text", text=f"❌ Session '{session_id}' not found.")]
             except Exception as e:
                 return [TextContent(type="text", text=f"❌ Error deleting session: {str(e)}")]
         
@@ -843,6 +853,20 @@ Ready to design! What would you like to create?"""
         # per-call via session_request_scope — no process-global env mutation).
         if not self.current_session:
             return [TextContent(type="text", text="❌ No active session. Create or select one first.")]
+
+        # Defense in depth (F1 root cause 3): current_session is a process-global
+        # field on the single hosted server that multiplexes all users, so a
+        # concurrent request from another tenant can flip it underneath this
+        # caller between their set_active_session and this dispatch. Re-verify
+        # ownership before touching any workspace. Bound (Codex) mode is already
+        # constrained to one owner-validated session, so it is exempt. The
+        # durable fix is to request-scope current_session (REVIEW_FINDINGS P0 #1).
+        if (
+            self._hosted
+            and not self.bound_session
+            and not self.session_manager.owns_session(self.current_session, self._scoped_user_id())
+        ):
+            return [TextContent(type="text", text="❌ No active session for this user. Select one with set_active_session.")]
 
         # Capability gating: protected (synth/save) tools require a signed-in
         # identity. Self-host's local identity is non-anonymous → always allowed.
