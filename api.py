@@ -693,6 +693,12 @@ async def list_sessions(identity: Identity = Depends(get_identity)):
             total_tokens=meta.get("total_tokens", 0) if meta else 0,
             total_cost=meta.get("total_cost", 0.0) if meta else 0.0,
             thread_count=thread_counts.get(session_id, 0),
+            # Cheap read-only provenance-file stat (no workspace hydration, no row
+            # materialization) so the "forked from" chip survives a reload — the
+            # store selects currentSession from this list.
+            source_template=templates_mod.read_provenance(
+                session_manager.get_workspace_path(session_id)
+            ),
         ))
 
     return result

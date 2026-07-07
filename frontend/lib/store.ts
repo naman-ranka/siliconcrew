@@ -832,22 +832,6 @@ export const useStore = create<AppState>((set, get) => ({
     // Back/forward no-op: already on this session — compare before dispatch.
     if (get().currentSession?.id === sessionId) return true;
     await get().selectSession(target);
-    // Enrich with the authoritative single-GET record — it carries
-    // source_template provenance (the "forked from" chip) that the hot list
-    // endpoint omits. Best-effort + stale-guarded; SWR iron rule: merge, never
-    // blank the populated session.
-    void sessionsApi
-      .get(sessionId)
-      .then((full) => {
-        if (get().currentSession?.id !== sessionId) return;
-        set((state) => ({
-          currentSession: state.currentSession ? { ...state.currentSession, ...full } : full,
-          sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, ...full } : s)),
-        }));
-      })
-      .catch(() => {
-        /* provenance is a nicety — a failed enrich never breaks the open */
-      });
     return true;
   },
 
