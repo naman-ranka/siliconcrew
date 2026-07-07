@@ -157,33 +157,30 @@ recursion_limit, and the job finished in the background → the real synth_0001+
 though no turn "watched" them. (2) A dropped socket does NOT stop the chat turn — server
 keeps the graph running headless to completion (api.py:1636-1639, 1771-1776); the
 "connection lost — may still be running" card (store.ts:859-873) is literally true.
-(3) The steer prompt DID land as turn 3 (post-reload isStreaming=false → sent immediately,
-store.ts:890-899); the model simply IGNORED it (never edited the TB) — a model-obedience
-failure, not delivery. Per-turn budget is only `recursion_limit: 50` (api.py:1596) — a
-hanging-TB fix loop exhausts it, so turns die mid-work with raw "Sorry, need more steps".
+(3) Why the steer "never landed" — REVISED (agent's final analysis; supersedes the
+earlier "model ignored it" reading): the one-live-run-per-thread supersede guard is
+`_ACTIVE_TURNS`, a plain in-process dict (api.py:1341) whose docstring assumes Cloud Run
+session affinity (api.py:1320-1322). A page RELOAD opens a new WebSocket that can route
+to a DIFFERENT instance while the prior turn runs headless on the original one; the new
+instance's dict is empty → the supersede at api.py:1556-1560 never fires → the steer turn
+runs CONCURRENTLY against the same Postgres checkpoint, and the still-finishing turn's
+writes clobber it. HONEST CAVEAT: instance-split vs "landed-but-model-disobeyed" is not
+distinguishable from the transcript; decisive check = Cloud Run logs for thread
+x2_uart_agent_20260707 (two [CHAT] turn-starts overlapping in wall-clock with different
+instance ids ⇒ clobbered) — QUEUED into the post-deploy log pass. DURABLE FIX either way
+(X2A-7 below): enforce one-live-run-per-thread at the DB/checkpoint layer (thread-scoped
+advisory lock / run token), same family as REVIEW_FINDINGS P0 #1. Aggravator:
+`recursion_limit: 50` per turn (api.py:1596) makes turns die mid-work with a raw error.
 
-| ID | Severity | Status | Summary |
-|----|----------|--------|---------|
-| X2A-1 | HIGH (honesty, model layer) | OPEN | Delegate's final prose fabricated "successfully verified … RTL Simulation: Passed, 8/8 tests, TEST PASSED" — no sim ever passed (all timed out); TB still had no clk init. Cards told the truth; the model's summary lied. Argues for a Claude default in the hosted delegate. |
-| X2A-2 | MED-HIGH (honesty, platform artifact) | OPEN | `generate_report_tool`'s design_report.md "Verification Results" table marks **Simulation: ✅ Pass** when no sim passed (likely inferred from a partial dump.vcd / default). Persisted, authoritative-looking. Fix: gate the report's sim verdict on the last sim's pass_marker_found/status. Synth PPA in the same report IS real. |
-| X2A-3 | MED (model capability) | OPEN | For a moderately complex bit-period-sampling TB, the delegate wrote a broken TB (clk never initialized → sim hangs to 60s ceiling), looped ~6× across two TBs, and never diagnosed it even when handed the exact fix. |
-| X2A-4 | MED (legibility, inv.6) | OPEN | Artifacts Index home tab doesn't update live during a run — Files/Runs showed 0 through the whole turn (and after synth_0001 was created); only a full reload populated them. Inline cards DO stream live → two divergent views during a live turn. |
-| X2A-5 | LOW-MED (legibility) | OPEN | "Connection lost" card says "Check the Runs / Signoff panel," but agent sims are ephemeral (run_isolated_simulation in /tmp scratch, no run record) → that panel is empty for sims. Hint is correct only for synthesis. |
-| X2A-6 | LOW (robustness/UX) | OPEN | recursion_limit=50 exhausted by a normal fix loop → raw LangGraph error shown verbatim ("…set the recursion_limit config key… docs.langchain.com/…GRAPH_RECURSION_LIMIT") + "Sorry, need more steps"; no Continue/Resume affordance (user must know to type "continue"). |
-
-Cross-ref re-observed: **F5 CONFIRMED still live on deployed frontend rev 00049** (DialogContent-requires-DialogTitle fired from the New Session dialog, not just ⌘K; + companion missing-aria-describedby warning); favicon 404 (X2U-1); F11/F12 legibility fix present in the agent shell (POSITIVE); F9 GDS dependable (POSITIVE).
-
-## Explore round 2 — agent/delegate posture (reports/explore2-agent.md, session x2_uart_agent_20260707)
-
-Verdict: the delegate FRAME is trustworthy (honest cards, honest failure detail,
-unread markers, honest connection-loss, real GDS) — the hosted default MODEL
-(Gemini 3.5 Flash) is the weak point: broken TB (clk never initialized), ~6
-blind edit→timeout loops, ignored the handed fix, then FABRICATED "verified,
-8/8 passing" prose its own cards refuted. Agent-posture contract verified
-honored (no palette, read-only files, Index home tab, unread markers).
+Cross-ref re-observed: **F5 on deployed rev 00049 also fires from the New Session
+dialog** — at HEAD, CreateSessionModal is hand-rolled (no Radix Dialog) and every Radix
+Dialog carries a DialogTitle, so this should vanish with the frontend deploy (verify in
+the post-deploy console check); favicon 404 (X2U-1); F11/F12-style failure detail present
+in agent-shell cards (POSITIVE); F9 GDS dependable (POSITIVE).
 
 | ID | Severity | Triage |
 |----|----------|--------|
+| X2A-7 (cross-instance supersede hazard: `_ACTIVE_TURNS` is process-local; reload can route a new WS to another instance → two turns write one checkpoint) | MED-HIGH (correctness under multi-instance) | OPEN — owner-visible: durable fix is a DB-layer thread lock/run token (P0 #1 family). Not fixed tonight (architectural); decisive log check queued post-deploy. |
 | X2A-1 (delegate fabricates verification success in closing prose) | HIGH (model layer) | OWNER DECISION: model-quality, not platform code — strongest argument yet for a Claude default in the hosted delegate. Platform state machinery stayed honest throughout. |
 | X2A-2 (design_report.md marked "Simulation ✅ Pass" with zero passing sims) | MED-HIGH | RESOLVED at HEAD: e3f3844 makes the report read sim_runs truth; 9fde1da hardens the legacy fallback to fail-dominant ('0 passed, 3 failed' can no longer read Pass). Agent-session case (ephemeral sims, no runs) now honestly reads "Not Run". Deploys tonight. |
 | X2A-3 (model can't close verification loop on a UART TB) | MED | Same owner decision as X2A-1 (model capability). |
