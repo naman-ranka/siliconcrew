@@ -10,11 +10,11 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "SiliconCrew Architect",
-  description: "Autonomous RTL Design Agent - AI-powered hardware design",
-  icons: {
-    icon: "/favicon.ico",
-  },
+  title: "SiliconCrew — open-source AI agent for RTL design",
+  description:
+    "An open-source autonomous LLM agent for RTL design, verification, and synthesis — spec to GDS on open EDA tools (OpenROAD, Yosys, Icarus Verilog, Verilator, sky130).",
+  // Favicon is supplied by the App Router file convention (app/icon.svg), so no
+  // manual icons entry (the old /favicon.ico reference 404'd — none existed).
 };
 
 export const viewport: Viewport = {
