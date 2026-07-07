@@ -93,3 +93,61 @@ def test_mcp_sync_decision_matches_mutating_set():
 
     misclassified = readers & MUTATING_TOOLS
     assert not misclassified, f"readers wrongly in MUTATING_TOOLS (needless upload): {misclassified}"
+
+
+# --- 4B (hosted-latency plan): the bound Codex subprocess defers its per-tool
+# sync to the parent's turn-end background sync ------------------------------
+
+
+def _mcp_server_with_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("RTL_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RTL_WORKSPACE", str(tmp_path / "ws"))
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "ws").mkdir(parents=True, exist_ok=True)
+    import mcp_server as mcp_mod
+
+    from src.utils.session_manager import SessionManager
+    mgr = SessionManager(base_dir=str(tmp_path / "ws"), db_path=str(tmp_path / "data" / "state.db"))
+    sid = mgr.create_session("designA", user_id=None)
+    return mcp_mod, sid
+
+
+def _call_write_file(mcp_mod, server, monkeypatch):
+    recorded = {}
+
+    async def fake_run_in_session(session_id, fn, *args, sync=True, **kwargs):
+        recorded["sync"] = sync
+        return "ok"
+
+    monkeypatch.setattr(mcp_mod, "run_in_session", fake_run_in_session)
+    out = asyncio.run(server.call_tool("write_file", {"filename": "a.v", "content": "x"}))
+    assert "ok" in " ".join(getattr(r, "text", "") for r in out)
+    return recorded
+
+
+def test_bound_codex_server_defers_per_tool_sync(tmp_path, monkeypatch):
+    """When the parent owns the turn-end sync (the Codex engine sets
+    SILICONCREW_MCP_DEFER_WORKSPACE_SYNC=1 for the bound subprocess it spawns),
+    even a MUTATING tool call runs with sync=False — a tool result must not
+    block on a full-workspace upload."""
+    monkeypatch.setenv("SILICONCREW_MCP_DEFER_WORKSPACE_SYNC", "1")
+    mcp_mod, sid = _mcp_server_with_session(tmp_path, monkeypatch)
+    server = mcp_mod.RTLDesignMCPServer(codex_tools=True, bound_session=sid)
+    assert server.defer_workspace_sync is True
+
+    recorded = _call_write_file(mcp_mod, server, monkeypatch)
+    assert recorded["sync"] is False, (
+        "mutating call must defer the workspace upload to the parent's turn-end sync"
+    )
+
+
+def test_unflagged_server_still_syncs_mutating_tools(tmp_path, monkeypatch):
+    """Without the defer flag (any non-Codex MCP client) the mutating-tool sync
+    stays exactly as before — gating it off would silently lose writes."""
+    monkeypatch.delenv("SILICONCREW_MCP_DEFER_WORKSPACE_SYNC", raising=False)
+    mcp_mod, sid = _mcp_server_with_session(tmp_path, monkeypatch)
+    server = mcp_mod.RTLDesignMCPServer(codex_tools=True, bound_session=sid)
+    assert server.defer_workspace_sync is False
+
+    recorded = _call_write_file(mcp_mod, server, monkeypatch)
+    assert recorded["sync"] is True

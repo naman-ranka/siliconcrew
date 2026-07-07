@@ -191,6 +191,17 @@ class RTLDesignMCPServer:
         self.tool_filter_mode = "all"  # Options: "all", "essential", "custom"
         self.custom_tool_filter = None  # List of tool names or categories
         self.codex_tools = codex_tools  # Expose Codex-only MCP helpers when enabled
+        # 4B (hosted-latency plan): when the parent process owns the once-per-
+        # turn workspace sync (the Codex engine sets this env key for the bound
+        # subprocess it spawns), skip the per-tool blocking upload here — a
+        # mutating tool result must not wait on a full-workspace GCS PUT. The
+        # parent's turn-end background sync tars the SAME scratch dir this
+        # subprocess writes into (shared WORKSPACE_SCRATCH_DIR), so nothing is
+        # lost — same crash exposure as the native agent's proven cadence.
+        self.defer_workspace_sync = (
+            os.environ.get("SILICONCREW_MCP_DEFER_WORKSPACE_SYNC", "").strip().lower()
+            in ("1", "true", "yes")
+        )
 
         # Identity for capability gating. MCP itself is a signed-in feature;
         # stdio/self-host is the trusted local user (full access). Hosted/remote
@@ -921,6 +932,10 @@ Ready to design! What would you like to create?"""
             # mutating call's sync (flush-on-next-mutation) — the only exposure
             # is a tail of pure-read calls before an instance recycle with no
             # following write, which is bounded and honest, not silent.
+            # 4B: when the parent process syncs once per turn (Codex bound
+            # mode, defer_workspace_sync), even a mutating call skips the
+            # blocking per-tool upload — the write is persisted by the parent's
+            # turn-end background sync instead.
             mutates = name in _SHARED_MUTATING_TOOLS
             result = await run_in_session(
                 active_session,
@@ -928,7 +943,7 @@ Ready to design! What would you like to create?"""
                 arguments,
                 user_id=uid,
                 tier=identity.tier,
-                sync=mutates,
+                sync=mutates and not self.defer_workspace_sync,
             )
             log_tool_result(
                 workspace=active_workspace,

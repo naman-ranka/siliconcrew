@@ -435,6 +435,11 @@ class CodexEngine:
         args = [mcp_server, "--transport", "stdio", "--codex-tools", "--bound-session", turn.session_id]
         env = {k: os.environ[k] for k in _SETTINGS_PASSTHROUGH if k in os.environ}
         env.update({"RTL_WORKSPACE": self._workspace_base, "RTL_DATA_DIR": self.mcp_data_dir, "PYTHONUNBUFFERED": "1"})
+        # 4B (hosted-latency plan): the parent process persists the workspace
+        # once per turn in the background (api.py's extension-turn sync), so the
+        # bound MCP subprocess must not block each mutating tool result on a
+        # full-workspace upload of the SAME shared scratch dir.
+        env["SILICONCREW_MCP_DEFER_WORKSPACE_SYNC"] = "1"
         token = turn.mcp_token or os.environ.get("CODEX_MCP_BEARER_TOKEN") or os.environ.get("SILICONCREW_MCP_TOKEN")
         if token:
             env["SILICONCREW_MCP_TOKEN"] = token

@@ -1543,6 +1543,23 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
                 if _ext_stopped:
                     await _ext_send({"type": "stopped", "tokens": {"input": 0, "output": 0}})
+
+                # Persist workspace changes once per turn, in the background —
+                # the SAME cadence and mechanism as the native path below. The
+                # Codex MCP subprocess defers its per-tool workspace sync to
+                # this turn-level sync (SILICONCREW_MCP_DEFER_WORKSPACE_SYNC),
+                # so a mutating tool result no longer blocks on a full-tree
+                # upload. Fires for completed, stopped, and headless turns
+                # alike, so whatever was written so far is persisted.
+                _ext_sync = getattr(_ws_provider, "sync", None)
+                if callable(_ext_sync):
+                    async def _ext_background_sync() -> None:
+                        try:
+                            await asyncio.to_thread(_ext_sync, session_id)
+                        except Exception as exc:
+                            print(f"[WARN] workspace sync failed: {exc}")
+
+                    _run_in_background(_ext_background_sync())
                 continue
             # --- native LangChain turn (unchanged) ----------------------------
 
