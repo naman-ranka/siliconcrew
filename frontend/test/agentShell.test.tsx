@@ -234,4 +234,18 @@ describe("AgentShell (view=agent, Wave 8 slide-over)", () => {
     expect(screen.getByTestId("rail-new-session")).toBeInTheDocument();
     expect(screen.getByTestId("rail-session-s1")).toHaveTextContent("sync_fifo");
   });
+
+  it("the rail's own top-left ☰ closes it — the opener corner also collapses (F7)", async () => {
+    // The header ☰ is buried under the open rail (z-90); the rail carries a
+    // matching ☰ in the same corner so the toggle is never unreachable.
+    render(<Workbench sessionId="s1" view="agent" />);
+    await screen.findByTestId("workbench-agent");
+
+    fireEvent.click(screen.getByTestId("agent-rail-toggle"));
+    expect(screen.getByTestId("agent-nav-rail").getAttribute("data-open")).toBe("true");
+
+    fireEvent.click(screen.getByTestId("rail-collapse"));
+    expect(useWorkbenchUiStore.getState().navRailOpen).toBe(false);
+    expect(screen.getByTestId("agent-nav-rail").getAttribute("data-open")).toBe("false");
+  });
 });
