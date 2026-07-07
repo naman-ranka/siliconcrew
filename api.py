@@ -1186,6 +1186,59 @@ async def get_thread_history(session_id: str, tid: str, identity: Identity = Dep
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/sessions/{session_id:path}/threads/{tid}/runtime/status")
+async def thread_runtime_status(session_id: str, tid: str, identity: Identity = Depends(get_identity)):
+    """Honest runtime-worker readiness for one thread (TTFT 3C).
+
+    Generic seam: the shell asks the thread's registered runtime IF it exposes
+    ``worker_state`` (Codex warm-keep does); native / plain runtimes report
+    "unavailable" and the UI shows nothing. States: ready | starting | cold |
+    unavailable — never a fake "ready".
+    """
+    uid = _require_owned(session_id, identity)
+    if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    row = session_manager.get_thread(tid, user_id=uid)
+    handler = runtime_registry.handler_for(runtime_registry.resolve_runtime(row))
+    fn = getattr(handler, "worker_state", None) if handler is not None else None
+    if fn is None:
+        return {"state": "unavailable"}
+    return {"state": fn(session_id=session_id, thread_id=tid, user_id=uid)}
+
+
+@app.post("/api/sessions/{session_id:path}/threads/{tid}/runtime/prewarm")
+async def prewarm_thread_runtime(
+    session_id: str, tid: str,
+    identity: Identity = Depends(get_identity),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Start the thread's runtime worker before the first message (TTFT 3B).
+
+    Fire-and-forget: kicks the spawn and returns the current state immediately
+    ("starting"), so the cold start overlaps the user's read-and-type time. An
+    early send coalesces onto the same spawn server-side (the turn waits for
+    the worker it pre-warmed, never double-spawns). Owner-scoped exactly like
+    every other thread route; the caller's bearer is what the worker's bound
+    MCP child authenticates with.
+    """
+    uid = _require_owned(session_id, identity)
+    if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    row = session_manager.get_thread(tid, user_id=uid)
+    handler = runtime_registry.handler_for(runtime_registry.resolve_runtime(row))
+    fn = getattr(handler, "prewarm", None) if handler is not None else None
+    if fn is None:
+        return {"state": "unavailable"}
+    # Same workspace resolution as a real turn (hydrates in hosted; off-loop).
+    workspace = await asyncio.to_thread(get_workspace_provider().workspace_for, session_id)
+    state = await fn(
+        session_id=session_id, thread_id=tid, user_id=uid, workspace=workspace,
+        tier=identity.tier, auth_token=auth_engine.parse_bearer(authorization),
+        thread_row=row,
+    )
+    return {"state": state}
+
+
 # Catch-all single-session GET. MUST stay below the specific /threads GET routes
 # above: ``session_id`` is greedy (``:path``), so this would otherwise shadow
 # ``GET …/threads`` and ``GET …/threads/{tid}/history`` (binding session_id to
