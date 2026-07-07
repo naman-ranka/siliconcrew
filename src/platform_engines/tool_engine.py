@@ -62,6 +62,7 @@ class ToolEngine(Protocol):
         timeout: int,
         workdir: str = "/workspace",
         name_prefix: str = "sc_tool",
+        base_env: Optional[dict] = None,
     ) -> ToolResult:
         ...
 
@@ -78,7 +79,10 @@ class DockerToolEngine:
 
     mode = "docker"
 
-    def run(self, *, image, command, cwd, env=None, timeout, workdir="/workspace", name_prefix="sc_tool"):
+    def run(self, *, image, command, cwd, env=None, timeout, workdir="/workspace", name_prefix="sc_tool", base_env=None):
+        # base_env is a NATIVE-only concern: the container already starts from a
+        # clean image env and receives ONLY the explicit -e ``env`` keys, so the
+        # docker path is inherently scrubbed. Accepted for interface parity.
         if not shutil.which("docker"):
             return _result(
                 False, "", f"Docker not found in PATH; this tool runs in the {image} container "
@@ -105,9 +109,15 @@ class NativeToolEngine:
 
     mode = "native"
 
-    def run(self, *, image, command, cwd, env=None, timeout, workdir="/workspace", name_prefix="sc_tool"):
+    def run(self, *, image, command, cwd, env=None, timeout, workdir="/workspace", name_prefix="sc_tool", base_env=None):
         os.makedirs(cwd, exist_ok=True)
-        full_env = {**os.environ, **(env or {})}
+        # base_env, when supplied, REPLACES os.environ as the base — a caller that
+        # runs untrusted user code (e.g. cocotb runs the agent's Python) passes a
+        # scrubbed base so backend secrets (API keys, DB URLs) never leak into the
+        # child. Default None preserves today's behavior (inherit os.environ) for
+        # xls/sby, whose commands are tool invocations, not user scripts.
+        base = os.environ if base_env is None else base_env
+        full_env = {**base, **(env or {})}
         proc = None
         try:
             proc = subprocess.Popen(
