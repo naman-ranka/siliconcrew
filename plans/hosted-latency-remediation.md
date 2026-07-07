@@ -1,6 +1,60 @@
 # Hosted latency remediation — requirements & intent
 
-**Status:** DRAFT for review. This is a *direction* document — it states the
+**Status:** IMPLEMENTED (4B, 4C quick cuts, 4A) on
+`claude/hosted-latency-remediation-obkib4`; 4C warm-keep deferred to its own
+plan as §4C intended. This section is authoritative over the body below.
+
+**What shipped (in landing order):**
+
+1. **4B — Codex once-per-turn background sync.** The extension-turn branch in
+   the chat WS handler now fires the same turn-end background workspace sync
+   the native path uses (it previously `continue`d past it — Codex never got a
+   parent-side sync). The Codex engine sets
+   `SILICONCREW_MCP_DEFER_WORKSPACE_SYNC=1` for its bound MCP subprocess, which
+   then skips the per-mutating-tool blocking upload; parent and subprocess
+   share the scratch dir, so the turn-end sync persists everything. Decision on
+   the §9 open question: once-per-turn (native parity) is sufficient — same
+   crash exposure as the native agent. Non-Codex MCP clients are unchanged.
+2. **4C quick cuts.** `SILICONCREW_SCHEMA_READY=1` (set by the engine for the
+   subprocess; parent provisioned at boot) skips `init_schema()` DDL; WorkOS
+   token verification resolves signing keys through a TTL'd (600s) file-cached
+   JWKS on instance-local disk (kid miss forces one refresh; verification
+   itself unchanged, fail-closed); `src.agents.architect` is imported lazily in
+   mcp_server (it only backs the prompt-file fallback; ~0.1s warm, more cold).
+3. **4A — incremental sync.** Answer to §9: per-file **content-addressed
+   blobs** (`workspaces/<sid>/.sc_blobs/<sha256>`) + one small **manifest
+   object written LAST** as the atomic commit point (its content hash is the
+   cache token — no new generation API). Blobs are immutable, so any manifest
+   names an internally consistent tree; a crash mid-sync leaves orphan blobs
+   but consistent readable state; deletes/renames propagate because a cold
+   instance reconstructs exactly the manifest's tree. Manifest records
+   mode/mtime_ns/symlinks/empty dirs (tree-faithful hydration — the mtime
+   sharp edge). A git-index-style stat-cache sidecar (racy-timestamp guard)
+   skips re-hashing; uploads stage through hashed snapshots so concurrent
+   writes can never store bytes under a mismatched hash (review finding). A
+   no-change sync costs zero writes. Legacy tar workspaces hydrate as before,
+   convert on first sync, and the stale tar is deleted; stores without the
+   raw-object surface keep tar behavior; self-host untouched.
+
+**Deferred (documented, not dropped):** 4C warm-keep (own plan, per §8.4);
+blob GC for superseded content (joins run retention/GC); live-deploy
+measurement of the §6 numbers (the F2-style before/after on rev N+1 — the
+regression tests prove the mechanism, the deploy proves the wall-clock);
+GoogleOAuthVerifier keeps google-auth's own fetching (WorkOS is the hosted
+path).
+
+**Rollout note (one-time, per session):** during a mixed-revision deploy
+window, an old-code instance reads the legacy tar, which is stale (or deleted)
+for sessions already converted by new code. Warm old instances keep serving
+their materialized scratch; only a cold old instance could see a stale/empty
+view until the rollout completes. Convertions happen on first post-deploy
+mutating sync, so the exposure is sessions actively written during the flip.
+
+---
+
+The original direction document follows, unchanged.
+
+This is a *direction* document — it states the
 problem, the evidence, who is affected, the intent of the fix, and the hard
 constraints any implementation must honor. It deliberately does **not** prescribe
 the implementation (data structures, function signatures, diffs). The reviewing
