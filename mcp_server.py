@@ -1141,12 +1141,25 @@ Ready to design! What would you like to create?"""
 
             # Streamable HTTP transport needs an active connect() context before
             # handling requests.
+            #
+            # stateless=True MUST match the session-less transport above
+            # (mcp_session_id=None). The default (stateless=False) leaves the
+            # single long-lived ServerSession in NotInitialized until an
+            # `initialize` handshake, so any request arriving before that — e.g.
+            # a client reconnecting after a server restart WITHOUT re-handshaking
+            # — makes ServerSession._received_request raise "Received request
+            # before initialization was complete", which the SDK receive loop
+            # blanket-maps to JSON-RPC -32602 "Invalid request parameters" (a
+            # bad-argument lie). Pairing stateless transport with a stateless
+            # session (as the SDK's own StreamableHTTPSessionManager does) treats
+            # every request as post-init, so a reconnect just works. (F9c)
             async with session_transport.connect() as streams:
                 mcp_task = asyncio.create_task(
                     self.server.run(
                         streams[0],
                         streams[1],
-                        self.server.create_initialization_options()
+                        self.server.create_initialization_options(),
+                        stateless=True,
                     )
                 )
                 try:
