@@ -46,7 +46,26 @@ honest failure panel in the report viewer — using data the backend already had
 never surfaced. This is the single change that turns the workbench from "capable
 for someone who already knows" into "teaches a newcomer".
 
-### 3. Honest error paths
+### 3. Hosted Codex latency — the F2 fix, measured live before/after
+You asked specifically about Codex performance. The exploration ran the same
+3-turn Codex-tab conversation on the deployed app before and after the deploy,
+and the fix is decisive. On a post-synthesis workspace, **every** read-only tool
+call had been paying a full whole-workspace tar+GCS-upload (~14s each); the F2
+fix gates that sync to mutating tools only. Same tools, same design, live:
+
+| tool call (post-synth) | before (rev 00060) | after (rev 00063) |
+|---|---|---|
+| get_synthesis_metrics | 13.98s | 0.00s |
+| get_route_drc_summary | 15.73s | 0.00s |
+| get_manifest | 13.78s | 0.04s |
+| read_file | 14.2s | 0.05s |
+
+A "add a port and re-verify" turn on a post-synth workspace went from ~4 minutes
+of mostly-sync-wait to fast. (F3 cold-start ~11s/turn is unchanged — that's the
+warm-subprocess follow-up, not shipped tonight.) The in-app Codex brain also came
+up clean on the freshly-rolled revision with no relink.
+
+### 4. Honest error paths
 - **F9c/F15:** root-caused the dishonest `-32602 "Invalid request parameters"` the
   MCP surfaced during deploys — it was the SDK's pre-init guard being blanket-mapped
   because the session-less HTTP transport ran with `stateless=False`. Fixed both
@@ -117,12 +136,13 @@ Lesson + fix logged: never run the deploy script to "inspect", and give it a rea
   full-materialization hypothesis, and the `.agents/` gitignore question (D1).
 
 ## Recommended next checks (not blocking)
-1. **codex leg 2** — re-run the Codex-tab conversation; F2's fix should drop the
-   ~14s post-synth tool calls to sub-second (the headline perf win, verified in
-   code, not yet re-measured live).
-2. **Reconnect the claude.ai "Silicon crew" MCP connector once** (this deploy
-   swapped revisions; the stateless fix prevents it for *future* deploys).
-3. Consider the F9b ORFS job-image rebuild when you're at the console.
+1. **Reconnect the claude.ai "Silicon crew" MCP connector once** (this deploy
+   swapped revisions; the stateless fix prevents it for *future* deploys). Note:
+   the in-app Codex brain already came up clean on the new revision with no relink
+   — this is only the external claude.ai connector surface.
+2. Consider the F9b ORFS job-image rebuild when you're at the console.
+
+(codex leg 2 — the F2 before/after — is DONE and folded into §3 above.)
 
 ## Process notes
 Ran as a fleet of opus subagents (implementers, explorers, reviewers) with
