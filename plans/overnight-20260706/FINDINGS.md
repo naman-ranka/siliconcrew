@@ -117,6 +117,31 @@ F5/F7/F13 confirmed (F5 fixed tonight; F13 trigger pinned: line ending in bare
 | X2U-3 | POSITIVE | — | Save already toasts "Saved · <file>" on deployed; tonight's ee5d0e6 adds the missing FAILURE toast. F8 fully closed. |
 | X2U-4 | correction | — | F6 not reproducible live; see F6 row. |
 
+## Explore round 2 — hosted MCP / FIR (reports/explore2-mcp.md, session x2_fir_mcp_20260707)
+
+Engine verdict: capable + honest end-to-end (clean-room FIR → real GDS; honest
+failing timing WNS -6.36ns for a deliberately unpipelined MAC; F9 re-confirmed
+via auto_checks.equiv=skip). All weak points are hosted plumbing/legibility.
+Triage of X2M findings:
+
+| ID | Severity | Triage |
+|----|----------|--------|
+| X2M-1 (post-synth degradation: hangs + -32602 flapping) | HIGH | EXPECTED-RESOLVED by tonight's deploy: live rev 00060 still runs the unconditional whole-workspace sync (F2 fix f095fcb undeployed) — a post-synth workspace (20 ODBs, 2 GDS) makes every call tar+PUT the tree; the -32602 flapping is the F9c pre-init mapping after instance recycle (stateless fix undeployed). POST-DEPLOY VERIFY: on the existing x2_fir_mcp_20260707 session, read-only MCP calls (read_spec, list_files, get_synthesis_status) must return fast and repeatedly. |
+| X2M-2 (all 5 PD-summary tools -32602 on a completed run, incl. no-arg get_cts_summary, while status/search/report worked same-minute) | HIGH | ASSIGNED (small-fixes lane): family-wide pattern suggests a REAL schema/validation rejection specific to these wrappers, not load. Investigate signatures vs working tools; add an every-tool schema-validation guard test. |
+| X2M-3 (-32602 lie across ~8 tools) | MED | F9c CONFIRMED with broad evidence; fix ships tonight. |
+| X2M-4 (wait_for_synthesis >300s despite max_wait_sec=120; status read hung) | MED | Largely F2-coupled (sync stall inside the read path) → expected-resolved; post-deploy verify. If a status read can EVER exceed its ceiling post-F2, that's a real invariant-5/6 hole to fix then. |
+| X2M-5 (schematic_tool leaks raw docker-socket error on hosted) | MED | ASSIGNED (small-fixes lane): honest hosted message via settings.hosted gate; hosted schematic support = owner decision, deferred. |
+| X2M-6 (waveform: raw binary values, undocumented VCD-native time units) | LOW-MED | DEFERRED, documented — good first fix for a future wave (radix + unit hints). |
+| X2M-7 (apply_patch rejects context-only diffs) | LOW | DEFERRED — document line-numbered-hunk requirement or accept context hunks. |
+| X2M-8 (14-min synth stage with empty last_log_lines) | LOW | DEFERRED — feeds the known "stream synth-stage logs" idea (F12 family). |
+| X2M-9 (256 mW total power for 8k-cell sky130 design, no sanity flag) | LOW | DEFERRED — units/parse sanity check on power metrics; unconfirmed concern. |
+| X2M-10 (stage_history ended_at batch-stamped identical; manifest sessionId "") | LOW | Known-deferred hosted per-stage timings; sessionId note logged. |
+
+Ops decision: the CODEX explorer is RESEQUENCED to AFTER the deploy — pre-deploy
+it would re-document known-fixed bugs (F2 sync latency, -32602); post-deploy it
+doubles as live verification of F2/F9c/X2M-1/X2M-4 resolution and of the
+connector surviving the roll (F15/stateless).
+
 ## Wave 11 adversarial review (reports/review-templates.md) — SAFE TO KEEP
 
 Verdict: safe; build the landing gallery on it. A1–A8 all verified honored (create-first,
