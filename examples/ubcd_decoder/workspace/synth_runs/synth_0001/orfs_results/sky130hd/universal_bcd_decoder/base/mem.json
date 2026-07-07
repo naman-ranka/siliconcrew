@@ -1,0 +1,3160 @@
+{
+  "creator": "Yosys 0.62+0 (git sha1 UNKNOWN-dirty, g++ 11.4.0-1ubuntu1~22.04.3 -fPIC -O3)",
+  "modules": {
+    "universal_bcd_decoder": {
+      "attributes": {
+        "hdlname": "universal_bcd_decoder",
+        "top": "00000000000000000000000000000001",
+        "src": "/workspace/inputs/ubcd.v:27.1-114.10"
+      },
+      "ports": {
+        "A": {
+          "direction": "input",
+          "bits": [ 2 ]
+        },
+        "B": {
+          "direction": "input",
+          "bits": [ 3 ]
+        },
+        "C": {
+          "direction": "input",
+          "bits": [ 4 ]
+        },
+        "D": {
+          "direction": "input",
+          "bits": [ 5 ]
+        },
+        "V0": {
+          "direction": "input",
+          "bits": [ 6 ]
+        },
+        "V1": {
+          "direction": "input",
+          "bits": [ 7 ]
+        },
+        "V2": {
+          "direction": "input",
+          "bits": [ 8 ]
+        },
+        "X6": {
+          "direction": "input",
+          "bits": [ 9 ]
+        },
+        "X7": {
+          "direction": "input",
+          "bits": [ 10 ]
+        },
+        "X9": {
+          "direction": "input",
+          "bits": [ 11 ]
+        },
+        "RBI": {
+          "direction": "input",
+          "bits": [ 12 ]
+        },
+        "LT": {
+          "direction": "input",
+          "bits": [ 13 ]
+        },
+        "BI": {
+          "direction": "input",
+          "bits": [ 14 ]
+        },
+        "AL": {
+          "direction": "input",
+          "bits": [ 15 ]
+        },
+        "Qa": {
+          "direction": "output",
+          "bits": [ 16 ]
+        },
+        "Qb": {
+          "direction": "output",
+          "bits": [ 17 ]
+        },
+        "Qc": {
+          "direction": "output",
+          "bits": [ 18 ]
+        },
+        "Qd": {
+          "direction": "output",
+          "bits": [ 19 ]
+        },
+        "Qe": {
+          "direction": "output",
+          "bits": [ 20 ]
+        },
+        "Qf": {
+          "direction": "output",
+          "bits": [ 21 ]
+        },
+        "Qg": {
+          "direction": "output",
+          "bits": [ 22 ]
+        },
+        "RBO": {
+          "direction": "output",
+          "bits": [ 23 ]
+        }
+      },
+      "cells": {
+        "$and$/workspace/inputs/ubcd.v:37$5472": {
+          "hide_name": 1,
+          "type": "$and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:37.15-37.35"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 24 ],
+            "B": [ 14 ],
+            "Y": [ 25 ]
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:38$5477": {
+          "hide_name": 1,
+          "type": "$and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:38.15-38.35"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 26 ],
+            "B": [ 14 ],
+            "Y": [ 27 ]
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:39$5482": {
+          "hide_name": 1,
+          "type": "$and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:39.15-39.35"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 28 ],
+            "B": [ 14 ],
+            "Y": [ 29 ]
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:40$5487": {
+          "hide_name": 1,
+          "type": "$and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:40.15-40.35"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 30 ],
+            "B": [ 14 ],
+            "Y": [ 31 ]
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:41$5492": {
+          "hide_name": 1,
+          "type": "$and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:41.15-41.35"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 32 ],
+            "B": [ 14 ],
+            "Y": [ 33 ]
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:42$5497": {
+          "hide_name": 1,
+          "type": "$and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:42.15-42.35"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 34 ],
+            "B": [ 14 ],
+            "Y": [ 35 ]
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:43$5502": {
+          "hide_name": 1,
+          "type": "$and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:43.15-43.35"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 36 ],
+            "B": [ 14 ],
+            "Y": [ 37 ]
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:44$5509": {
+          "hide_name": 1,
+          "type": "$and",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:44.15-44.46"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 38 ],
+            "B": [ 14 ],
+            "Y": [ 23 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5570": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000011",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 39, 40, 41 ],
+            "Y": [ 42 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5572": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 43, 44 ],
+            "Y": [ 45 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5574": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 46, 47, 48, 49, 50, 51, 52 ],
+            "Y": [ 53 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5576": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 54, 55 ],
+            "Y": [ 56 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5578": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000011",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 57, 58, 59 ],
+            "Y": [ 60 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5580": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 61, 62 ],
+            "Y": [ 63 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5582": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 64, 65 ],
+            "Y": [ 66 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5584": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 67, 68 ],
+            "Y": [ 69 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5586": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 70, 71 ],
+            "Y": [ 72 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5588": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 73, 74 ],
+            "Y": [ 75 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5590": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 76, 77 ],
+            "Y": [ 78 ]
+          }
+        },
+        "$auto$opt_reduce.cc:131:opt_pmux$5592": {
+          "hide_name": 1,
+          "type": "$reduce_or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 79, 80 ],
+            "Y": [ 81 ]
+          }
+        },
+        "$ne$/workspace/inputs/ubcd.v:44$5505": {
+          "hide_name": 1,
+          "type": "$reduce_bool",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:44.17-44.27"
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "Y": [ 82 ]
+          }
+        },
+        "$not$/workspace/inputs/ubcd.v:37$5470": {
+          "hide_name": 1,
+          "type": "$not",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:37.26-37.29"
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 13 ],
+            "Y": [ 83 ]
+          }
+        },
+        "$not$/workspace/inputs/ubcd.v:37$5473": {
+          "hide_name": 1,
+          "type": "$not",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:37.39-37.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 15 ],
+            "Y": [ 84 ]
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:37$5471": {
+          "hide_name": 1,
+          "type": "$or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:37.16-37.29"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 85 ],
+            "B": [ 83 ],
+            "Y": [ 24 ]
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:38$5476": {
+          "hide_name": 1,
+          "type": "$or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:38.16-38.29"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 86 ],
+            "B": [ 83 ],
+            "Y": [ 26 ]
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:39$5481": {
+          "hide_name": 1,
+          "type": "$or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:39.16-39.29"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 87 ],
+            "B": [ 83 ],
+            "Y": [ 28 ]
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:40$5486": {
+          "hide_name": 1,
+          "type": "$or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:40.16-40.29"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 88 ],
+            "B": [ 83 ],
+            "Y": [ 30 ]
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:41$5491": {
+          "hide_name": 1,
+          "type": "$or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:41.16-41.29"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 89 ],
+            "B": [ 83 ],
+            "Y": [ 32 ]
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:42$5496": {
+          "hide_name": 1,
+          "type": "$or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:42.16-42.29"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 90 ],
+            "B": [ 83 ],
+            "Y": [ 34 ]
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:43$5501": {
+          "hide_name": 1,
+          "type": "$or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:43.16-43.29"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 91 ],
+            "B": [ 83 ],
+            "Y": [ 36 ]
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:44$5506": {
+          "hide_name": 1,
+          "type": "$or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:44.16-44.34"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 82 ],
+            "B": [ 12 ],
+            "Y": [ 92 ]
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:44$5508": {
+          "hide_name": 1,
+          "type": "$or",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:44.16-44.40"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 92 ],
+            "B": [ 83 ],
+            "Y": [ 38 ]
+          }
+        },
+        "$procmux$5515": {
+          "hide_name": 1,
+          "type": "$pmux",
+          "parameters": {
+            "S_WIDTH": "00000000000000000000000000100011",
+            "WIDTH": "00000000000000000000000000000111"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:109.29-109.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "S": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ "x", "x", "x", "x", "x", "x", "x" ],
+            "B": [ "1", "0", "0", "0", "1", "1", "1", "1", "0", "0", "1", "1", "1", "1", "0", "1", "1", "1", "1", "0", "1", "1", "0", "0", "1", "1", "1", "0", "0", "0", "1", "1", "1", "1", "1", "1", "1", "1", "0", "1", "1", "1", "0", "0", "0", "0", "0", "0", "0", "1", "1", "0", "0", "1", "1", "1", "0", "0", "0", "1", "1", "1", "0", "0", "1", "1", "0", "1", "1", "1", "0", "0", "0", "0", "0", "0", "1", "1", "0", "0", "0", "1", "1", "0", "1", "0", "0", "0", "0", "0", "0", "1", "0", "0", "0", "0", "0", "1", "1", "0", "0", "1", "0", "0", "1", "0", "0", "0", "1", "0", "0", "1", "0", "0", "0", "1", "0", "0", "0", "1", "0", "1", "1", "0", "1", "1", "0", "1", "1", "0", "0", "1", "1", "1", "1", "1", "1", "0", "0", "1", "1", "1", "0", "1", "1", "0", "1", "0", "1", "1", "0", "0", "0", "0", "1", "1", "1", "1", "1", "1", "0", "1", "1", "0", "0", "0", "1", "1", "0", "0", "1", "1", "1", "0", "1", "0", "0", "0", "1", "1", "1", "1", "1", "0", "0", "1", "0", "1", "1", "0", "1", "0", "0", "0", "1", "1", "0", "0", "1", "1", "0", "0", "1", "0", "0", "0", "1", "1", "0", "1", 93, 94, 95, 96, "0", "1", "1", "1", "1", "1", "1", "1", "1", "1", 97, 98, 99, 100, 101, 102, "0", 103, "0", "1", "1", "1", "1", "1", 104, 105, 106, 107, 108, 109, "0" ],
+            "S": [ 110, 42, 111, 45, 112, 113, 53, 114, 56, 115, 60, 116, 63, 117, 118, 119, 66, 69, 72, 75, 78, 81, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132 ],
+            "Y": [ 85, 86, 87, 88, 89, 90, 91 ]
+          }
+        },
+        "$procmux$5516_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:109.29-109.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "1", "1", "1", "1", "1" ],
+            "Y": [ 110 ]
+          }
+        },
+        "$procmux$5517_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:108.29-108.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "1", "1", "1", "1", "1" ],
+            "Y": [ 39 ]
+          }
+        },
+        "$procmux$5518_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:107.29-107.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "0", "1", "1", "1", "1", "1" ],
+            "Y": [ 111 ]
+          }
+        },
+        "$procmux$5519_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:106.29-106.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "0", "1", "1", "1", "1", "1" ],
+            "Y": [ 43 ]
+          }
+        },
+        "$procmux$5520_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:105.29-105.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "0", "1", "1", "1", "1" ],
+            "Y": [ 112 ]
+          }
+        },
+        "$procmux$5521_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:103.29-103.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "0", "1", "1", "1", "1" ],
+            "Y": [ 113 ]
+          }
+        },
+        "$procmux$5522_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:102.29-102.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "1", "1", "0", "1", "1" ],
+            "Y": [ 46 ]
+          }
+        },
+        "$procmux$5523_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:101.29-101.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "1", "1", "0", "1", "1" ],
+            "Y": [ 114 ]
+          }
+        },
+        "$procmux$5524_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:100.29-100.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "0", "1", "1", "0", "1", "1" ],
+            "Y": [ 54 ]
+          }
+        },
+        "$procmux$5525_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:99.29-99.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "0", "1", "1", "0", "1", "1" ],
+            "Y": [ 115 ]
+          }
+        },
+        "$procmux$5526_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:98.29-98.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "0", "1", "0", "1", "1" ],
+            "Y": [ 40 ]
+          }
+        },
+        "$procmux$5527_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:96.29-96.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "0", "1", "0", "1", "1" ],
+            "Y": [ 57 ]
+          }
+        },
+        "$procmux$5528_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:95.29-95.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "1", "1", "1", "0", "1" ],
+            "Y": [ 47 ]
+          }
+        },
+        "$procmux$5529_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:94.29-94.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "1", "1", "1", "0", "1" ],
+            "Y": [ 41 ]
+          }
+        },
+        "$procmux$5530_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:93.29-93.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "0", "1", "1", "1", "0", "1" ],
+            "Y": [ 116 ]
+          }
+        },
+        "$procmux$5531_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:92.29-92.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "0", "1", "1", "1", "0", "1" ],
+            "Y": [ 44 ]
+          }
+        },
+        "$procmux$5532_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:91.29-91.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "0", "1", "1", "0", "1" ],
+            "Y": [ 55 ]
+          }
+        },
+        "$procmux$5533_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:89.29-89.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "0", "1", "1", "0", "1" ],
+            "Y": [ 58 ]
+          }
+        },
+        "$procmux$5534_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:88.29-88.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "1", "1", "0", "0", "1" ],
+            "Y": [ 48 ]
+          }
+        },
+        "$procmux$5535_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:87.29-87.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "1", "1", "0", "0", "1" ],
+            "Y": [ 61 ]
+          }
+        },
+        "$procmux$5536_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:86.29-86.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "0", "1", "1", "0", "0", "1" ],
+            "Y": [ 117 ]
+          }
+        },
+        "$procmux$5537_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:85.29-85.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "0", "1", "1", "0", "0", "1" ],
+            "Y": [ 118 ]
+          }
+        },
+        "$procmux$5538_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:84.29-84.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "0", "1", "0", "0", "1" ],
+            "Y": [ 119 ]
+          }
+        },
+        "$procmux$5539_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000111",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:82.29-82.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "0", "1", "0", "0", "1" ],
+            "Y": [ 64 ]
+          }
+        },
+        "$procmux$5540_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:81.29-81.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "1", "1", "1", "1" ],
+            "Y": [ 67 ]
+          }
+        },
+        "$procmux$5541_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:80.29-80.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "1", "1", "1", "1" ],
+            "Y": [ 70 ]
+          }
+        },
+        "$procmux$5542_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:79.29-79.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "0", "1", "1", "1", "1" ],
+            "Y": [ 73 ]
+          }
+        },
+        "$procmux$5543_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:78.29-78.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "0", "1", "1", "1", "1" ],
+            "Y": [ 76 ]
+          }
+        },
+        "$procmux$5544_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:77.29-77.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "0", "1", "1", "1" ],
+            "Y": [ 79 ]
+          }
+        },
+        "$procmux$5545_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:75.29-75.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "0", "1", "1", "1" ],
+            "Y": [ 120 ]
+          }
+        },
+        "$procmux$5546_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:74.29-74.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "1", "1", "0", "1" ],
+            "Y": [ 49 ]
+          }
+        },
+        "$procmux$5547_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:73.29-73.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "1", "1", "0", "1" ],
+            "Y": [ 65 ]
+          }
+        },
+        "$procmux$5548_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:72.29-72.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "0", "1", "1", "0", "1" ],
+            "Y": [ 59 ]
+          }
+        },
+        "$procmux$5549_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:71.29-71.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "0", "1", "1", "0", "1" ],
+            "Y": [ 62 ]
+          }
+        },
+        "$procmux$5550_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:70.29-70.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "0", "1", "0", "1" ],
+            "Y": [ 121 ]
+          }
+        },
+        "$procmux$5551_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000110",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:68.29-68.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "0", "1", "0", "1" ],
+            "Y": [ 122 ]
+          }
+        },
+        "$procmux$5552_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000101",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:67.29-67.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "1", "1", "1" ],
+            "Y": [ 50 ]
+          }
+        },
+        "$procmux$5553_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000101",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:66.29-66.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "1", "1", "1" ],
+            "Y": [ 123 ]
+          }
+        },
+        "$procmux$5554_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000101",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:65.29-65.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "0", "1", "1", "1" ],
+            "Y": [ 124 ]
+          }
+        },
+        "$procmux$5555_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000101",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:64.29-64.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "0", "1", "1", "1" ],
+            "Y": [ 125 ]
+          }
+        },
+        "$procmux$5556_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000101",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:63.29-63.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1", "0", "1", "1" ],
+            "Y": [ 126 ]
+          }
+        },
+        "$procmux$5557_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000111",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000101",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:61.29-61.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5, 6, 7, 8 ],
+            "B": [ "0", "1", "0", "1", "1" ],
+            "Y": [ 127 ]
+          }
+        },
+        "$procmux$5558_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000101",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:60.29-60.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 4, 5, 6, 7, 8 ],
+            "B": [ "1", "1" ],
+            "Y": [ 51 ]
+          }
+        },
+        "$procmux$5559_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000110",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000011",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:58.44-58.44|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 3, 4, 5, 6, 7, 8 ],
+            "B": [ "1", "0", "1" ],
+            "Y": [ 52 ]
+          }
+        },
+        "$procmux$5560_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000100",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:57.29-57.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "B": [ "1", "0", "0", "1" ],
+            "Y": [ 128 ]
+          }
+        },
+        "$procmux$5561_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000100",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:56.44-56.44|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "B": [ "0", "0", "0", "1" ],
+            "Y": [ 129 ]
+          }
+        },
+        "$procmux$5562_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000011",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:55.44-55.44|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "B": [ "1", "1", "1" ],
+            "Y": [ 130 ]
+          }
+        },
+        "$procmux$5563_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000011",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:54.29-54.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "B": [ "0", "1", "1" ],
+            "Y": [ 131 ]
+          }
+        },
+        "$procmux$5564_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000011",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:53.29-53.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "B": [ "1", "0", "1" ],
+            "Y": [ 68 ]
+          }
+        },
+        "$procmux$5565_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000011",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:52.29-52.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "B": [ "0", "0", "1" ],
+            "Y": [ 71 ]
+          }
+        },
+        "$procmux$5566_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:51.29-51.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "B": [ "1", "1" ],
+            "Y": [ 74 ]
+          }
+        },
+        "$procmux$5567_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000010",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:50.29-50.29|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "B": [ "0", "1" ],
+            "Y": [ 77 ]
+          }
+        },
+        "$procmux$5568_CMP0": {
+          "hide_name": 1,
+          "type": "$eq",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:49.45-49.45|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "B": [ "1" ],
+            "Y": [ 80 ]
+          }
+        },
+        "$procmux$5569_CMP0": {
+          "hide_name": 1,
+          "type": "$logic_not",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000100",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "full_case": "00000000000000000000000000000001",
+            "src": "/workspace/inputs/ubcd.v:47.27-47.27|/workspace/inputs/ubcd.v:47.3-111.10"
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 2, 3, 4, 5 ],
+            "Y": [ 132 ]
+          }
+        },
+        "$ternary$/workspace/inputs/ubcd.v:49$5511": {
+          "hide_name": 1,
+          "type": "$mux",
+          "parameters": {
+            "WIDTH": "00000000000000000000000000000110"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:49.24-49.43"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "S": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ "0", "0", "0", "0", "0", "0" ],
+            "B": [ "1", "1", "1", "1", "1", "1" ],
+            "S": [ 12 ],
+            "Y": [ 104, 105, 106, 107, 108, 109 ]
+          }
+        },
+        "$ternary$/workspace/inputs/ubcd.v:55$5512": {
+          "hide_name": 1,
+          "type": "$mux",
+          "parameters": {
+            "WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:55.24-55.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "S": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ "0" ],
+            "B": [ "1" ],
+            "S": [ 9 ],
+            "Y": [ 103 ]
+          }
+        },
+        "$ternary$/workspace/inputs/ubcd.v:56$5513": {
+          "hide_name": 1,
+          "type": "$mux",
+          "parameters": {
+            "WIDTH": "00000000000000000000000000000110"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:56.24-56.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "S": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ "1", "1", "1", "0", "0", "0" ],
+            "B": [ "1", "1", "1", "0", "0", "1" ],
+            "S": [ 10 ],
+            "Y": [ 97, 98, 99, 100, 101, 102 ]
+          }
+        },
+        "$ternary$/workspace/inputs/ubcd.v:58$5514": {
+          "hide_name": 1,
+          "type": "$mux",
+          "parameters": {
+            "WIDTH": "00000000000000000000000000000100"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:58.24-58.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "S": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ "1", "1", "1", "0" ],
+            "B": [ "1", "1", "1", "1" ],
+            "S": [ 11 ],
+            "Y": [ 93, 94, 95, 96 ]
+          }
+        },
+        "$xor$/workspace/inputs/ubcd.v:37$5474": {
+          "hide_name": 1,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:37.14-37.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 25 ],
+            "B": [ 84 ],
+            "Y": [ 16 ]
+          }
+        },
+        "$xor$/workspace/inputs/ubcd.v:38$5479": {
+          "hide_name": 1,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:38.14-38.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 27 ],
+            "B": [ 84 ],
+            "Y": [ 17 ]
+          }
+        },
+        "$xor$/workspace/inputs/ubcd.v:39$5484": {
+          "hide_name": 1,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:39.14-39.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 29 ],
+            "B": [ 84 ],
+            "Y": [ 18 ]
+          }
+        },
+        "$xor$/workspace/inputs/ubcd.v:40$5489": {
+          "hide_name": 1,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:40.14-40.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 31 ],
+            "B": [ 84 ],
+            "Y": [ 19 ]
+          }
+        },
+        "$xor$/workspace/inputs/ubcd.v:41$5494": {
+          "hide_name": 1,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:41.14-41.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 33 ],
+            "B": [ 84 ],
+            "Y": [ 20 ]
+          }
+        },
+        "$xor$/workspace/inputs/ubcd.v:42$5499": {
+          "hide_name": 1,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:42.14-42.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 35 ],
+            "B": [ 84 ],
+            "Y": [ 21 ]
+          }
+        },
+        "$xor$/workspace/inputs/ubcd.v:43$5504": {
+          "hide_name": 1,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:43.14-43.42"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 37 ],
+            "B": [ 84 ],
+            "Y": [ 22 ]
+          }
+        }
+      },
+      "netnames": {
+        "$and$/workspace/inputs/ubcd.v:37$5472_Y": {
+          "hide_name": 1,
+          "bits": [ 25 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:37.15-37.35"
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:38$5477_Y": {
+          "hide_name": 1,
+          "bits": [ 27 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:38.15-38.35"
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:39$5482_Y": {
+          "hide_name": 1,
+          "bits": [ 29 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:39.15-39.35"
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:40$5487_Y": {
+          "hide_name": 1,
+          "bits": [ 31 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:40.15-40.35"
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:41$5492_Y": {
+          "hide_name": 1,
+          "bits": [ 33 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:41.15-41.35"
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:42$5497_Y": {
+          "hide_name": 1,
+          "bits": [ 35 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:42.15-42.35"
+          }
+        },
+        "$and$/workspace/inputs/ubcd.v:43$5502_Y": {
+          "hide_name": 1,
+          "bits": [ 37 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:43.15-43.35"
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5571": {
+          "hide_name": 1,
+          "bits": [ 42 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5573": {
+          "hide_name": 1,
+          "bits": [ 45 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5575": {
+          "hide_name": 1,
+          "bits": [ 53 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5577": {
+          "hide_name": 1,
+          "bits": [ 56 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5579": {
+          "hide_name": 1,
+          "bits": [ 60 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5581": {
+          "hide_name": 1,
+          "bits": [ 63 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5583": {
+          "hide_name": 1,
+          "bits": [ 66 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5585": {
+          "hide_name": 1,
+          "bits": [ 69 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5587": {
+          "hide_name": 1,
+          "bits": [ 72 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5589": {
+          "hide_name": 1,
+          "bits": [ 75 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5591": {
+          "hide_name": 1,
+          "bits": [ 78 ],
+          "attributes": {
+          }
+        },
+        "$auto$opt_reduce.cc:137:opt_pmux$5593": {
+          "hide_name": 1,
+          "bits": [ 81 ],
+          "attributes": {
+          }
+        },
+        "$auto$wreduce.cc:514:run$5594": {
+          "hide_name": 1,
+          "bits": [ 104, 105, 106, 107, 108, 109, "0" ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:49.24-49.43"
+          }
+        },
+        "$auto$wreduce.cc:514:run$5595": {
+          "hide_name": 1,
+          "bits": [ 97, 98, 99, 100, 101, 102, "0" ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:56.24-56.42"
+          }
+        },
+        "$auto$wreduce.cc:514:run$5596": {
+          "hide_name": 1,
+          "bits": [ 93, 94, 95, 96, "0", "1", "1" ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:58.24-58.42"
+          }
+        },
+        "$ne$/workspace/inputs/ubcd.v:44$5505_Y": {
+          "hide_name": 1,
+          "bits": [ 82 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:44.17-44.27"
+          }
+        },
+        "$not$/workspace/inputs/ubcd.v:37$5470_Y": {
+          "hide_name": 1,
+          "bits": [ 83 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:37.26-37.29"
+          }
+        },
+        "$not$/workspace/inputs/ubcd.v:37$5473_Y": {
+          "hide_name": 1,
+          "bits": [ 84 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:37.39-37.42"
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:37$5471_Y": {
+          "hide_name": 1,
+          "bits": [ 24 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:37.16-37.29"
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:38$5476_Y": {
+          "hide_name": 1,
+          "bits": [ 26 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:38.16-38.29"
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:39$5481_Y": {
+          "hide_name": 1,
+          "bits": [ 28 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:39.16-39.29"
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:40$5486_Y": {
+          "hide_name": 1,
+          "bits": [ 30 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:40.16-40.29"
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:41$5491_Y": {
+          "hide_name": 1,
+          "bits": [ 32 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:41.16-41.29"
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:42$5496_Y": {
+          "hide_name": 1,
+          "bits": [ 34 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:42.16-42.29"
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:43$5501_Y": {
+          "hide_name": 1,
+          "bits": [ 36 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:43.16-43.29"
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:44$5506_Y": {
+          "hide_name": 1,
+          "bits": [ 92 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:44.16-44.34"
+          }
+        },
+        "$or$/workspace/inputs/ubcd.v:44$5508_Y": {
+          "hide_name": 1,
+          "bits": [ 38 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:44.16-44.40"
+          }
+        },
+        "$procmux$5516_CMP": {
+          "hide_name": 1,
+          "bits": [ 110 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5517_CMP": {
+          "hide_name": 1,
+          "bits": [ 39 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5518_CMP": {
+          "hide_name": 1,
+          "bits": [ 111 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5519_CMP": {
+          "hide_name": 1,
+          "bits": [ 43 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5520_CMP": {
+          "hide_name": 1,
+          "bits": [ 112 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5521_CMP": {
+          "hide_name": 1,
+          "bits": [ 113 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5522_CMP": {
+          "hide_name": 1,
+          "bits": [ 46 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5523_CMP": {
+          "hide_name": 1,
+          "bits": [ 114 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5524_CMP": {
+          "hide_name": 1,
+          "bits": [ 54 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5525_CMP": {
+          "hide_name": 1,
+          "bits": [ 115 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5526_CMP": {
+          "hide_name": 1,
+          "bits": [ 40 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5527_CMP": {
+          "hide_name": 1,
+          "bits": [ 57 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5528_CMP": {
+          "hide_name": 1,
+          "bits": [ 47 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5529_CMP": {
+          "hide_name": 1,
+          "bits": [ 41 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5530_CMP": {
+          "hide_name": 1,
+          "bits": [ 116 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5531_CMP": {
+          "hide_name": 1,
+          "bits": [ 44 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5532_CMP": {
+          "hide_name": 1,
+          "bits": [ 55 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5533_CMP": {
+          "hide_name": 1,
+          "bits": [ 58 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5534_CMP": {
+          "hide_name": 1,
+          "bits": [ 48 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5535_CMP": {
+          "hide_name": 1,
+          "bits": [ 61 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5536_CMP": {
+          "hide_name": 1,
+          "bits": [ 117 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5537_CMP": {
+          "hide_name": 1,
+          "bits": [ 118 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5538_CMP": {
+          "hide_name": 1,
+          "bits": [ 119 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5539_CMP": {
+          "hide_name": 1,
+          "bits": [ 64 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5540_CMP": {
+          "hide_name": 1,
+          "bits": [ 67 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5541_CMP": {
+          "hide_name": 1,
+          "bits": [ 70 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5542_CMP": {
+          "hide_name": 1,
+          "bits": [ 73 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5543_CMP": {
+          "hide_name": 1,
+          "bits": [ 76 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5544_CMP": {
+          "hide_name": 1,
+          "bits": [ 79 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5545_CMP": {
+          "hide_name": 1,
+          "bits": [ 120 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5546_CMP": {
+          "hide_name": 1,
+          "bits": [ 49 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5547_CMP": {
+          "hide_name": 1,
+          "bits": [ 65 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5548_CMP": {
+          "hide_name": 1,
+          "bits": [ 59 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5549_CMP": {
+          "hide_name": 1,
+          "bits": [ 62 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5550_CMP": {
+          "hide_name": 1,
+          "bits": [ 121 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5551_CMP": {
+          "hide_name": 1,
+          "bits": [ 122 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5552_CMP": {
+          "hide_name": 1,
+          "bits": [ 50 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5553_CMP": {
+          "hide_name": 1,
+          "bits": [ 123 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5554_CMP": {
+          "hide_name": 1,
+          "bits": [ 124 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5555_CMP": {
+          "hide_name": 1,
+          "bits": [ 125 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5556_CMP": {
+          "hide_name": 1,
+          "bits": [ 126 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5557_CMP": {
+          "hide_name": 1,
+          "bits": [ 127 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5558_CMP": {
+          "hide_name": 1,
+          "bits": [ 51 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5559_CMP": {
+          "hide_name": 1,
+          "bits": [ 52 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5560_CMP": {
+          "hide_name": 1,
+          "bits": [ 128 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5561_CMP": {
+          "hide_name": 1,
+          "bits": [ 129 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5562_CMP": {
+          "hide_name": 1,
+          "bits": [ 130 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5563_CMP": {
+          "hide_name": 1,
+          "bits": [ 131 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5564_CMP": {
+          "hide_name": 1,
+          "bits": [ 68 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5565_CMP": {
+          "hide_name": 1,
+          "bits": [ 71 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5566_CMP": {
+          "hide_name": 1,
+          "bits": [ 74 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5567_CMP": {
+          "hide_name": 1,
+          "bits": [ 77 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5568_CMP": {
+          "hide_name": 1,
+          "bits": [ 80 ],
+          "attributes": {
+          }
+        },
+        "$procmux$5569_CMP": {
+          "hide_name": 1,
+          "bits": [ 132 ],
+          "attributes": {
+          }
+        },
+        "$ternary$/workspace/inputs/ubcd.v:55$5512_Y": {
+          "hide_name": 1,
+          "bits": [ 103, "0", "1", "1", "1", "1", "1" ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:55.24-55.42"
+          }
+        },
+        "A": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:28.13-28.14"
+          }
+        },
+        "AL": {
+          "hide_name": 0,
+          "bits": [ 15 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:29.38-29.40"
+          }
+        },
+        "B": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:28.16-28.17"
+          }
+        },
+        "BI": {
+          "hide_name": 0,
+          "bits": [ 14 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:29.34-29.36"
+          }
+        },
+        "C": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:28.19-28.20"
+          }
+        },
+        "D": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:28.22-28.23"
+          }
+        },
+        "LT": {
+          "hide_name": 0,
+          "bits": [ 13 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:29.30-29.32"
+          }
+        },
+        "Qa": {
+          "hide_name": 0,
+          "bits": [ 16 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:30.14-30.16"
+          }
+        },
+        "Qb": {
+          "hide_name": 0,
+          "bits": [ 17 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:30.18-30.20"
+          }
+        },
+        "Qc": {
+          "hide_name": 0,
+          "bits": [ 18 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:30.22-30.24"
+          }
+        },
+        "Qd": {
+          "hide_name": 0,
+          "bits": [ 19 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:30.26-30.28"
+          }
+        },
+        "Qe": {
+          "hide_name": 0,
+          "bits": [ 20 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:30.30-30.32"
+          }
+        },
+        "Qf": {
+          "hide_name": 0,
+          "bits": [ 21 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:30.34-30.36"
+          }
+        },
+        "Qg": {
+          "hide_name": 0,
+          "bits": [ 22 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:30.38-30.40"
+          }
+        },
+        "RBI": {
+          "hide_name": 0,
+          "bits": [ 12 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:29.25-29.28"
+          }
+        },
+        "RBO": {
+          "hide_name": 0,
+          "bits": [ 23 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:30.42-30.45"
+          }
+        },
+        "V0": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:28.25-28.27"
+          }
+        },
+        "V1": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:28.29-28.31"
+          }
+        },
+        "V2": {
+          "hide_name": 0,
+          "bits": [ 8 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:28.33-28.35"
+          }
+        },
+        "X6": {
+          "hide_name": 0,
+          "bits": [ 9 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:29.13-29.15"
+          }
+        },
+        "X7": {
+          "hide_name": 0,
+          "bits": [ 10 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:29.17-29.19"
+          }
+        },
+        "X9": {
+          "hide_name": 0,
+          "bits": [ 11 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:29.21-29.23"
+          }
+        },
+        "data": {
+          "hide_name": 0,
+          "bits": [ 85, 86, 87, 88, 89, 90, 91 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:36.12-36.16"
+          }
+        },
+        "value": {
+          "hide_name": 0,
+          "bits": [ 2, 3, 4, 5 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:34.13-34.18"
+          }
+        },
+        "version": {
+          "hide_name": 0,
+          "bits": [ 6, 7, 8 ],
+          "attributes": {
+            "src": "/workspace/inputs/ubcd.v:33.13-33.20"
+          }
+        }
+      }
+    }
+  }
+}

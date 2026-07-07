@@ -1,0 +1,75 @@
+
+20. Printing statistics.
+
+=== universal_bcd_decoder ===
+
+        +----------Local Count, excluding submodules.
+        |        +-Local Area, excluding submodules.
+        |        | 
+      206        - wires
+      206        - wire bits
+       22        - public wires
+       22        - public wire bits
+       22        - ports
+       22        - port bits
+      192 1.23E+03 cells
+        1    8.758   sky130_fd_sc_hd__a211o_1
+        3   22.522   sky130_fd_sc_hd__a211oi_1
+        1   12.512   sky130_fd_sc_hd__a211oi_2
+        1    7.507   sky130_fd_sc_hd__a21boi_0
+       12   60.058   sky130_fd_sc_hd__a21oi_1
+        1    10.01   sky130_fd_sc_hd__a221o_1
+        1    8.758   sky130_fd_sc_hd__a22o_1
+        3   22.522   sky130_fd_sc_hd__a22oi_1
+        5    31.28   sky130_fd_sc_hd__a31oi_1
+        1    8.758   sky130_fd_sc_hd__a32oi_1
+        4   40.038   sky130_fd_sc_hd__a41o_1
+        4   35.034   sky130_fd_sc_hd__a41oi_1
+        2   15.014   sky130_fd_sc_hd__and2b_1
+        1    10.01   sky130_fd_sc_hd__and2b_4
+        2   12.512   sky130_fd_sc_hd__and3_1
+        1    8.758   sky130_fd_sc_hd__and3b_1
+        1    8.758   sky130_fd_sc_hd__and4_1
+        1   11.261   sky130_fd_sc_hd__and4_4
+        1    3.754   sky130_fd_sc_hd__buf_1
+        9   45.043   sky130_fd_sc_hd__buf_2
+        7    52.55   sky130_fd_sc_hd__buf_4
+        2   22.522   sky130_fd_sc_hd__buf_6
+        8   30.029   sky130_fd_sc_hd__inv_1
+        1    10.01   sky130_fd_sc_hd__maj3_1
+        1   11.261   sky130_fd_sc_hd__mux2_2
+        2   20.019   sky130_fd_sc_hd__mux2i_1
+       18   67.565   sky130_fd_sc_hd__nand2_1
+        1    6.256   sky130_fd_sc_hd__nand2_2
+       10    62.56   sky130_fd_sc_hd__nand2b_1
+        5   25.024   sky130_fd_sc_hd__nand3_1
+        2   15.014   sky130_fd_sc_hd__nand3b_1
+        3   18.768   sky130_fd_sc_hd__nand4_1
+        1   12.512   sky130_fd_sc_hd__nand4_2
+        3   26.275   sky130_fd_sc_hd__nand4b_1
+       10   37.536   sky130_fd_sc_hd__nor2_1
+        6   37.536   sky130_fd_sc_hd__nor2b_1
+        8   40.038   sky130_fd_sc_hd__nor3_1
+        1    10.01   sky130_fd_sc_hd__nor3_2
+        1   12.512   sky130_fd_sc_hd__nor3b_2
+        3   18.768   sky130_fd_sc_hd__nor4_1
+        2   22.522   sky130_fd_sc_hd__o2111a_1
+        1    8.758   sky130_fd_sc_hd__o2111ai_1
+        1    7.507   sky130_fd_sc_hd__o211ai_1
+        1    7.507   sky130_fd_sc_hd__o21a_1
+       15   75.072   sky130_fd_sc_hd__o21ai_0
+        2    10.01   sky130_fd_sc_hd__o21ai_1
+        2   12.512   sky130_fd_sc_hd__o22ai_1
+        1    8.758   sky130_fd_sc_hd__o2bb2ai_1
+        1    8.758   sky130_fd_sc_hd__o311ai_0
+        1    8.758   sky130_fd_sc_hd__o31a_1
+        4   30.029   sky130_fd_sc_hd__o31ai_1
+        1   12.512   sky130_fd_sc_hd__o31ai_2
+        1    8.758   sky130_fd_sc_hd__o32ai_1
+        2   12.512   sky130_fd_sc_hd__or3_1
+        5   43.792   sky130_fd_sc_hd__xnor2_1
+        4   35.034   sky130_fd_sc_hd__xor2_1
+
+   Chip area for module '\universal_bcd_decoder': 1232.432000
+     of which used for sequential elements: 0.000000 (0.00%)
+
