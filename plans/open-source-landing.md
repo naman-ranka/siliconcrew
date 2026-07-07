@@ -1,9 +1,42 @@
-# Open-source landing page — plan (DRAFT: design intent locked, code-grounding pending)
+# Open-source landing page — plan (GROUNDED, ready to implement)
 
-Status: DRAFT. Design intent below is ready for owner review. The file:line
-grounding + consumer sweep (from the `launcher-map` exploration) must be folded
-in before this is implementation-grade — do NOT start coding from the draft
-alone (CLAUDE.md: every "reuse existing X" claim verified in code first).
+Status: READY. Grounded in `reports/launcher-map.md` (file:line). Sequence AFTER
+the Wave 11 adversarial review is triaged (the landing edits Launcher.tsx, which
+Wave 11 also touched — serialize to avoid contention) and integrates the gallery
+Wave 11 already shipped.
+
+## Grounding (from launcher-map.md — verified in code)
+
+- `/` route: `app/page.tsx:11-19` → `components/launcher/Launcher.tsx:55-589`
+  (self-contained). **Insertion points:** the header brand lockup
+  (`Launcher.tsx:328-336` — a lucide `CircuitBoard` glyph + text "SiliconCrew",
+  NO svg logo) and `EmptyLauncher` (`591-613`, "No workspaces yet").
+- **Net-new for OSS (none exist today, verified):** no `public/` dir, no favicon
+  (`/favicon.ico` referenced in `layout.tsx:84` but ABSENT), no logo asset, and
+  **zero GitHub/external links anywhere in the frontend**. The landing must
+  supply all of these.
+- **Wave 11 ALREADY shipped the gallery** (impl-templates): `Launcher` Examples
+  section + `ExampleCard` + `TemplatePreview` + `templatesApi` + store
+  `loadTemplates`/`forkTemplate`. The landing INTEGRATES/places this, does not
+  rebuild it. (launcher-map predates it and says "none" — reconcile against the
+  live Wave 11 components.)
+- **Design tokens:** `app/globals.css` HSL CSS vars; `--primary` = Claude orange
+  `14 63% 60%`; surface ladder `--surface-0..3`; `.dark` default on `<html>`
+  (`layout.tsx:33`), `.light` "paper" via `ThemeToggle`. Fonts Inter + JetBrains
+  Mono (`globals.css:6-7`). Icons `lucide-react`. New sections MUST style via
+  `--surface-*`/`--primary` tokens and read correctly in BOTH themes.
+- **Metadata:** `layout.tsx:12-24` title "SiliconCrew Architect", description
+  "Autonomous RTL Design Agent…". Update for OSS + add a real favicon.
+- **Hosted vs self-host:** only indirect — `authEnabled()` (`auth.tsx:77-79`);
+  no `/config` hosted flag. A landing can use the auth-enabled signal only.
+- **README copy (reuse for hero):** root `README.md:3` tagline "An autonomous
+  LLM agent for RTL design, verification, and synthesis."; badges incl. MIT +
+  **CVDP 68.5%**; a strong Capabilities list (spec-first, RTL gen, self-checking
+  TBs, waveform debug, synth-to-GDSII, PPA, formal, XLS/HLS) — all real, usable.
+- **DO-NOT-BREAK (e2e contract, `workbench.smoke.spec.ts:95-154`):** preserve
+  testids `session-card-<id>`, `thread-drawer`, `open-settings`; and the EXACT
+  strings "Search workspaces…" and "Workspace name — e.g. sync_fifo". Only two
+  e2e tests bind the Launcher; no unit test snapshots its layout.
 
 ## The ask (owner, verbatim in spirit)
 
@@ -94,19 +127,16 @@ A vertical composition on `/` (Launcher), top to bottom:
 - Sequencing: land Wave 11 templates FIRST so the gallery is real on first
   paint (recommended), vs. ship landing with an honest "examples coming" state.
 
-## Grounding to fold in (from `launcher-map`, pending)
+## Net-new assets to create
 
-- The `/` route file + component tree (header, search, Recent/Grouped, cards,
-  empty state, account/theme/settings) with file:line.
-- Store slices + API calls feeding it (sessions load/create, auth/account).
-- Design tokens/theming (tailwind? CSS vars?), icon lib, fonts, logo asset.
-- Deployment-mode awareness client-side (hosted vs self-host flags) — the
-  landing may show different chrome per mode.
-- Existing tests asserting on the Launcher (what a redesign breaks) — the
-  consumer sweep + test-update list.
-- README/frontend-README copy reusable for the hero/what-it-is.
+- A simple, tasteful **SVG logo** (inline component or `public/logo.svg`) —
+  circuit/silicon motif consistent with the `CircuitBoard` glyph already used;
+  themeable via `currentColor`/tokens.
+- A real **favicon** (`public/favicon.ico` or `app/icon.svg`) — the referenced
+  one is missing; a 404 today.
+- Create the `public/` dir (none exists).
 
-## Test list (to finalize after grounding)
+## Test list
 
 - vitest: hero/identity renders with GitHub+Issues links (real hrefs); gallery
   section renders cards + honest empty state; picker still renders + creates;

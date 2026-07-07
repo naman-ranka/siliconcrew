@@ -59,9 +59,25 @@ to size each bucket (the server is already instrumented).
 
 | ID | Severity | Status | Summary |
 |----|----------|--------|---------|
-| F9 | HIGH (blocker) | FIXED (04365b2) — DEPLOY PENDING | Hosted spec→GDS dies at CTS with SIGILL: the OpenROAD LEC (logical-equivalence) child exec'd from cts.tcl uses ISA extensions the Cloud Run CPU pool lacks → "illegal instruction" AFTER CTS metrics compute cleanly, blocking all hosted GDS. ASU p1 met timing at place (+0.372ns) but produced no GDS. Owner-directed fix: write `export LEC_CHECK = 0` into ORFS config.mk on HOSTED only (self-host keeps the real equivalence check). Both config.mk builders in synthesis_manager.py covered; regression test tests/test_lec_check_hosted.py. Deployed-CPU root cause = out of scope (owner). Needs a backend deploy to take effect on hosted; batch with the next roll before the flagship GDS run. |
+| F9 | HIGH (blocker) | FIXED (04365b2) — DEPLOY PENDING | Hosted spec→GDS dies at CTS with SIGILL: the OpenROAD LEC (logical-equivalence) child exec'd from cts.tcl uses ISA extensions the Cloud Run CPU pool lacks → "illegal instruction" AFTER CTS metrics compute cleanly, blocking all hosted GDS. ASU p1 met timing at place (+0.372ns) but produced no GDS. Owner-directed fix: write `export LEC_CHECK = 0` into ORFS config.mk on HOSTED only (self-host keeps the real equivalence check). Both config.mk builders in synthesis_manager.py covered; regression test tests/test_lec_check_hosted.py. Deployed-CPU root cause = out of scope (owner). DEPLOYED backend-only to **rev siliconcrew-backend-00060** (built from the F1 base ccdb6e0 + LEC-only synthesis_manager.py overlay, EXCLUDING the unreviewed Wave 11 backend — templates/api routes/bundles/transcript — since those aren't gated yet; verified the deploy tree had LEC + none of Wave 11). /api/health 200. Live GDS verification in progress (gds-verify agent). |
 | F9b | HIGH | OPEN (explore-mcp F2) | `retry_pd` resume-from-CTS doesn't stage the place checkpoint into the resumed worker's `results/<plat>/<top>/base/` → `ORD-0007 3_place.odb does not exist`. Cloud resume/adoption broken; also reported an artifact that isn't physically present (honest-state violation). Independent of F9. |
 | F9c | MEDIUM | OPEN (explore-mcp F3) | Backend/unavailable errors (e.g. during a deploy) are surfaced to the MCP client as JSON-RPC `-32602 "Invalid request parameters"` — a lie that sends external-app devs hunting a nonexistent bad-arg bug. Map to `-32000` server-error + retry hint; health-gate/drain deploys. (This is the -32602 we saw during the F1 roll.) |
+
+## Tenancy sweep result (reports/tenancy-sweep.md) — CLEAN
+
+Read-only red-team of ALL MCP tools + REST /invoke + in-memory registries after
+F1: **no new cross-tenant holes.** F1's three defects were the only ones, now
+fixed+deployed. Every other surface is structurally safe: regular/run-id MCP
+tools carry NO tenant-selecting argument (workspace is bound via current_session,
+which the deployed F1 pre-dispatch gate owner-validates); REST /invoke +
+/runs/{run_id} all call require_owned first; enforce_file_containment is
+caller-scoped; the synth registry is keyed by (abspath(workspace), run_id) so
+synth_0001 can't collide across owners; the resource surface gates every read via
+_assert_session_readable. One NON-tenancy note (F10 below).
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| F10 | LOW (capability, not tenancy) | OPEN | `update_manifest` is in MUTATING_TOOLS but missing from MCP `_PROTECTED_TOOLS` (mcp_server.py:231) → a hosted ANONYMOUS identity could mutate the manifest (still bounded to its own current_session; not cross-tenant). Already REVIEW_FINDINGS P2. One-liner: add "update_manifest" to _PROTECTED_TOOLS. |
 
 ## Decisions for the owner (surfaced, not guessed)
 
