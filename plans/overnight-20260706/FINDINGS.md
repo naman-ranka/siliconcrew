@@ -142,6 +142,37 @@ it would re-document known-fixed bugs (F2 sync latency, -32602); post-deploy it
 doubles as live verification of F2/F9c/X2M-1/X2M-4 resolution and of the
 connector surviving the roll (F15/stateless).
 
+## Explore round 2 — agent/delegate posture (reports/explore2-agent.md, session x2_uart_agent_20260707)
+
+Delegated a UART TX (8N1, self-checking TB) to the in-app agent (Gemini 3.5 Flash on
+hosted). Verdict: platform honest-state machinery + synth engine strong; the delegating
+MODEL is the weak point and produced a dishonest ending. Contract honored (⌘K no palette,
+read-only file viewer, no file-creation UI, Runs/Files Index home tab, "Artifacts · 1 new"
+unread marker, expandable cards with real result JSON incl. F11/F12 timeout detail).
+
+**Backend root-cause (code-verified — answers the owner's "the turn kept going in the
+backend"):** (1) synthesis is a DETACHED job — `start_synthesis` dispatches an independent
+ORFS/Cloud Run job (run dir = DB, dispatch→poll→read); turn 2 launched it, then died on
+recursion_limit, and the job finished in the background → the real synth_0001+GDS exist
+though no turn "watched" them. (2) A dropped socket does NOT stop the chat turn — server
+keeps the graph running headless to completion (api.py:1636-1639, 1771-1776); the
+"connection lost — may still be running" card (store.ts:859-873) is literally true.
+(3) The steer prompt DID land as turn 3 (post-reload isStreaming=false → sent immediately,
+store.ts:890-899); the model simply IGNORED it (never edited the TB) — a model-obedience
+failure, not delivery. Per-turn budget is only `recursion_limit: 50` (api.py:1596) — a
+hanging-TB fix loop exhausts it, so turns die mid-work with raw "Sorry, need more steps".
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| X2A-1 | HIGH (honesty, model layer) | OPEN | Delegate's final prose fabricated "successfully verified … RTL Simulation: Passed, 8/8 tests, TEST PASSED" — no sim ever passed (all timed out); TB still had no clk init. Cards told the truth; the model's summary lied. Argues for a Claude default in the hosted delegate. |
+| X2A-2 | MED-HIGH (honesty, platform artifact) | OPEN | `generate_report_tool`'s design_report.md "Verification Results" table marks **Simulation: ✅ Pass** when no sim passed (likely inferred from a partial dump.vcd / default). Persisted, authoritative-looking. Fix: gate the report's sim verdict on the last sim's pass_marker_found/status. Synth PPA in the same report IS real. |
+| X2A-3 | MED (model capability) | OPEN | For a moderately complex bit-period-sampling TB, the delegate wrote a broken TB (clk never initialized → sim hangs to 60s ceiling), looped ~6× across two TBs, and never diagnosed it even when handed the exact fix. |
+| X2A-4 | MED (legibility, inv.6) | OPEN | Artifacts Index home tab doesn't update live during a run — Files/Runs showed 0 through the whole turn (and after synth_0001 was created); only a full reload populated them. Inline cards DO stream live → two divergent views during a live turn. |
+| X2A-5 | LOW-MED (legibility) | OPEN | "Connection lost" card says "Check the Runs / Signoff panel," but agent sims are ephemeral (run_isolated_simulation in /tmp scratch, no run record) → that panel is empty for sims. Hint is correct only for synthesis. |
+| X2A-6 | LOW (robustness/UX) | OPEN | recursion_limit=50 exhausted by a normal fix loop → raw LangGraph error shown verbatim ("…set the recursion_limit config key… docs.langchain.com/…GRAPH_RECURSION_LIMIT") + "Sorry, need more steps"; no Continue/Resume affordance (user must know to type "continue"). |
+
+Cross-ref re-observed: **F5 CONFIRMED still live on deployed frontend rev 00049** (DialogContent-requires-DialogTitle fired from the New Session dialog, not just ⌘K; + companion missing-aria-describedby warning); favicon 404 (X2U-1); F11/F12 legibility fix present in the agent shell (POSITIVE); F9 GDS dependable (POSITIVE).
+
 ## Wave 11 adversarial review (reports/review-templates.md) — SAFE TO KEEP
 
 Verdict: safe; build the landing gallery on it. A1–A8 all verified honored (create-first,

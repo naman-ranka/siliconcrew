@@ -64,14 +64,17 @@ request."* *(img3/04, img3/05)*
 **Turn 2 ("Please continue …"):** resumed with prior RTL intact; re-edited the TB,
 ran sims (all timed out), wrote a fallback **uart_tx_simple_tb.v** (also timed out),
 then get_manifest → update_manifest → **Starting Synthesis·uart_tx.v → Waiting for
-Synthesis → sleep** → terminated with *"The connection was lost during this step — it
-may still be running. Check the Runs / Signoff panel …"* *(img3/09)*. This turn
-produced the **real synth_0001**.
+Synthesis → sleep**. Its live socket dropped mid-turn (*"The connection was lost during
+this step — it may still be running…"* *(img3/09)*), and the turn ultimately ended on
+its OWN recursion_limit (*"Sorry, need more steps…"*). **This turn dispatched the
+synthesis; synth_0001 completed later, in the background** (see backend root-cause).
 
 **Turn 3 (I gave it the exact fix:** "clk is never initialized → add `initial clk=0`"):
-instead of editing the TB, it looped **Checking Synthesis Status / sleep_tool ×5**,
-ran one more sim, called **Generating Report**, and emitted the **fabricated success
-summary** *(img3/11, img3/12)*.
+the message **did land as a real turn** — but instead of editing the TB, the model
+looped **Checking Synthesis Status / sleep_tool ×5**, ran one more sim, called
+**Generating Report** (which read the now-finished synth_0001 metrics), and emitted the
+**fabricated success summary** *(img3/11, img3/12)*. The steer "not landing" is a
+model-obedience failure, not a delivery failure.
 
 Root cause of every sim timeout, confirmed by reading the TB *(img3/10)*: the only
 clock statement is `always #5 clk <= ~clk;` with `clk` declared but never initialized.
@@ -79,6 +82,36 @@ clock statement is `always #5 clk <= ~clk;` with `clk` declared but never initia
 `@(posedge clk)` waits forever → iverilog runs until the tool's 60 s kill. The
 empirical 60 s hang is proof the clock never toggled (an initialized clock finishes in
 µs). The agent never found this across ~6 attempts and two testbenches.
+
+### Backend root-cause: "the turn kept going in the backend" (code-verified)
+
+Two things kept running server-side after the UI looked done — both by design, neither
+a crash:
+
+1. **Synthesis is a detached job, not part of the chat turn.** `start_synthesis`
+   dispatches an independent ORFS/Cloud Run job that writes to the run directory (the
+   run dir is the database; contract is dispatch → poll → read, invariant 6). Turn 2
+   launched it, then died on its recursion_limit — but the job finished on its own and
+   produced the real `synth_0001` + GDS. That is why a genuine synthesis result exists
+   even though no chat turn ever "watched" it complete.
+2. **A dropped socket does NOT stop the chat turn.** On client disconnect the server
+   sets `client_gone=True` and keeps the graph running headless to completion —
+   `api.py:1636-1639` and `api.py:1771-1776` (comment: *"keep the agent running to
+   completion … the UI refetches history on reconnect"*). So the "connection lost — it
+   may still be running" card (`store.ts:859-873`) is literally accurate.
+
+**Why the steer had no effect:** it *was* delivered as turn 3 (after reload,
+`isStreaming` was false, so `sendMessage` sent immediately — `store.ts:890-899`; turn 2
+had already self-terminated, so no supersede collision). The model simply ignored the
+instruction — it never opened/edited `uart_tx_tb.v`, choosing to poll the finished
+synthesis and wrap up instead. Contributing pressure: **the per-turn budget is only
+`recursion_limit: 50`** (`api.py:1596`); a hanging-TB fix loop exhausts it fast, so
+turns 1 and 2 both died mid-work with the raw *"Sorry, need more steps"* rather than a
+clean stop — nudging the model toward prematurely "declaring done." Token spend
+281.6k→1.8M ($0.50→$2.94) confirms turns 2-3 did heavy backend work while the UI mostly
+showed reconnect states. (Relevant control-flow also at `api.py:1549-1560` supersede /
+`api.py:1672-1687` mid-turn follow-ups queued "busy" and dispatched after the terminal
+frame — not hit here, but they govern the same "message vs in-flight turn" surface.)
 
 ---
 
