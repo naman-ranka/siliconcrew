@@ -45,6 +45,12 @@ def main(argv=None) -> int:
     parser.add_argument("--platform", default=None, help="ORFS platform (e.g. sky130hd).")
     parser.add_argument("--source-note", default=None, help="Provenance note for the card.")
     parser.add_argument(
+        "--prune-pnr",
+        action="store_true",
+        help="Drop regenerable per-stage PnR checkpoints (*.odb, intermediate "
+        "*.gds); keeps 6_final.gds + netlist + reports. Use for full-flow GDS bundles.",
+    )
+    parser.add_argument(
         "--workspace-dir",
         default=os.environ.get("RTL_WORKSPACE")
         or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "workspace"),
@@ -64,10 +70,13 @@ def main(argv=None) -> int:
         highlights=args.highlights,
         platform=args.platform,
         source_note=args.source_note,
+        prune_pnr_intermediates=args.prune_pnr,
     )
 
     print(f"Bundle written to: {result.template_dir}")
     print(f"  files copied:   {result.files}  ({result.bytes} bytes)")
+    if result.pruned:
+        print(f"  pruned:         {result.pruned} PnR intermediate file(s)")
     print(f"  conversations:  {', '.join(result.conversations) or '(none)'}")
     if result.secret_warnings:
         print("  SECRET WARNINGS (review before committing):", file=sys.stderr)

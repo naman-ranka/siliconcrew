@@ -1,0 +1,26 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "seq_detector_0011.v",
+      "role": "rtl",
+      "path": "seq_detector_0011.v"
+    },
+    {
+      "name": "seq_detector_0011_tb.v",
+      "role": "tb",
+      "path": "seq_detector_0011_tb.v"
+    }
+  ],
+  "synthTop": "seq_detector_0011",
+  "simTop": "seq_detector_0011_tb",
+  "clockPeriodNs": 20.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "seq_detector_0011_tb.v",
+      "module": "seq_detector_0011_tb"
+    }
+  ]
+}

@@ -364,6 +364,36 @@ def test_export_then_fork_round_trip(sm, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_export_prunes_pnr_intermediates_when_asked(sm, tmp_path):
+    """Opt-in prune drops regenerable PnR checkpoints but keeps the final GDS."""
+    sid = sm.create_session("gds_design")
+    ws = sm.get_workspace_path(sid)
+    base = os.path.join(ws, "synth_runs", "synth_0001", "orfs_results", "sky130hd", "gds_design", "base")
+    _write(os.path.join(base, "6_final.gds"), "GDS-FINAL")
+    _write(os.path.join(base, "6_1_merged.gds"), "GDS-INTERMEDIATE")
+    _write(os.path.join(base, "3_place.odb"), "ODB")
+    _write(os.path.join(base, "6_final.odb"), "ODB")
+    _write(os.path.join(base, "6_final.v"), "module gds_design(); endmodule")
+    _write(os.path.join(ws, "manifest.json"), {"sessionId": sid, "files": [], "synthTop": "gds_design"})
+
+    out = str(tmp_path / "examples" / "gds_design")
+    res = T.export_session_bundle(sm, sid, out, db_path=sm.db_path, name="GDS", prune_pnr_intermediates=True)
+    bbase = os.path.join(out, "workspace", "synth_runs", "synth_0001", "orfs_results", "sky130hd", "gds_design", "base")
+    assert res.pruned == 3  # 6_1_merged.gds + 3_place.odb + 6_final.odb
+    assert os.path.isfile(os.path.join(bbase, "6_final.gds"))   # kept
+    assert os.path.isfile(os.path.join(bbase, "6_final.v"))     # kept
+    assert not os.path.exists(os.path.join(bbase, "6_1_merged.gds"))
+    assert not os.path.exists(os.path.join(bbase, "3_place.odb"))
+    assert not os.path.exists(os.path.join(bbase, "6_final.odb"))
+
+    # Default (no prune) keeps everything.
+    out2 = str(tmp_path / "examples" / "gds_design2")
+    res2 = T.export_session_bundle(sm, sid, out2, db_path=sm.db_path, name="GDS")
+    assert res2.pruned == 0
+    b2 = os.path.join(out2, "workspace", "synth_runs", "synth_0001", "orfs_results", "sky130hd", "gds_design", "base")
+    assert os.path.isfile(os.path.join(b2, "3_place.odb"))
+
+
 def test_shipped_sync_fifo_bundle_is_forkable(sm):
     items = {t["id"]: t for t in T.list_templates()}  # default examples dir (repo root)
     if "sync_fifo" not in items:

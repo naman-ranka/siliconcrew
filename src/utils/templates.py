@@ -477,6 +477,40 @@ def _manifest_top_module(ws: str) -> Optional[str]:
     return None
 
 
+# The one final GDS a showcase layout viewer renders; everything else under a
+# run's ``base/`` with these shapes is a regenerable per-stage checkpoint.
+_FINAL_GDS = "6_final.gds"
+
+
+def _prune_pnr_intermediates(ws: str) -> int:
+    """Drop regenerable per-stage PnR checkpoints from a full-flow GDS bundle.
+
+    A completed sky130 run leaves ~35 MB of intermediate OpenDB ``*.odb`` and a
+    merged ``6_1_merged.gds`` under ``synth_runs/*/orfs_results/.../base/`` — NO
+    viewer reads them (the layout viewer renders ``6_final.gds``; reports read
+    ``orfs_reports/*.rpt``; the runs pane reads ``run_meta.json``). Removing them
+    shrinks a public GDS bundle from tens of MB to a few, keeping the final GDS,
+    netlist, DEF/SDC/SPEF, reports, and logs — the honest tapeout result. Opt-in
+    (default off); the run really produced these, this is curation not fabrication.
+    Returns the count removed.
+    """
+    removed = 0
+    runs_root = os.path.join(ws, "synth_runs")
+    if not os.path.isdir(runs_root):
+        return 0
+    for dirpath, _dirs, files in os.walk(runs_root):
+        for name in files:
+            low = name.lower()
+            drop = low.endswith(".odb") or (low.endswith(".gds") and low != _FINAL_GDS)
+            if drop:
+                try:
+                    os.remove(os.path.join(dirpath, name))
+                    removed += 1
+                except OSError:
+                    pass
+    return removed
+
+
 @dataclass
 class ExportResult:
     template_dir: str
@@ -484,6 +518,7 @@ class ExportResult:
     secret_warnings: List[str]
     files: int
     bytes: int
+    pruned: int = 0
 
 
 def export_session_bundle(
@@ -498,6 +533,7 @@ def export_session_bundle(
     highlights: Optional[List[str]] = None,
     platform: Optional[str] = None,
     source_note: Optional[str] = None,
+    prune_pnr_intermediates: bool = False,
     max_bytes: int = DEFAULT_MAX_BYTES,
     max_files: int = DEFAULT_MAX_FILES,
 ) -> ExportResult:
@@ -508,6 +544,10 @@ def export_session_bundle(
     sanitizes the author's identity out, and writes a ``template.json`` scaffold
     (the curator fills description/highlights). Secret-looking files are
     surfaced as warnings — never silently shipped, never silently dropped.
+
+    ``prune_pnr_intermediates`` (opt-in) drops the regenerable per-stage PnR
+    ``*.odb``/intermediate ``*.gds`` checkpoints so a full-flow GDS bundle is a
+    few MB instead of tens — keeping the final GDS, netlist, reports, and logs.
 
     A hot path this is not: it is an offline authoring utility (also the seed for
     a future publish flow). Self-host only — see ``read_thread_messages``.
@@ -529,6 +569,7 @@ def export_session_bundle(
     # (run_meta, event logs, and — below — the rendered transcripts).
     redactions = [os.path.abspath(src_ws), os.path.expanduser("~")]
     _sanitize_exported_workspace(workspace_out, redact_paths=redactions)
+    pruned = _prune_pnr_intermediates(workspace_out) if prune_pnr_intermediates else 0
 
     # Render each thread's transcript into the exported workspace. list_threads
     # is read-only; a session with no separate threads still has its "Chat 1"
@@ -578,4 +619,5 @@ def export_session_bundle(
         secret_warnings=secret_warnings,
         files=stats.files,
         bytes=stats.bytes,
+        pruned=pruned,
     )
