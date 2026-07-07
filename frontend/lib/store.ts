@@ -661,7 +661,9 @@ export const useStore = create<AppState>((set, get) => ({
     set({ templatesLoading: true, templatesError: null });
     try {
       const templates = await templatesApi.list();
-      set({ templates, templatesLoading: false });
+      // Defensive: a malformed/absent payload must never make `templates`
+      // non-array (the Launcher reads `templates.length`).
+      set({ templates: Array.isArray(templates) ? templates : [], templatesLoading: false });
     } catch (error) {
       set({
         templatesError: error instanceof Error ? error.message : "Failed to load examples",
