@@ -1864,13 +1864,20 @@ export const useStore = create<AppState>((set, get) => ({
   loadManifest: async () => {
     const { currentSession } = get();
     if (!currentSession) return;
+    const sid = currentSession.id;
     set({ manifestLoading: true });
     try {
-      const manifest = await workbenchApi.getManifest(currentSession.id);
-      set({ manifest });
+      const manifest = await workbenchApi.getManifest(sid);
+      // Session switched mid-flight (X2A-4 fires this off live WS frames now):
+      // dropping the stale result is the only honest move, or A's manifest
+      // cross-writes into B. Same guard loadThreads uses; B's own load owns
+      // its slice and its loading flag.
+      if (get().currentSession?.id !== sid) return;
+      set({ manifest, manifestLoading: false });
     } catch {
-      set({ manifest: null });
-    } finally {
+      if (get().currentSession?.id !== sid) return;
+      // Populated data never blanks (invariant 4/7): a transient 500 mid-turn
+      // keeps the last-known manifest rather than flashing the Index empty.
       set({ manifestLoading: false });
     }
   },
@@ -1920,6 +1927,10 @@ export const useStore = create<AppState>((set, get) => ({
       set({ runsLoading: true });
       try {
         const runs = await workbenchApi.listRuns(sid, runKindFilter);
+        // Session switched mid-flight (X2A-4 fires this off live WS frames now):
+        // discard, or A's runs cross-write into B and detectRunTransitions
+        // announces A's transitions against B. Same guard loadThreads uses.
+        if (get().currentSession?.id !== sid) return;
         // Prev captured AFTER the fetch: a Refresh applied mid-flight already
         // ran the detector — don't re-announce the same transition.
         const prevRuns = get().runs;
@@ -1927,11 +1938,13 @@ export const useStore = create<AppState>((set, get) => ({
           runs,
           selectedRunId:
             runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
+          runsLoading: false,
         }));
         detectRunTransitions(sid, prevRuns, runs);
       } catch {
-        set({ runs: [] });
-      } finally {
+        if (get().currentSession?.id !== sid) return;
+        // Populated data never blanks (invariant 4/7): keep the prior runs on a
+        // transient error rather than flashing the Index empty mid-turn.
         set({ runsLoading: false });
       }
     });
