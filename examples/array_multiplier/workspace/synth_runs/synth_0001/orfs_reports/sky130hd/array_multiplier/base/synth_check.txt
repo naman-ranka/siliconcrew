@@ -1,0 +1,4 @@
+
+19. Executing CHECK pass (checking for obvious problems).
+Checking module array_multiplier...
+Found and reported 0 problems.
