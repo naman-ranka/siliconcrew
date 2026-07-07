@@ -122,6 +122,45 @@ F12. Left out deliberately to avoid speculative machinery; flag for the owner.
 - Fixtures restored after each suite (`git checkout -- tests/fixtures/
   test_sby_output.txt`); staged only my own files each commit; pushed after each.
 
+## ITEM 4 — X2U-2: honest sim status + spec detection in the design report · commit `e3f3844`
+
+**Finding (explore2-ui, LOW/honesty):** the synthesis Design Report showed
+"Simulation ⏳ Not Run" even after sims passed in the session, and "No
+specification file found" even with `spec.md` present — both mislead a newcomer
+about their own progress.
+
+**Root causes (both in `src/tools/design_report.py`):**
+- Sim status was derived by scanning the **workspace root** for `.out` /
+  `simulation.log` and grepping pass/fail. Isolated sim runs write to
+  `sim_runs/<id>/run_meta.json` and never to the workspace root, so the scan
+  always fell through to "Not Run".
+- Spec detection matched only `*_spec.yaml` (write_spec's output). A markdown
+  `spec.md` (Spec tab / user-authored) is `role=other` to the manifest, so it
+  was invisible → "No specification file found."
+
+**Fix:**
+- `_simulation_status_cell(workspace)` reads `list_sim_runs` (authoritative,
+  newest-first) and reports the LATEST run's verdict with its id and a
+  "latest of N runs" count when several exist; the legacy root scan is kept
+  only as a fallback for pre-isolation sessions. "Not Run" now appears only
+  when nothing actually ran.
+- `_is_spec_like` / `_spec_like_files` recognize `spec.md`, `*_spec.md`,
+  `spec.{yaml,yml,txt}` in addition to `*_spec.yaml`. A YAML spec still yields
+  the full summary table; when only a markdown spec exists the report names it
+  and points to the Spec tab. The Generated Files "Specifications" row uses the
+  same predicate.
+
+**Fence honored:** only `design_report.py` + its tests. Reads (does not modify)
+`sim_manager.list_sim_runs`; did not touch synthesis_manager/actions/api.py,
+mcp_server, wrappers/tool_catalog, frontend, examples.
+
+**Pre-fix proof:** stashed only `design_report.py`, ran `TestReportHonestyX2U2`
+— the 4 truth-surfacing tests failed (report still said "Not Run" / "No
+specification file found" with sim_runs and spec.md present); the 2 negative
+tests (Not Run / no-spec only when truly absent) passed pre-fix as intended.
+Restored → 30/30 pass. Full gate: 9 known baseline + one concurrent-lane
+artifact (`test_cocotb_engine` `TypeError: FakeEngine.run` — passes solo).
+
 ## Commits (all pushed)
 
 | Commit | Item | Outcome |
@@ -129,3 +168,4 @@ F12. Left out deliberately to avoid speculative machinery; flag for the owner.
 | `c8ab0b0` | F11 backend | `pass_marker` in sim result + `passMarker` in run_meta |
 | `910ecb1` | F12 backend | `current_stage`/`check_notes` through list + `_synth_to_run` + response model |
 | `3927e60` | F9b | contract-lock regression test; root cause = stale ORFS job image (deploy), F9b left OPEN |
+| `e3f3844` | X2U-2 | design report reads sim status from sim_runs + recognizes spec.md |
