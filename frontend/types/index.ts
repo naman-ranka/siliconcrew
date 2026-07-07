@@ -18,6 +18,36 @@ export interface Session {
   // S0: cheap COUNT over the threads table, included in the session list so
   // launcher cards can show a chat count without hydrating any workspace.
   thread_count?: number;
+  // Wave 11: provenance for a session forked from a template bundle. Populated
+  // only on the single-session GET (a read-only workspace-file peek); null for a
+  // normal session. Drives the "forked from <name>" chip in the workbench.
+  source_template?: TemplateProvenance | null;
+}
+
+// Wave 11 — templates are repo-owned BUNDLES you can fork into a session.
+export interface TemplateProvenance {
+  id: string;
+  name: string;
+  forked_at: string;
+}
+
+// Gallery card shape (GET /api/templates).
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  description: string;
+  highlights: string[];
+  top_module?: string | null;
+  platform?: string | null;
+  source_note?: string | null;
+  file_count: number;
+  run_count: number;
+}
+
+// Preview shape (GET /api/templates/{id}) — summary + a shallow peek inside.
+export interface TemplateDetail extends TemplateSummary {
+  files: string[];
+  conversations: string[];
 }
 
 // Model registry (the picker). `available` is per-request: false when the

@@ -18,6 +18,8 @@ import type {
   DirEntry,
   SmartFile,
   ToolCatalogEntry,
+  TemplateSummary,
+  TemplateDetail,
 } from "@/types";
 import { authHeader, getAuthToken, recoverAuthExpired } from "./authToken";
 
@@ -112,6 +114,21 @@ export const sessionsApi = {
   delete: (sessionId: string) =>
     apiFetch<{ status: string }>(`/api/sessions/${encodeSessionId(sessionId)}`, {
       method: "DELETE",
+    }),
+};
+
+// Templates API (Wave 11) — repo-owned example bundles you can FORK into a
+// session. list/get are PUBLIC (no sign-in); fork requires a signed-in/self-host
+// identity (it owns the resulting session).
+export const templatesApi = {
+  list: () => apiFetch<{ templates: TemplateSummary[] }>("/api/templates").then((r) => r.templates),
+
+  get: (templateId: string) =>
+    apiFetch<TemplateDetail>(`/api/templates/${encodeURIComponent(templateId)}`),
+
+  fork: (templateId: string) =>
+    apiFetch<{ sessionId: string }>(`/api/templates/${encodeURIComponent(templateId)}/fork`, {
+      method: "POST",
     }),
 };
 

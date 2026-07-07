@@ -17,6 +17,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
@@ -39,11 +40,13 @@ import { AccountChip } from "@/components/auth/AccountChip";
 import { ThemeToggle } from "@/components/workbench/ThemeToggle";
 import { SessionCard } from "./SessionCard";
 import { ThreadDrawer } from "./ThreadDrawer";
+import { ExampleCard } from "./ExampleCard";
+import { TemplatePreview } from "./TemplatePreview";
 import { CreateSessionModal } from "./CreateSessionModal";
 import { NamePrompt, type NamePromptProps } from "./NamePrompt";
 import { LauncherContextMenu, type MenuItem } from "./LauncherContextMenu";
 import { groupSwatch } from "./util";
-import type { Project, Session } from "@/types";
+import type { Project, Session, TemplateSummary } from "@/types";
 
 type SortMode = "recent" | "grouped";
 
@@ -67,12 +70,16 @@ export function Launcher() {
     renameProject,
     createProject,
     moveSession,
+    templates,
+    loadTemplates,
+    forkTemplate,
   } = useStore();
   const { status: authStatus } = useAuth();
 
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortMode>("recent");
   const [selId, setSelId] = useState<string | null>(null);
+  const [selTemplate, setSelTemplate] = useState<TemplateSummary | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [prompt, setPrompt] = useState<Omit<NamePromptProps, "onCancel"> | null>(null);
@@ -89,6 +96,12 @@ export function Launcher() {
     loadSessions();
     loadProjects();
   }, [loadSessions, loadProjects, authStatus]);
+
+  // Templates are PUBLIC (no auth gate) — load once on mount so a brand-new user
+  // with no sessions still sees examples to fork.
+  useEffect(() => {
+    loadTemplates();
+  }, [loadTemplates]);
 
   const groupColor = (projectId: string) =>
     groupSwatch(projects.findIndex((p) => p.id === projectId));
@@ -139,6 +152,24 @@ export function Launcher() {
       // Creation failed (offline / stale session) — still land in the workspace.
       open(sessionId);
     }
+  };
+
+  // Session and template selection share the ONE right-hand slide-over, so
+  // selecting one dismisses the other.
+  const selectSessionCard = (id: string) => {
+    setSelTemplate(null);
+    setSelId(id);
+  };
+  const selectExample = (t: TemplateSummary) => {
+    setSelId(null);
+    setSelTemplate(t);
+  };
+
+  // Fork → new user-owned session, then route straight into it. Errors bubble
+  // to the preview (e.g. a hosted deployment returns 400).
+  const forkExample = async (templateId: string) => {
+    const sessionId = await forkTemplate(templateId);
+    open(sessionId);
   };
 
   // Drag-to-group: optimistic move, reverted on server failure.
@@ -306,7 +337,7 @@ export function Launcher() {
       selected={s.id === selId}
       groupName={showTag ? groupNameOf(s.project_id) : null}
       groupColor={showTag && s.project_id ? groupColor(s.project_id) : null}
-      onSelect={() => setSelId(s.id)}
+      onSelect={() => selectSessionCard(s.id)}
       onOpen={() => open(s.id)}
       onMenu={(e) => openSessionMenu(e, s)}
       dragging={dragId === s.id}
@@ -320,6 +351,36 @@ export function Launcher() {
 
   const isEmpty = !sessionsLoading && sessions.length === 0 && !sessionsError;
   const isBooting = sessionsLoading && sessions.length === 0;
+
+  // Examples gallery — shown above the sessions grid whenever bundles exist
+  // (including for a brand-new user with no sessions). SWR iron rule: the list
+  // is populated from the store and never blanks on a refresh error.
+  const examplesBlock =
+    templates.length > 0 ? (
+      <section data-testid="examples-section" className="mb-8">
+        <div className="flex items-center gap-2 mb-3">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
+          <span className="text-[12.5px] font-semibold text-foreground/90">Examples</span>
+          <span className="text-[11px] text-muted-foreground/50 tabular-nums">
+            {templates.length}
+          </span>
+          <span className="text-[11px] text-muted-foreground/60">
+            — fork a finished design into your own workspace
+          </span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {templates.map((t) => (
+            <ExampleCard
+              key={t.id}
+              template={t}
+              selected={selTemplate?.id === t.id}
+              onSelect={() => selectExample(t)}
+              onOpen={() => selectExample(t)}
+            />
+          ))}
+        </div>
+      </section>
+    ) : null;
 
   return (
     <div data-testid="launcher" className="h-full flex bg-surface-0">
@@ -407,10 +468,20 @@ export function Launcher() {
             </div>
           </div>
         ) : isEmpty ? (
-          <EmptyLauncher onCreate={() => startCreate(null)} />
+          examplesBlock ? (
+            <div className="flex-1 overflow-y-auto px-6 py-6">
+              <div className="max-w-[860px] w-full mx-auto">
+                {examplesBlock}
+                <EmptyLauncher onCreate={() => startCreate(null)} inline />
+              </div>
+            </div>
+          ) : (
+            <EmptyLauncher onCreate={() => startCreate(null)} />
+          )
         ) : (
           <div className="flex-1 overflow-y-auto px-6 py-6" onContextMenu={openBgMenu}>
             <div className="max-w-[860px] w-full mx-auto">
+              {examplesBlock}
               {filtered.length === 0 ? (
                 <div className="grid place-items-center py-24 text-center">
                   <div className="w-11 h-11 rounded-xl bg-surface-2 grid place-items-center mb-3">
@@ -545,8 +616,15 @@ export function Launcher() {
         )}
       </div>
 
-      {/* Thread drawer — one lazy hydration for the selected session only. */}
-      {selected && (
+      {/* Right-hand slide-over — a template preview OR the session thread drawer
+          (mutually exclusive; one lazy hydration for the selected item only). */}
+      {selTemplate ? (
+        <TemplatePreview
+          template={selTemplate}
+          onClose={() => setSelTemplate(null)}
+          onFork={forkExample}
+        />
+      ) : selected ? (
         <ThreadDrawer
           session={selected}
           groupName={groupNameOf(selected.project_id)}
@@ -555,7 +633,7 @@ export function Launcher() {
           onOpen={(opts) => open(selected.id, opts)}
           onNewChat={() => void newChat(selected.id)}
         />
-      )}
+      ) : null}
 
       {/* Overlays */}
       {menu && <LauncherContextMenu {...menu} onClose={() => setMenu(null)} />}
@@ -588,9 +666,9 @@ export function Launcher() {
   );
 }
 
-function EmptyLauncher({ onCreate }: { onCreate: () => void }) {
+function EmptyLauncher({ onCreate, inline = false }: { onCreate: () => void; inline?: boolean }) {
   return (
-    <div className="flex-1 grid place-items-center px-6">
+    <div className={cn(inline ? "py-10 grid place-items-center" : "flex-1 grid place-items-center px-6")}>
       <div className="max-w-[380px] text-center">
         <div className="mx-auto w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 grid place-items-center mb-5 relative">
           <Folder className="h-7 w-7 text-primary" />

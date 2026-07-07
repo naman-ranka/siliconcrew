@@ -26,8 +26,9 @@ import type {
   DirEntry,
   SmartFile,
   ToolCatalogEntry,
+  TemplateSummary,
 } from "@/types";
-import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi, codexApi } from "./api";
+import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi, codexApi, templatesApi } from "./api";
 import { generateId } from "./utils";
 import { makeArtifactKey, type ArtifactKey } from "./artifactKeys";
 import { isDuplicateOfServer, mergeActivity, upsertActivityEvent } from "./activityMerge";
@@ -270,6 +271,16 @@ interface AppState {
   sessionsLoading: boolean;
   sessionsError: string | null;
 
+  // Template gallery (Wave 11) — read-only example bundles you can fork. List
+  // data only; no heavy per-template state (the preview fetches on demand).
+  templates: TemplateSummary[];
+  templatesLoading: boolean;
+  templatesError: string | null;
+  loadTemplates: () => Promise<void>;
+  /** Fork a bundle → new user-owned session id (added to the sessions list).
+   * Throws on failure so the caller can surface it (e.g. hosted 400). */
+  forkTemplate: (templateId: string) => Promise<string>;
+
   // Chat state
   messages: Message[];
   isStreaming: boolean;
@@ -494,6 +505,9 @@ export const useStore = create<AppState>((set, get) => ({
   currentSession: null,
   sessionsLoading: false,
   sessionsError: null,
+  templates: [],
+  templatesLoading: false,
+  templatesError: null,
 
   messages: [],
   isStreaming: false,
@@ -639,6 +653,36 @@ export const useStore = create<AppState>((set, get) => ({
         sessionsLoading: false,
       });
     }
+  },
+
+  // Template gallery (Wave 11). SWR iron rule: a populated list never blanks on
+  // a failed refresh — keep the last-good templates and surface the error.
+  loadTemplates: async () => {
+    set({ templatesLoading: true, templatesError: null });
+    try {
+      const templates = await templatesApi.list();
+      set({ templates, templatesLoading: false });
+    } catch (error) {
+      set({
+        templatesError: error instanceof Error ? error.message : "Failed to load examples",
+        templatesLoading: false,
+      });
+    }
+  },
+
+  forkTemplate: async (templateId: string) => {
+    const { sessionId } = await templatesApi.fork(templateId);
+    // Best-effort: pull the fresh session into the list so a return to the
+    // launcher shows it immediately (the caller routes into /w/{id} regardless).
+    try {
+      const session = await sessionsApi.get(sessionId);
+      set((state) => ({
+        sessions: [session, ...state.sessions.filter((s) => s.id !== sessionId)],
+      }));
+    } catch {
+      // The fork succeeded server-side; a failed refresh must not fail the fork.
+    }
+    return sessionId;
   },
 
   createSession: async (name: string, model: string, projectId?: string | null) => {
@@ -788,6 +832,22 @@ export const useStore = create<AppState>((set, get) => ({
     // Back/forward no-op: already on this session — compare before dispatch.
     if (get().currentSession?.id === sessionId) return true;
     await get().selectSession(target);
+    // Enrich with the authoritative single-GET record — it carries
+    // source_template provenance (the "forked from" chip) that the hot list
+    // endpoint omits. Best-effort + stale-guarded; SWR iron rule: merge, never
+    // blank the populated session.
+    void sessionsApi
+      .get(sessionId)
+      .then((full) => {
+        if (get().currentSession?.id !== sessionId) return;
+        set((state) => ({
+          currentSession: state.currentSession ? { ...state.currentSession, ...full } : full,
+          sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, ...full } : s)),
+        }));
+      })
+      .catch(() => {
+        /* provenance is a nicety — a failed enrich never breaks the open */
+      });
     return true;
   },
 
