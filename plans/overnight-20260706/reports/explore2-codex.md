@@ -1,17 +1,290 @@
 # Explore round 2 — Codex-agent UX + latency
 
-Evaluating how a **Codex agent** performs as a SiliconCrew user: drivability,
-latency, conversation continuity, and product UX. Two legs planned: **Leg 1**
-(this section) is the pre-deploy baseline against live backend **rev 00060**
-(F2 unconditional whole-workspace sync still shipping). **Leg 2** (placeholder
-at bottom) re-runs the same measurements after tonight's deploy to measure the
-delta.
+Evaluating the **Codex agent experience for a user of the deployed web app**:
+switch the agent panel to the **Codex** tab and run a multi-turn design
+conversation, judging drivability, latency, continuity, and UX. Two legs
+planned: **Leg 1** (this section) is the pre-deploy baseline against live
+backend **rev 00060** (F2 unconditional whole-workspace sync still shipping).
+**Leg 2** (placeholder at bottom) re-runs the same conversation after tonight's
+deploy to measure the delta.
 
-Sessions I created are named `x2_codex_*` (self-host, local machine only).
+**Method (per owner course-correction): drive the deployed frontend UI**, not
+the local CLI. The UI route is the deliverable; the CLI measurements are kept
+as **Appendix A**. UI session: `x2_codex_ui_20260707` (hosted, test account).
 
 ---
 
-## Leg 1 (pre-deploy, rev 00060)
+## Leg 1 — UI route (deployed frontend) — DELIVERABLE
+
+Frontend `https://siliconcrew-frontend-psp2dkllmq-uc.a.run.app/`, signed in as
+`rockstarme.the5@gmail.com` (already authenticated — no AuthKit step needed).
+Created `x2_codex_ui_20260707` in **Agent** posture, switched the agent panel's
+**Workbench | Codex** toggle to **Codex**. This is SiliconCrew's server-side
+Codex brain (the `[CODEX-TIMING]` path, hosted mode → F2/F3 apply), driven from
+the user's seat.
+
+### Wiring & first impressions (UI)
+
+- Switching to **Codex** shows a **"Codex — ChatGPT connected"** account chip
+  and opens a fresh Codex chat thread. **No auth/link step was required** — the
+  ChatGPT account is already connected on the test account, so the "does the
+  Codex tab need a link step" risk did not materialize here (a first-time user
+  without a connected account would see the connect affordance — untested).
+- **UX bug — stale model label:** the composer's model picker still reads
+  **"Gemini 3.5 Flash"** while the Codex tab is active, even though Codex runs
+  on the connected ChatGPT account (a gpt-5.x brain), not Gemini. Misleading:
+  the user can't tell which model is actually answering on the Codex tab
+  (X2C-6).
+
+### Turn 1 — "design a 4-bit Gray-code counter + self-checking TB, lint,
+simulate" (UI)
+
+Thread `6287…bb44`, turn `5f76…047`, sent 08:03:23 UTC. **First visible
+activity ("Thinking · 7s") ~7s after Send.** The Codex agent's work rendered as
+**legible inline cards** — each a friendly name + duration + a contextual action
+button — in this order: `get_current_session` → `Listing Files · 1s` → `Writing
+Specification · gray4` *(Open spec)* → `Reading Specification` *(Open spec)* →
+`Writing File · gray4.v` *(Open file)* → `Writing File · gray4_tb.v` *(Open
+file)* → `update_manifest` → `Running Linter · gray4.v` → `Running Linter ·
+gray4.v, gray4_tb.v` → `run_isolated_simulation` *(Open waveform)* → `Starting
+Synthesis · gray4.v` *(Open report)* → `Waiting for Synthesis · 60s / 106s / …`.
+The Artifacts Index populated live (`synth_0001` gray4, `sim_0001` gray4_tb).
+
+**Server-side latency for this turn (`[CODEX-TIMING]`, authoritative):**
+
+| bucket | value | note |
+|---|---|---|
+| `elapsed_setup` (F3 cold-start) | **10.17s** | fresh MCP subprocess bring-up before first token |
+| `sdk_turn_issued` | 0.05s | issuing the turn is cheap |
+| get_current_session | 0.05s | |
+| list_files_tool | 0.54s | |
+| write_spec / read_spec | 0.15s / 0.16s | |
+| write_file ×2 | 0.18s / 0.22s | |
+| update_manifest | 0.17s | |
+| linter_tool ×2 | 0.88s / 0.20s | |
+| run_isolated_simulation | 0.24s | |
+| start_synthesis | 0.52s | |
+| **wait_for_synthesis** | **60.17s, then 121.73s** | bounded blocker; 2nd call slightly **exceeded** the ≤120s ceiling |
+
+Two headline facts: (1) **F3 is real and live** — 10.17s of cold-start setup
+before the agent could act (consistent with the 6–15s seen in older hosted
+turns). (2) **F2 grows with the workspace, live on this turn.** Pre-synthesis,
+every read/write tool returned **sub-second** (tiny workspace: spec + 2 `.v`).
+**Post-synthesis, the same class of read tools jumped to ~14–16s each** on the
+grown workspace (ODBs + reports + GDS):
+
+| post-synth read tool | elapsed |
+|---|---|
+| get_synthesis_metrics | 13.98s |
+| get_route_drc_summary | 15.73s |
+| get_cts_summary | 14.60s |
+| get_congestion_summary | 13.92s |
+
+That ~14s-per-read is F2 (whole-workspace tar+GCS-upload on every call) biting
+once the workspace has synthesis artifacts — the exact cost the batched F2 fix
+targets. It is smaller than the 168–186s seen on the multi-run FIR workspace
+(Appendix A hosted baseline) because this is a single-synth 8k-cell design, but it is the same
+mechanism and clearly visible from the user's seat (each metric the agent reads
+to write its summary costs ~14s). Notably these four PD-summary tools **all
+succeeded** here — the X2M-2 "-32602 on every PD-summary tool" symptom did **not
+reproduce** on this run. The felt latency between cards (~10–29s gaps) pre-synth
+is Codex **model reasoning**, same as the CLI. The `wait_for_synthesis` ceiling
+of 121.73s is a minor invariant-6 overrun to note (bound is "≤120s").
+
+**Design outcome:** the agent's synthesis persistence paid off — `synth_0001`
+did not produce GDS, but **`synth_0002` completed successfully** (ORFS job
+`siliconcrew-orfs-whbk6`, exit 0, GDS uploaded to
+`orfs-runs/x2_codex_ui_20260707/synth_0002/`). So turn 1 reached **routed GDS**
+by hand of the Codex agent, unattended — real capability, at the cost of a very
+long turn (F9 CTS coin-flip: 1st synth failed, 2nd passed — consistent with the
+known heterogeneous-CPU flake).
+
+**Two behavioral findings from turn 1:**
+- **X2C-7 — the Codex agent over-reaches the ask.** I requested only lint +
+  simulate; the agent proactively ran `start_synthesis` + `wait_for_synthesis`
+  and, when `synth_0001` did not cleanly produce GDS, investigated
+  (`search_logs_tool`, `read_stage_report`) and **re-ran synthesis** — turning a
+  ~1-minute design+sim request into a 6+ minute GDS saga. Good initiative, but a
+  user who asked for a quick sim gets a long synthesis they didn't request.
+- **X2C-5 (HIGH) — long Codex turns lose their live progress in the UI, the
+  composer falsely goes idle, and there is no way to see or stop the running
+  turn.** Observed twice on this one turn:
+  1. **Mid-turn blank:** the **entire assistant response block vanished from the
+     transcript** (only the user message remained) and the composer **reset to
+     idle** (default placeholder, Send disabled) — while the turn was **still
+     running server-side** (`[CODEX-TIMING]` showed tools firing for another
+     ~10 minutes). Zero console errors.
+  2. **No reconnect after reload:** reloading the page (and re-selecting the
+     Codex tab / the codex chat by URL) still showed **only the user message** —
+     the UI does **not** reattach to the in-flight Codex turn's stream. No tool
+     cards, no text, **no Stop button** → the user cannot see progress *or
+     cancel a runaway turn* from the chat; only the Artifacts Index reveals that
+     work is happening (runs appearing).
+  Likely cause: the Codex runtime persists the assistant message only at **turn
+  end** (`codex_runtime.py` appends the assistant turn after the stream
+  completes), so any transcript (re)fetch mid-turn — SWR revalidate,
+  window-focus (invariant 6), or a full reload — renders the **empty persisted
+  state**, and there is no live-stream reattach for an already-running Codex
+  turn. A real user hits this simply by tabbing away, refreshing, or running a
+  long synthesis turn. The work is not lost (workspace + runs persist, see
+  below), but the chat looks **done-and-empty while Codex churns for minutes**,
+  with no cancel affordance. (Distinct from the native/Gemini agent, whose
+  LangGraph checkpointer persists incrementally — this is specific to the Codex
+  persist-at-turn-end model.)
+  - **Mitigation exists and is honest (not a lie):** once the turn ends, a
+    reload shows the **full persisted tool-card transcript**, ending with an
+    honest advisory — *"The connection was lost during this step — it may still
+    be running. Check the Runs / Signoff panel for live status, or send a
+    message to continue."* So the platform does NOT fake completion; it points
+    the user to the authoritative Runs panel (invariant 5). **But** the turn's
+    **final written summary/verdict is missing** — the 698s turn that reached
+    GDS never delivered its textual conclusion in-chat (lost with the dropped
+    stream); the user must reconstruct the outcome from the Runs/Signoff panel.
+    Net: honest but poor legibility — the fix is a live-stream **reattach** for
+    an in-flight Codex turn (and/or incremental assistant-message persistence so
+    a refetch shows progress instead of blank). **This is the most important UI
+    finding of the leg.**
+- **Workspace durability is fine (the chat is the only casualty):** across the
+  mid-turn blank and a full reload, the **Artifacts Index stayed correct** —
+  `sim_0001`, `synth_0001`, `synth_0002`, `sim_0002` runs and the `gray4.v` /
+  `gray4_tb.v` / `constraints.sdc` files all persisted, with a `gray4`
+  top-module chip. So the run directory (invariant 5) is durable; only the live
+  Codex chat transcript is not recoverable until the turn ends.
+- **Continuity nit — reload resets the agent sub-tab.** After reload, the agent
+  group reverted to **Workbench + Chat 1** even though the URL carried the Codex
+  chat id (`?chat=6287…`) — the Codex/Workbench sub-tab and active chat are not
+  fully driven by the URL (minor invariant-7 "URL is source of truth" gap;
+  X2C-8).
+
+**Turn 1 total: `turn_end status=completed elapsed=698.03s` (11.6 min).** The
+length is F2 (14–16s post-synth reads) + the `wait_for_synthesis` polls + the
+synth retry + a very thorough metric/DRC/congestion/re-sim sweep the agent did
+on its own.
+
+### Turn 2 — "add an enable input, re-verify (no synthesis)" — continuity (UI)
+
+Sent in the **same Codex chat** (thread `6287…bb44`, new turn `72ce…9912`),
+08:18:01 UTC. **Continuity confirmed:** the turn opened by `read_file gray4.v` →
+`read_file gray4_tb.v` → `get_manifest` — it saw and re-read **turn 1's own
+files**, then re-wrote the spec and proceeded to edit. The transcript correctly
+stacks turn 1 (ending in the honest advisory) above turn 2.
+
+**But turn 2 is where F2 is unmistakable.** `[CODEX-TIMING]`:
+
+| turn-2 tool | elapsed |
+|---|---|
+| `elapsed_setup` (F3) | **3.83s** (F3 varies 3.8–14.6s across turns) |
+| read_file gray4.v | 14.23s |
+| read_file gray4_tb.v | 13.81s |
+| get_manifest | 13.78s |
+| write_spec | 14.05s |
+| read_spec | 14.13s |
+
+**On the post-synth workspace, EVERY tool call costs ~14s** — reads and writes
+alike — because F2 tars+uploads the whole workspace (now ODBs + GDS + reports)
+on each call. A routine "add a port and re-verify" turn therefore drags into
+minutes purely on sync overhead. **This is the single clearest, most damning F2
+signal of the leg**, and the exact cost the batched F2 fix removes (leg 2 should
+show these drop to sub-second).
+
+**Turn 2 outcome — continuity + correctness + honesty all pass.** It **read
+turn 1's files, edited them**, respected the no-synthesis instruction, and
+delivered a **complete, honest final summary** in-chat (this shorter 4-min turn
+did not lose its stream): *"Done — no synthesis run was started. Changed files:
+gray4.v, gray4_tb.v, gray4_spec.yaml, constraints.sdc … Lint: PASS …
+Simulation: Run sim_0003, Status PASS, Pass marker found: TEST PASSED … verifies
+reset, en=0 hold, en=1 advancement, exactly one Gray-code bit change."* So the
+lost-final-summary symptom is specific to **long turns whose stream drops**
+(turn 1, 11.6 min + a reload), not every turn. `turn_end status=completed
+elapsed=247.66s` (4.1 min, all F2 + reasoning, no synth).
+
+### Turn 3 — "what's in my workspace?" — continuity (UI)
+
+Sent in the same Codex chat, 08:23:51 UTC. New turn: `elapsed_setup=3.64s`,
+`list_files_tool` 14.73s (F2 again), then `get_manifest`, then a short
+inventory. It correctly enumerated the workspace and manifest roles — continuity
+held a third time, and (being short, ~54s) it delivered its full answer in-chat:
+*"gray4.v — rtl, gray4_tb.v — tb, constraints.sdc — sdc; RTL/synthesis top:
+gray4, Testbench top: gray4_tb; other files: gray4_spec.yaml, manifest.json,
+sim_runs/…, synth_runs/…, attempt_log.json, attempt_events.jsonl."*
+`turn_end status=completed elapsed=53.99s` (2 tools, each ~14s from F2, + setup
+3.64s + reasoning).
+
+### UI per-turn wall-clock summary
+
+| Turn (UI) | server `elapsed` | F3 setup | tools | dominant cost | outcome |
+|---|---|---|---|---|---|
+| 1 — design gray4 + TB + lint + sim (agent also synthesized) | **698.03s** (11.6 min) | 10.17s | ~30 (incl. synth retry) | synth waits + F2 post-synth reads + model | routed **GDS** (synth_0002); final summary lost to dropped stream (X2C-5) |
+| 2 — add enable, re-verify (no synth) | **247.66s** (4.1 min) | 3.83s | ~12 | **F2 ~14s/call** + model | lint PASS, **sim_0003 PASS**; full summary delivered; continuity ✓ |
+| 3 — workspace inventory | **53.99s** | 3.64s | 2 | F2 ~14s/call + model | correct inventory; continuity ✓ |
+
+### Continuity verdict (UI)
+
+**Strong within a chat.** All three turns ran in one Codex chat (thread
+`6287…bb44`); turn 2 re-read and edited **turn 1's own files**, turn 3
+inventoried them — the Codex `external_thread_id` resume + the session binding
+carried context across turns, and the workspace/runs are durable (survive
+reloads and the mid-turn blank). Two caveats: (1) **X2C-5** — a *live* turn's
+progress is not recoverable in-chat until it ends (blank on refetch, no
+reattach), and a long turn can lose its final summary; (2) **X2C-8** — a reload
+resets the agent sub-tab to Workbench/Chat 1 while the URL still points at the
+Codex chat (URL-source-of-truth nit). Neither loses data.
+
+### UX verdict (from the web-app user's seat)
+
+**The Codex agent is genuinely capable and its work is beautifully legible —
+but the hosted latency (F2/F3) and the live-turn UI gaps make it feel heavy, and
+its over-eagerness can run away.** Concretely:
+
+- **Legibility — excellent.** Every tool is a friendly-named inline card
+  (*Writing Specification*, *Running Linter*, *Waiting for Synthesis*, *Reading
+  File · gray4.v · 14s*) with a duration and a contextual action (*Open spec /
+  file / waveform / report*). A designer can follow exactly what the agent did.
+  Final summaries (when delivered) are honest and specific (real run ids, pass
+  markers, VCD paths).
+- **Honesty — good.** Lint/sim verdicts are real; when the stream drops the UI
+  shows an honest "connection lost — check the Runs panel" advisory rather than
+  faking completion; the Artifacts Index is always authoritative.
+- **Latency — the weak point.** F3 cold-start is 3.6–14.6s **before every turn's
+  first token**; and once a workspace has synthesis artifacts, **F2 makes every
+  tool call ~14s**, so multi-tool turns take minutes. A designer would tolerate
+  the ~1-min self-host-class turns, but **not** a post-synth turn where each of
+  a dozen tool calls costs 14s.
+- **Behavior — over-reach + no cancel.** The agent volunteered a full
+  synthesis→GDS run on a "design + simulate" ask and, on a failed first synth,
+  looped through diagnosis + a second synth (11.6-min turn) — impressive
+  autonomy, but a user who wanted a quick sim can't easily stop it (no Stop
+  control once the live view blanks, X2C-5).
+
+**Single change that would most improve the Codex web experience: ship the
+batched F2 sync-gating fix** (`f095fcb`). It turns the ~14s-per-call post-synth
+tax into sub-second reads — the difference between a 4-minute and a ~40-second
+"add a port and re-verify" turn. Second: **fix X2C-5** (live-stream reattach /
+incremental persistence) so a long Codex turn stays visible and cancelable.
+
+### Findings (UI leg — NEW only)
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| X2C-5 | HIGH (UX/legibility) | OPEN | A live Codex turn's progress is not recoverable in the UI until it ends: mid-turn the assistant block **blanks to just the user message** and the composer **goes idle** (no Stop) on any transcript refetch (SWR/focus/reload), because the Codex runtime persists the assistant message only at turn-end and the UI does **not** reattach to the running stream. Honest mitigation exists (post-turn reload shows the full cards + a "connection lost — check Runs panel" advisory), but a long turn (turn 1, 698s) **lost its final written summary** and could not be cancelled from chat. Fix: live-stream reattach and/or incremental assistant-message persistence. Most important UI finding. |
+| X2C-6 | LOW (UX/honesty) | OPEN | The composer **model picker still reads "Gemini 3.5 Flash" while the Codex tab is active** — Codex runs on the connected ChatGPT account (a gpt-5.x brain), not Gemini. The user can't tell which model is answering on the Codex tab. Fix: reflect the Codex/account model in the picker when the Codex sub-tab is selected. |
+| X2C-7 | LOW-MED (behavior) | OPEN | The Codex agent **over-reaches the ask** — given "design + lint + simulate," it also ran `start_synthesis` + `wait_for_synthesis`, and on a failed first synth looped through log/stage-report diagnosis + a second synth, turning a ~1-min request into an 11.6-min GDS saga. Good initiative, but should be scoped to the request (or the runaway should be cancelable — see X2C-5). Adding "do NOT run synthesis" to turn 2 correctly suppressed it, so it is steerable. |
+| X2C-8 | LOW (invariant 7) | OPEN | A page reload **resets the agent sub-tab to Workbench + Chat 1** even though the URL carries the Codex chat id (`?chat=…`) — the Codex/Workbench sub-tab and active chat are not fully URL-driven. No data loss; a source-of-truth nit. |
+
+**Not reproduced this leg (worth noting):** X2M-2 (the "-32602 on every
+PD-summary tool" symptom) — here `get_synthesis_metrics`, `get_route_drc_summary`,
+`get_cts_summary`, `get_congestion_summary` **all succeeded** (just slow, ~14s
+each from F2). `wait_for_synthesis` returned at 60.17s and 121.73s — one call
+**slightly over** the "≤120s" bound (minor invariant-6 note).
+
+---
+
+## Appendix A — CLI route (self-host, superseded by UI route above)
+
+_Kept for the honest measurements gathered before the course-correction. The
+CLI drives the **local self-host** `rtl-codex` server, which does not exercise
+F2/F3 (those are hosted, server-side-brain only) — so these numbers characterize
+the self-host CLI experience, not the hosted product._
 
 ### How Codex is wired on this machine (verified)
 
@@ -194,11 +467,20 @@ entry adds an auth-failure stall + error spam to every invocation (X2C-1).
 
 ## Leg 2 (post-deploy)
 
-_Placeholder — to be filled after tonight's deploy. Re-run the identical
-self-host multi-turn conversation (same three prompts) and re-pull the hosted
-`[CODEX-TIMING]` `elapsed_setup` + `POST /mcp` latency distribution; compare
-against the leg-1 tables above. Key deltas to check: (1) hosted `/mcp` tail
-latency — do post-synth read calls drop from ~168s to sub-second once F2 gates
-sync to mutating tools only? (2) F3 setup — unchanged unless the warm-subprocess
-follow-up shipped. (3) does the claude.ai / codex hosted MCP survive the
-revision roll, or still need a manual reconnect (F15)?_
+_Placeholder — to be filled after tonight's deploy. **Repeat the UI route
+exactly:** new session in Agent posture → Codex tab → the same three prompts
+(design gray4 + TB + lint + sim; add enable, no synthesis; workspace inventory),
+and re-pull the hosted `[CODEX-TIMING]` buckets for each turn. Key deltas to
+check against the leg-1 UI tables above:_
+1. **F2 (the big one):** do **post-synth tool calls drop from ~14s to
+   sub-second** once the batched F2 fix gates `provider.sync()` to mutating
+   tools only? Repeat turn 2 (add-enable, all reads/writes on a post-synth
+   workspace) and compare the ~14s-per-call table — this is the headline number.
+2. **F3 setup:** still 3.6–14.6s per turn unless the warm-subprocess follow-up
+   shipped (it is only batched as a follow-up, so expect little change).
+3. **X2C-5:** does a long/refreshed Codex turn now reattach its live stream (or
+   at least keep progress visible) instead of blanking to the user message? Tab
+   away mid-turn and reload to test.
+4. **X2C-6:** does the composer model label stop saying "Gemini 3.5 Flash" on
+   the Codex tab?
+5. **`wait_for_synthesis`** ≤120s bound honored (leg 1 saw one 121.73s call)._
