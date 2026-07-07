@@ -353,7 +353,16 @@ export interface SmartFile {
 
 // Artifact tab/key kinds for the v2 workbench (see lib/artifactKeys.ts for the
 // `kind:ref` string-key helpers).
-export type ArtifactKind = "code" | "spec" | "wave" | "report" | "layout" | "schematic";
+export type ArtifactKind =
+  | "code"
+  | "spec"
+  | "wave"
+  | "report"
+  | "layout"
+  | "schematic"
+  | "image"
+  | "data"
+  | "text";
 
 // --- Tool catalog (GET /api/workspace/{sid}/tools) ---------------------------
 // The backend introspects the SAME LangChain @tool registry the agent and MCP

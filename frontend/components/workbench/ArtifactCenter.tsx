@@ -9,7 +9,10 @@ import {
   Code2,
   FileText,
   Home,
+  Image as ImageIcon,
   Layers,
+  Table2,
+  Type,
   X,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
@@ -24,6 +27,9 @@ import { WaveArtifact } from "./viewers/WaveArtifact";
 import { ReportArtifact } from "./viewers/ReportArtifact";
 import { LayoutArtifact } from "./viewers/LayoutArtifact";
 import { SchematicArtifact } from "./viewers/SchematicArtifact";
+import { ImageArtifact } from "./viewers/ImageArtifact";
+import { DataArtifact } from "./viewers/DataArtifact";
+import { TextArtifact } from "./viewers/TextArtifact";
 import { ViewerEmpty } from "./viewers/panels";
 
 const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }>> = {
@@ -33,6 +39,9 @@ const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }
   report: BarChart3,
   layout: Layers,
   schematic: CircuitBoard,
+  image: ImageIcon,
+  data: Table2,
+  text: Type,
 };
 
 // Route one open tab to its wrapper viewer. Wrappers load their own data via
@@ -56,6 +65,12 @@ function ArtifactBody({ artifactKey, readOnly }: { artifactKey: string; readOnly
       return <LayoutArtifact runId={parsed.ref ?? ""} />;
     case "schematic":
       return <SchematicArtifact name={parsed.ref ?? ""} />;
+    case "image":
+      return <ImageArtifact path={parsed.ref ?? ""} />;
+    case "data":
+      return <DataArtifact path={parsed.ref ?? ""} />;
+    case "text":
+      return <TextArtifact path={parsed.ref ?? ""} />;
   }
 }
 

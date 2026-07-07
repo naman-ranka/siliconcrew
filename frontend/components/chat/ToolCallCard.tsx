@@ -11,7 +11,10 @@ import {
   CircuitBoard,
   Code2,
   FileText,
+  Image as ImageIcon,
   Layers,
+  Table2,
+  Type,
   X,
   Loader2,
   Wrench,
@@ -54,6 +57,9 @@ const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }
   report: BarChart3,
   layout: Layers,
   schematic: CircuitBoard,
+  image: ImageIcon,
+  data: Table2,
+  text: Type,
 };
 
 const KIND_OPEN_LABEL: Record<ArtifactKind, string> = {
@@ -63,6 +69,9 @@ const KIND_OPEN_LABEL: Record<ArtifactKind, string> = {
   report: "report",
   layout: "layout",
   schematic: "schematic",
+  image: "image",
+  data: "data",
+  text: "text",
 };
 
 /** "Open <kind> →" — a tool call whose result maps to an artifact gets a
