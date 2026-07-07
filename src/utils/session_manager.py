@@ -26,7 +26,13 @@ class SessionManager:
         # Default to the config-selected store (SQLite unless hosted+Postgres),
         # but allow explicit injection for tests / embedding.
         self._store = metadata_store or build_metadata_store(self.db_path)
-        self._store.init_schema()
+        # 4C (hosted-latency plan): a Codex-bound MCP subprocess spawn must not
+        # re-run the schema DDL on a fresh Cloud SQL connection every turn —
+        # the parent app provisioned the schema at boot and marks the
+        # subprocess env accordingly (codex_engine._config_overrides). Everyone
+        # else (self-host, standalone MCP, the app itself) provisions as before.
+        if os.environ.get("SILICONCREW_SCHEMA_READY", "").strip().lower() not in ("1", "true", "yes"):
+            self._store.init_schema()
 
     # -------------------------------------------------------------------------
     # Project methods

@@ -82,7 +82,6 @@ from src.tools.wrappers import (
     get_workspace_path,
     mcp_tools,
 )
-from src.agents.architect import SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.platform_engines.request_scope import run_in_session
@@ -118,6 +117,12 @@ def _load_architect_prompt() -> tuple[str, str, str]:
         except Exception:
             # Fall through to SYSTEM_PROMPT fallback.
             pass
+
+    # Lazy: the LangGraph agent stack behind SYSTEM_PROMPT is only needed on
+    # this fallback (prompt file missing/unreadable) — importing it at module
+    # load taxed every Codex MCP subprocess spawn for a constant that is
+    # almost never used (4C, hosted-latency plan).
+    from src.agents.architect import SYSTEM_PROMPT
 
     return SYSTEM_PROMPT, "src.agents.architect.SYSTEM_PROMPT", "legacy"
 

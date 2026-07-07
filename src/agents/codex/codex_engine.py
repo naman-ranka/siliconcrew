@@ -440,6 +440,10 @@ class CodexEngine:
         # bound MCP subprocess must not block each mutating tool result on a
         # full-workspace upload of the SAME shared scratch dir.
         env["SILICONCREW_MCP_DEFER_WORKSPACE_SYNC"] = "1"
+        # 4C: the parent app already provisioned the metadata schema at boot —
+        # the per-turn subprocess must not pay the DDL round-trips again on a
+        # fresh Cloud SQL connection before it can answer the MCP handshake.
+        env["SILICONCREW_SCHEMA_READY"] = "1"
         token = turn.mcp_token or os.environ.get("CODEX_MCP_BEARER_TOKEN") or os.environ.get("SILICONCREW_MCP_TOKEN")
         if token:
             env["SILICONCREW_MCP_TOKEN"] = token
