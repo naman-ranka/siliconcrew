@@ -2738,6 +2738,10 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
                 "elapsed_sec": meta.get("elapsed_sec"),
                 "summary_metrics": meta.get("summary_metrics"),
                 "auto_checks": meta.get("auto_checks"),
+                # Failing stage + reason so a failed run is legible in the list
+                # without opening logs (F12). Absent in run_meta → null.
+                "current_stage": meta.get("current_stage"),
+                "check_notes": meta.get("check_notes"),
                 "report_available": os.path.exists(report_path),
                 "report_filename": os.path.basename(report_path) if os.path.exists(report_path) else None,
             }

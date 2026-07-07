@@ -270,6 +270,8 @@ class SynthesisRunResponse(BaseModel):
     elapsed_sec: Optional[float] = None
     summary_metrics: Optional[Dict[str, Any]] = None
     auto_checks: Optional[Dict[str, Any]] = None
+    current_stage: Optional[str] = None
+    check_notes: Optional[str] = None
     report_available: bool = False
     report_filename: Optional[str] = None
 

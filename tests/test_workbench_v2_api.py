@@ -245,6 +245,32 @@ def test_run_status_route_answers_by_run_id(client):
     assert job["summary_metrics"]["area_um2"] == 12.3
 
 
+def test_runs_list_surfaces_failing_stage_and_notes(client):
+    """F12: a failed synth run's /runs item carries the failing stage +
+    one-line reason (camelCase) straight from run_meta, so the run card can
+    explain the failure without opening logs."""
+    c, ws = client
+    run_dir = os.path.join(ws, "synth_runs", "synth_0002")
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "run_meta.json"), "w") as f:
+        json.dump({
+            "run_id": "synth_0002", "status": "failed", "current_stage": "cts",
+            "check_notes": "Clock tree synthesis failed (see 4_1_cts.log).",
+            "top_module": "counter", "platform": "sky130hd",
+            "created_at": _iso(0), "updated_at": _iso(1),
+        }, f)
+    with open(os.path.join(ws, "synth_runs", "index.json"), "w") as f:
+        json.dump({"runs": [{"run_id": "synth_0002", "status": "failed",
+                             "updated_at": _iso(1)}]}, f)
+
+    r = c.get(f"/api/workspace/{SID}/runs?kind=synth")
+    assert r.status_code == 200
+    runs = r.json()["runs"]
+    synth = next(x for x in runs if x["id"] == "synth_0002")
+    assert synth["currentStage"] == "cts"
+    assert synth["checkNotes"] == "Clock tree synthesis failed (see 4_1_cts.log)."
+
+
 def test_run_status_route_unknown_run(client):
     c, ws = client
     r = c.get(f"/api/workspace/{SID}/runs/synth_9999/status")
