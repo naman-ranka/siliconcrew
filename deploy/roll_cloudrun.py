@@ -6,8 +6,8 @@ from google.auth.transport.requests import AuthorizedSession
 project = 'siliconcrew'
 region = 'us-central1'
 updates = {
-    'siliconcrew-backend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/backend@sha256:1b79fc453f5d8754edabf621774fb0eef290288aff13c634938fbdcd6e02e6a3',
-    'siliconcrew-frontend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/frontend@sha256:d78cb64ea24ffb7ceada4aca5bf1cb5c27893ac587fac0ab33bbb9320d381a0f',
+    'siliconcrew-backend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/backend@sha256:dddabfd38117f97ab2b93b0e58ce7e807b6d35c2b29c4273c054d05563c3c25b',
+    'siliconcrew-frontend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/frontend@sha256:17ee683acd802b2e248a7656e39a589bb5581df734f0fdb0acb1f292bbf5bced',
 }
 
 def main():

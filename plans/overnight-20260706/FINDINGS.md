@@ -241,6 +241,42 @@ Corroboration: codex leg 1b independently did NOT reproduce X2M-2 (all 4 PD tool
 succeeded, ~14s each purely from F2) — supports the X2M-2 schema-disproof (it was
 F2-temporal, not a schema bug).
 
+## ✅ DEPLOY COMPLETE + LIVE-VERIFIED (session 2, 2026-07-07 ~08:4x MST)
+
+Deployed tonight's HEAD (image f1425f3, all code + 14 gallery bundles):
+- backend **rev 00063-56l** (digest dddabfd3) — F1+F9+F2+F9c+F11/F12+X2U-2+X2M-5+
+  python-wave+AR-1 + everything.
+- frontend **rev 00052-hcz** (digest 17ee683a) — landing+gallery+F5/F6/F7/F8+
+  F11/F12 render+PA7-10+X2A-4/5+AR-2.
+Built via clean git-archive, pushed to Artifact Registry, rolled via
+roll_cloudrun.py (this time with the CORRECT new digests). Both /health 200.
+
+LIVE-VERIFIED via Playwright (deployed app, test acct):
+- ✅ Landing renders: title "SiliconCrew — open-source AI agent for RTL design",
+  GitHub + Issues links (header + footer), "Open source, MIT-licensed" footer.
+  THE MISSION'S #1 PRIORITY — session picker is now one element; the OSS landing
+  + examples gallery is the page.
+- ✅ Gallery lists all **14** real GDS bundles with honest metrics (WNS/cells/area)
+  + attribution (Tiny Tapeout Apache commits, clean-room labels, dual MIT/Apache
+  on Simon).
+- ✅ Preview shows files + fail→fix trajectory (the "see how the agent ran" goal).
+- ✅ D3 fork honesty LIVE: hosted fork renders the honest "available in self-host
+  today" alert, not a raw error.
+- ✅ Console CLEAN on landing — F5 (DialogTitle) gone, favicon 404 (X2U-1) gone.
+- ✅ Backend /api/templates serves 14 bundles.
+
+DEFERRED from the deploy (honest): the **siliconcrew-orfs JOB image** rebuild
+(F9b remediation) — NOT done. It's a separate Cloud Run JOB, an edge feature
+(retry_pd resume-from-stage), and after the earlier deploy incident I chose not
+to run a second unfamiliar production operation unattended. F9b stays OPEN;
+remediation = rebuild the job image from deploy/orfs_job/ + `gcloud run jobs
+update siliconcrew-orfs`, then verify a hosted resume. Owner-triggerable.
+
+Post-deploy checks still worth running (not blocking): codex LEG 2 (F2 delta —
+the ~14s post-synth calls should now be sub-second); MCP connector survives-deploy
+(the claude.ai "Silicon crew" connector likely needs ONE manual reconnect for THIS
+deploy — the stateless fix cures it for deploys AFTER it, F15/F9c).
+
 ## ⚠️ DEPLOY INCIDENT (session 2, 2026-07-07 ~08:2x MST) — caught + reverted
 
 WHAT HAPPENED: I ran `python deploy/roll_cloudrun.py --list` intending to LIST
