@@ -1,0 +1,183 @@
+{
+  "creator": "Yosys 0.62+0 (git sha1 UNKNOWN-dirty, g++ 11.4.0-1ubuntu1~22.04.3 -fPIC -O3)",
+  "modules": {
+    "lfsr8": {
+      "attributes": {
+        "hdlname": "lfsr8",
+        "top": "00000000000000000000000000000001",
+        "src": "/workspace/inputs/lfsr8.v:4.1-16.10"
+      },
+      "ports": {
+        "clk": {
+          "direction": "input",
+          "bits": [ 2 ]
+        },
+        "rst_n": {
+          "direction": "input",
+          "bits": [ 3 ]
+        },
+        "en": {
+          "direction": "input",
+          "bits": [ 4 ]
+        },
+        "state": {
+          "direction": "output",
+          "bits": [ 5, 6, 7, 8, 9, 10, 11, 12 ]
+        }
+      },
+      "cells": {
+        "$auto$ff.cc:337:slice$5482": {
+          "hide_name": 1,
+          "type": "$adffe",
+          "parameters": {
+            "ARST_POLARITY": "00000000000000000000000000000000",
+            "ARST_VALUE": "11111111",
+            "CLK_POLARITY": "00000000000000000000000000000001",
+            "EN_POLARITY": "00000000000000000000000000000001",
+            "WIDTH": "00000000000000000000000000001000"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:12.5-15.8"
+          },
+          "port_directions": {
+            "ARST": "input",
+            "CLK": "input",
+            "D": "input",
+            "EN": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "ARST": [ 3 ],
+            "CLK": [ 2 ],
+            "D": [ 13, 5, 6, 7, 8, 9, 10, 11 ],
+            "EN": [ 4 ],
+            "Q": [ 5, 6, 7, 8, 9, 10, 11, 12 ]
+          }
+        },
+        "$xor$/workspace/inputs/lfsr8.v:10$5470": {
+          "hide_name": 1,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:10.21-10.40"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 12 ],
+            "B": [ 10 ],
+            "Y": [ 14 ]
+          }
+        },
+        "$xor$/workspace/inputs/lfsr8.v:10$5471": {
+          "hide_name": 1,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:10.21-10.51"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 14 ],
+            "B": [ 9 ],
+            "Y": [ 15 ]
+          }
+        },
+        "$xor$/workspace/inputs/lfsr8.v:10$5472": {
+          "hide_name": 1,
+          "type": "$xor",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000000001",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000000001",
+            "Y_WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:10.21-10.62"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 15 ],
+            "B": [ 8 ],
+            "Y": [ 13 ]
+          }
+        }
+      },
+      "netnames": {
+        "$xor$/workspace/inputs/lfsr8.v:10$5470_Y": {
+          "hide_name": 1,
+          "bits": [ 14 ],
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:10.21-10.40"
+          }
+        },
+        "$xor$/workspace/inputs/lfsr8.v:10$5471_Y": {
+          "hide_name": 1,
+          "bits": [ 15 ],
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:10.21-10.51"
+          }
+        },
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:5.23-5.26"
+          }
+        },
+        "en": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:7.23-7.25"
+          }
+        },
+        "feedback": {
+          "hide_name": 0,
+          "bits": [ 13 ],
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:10.10-10.18"
+          }
+        },
+        "rst_n": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:6.23-6.28"
+          }
+        },
+        "state": {
+          "hide_name": 0,
+          "bits": [ 5, 6, 7, 8, 9, 10, 11, 12 ],
+          "attributes": {
+            "src": "/workspace/inputs/lfsr8.v:8.23-8.28"
+          }
+        }
+      }
+    }
+  }
+}

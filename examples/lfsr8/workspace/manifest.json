@@ -1,0 +1,26 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "lfsr8.v",
+      "role": "rtl",
+      "path": "lfsr8.v"
+    },
+    {
+      "name": "lfsr8_tb.v",
+      "role": "tb",
+      "path": "lfsr8_tb.v"
+    }
+  ],
+  "synthTop": "lfsr8",
+  "simTop": "lfsr8_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "lfsr8_tb.v",
+      "module": "lfsr8_tb"
+    }
+  ]
+}

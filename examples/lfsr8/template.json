@@ -1,0 +1,13 @@
+{
+  "id": "lfsr8",
+  "name": "8-bit LFSR (maximal-length)",
+  "description": "A clean-room 8-bit Fibonacci LFSR (polynomial x^8+x^6+x^5+x^4+1, period 255) taken spec -> lint -> simulation -> GDS on the SkyWater sky130hd PDK entirely through the platform.",
+  "highlights": [
+    "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
+    "Timing met: WNS 0.0 ns; 21 std cells",
+    "Self-checking testbench: maximal-period 255 + no all-zero lockup PASSED"
+  ],
+  "top_module": "lfsr8",
+  "platform": "sky130hd",
+  "source_note": "Clean-room spec + RTL/TB; authored by dogfooding SiliconCrew locally (native iverilog sim + local ORFS synth)."
+}
