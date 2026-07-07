@@ -106,6 +106,13 @@ class PlatformSettings:
     # means the app is exactly the native-only workbench.
     codex_enabled: bool = False
 
+    # Python analysis tool execution: "docker" (isolated container, local
+    # default) | "native" (host subprocess with scrubbed env + rlimits). Mirrors
+    # sim_engine. The tool is gated OFF on hosted entirely, so this only ever
+    # selects the LOCAL/self-host engine.
+    python_engine: str = "docker"
+    python_image: str = "siliconcrew/python-analysis:1"
+
     @property
     def workos_configured(self) -> bool:
         """True when WorkOS token validation can run (hosted web + MCP auth).
@@ -218,6 +225,10 @@ def get_settings() -> PlatformSettings:
         test_bearer_token=_env("SILICONCREW_TEST_BEARER_TOKEN"),
         # Accept either the new flag or the reference's ENABLE_CODEX_RUNTIME.
         codex_enabled=_flag("CODEX_ENABLED", default=False) or _flag("ENABLE_CODEX_RUNTIME", default=False),
+        # Docker-preferred locally (native fallback when docker is absent); hosted
+        # never runs this tool. See src/tools/run_python.py.
+        python_engine=_env("PYTHON_ENGINE", "native" if hosted else "docker"),
+        python_image=_env("PYTHON_ANALYSIS_IMAGE", "siliconcrew/python-analysis:1"),
     )
 
 

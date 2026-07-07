@@ -55,6 +55,9 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
     "reporting": [
         "save_metrics_tool", "generate_report_tool",
     ],
+    "analysis": [
+        "run_python_analysis",
+    ],
     "hls": [
         "run_xls_flow", "run_dslx_interpreter", "compile_dslx_to_ir",
         "optimize_xls_ir", "codegen_xls", "benchmark_xls",
@@ -73,6 +76,7 @@ PROTECTED_TOOLS = frozenset(TOOL_CATEGORIES["synthesis"]) | {
     "load_yaml_spec_file", "update_manifest",
     "save_metrics_tool", "generate_report_tool",
     "cocotb_tool", "sby_tool",
+    "run_python_analysis",
     *TOOL_CATEGORIES["hls"],
 }
 
@@ -87,6 +91,7 @@ MUTATING_TOOLS = frozenset({
     "simulation_tool", "run_isolated_simulation", "cocotb_tool", "sby_tool",
     "start_synthesis", "retry_pd",
     "save_metrics_tool", "generate_report_tool", "schematic_tool",
+    "run_python_analysis",
     *TOOL_CATEGORIES["hls"],
 })
 

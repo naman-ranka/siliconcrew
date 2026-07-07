@@ -860,6 +860,52 @@ def generate_report_tool(run_id: str = None) -> str:
         return f"Error generating report: {str(e)}"
 
 
+class RunPythonAnalysisArgs(BaseModel):
+    script_file: str = Field(
+        ...,
+        description="Workspace-relative path to a .py script to run. Write the script with write_file FIRST — this tool runs a FILE, not inline code.",
+    )
+    args: list[str] = Field(
+        default_factory=list,
+        description="Optional command-line arguments passed to the script (sys.argv[1:]).",
+    )
+
+
+@tool(args_schema=RunPythonAnalysisArgs)
+def run_python_analysis(script_file: str, args: list[str] = None) -> str:
+    """
+    Run a workspace Python script for small engineering-support analysis —
+    generating golden/expected vectors, .mem/.hex/.csv files, fixed-point/CRC/DSP
+    checks, or plotting simulation outputs. Write the script with write_file
+    first (it is recorded as exactly what ran); this tool executes a FILE, not
+    inline code. Isolated subprocess: 30s timeout, workspace-only cwd, scrubbed
+    env (no backend secrets), pinned libs (stdlib + numpy + matplotlib + pyyaml +
+    vcdvcd) — no pip, no network in docker mode. NOT a cocotb replacement, REPL,
+    or general shell. Returns JSON with exit_code, output tails, and the files
+    the run produced (open them as artifacts).
+    """
+    # Load-bearing hosted gate (PA3/PA4): the tool runs local toolchains and is
+    # OFF on the hosted platform. Placed at the wrapper entry so EVERY path
+    # (agent / MCP / REST /invoke) is covered by construction — authorize() alone
+    # can't express "hosted-unavailable" (it only distinguishes anonymous).
+    from src.platform_engines.settings import get_settings
+
+    if get_settings().hosted:
+        return (
+            "Python analysis runs locally and isn't available on the hosted "
+            "platform yet — use it in self-host / local mode."
+        )
+
+    workspace = get_workspace_path()
+    from src.tools.run_python import run_python_analysis as _run_python, PythonAnalysisError
+
+    try:
+        result = _run_python(workspace, script_file, args or [])
+    except PythonAnalysisError as exc:
+        return f"Error: {exc}"
+    return json.dumps(result, indent=2)
+
+
 @tool
 def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
     """
@@ -1183,6 +1229,8 @@ mcp_tools = [
     # Reporting & Metrics
     save_metrics_tool,
     generate_report_tool,
+    # Analysis (local-only Python analysis tool)
+    run_python_analysis,
     # Google XLS HLS tools
     run_dslx_interpreter,
     compile_dslx_to_ir,

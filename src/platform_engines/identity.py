@@ -24,6 +24,11 @@ class Action(str, Enum):
     SYNTHESIZE = "synthesize"
     SAVE = "save"
     MCP = "mcp"
+    # Local-only Python analysis. Deliberately NOT in ANONYMOUS_ALLOWED, but the
+    # load-bearing "hosted OFF" switch is get_settings().hosted checked INSIDE the
+    # tool (authorize() only distinguishes anonymous — a signed-in hosted user
+    # would pass any Action). See run_python_analysis wrapper.
+    PYTHON = "python"
 
 
 # Anonymous trial is limited to the cheap, safe stages.
