@@ -4,7 +4,14 @@ Status: OPEN | CONFIRMED | FIXED (commit) | DEFERRED | NOT-A-BUG
 
 | ID | Severity | Status | Summary | Detail |
 |----|----------|--------|---------|--------|
-| F1 | HIGH (tenancy, invariant 8) | OPEN | Hosted MCP `list_sessions_tool` returned 33 sessions across owners to test user rockstarme.the5@gmail.com (frontend correctly shows 2). MCP writes as the test user (probe session appeared in its Launcher), so the list path appears unscoped. Must also check `set_active_session`/read tools for cross-owner workspace access. | reports/F1-tenancy.md |
+| F1 | CRITICAL (tenancy, invariant 8) | FIXED (7b9fa8e) — DEPLOY PENDING | Hosted MCP had 3 cross-tenant defects: (1) `list_sessions_tool` leaked all owners' sessions (the 33-session symptom); (2) `delete_session_tool` bypassed the ownership guard → any signed-in user could destroy any tenant's workspace/chats/checkpoints by id (single-request, destructive); (3) process-global `current_session` on the one shared hosted server → cross-tenant read/write under concurrency. Stopgap: scope list+delete by `_scoped_user_id()`, pre-dispatch `owns_session` gate. Durable fix (request-scope current_session) = REVIEW_FINDINGS P0 #1, deferred. | reports/F1-tenancy.md |
+
+## Deploy note (F1)
+
+F1 fix touches ONLY `mcp_server.py` (backend). The live hosted backend is
+vulnerable to single-request cross-tenant deletion until redeployed. Plan:
+backend-only Cloud Run roll of a clean commit once it won't contend with the
+fleet's docker sims (impl-templates uses docker sim_engine). Frontend unchanged.
 
 ## Notes
 
