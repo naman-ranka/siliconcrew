@@ -86,4 +86,20 @@ describe("Breadcrumb", () => {
     fireEvent.click(screen.getByTestId("breadcrumb-session"));
     expect(useWorkbenchUiStore.getState().quickSwitchOpen).toBe(true);
   });
+
+  it("shows no 'forked from' chip for a normal session", () => {
+    render(<Breadcrumb />);
+    expect(screen.queryByTestId("forked-from-chip")).not.toBeInTheDocument();
+  });
+
+  it("shows a 'forked from' chip when the session has template provenance", () => {
+    useStore.setState({
+      currentSession: {
+        ...SESSION,
+        source_template: { id: "sync_fifo", name: "Synchronous FIFO", forked_at: "2026-07-06T00:00:00+00:00" },
+      },
+    });
+    render(<Breadcrumb />);
+    expect(screen.getByTestId("forked-from-chip")).toHaveTextContent("forked from Synchronous FIFO");
+  });
 });
