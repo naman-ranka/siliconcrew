@@ -101,3 +101,63 @@ Stash popped; all 9 pass post-fix.
 - The ReportArtifact failure panel shows the log tail only for the one live
   `synthJob` run; a historical failed run shows stage + notes but no tail (by
   design — no fetch).
+
+---
+
+# Follow-up lane — F6 + F7 (nav-rail area)
+
+Two commits, pushed. Same fences (frontend/** only, no store changes).
+
+- `2b16187` fix(ui): reachable nav-rail toggle while open (F7)
+- `06f4e11` fix(ui): floor artifacts slide-over width so its tab strip never clips (F6)
+
+## F6 — the real mechanism was NOT a pinned rail
+
+The finding described "open pinned nav rail (264px) shoves the artifacts
+slide-over tab strip off the right edge on viewports <~1650px". Verified in
+code + git: the NavRail has been a `fixed` overlay with a full-viewport scrim
+since Wave 8 (`NavRail.tsx:138-148`) — it never participates in the flex
+layout, so it cannot shove anything. The live-exploration note (X2U-4) reached
+the same conclusion ("NOT reproducible live … rail is an overlay"). The `<1650`
+figure fits a *pinned* 264 + wide-artifacts 760 + ~600 conversation layout that
+no longer exists.
+
+But there IS a real, reproducible "slide-over loses its tab strip" bug, just
+with a different cause: the panel's inner body carried `minWidth: 360` while its
+`overflow-hidden` wrapper was `width: min(42vw, 520px)` (AgentShell). When
+`42vw < 360` (viewport <~857px) the inner outgrew the wrapper and the tab
+strip's right edge was clipped. Fix (option a — max-width math): floor the
+width preset at `max(360px, …)` for both normal and wide, so wrapper == inner
+and nothing clips; dropped the now-redundant inner `minWidth`. `PANEL_W` is now
+exported and unit-guarded (both presets contain the 360 floor).
+
+## F7 — reachable toggle while open
+
+The open rail (fixed, z-90) paints over the shell header's ☰ opener, so it
+could only be closed via Esc / ⌘O / the scrim / the rail's own top-right
+collapse glyph — not the toggle that opened it. Fix (the finding's "duplicate
+the toggle inside the rail header" idiom): moved a ☰ (Menu) into the rail
+header's top-LEFT, the exact screen position of the opener, so the same corner
+control both opens and closes. Replaced the top-right `PanelLeftClose` glyph.
+
+## Tests (all in test/agentShell.test.tsx, reusing its Workbench harness)
+
+- F7: open the rail, click `rail-collapse`, assert `navRailOpen === false` and
+  the rail's `data-open` flips to false.
+- F6: `PANEL_W.normal`/`.wide` both contain the `max(360px` floor.
+- Pre-fix proof: stashed AgentShell.tsx + NavRail.tsx → both new tests fail
+  ("Unable to find [data-testid=rail-collapse]"; `PANEL_W.normal` lacks the
+  floor). Popped; 7/7 pass.
+
+## Gates
+
+- tsc clean; vitest 375 passed, 1 failure = the known `chat.threads.store.test.ts`
+  only; `next build` green (below).
+
+## Browser-only (for the endgame Playwright pass)
+
+- F6: at a narrow width (e.g. 800px) with the artifacts panel open, the tab
+  strip renders whole (no right-edge clip). The unit test only guards the width
+  floor constant, not the rendered pixels (jsdom doesn't compute vw/`max()`).
+- F7: with the rail open, clicking the top-left ☰ visibly closes it, and the
+  ☰ sits over the same spot as the header opener (pixel alignment).
