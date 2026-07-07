@@ -128,7 +128,11 @@ def _load_architect_prompt() -> tuple[str, str, str]:
 # Tool categorization for filtering — single source of truth shared with the
 # web UI's tool catalog (src/api/tool_catalog.py), so the Command Surface, the
 # agent, and MCP clients all see one taxonomy and one protection policy.
-from src.api.tool_catalog import TOOL_CATEGORIES, PROTECTED_TOOLS as _SHARED_PROTECTED_TOOLS
+from src.api.tool_catalog import (
+    TOOL_CATEGORIES,
+    PROTECTED_TOOLS as _SHARED_PROTECTED_TOOLS,
+    MUTATING_TOOLS as _SHARED_MUTATING_TOOLS,
+)
 
 # Flatten for easy lookup
 ALL_CATEGORIZED_TOOLS = set()
@@ -903,12 +907,28 @@ Ready to design! What would you like to create?"""
             # the worker thread, so the workspace resolves task-locally and
             # concurrent MCP clients are isolated (replaces the RTL_WORKSPACE
             # env mutation). user_id/tier flow to tenancy + quota enforcement.
+            #
+            # F2 latency: only a MUTATING tool re-tars+uploads the workspace to
+            # object storage on exit. A read-only tool (read_file/get_manifest/
+            # get_synthesis_status/…) does NOT — a design loop is mostly reads,
+            # and each was paying a full-workspace GCS PUT for nothing. Mirrors
+            # the REST action router (actions.py run_scoped(mutates=…)). Two
+            # caveats we accept by design: (1) the synth run-state that a status
+            # read reconciles is persisted through its OWN durable push
+            # (_persist_run_meta_durable → the run store), independent of this
+            # workspace sync, so gating it off loses no run-state; (2) the
+            # activity log a read appends (attempt_events.jsonl) rides the next
+            # mutating call's sync (flush-on-next-mutation) — the only exposure
+            # is a tail of pure-read calls before an instance recycle with no
+            # following write, which is bounded and honest, not silent.
+            mutates = name in _SHARED_MUTATING_TOOLS
             result = await run_in_session(
                 active_session,
                 tool_func.invoke,
                 arguments,
                 user_id=uid,
                 tier=identity.tier,
+                sync=mutates,
             )
             log_tool_result(
                 workspace=active_workspace,

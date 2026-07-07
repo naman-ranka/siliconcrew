@@ -25,7 +25,8 @@ from src.utils.session_context import SessionContext, session_scope
 
 @contextmanager
 def session_request_scope(
-    session_id: str, user_id: Optional[str] = None, provider=None, tier: Optional[str] = None
+    session_id: str, user_id: Optional[str] = None, provider=None, tier: Optional[str] = None,
+    sync: bool = True,
 ) -> Iterator[str]:
     """Run a block as a fully-bound request for ``session_id``.
 
@@ -33,6 +34,14 @@ def session_request_scope(
 
         with session_request_scope(session_id, user_id=uid) as workspace:
             run_simulation(...)   # tools resolve `workspace` task-locally
+
+    ``sync`` (cloud only): whether to persist the workspace back to durable
+    storage on exit. Pass ``sync=False`` for a read-only call so it doesn't
+    re-tar+upload the whole workspace for nothing — the F2 latency fix, and the
+    same policy the REST action router already applies (see actions.py
+    ``run_scoped(mutates=…)``). A write-only durable channel that bypasses the
+    workspace tarball (e.g. the synthesis run-store push) is unaffected either
+    way. Self-host has no ``sync()`` so this is a no-op regardless.
     """
     if provider is None:
         from src.platform_engines.workspace_provider import get_workspace_provider
@@ -47,10 +56,14 @@ def session_request_scope(
             yield workspace
         finally:
             # Persist back to durable storage when the provider supports it
-            # (cloud). Local provider has no sync() — nothing to do.
-            sync = getattr(provider, "sync", None)
-            if callable(sync):
-                sync(session_id)
+            # (cloud) AND this was a mutating call. Local provider has no sync()
+            # — nothing to do. A read-only call skips the upload; anything it
+            # appended (e.g. the activity log) rides the next mutating call's
+            # sync (flush-on-next-mutation).
+            if sync:
+                sync_fn = getattr(provider, "sync", None)
+                if callable(sync_fn):
+                    sync_fn(session_id)
 
 
 async def run_in_session(
@@ -60,6 +73,7 @@ async def run_in_session(
     user_id: Optional[str] = None,
     tier: Optional[str] = None,
     provider=None,
+    sync: bool = True,
     **kwargs,
 ) -> Any:
     """Run a sync callable inside a fully-bound session scope, off the event loop.
@@ -71,11 +85,15 @@ async def run_in_session(
     the MCP server's per-call ``os.environ["RTL_WORKSPACE"]`` mutation: each tool
     invocation resolves its workspace from this scope, so concurrent MCP clients
     are isolated with no shared process-global state.
+
+    ``sync`` gates the cloud workspace write-back on exit (see
+    ``session_request_scope``): the MCP server passes ``sync=False`` for
+    read-only tools so a read never re-tars+uploads the whole workspace.
     """
     loop = asyncio.get_event_loop()
 
     def _invoke():
-        with session_request_scope(session_id, user_id=user_id, tier=tier, provider=provider):
+        with session_request_scope(session_id, user_id=user_id, tier=tier, provider=provider, sync=sync):
             return fn(*args, **kwargs)
 
     return await loop.run_in_executor(None, _invoke)
