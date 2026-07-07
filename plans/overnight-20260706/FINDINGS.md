@@ -112,8 +112,8 @@ from af0124b). Two real-but-minor defects to fix:
 
 | ID | Severity | Status | Summary |
 |----|----------|--------|---------|
-| F16 | MEDIUM (privacy) | FIX QUEUED | Export sanitizer (`templates.py:383` `_sanitize_exported_workspace`) redacts author host-paths ONLY in run_meta.json; `attempt_events.jsonl`/`attempt_log.json` are copied verbatim and `conversations/*.md` are rendered post-sanitize with no redaction. A future export of a synthesis/chat session could leak `C:\Users\<name>\…` into the PUBLIC examples repo. Docstring overstates ("strips author identity"). Shipped sync_fifo bundle is verified clean. Fix: redact events + transcript too, or narrow docstring + rely on curator review. Matters for the flagship p1 export. |
-| F17 | LOW-MED (invariant 7) | FIX QUEUED | Provenance chip blanks after renaming/moving a forked session: `patch_session` (api.py:1275) builds SessionResponse WITHOUT source_template (→null), and store `renameSession`/`moveSession` overwrite currentSession with it → chip disappears until next loadSessions (SWR "populated data never blanks" violation). Fix: include source_template in patch_session response (like list/get). |
+| F16 | MEDIUM (privacy) | FIXED (8e90f1b) | Export sanitizer (`templates.py:383` `_sanitize_exported_workspace`) redacts author host-paths ONLY in run_meta.json; `attempt_events.jsonl`/`attempt_log.json` are copied verbatim and `conversations/*.md` are rendered post-sanitize with no redaction. A future export of a synthesis/chat session could leak `C:\Users\<name>\…` into the PUBLIC examples repo. Docstring overstates ("strips author identity"). Shipped sync_fifo bundle is verified clean. Fix: redact events + transcript too, or narrow docstring + rely on curator review. Matters for the flagship p1 export. |
+| F17 | LOW-MED (invariant 7) | FIXED (8e90f1b) | Provenance chip blanks after renaming/moving a forked session: `patch_session` (api.py:1275) builds SessionResponse WITHOUT source_template (→null), and store `renameSession`/`moveSession` overwrite currentSession with it → chip disappears until next loadSessions (SWR "populated data never blanks" violation). Fix: include source_template in patch_session response (like list/get). |
 
 ## Decisions for the owner (surfaced, not guessed)
 
@@ -144,12 +144,38 @@ keyed local run). Not blocking the landing.
 
 - backend **rev 00060** LIVE = F1 tenancy fix + F9 LEC_CHECK=0. (frontend rev
   00049 unchanged.) Both verified /api/health 200.
-- PENDING deploys (batch into one final backend roll near end of night, after
-  review): F2 codex-latency (in progress), F17 patch_session (minor). F16 is
-  self-host export tooling (no deploy needed). The **landing page** is a FRONTEND
-  deploy — separate image, roll after it lands + is reviewed.
-- Reminder: every backend deploy breaks the claude.ai MCP connector until manual
-  reconnect (F15) — prefer batching + deploy when no MCP-driven agent is mid-run.
+- PENDING deploys — **strategy simplified now that Wave 11 is adversarially
+  reviewed (SAFE) + F16/F17 fixed.** The minimal-overlay dance was only needed
+  while Wave 11 was unreviewed. Now the whole branch is reviewed/gated, so the
+  end-of-night deploy is: run the FULL gate suite on final HEAD (backend pytest
+  vs the 9-known baseline; frontend tsc/vitest/build/playwright), and if green,
+  deploy **backend HEAD** (F1+F9+F2+Wave11+F16/F17) and **frontend HEAD**
+  (landing + gallery) together from the reviewed tip. Live-verify: landing
+  renders, gallery lists, GDS still works, tenancy still scoped.
+- Timing: deploy when NO MCP-driven agent is mid-run (every backend deploy breaks
+  the claude.ai MCP connector until manual reconnect, F15) — and after the
+  landing lands + is adversarially reviewed.
+
+## D3 — Hosted showcase vs self-host-only fork (real tension for the owner)
+
+Wave 11 A5 HARD-GATES fork to self-host (hosted fork returns 400 — the GCS-copy
+path is deferred). But your showcase goal is that visitors on the DEPLOYED app can
+fork examples to "see the files, see how the agent ran." So on hosted, the gallery
+will LIST + PREVIEW examples but the "Fork this example" action will 400.
+- Mitigation that may already satisfy the goal: TemplatePreview shows the file
+  list + conversation transcript names + "what's inside" WITHOUT forking — so a
+  hosted visitor can still SEE the agent's work via preview; only creating their
+  own editable copy is self-host-only. (Verify what preview renders on hosted.)
+- Options for you: (a) ship hosted gallery as browse/preview-only with fork
+  disabled + an honest "fork available in self-host" message (Level-1 honest);
+  (b) build the hosted-fork GCS-copy path (deferred Level-3 work, non-trivial);
+  (c) make preview rich enough (files + trajectory + transcript inline) that
+  "fork" is optional for the showcase. RECOMMEND (a)+(c) for now; (b) later.
+- FOLLOW-UP (not landing-impl's job — ExampleCard/TemplatePreview are off-limits
+  to it): verify how the gallery's "Fork" action behaves on hosted today — does it
+  show a graceful "available in self-host" message, or a raw 400 error? If raw,
+  a small Wave-11 gallery fix should present it honestly per deployment mode. To
+  do after the landing lands.
 
 ## Notes
 
