@@ -255,6 +255,40 @@ function scheduleActivityRefresh(get: () => AppState): void {
   }, 1200);
 }
 
+// X2A-4: the agent-shell artifact Index renders `manifest.files` and `runs` —
+// slices the dir-tree invalidation above does NOT touch — so during a live
+// agent turn its home panel stayed empty while the inline cards streamed the
+// same work. These schedulers reload those two slices off the SAME WS tool
+// frames the cards render from (debounced, one refetch per burst) — an
+// activity-event-driven update, never a poller (invariant 6). Which tools move
+// which slice mirrors TOOL_DIR_INVALIDATION.
+const MANIFEST_REFRESH_TOOLS = new Set([
+  "write_spec",
+  "write_file",
+  "edit_file_tool",
+  "apply_patch_tool",
+  "update_manifest",
+]);
+const RUNS_REFRESH_TOOLS = new Set(["simulation_tool", "start_synthesis", "retry_pd"]);
+
+let _manifestRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleManifestRefresh(get: () => AppState): void {
+  if (_manifestRefreshTimer) return;
+  _manifestRefreshTimer = setTimeout(() => {
+    _manifestRefreshTimer = null;
+    void get().loadManifest();
+  }, 1200);
+}
+
+let _runsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleRunsRefresh(get: () => AppState): void {
+  if (_runsRefreshTimer) return;
+  _runsRefreshTimer = setTimeout(() => {
+    _runsRefreshTimer = null;
+    void get().loadRuns();
+  }, 1200);
+}
+
 interface AppState {
   // Project state
   projects: Project[];
@@ -1106,6 +1140,10 @@ export const useStore = create<AppState>((set, get) => ({
           if (toolCall) {
             const dirPrefixes = TOOL_DIR_INVALIDATION[toolCall.name];
             if (dirPrefixes) get().invalidateDirs(dirPrefixes);
+            // Keep the agent-shell Index (manifest.files + runs) live with the
+            // inline cards — refresh those slices off this same tool frame.
+            if (MANIFEST_REFRESH_TOOLS.has(toolCall.name)) scheduleManifestRefresh(get);
+            if (RUNS_REFRESH_TOOLS.has(toolCall.name)) scheduleRunsRefresh(get);
           }
           break;
         }
@@ -1130,6 +1168,10 @@ export const useStore = create<AppState>((set, get) => ({
           }
           // Final workspace refresh after completion
           get().refreshWorkspace();
+          // X2A-4: reconcile the Index's slices with the turn's end state (a
+          // final guarantee beyond the debounced per-frame refreshes above).
+          get().loadManifest();
+          get().loadRuns();
           // Reflect server-side auto-title / last-active reordering in the switcher.
           get().loadThreads();
           // A follow-up typed during the turn goes out now, in order.
