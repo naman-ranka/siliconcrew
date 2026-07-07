@@ -1,0 +1,26 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "cla4.v",
+      "role": "rtl",
+      "path": "cla4.v"
+    },
+    {
+      "name": "cla4_tb.v",
+      "role": "tb",
+      "path": "cla4_tb.v"
+    }
+  ],
+  "synthTop": "cla4",
+  "simTop": "cla4_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "cla4_tb.v",
+      "module": "cla4_tb"
+    }
+  ]
+}
