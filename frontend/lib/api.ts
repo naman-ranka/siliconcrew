@@ -184,6 +184,20 @@ export const threadsApi = {
       `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}`,
       { method: "DELETE" }
     ),
+
+  // TTFT (Codex warm-keep): start the thread's runtime worker before the first
+  // message, and read its HONEST readiness. States: ready | starting | cold |
+  // unavailable ("unavailable" = the runtime has no warm capability — show
+  // nothing). See plans/codex-ttft-remediation.md 3B/3C.
+  prewarmRuntime: (sessionId: string, threadId: string) =>
+    apiFetch<{ state: string }>(
+      `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}/runtime/prewarm`,
+      { method: "POST" }
+    ),
+  runtimeStatus: (sessionId: string, threadId: string) =>
+    apiFetch<{ state: string }>(
+      `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}/runtime/status`
+    ),
 };
 
 // Codex runtime capability + account-auth (ChatGPT device-code login) status.

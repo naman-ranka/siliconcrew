@@ -286,6 +286,12 @@ function scheduleManifestRefresh(get: () => AppState): void {
   }, 1200);
 }
 
+// TTFT 3C: the Codex setup watch (prewarm → bounded status poll). A token
+// supersedes stale watches on thread/session/runtime changes; the timer only
+// runs while the worker reports "starting".
+let codexSetupPollTimer: ReturnType<typeof setTimeout> | null = null;
+let codexSetupToken = 0;
+
 let _runsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleRunsRefresh(get: () => AppState): void {
   if (_runsRefreshTimer) return;
@@ -357,6 +363,11 @@ interface AppState {
   // the Codex agent — codex_runtime.py skips key resolution entirely once an
   // account is connected, so the picker's usual key-based gate doesn't apply.
   codexAccountConnected: boolean;
+  // TTFT 3C (plans/codex-ttft-remediation.md): the active Codex thread's
+  // worker readiness, shown honestly in the chat surface. null = nothing to
+  // show (native runtime, warm-keep unavailable, or state unknown). Never a
+  // fake "ready": the value only ever mirrors the backend status endpoint.
+  codexSetup: { threadId: string; state: "starting" | "ready" } | null;
 
   // Model registry (the picker). The active thread's model is what the WS uses.
   models: ModelInfo[];
@@ -423,6 +434,9 @@ interface AppState {
   setAgentRuntime: (runtime: "langchain" | "codex") => Promise<void>;
   loadCodexCapability: () => Promise<void>;
   setCodexAccountConnected: (connected: boolean) => void;
+  /** TTFT 3B/3C: kick the active Codex thread's worker spawn (pre-warm) and
+   * follow its honest setup state with a bounded poll (only while starting). */
+  prewarmAgentRuntime: () => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   deleteThread: (threadId: string) => Promise<void>;
   renameThread: (threadId: string, title: string) => Promise<void>;
@@ -564,6 +578,7 @@ export const useStore = create<AppState>((set, get) => ({
   agentRuntime: "langchain",
   codexEnabled: false,
   codexAccountConnected: false,
+  codexSetup: null,
 
   models: [],
   modelsLoaded: false,
@@ -1405,6 +1420,58 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setCodexAccountConnected: (connected) => set({ codexAccountConnected: connected }),
+
+  prewarmAgentRuntime: async () => {
+    const { currentSession, activeThreadId, agentRuntime } = get();
+    // Any change of thread/session/runtime supersedes the previous setup watch
+    // (the token guard below drops stale responses — SWR iron rule).
+    const token = ++codexSetupToken;
+    if (codexSetupPollTimer) {
+      clearTimeout(codexSetupPollTimer);
+      codexSetupPollTimer = null;
+    }
+    if (!currentSession || !activeThreadId || agentRuntime !== "codex") {
+      set({ codexSetup: null });
+      return;
+    }
+    const sid = currentSession.id;
+    const tid = activeThreadId;
+    // Apply an honest backend state; returns true while we should keep watching.
+    const apply = (state: string): boolean => {
+      if (token !== codexSetupToken || get().activeThreadId !== tid) return false;
+      if (state === "starting" || state === "ready") {
+        set({ codexSetup: { threadId: tid, state } });
+        return state === "starting";
+      }
+      set({ codexSetup: null }); // unavailable/cold/unknown → show nothing
+      return false;
+    };
+    let watching: boolean;
+    try {
+      watching = apply((await threadsApi.prewarmRuntime(sid, tid)).state);
+    } catch {
+      if (token === codexSetupToken) set({ codexSetup: null });
+      return;
+    }
+    // Bounded poll ONLY while the worker is starting (setup is a short,
+    // explicit window — this is not run-status polling); stops at ready/cold,
+    // on thread switch, or after 2 minutes (an honest give-up: chip clears).
+    const startedAt = Date.now();
+    const pollOnce = async () => {
+      if (!watching || token !== codexSetupToken) return;
+      if (Date.now() - startedAt > 120_000) {
+        apply("cold");
+        return;
+      }
+      try {
+        watching = apply((await threadsApi.runtimeStatus(sid, tid)).state);
+      } catch {
+        watching = apply("cold");
+      }
+      if (watching) codexSetupPollTimer = setTimeout(pollOnce, 1200);
+    };
+    if (watching) codexSetupPollTimer = setTimeout(pollOnce, 1200);
+  },
 
   selectThread: async (threadId: string) => {
     const { currentSession, activeThreadId, ws } = get();

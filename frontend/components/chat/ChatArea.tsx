@@ -6,7 +6,7 @@ import { ChatInput } from "./ChatInput";
 import { ThreadSwitcher } from "./ThreadSwitcher";
 import { useStore } from "@/lib/store";
 import { formatTokens, formatCost } from "@/lib/utils";
-import { Cpu, Zap, Coins, Hash, AlertCircle, X, KeyRound } from "lucide-react";
+import { Cpu, Zap, Coins, Hash, AlertCircle, X, KeyRound, Loader2, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const API_KEY_NOTICE_DISMISSED = "sc-apikey-notice-dismissed";
@@ -31,7 +31,7 @@ export function ChatArea({
    * not chrome. */
   hideHeader?: boolean;
 }) {
-  const { currentSession, chatError, chatErrorCode, agentRuntime } = useStore();
+  const { currentSession, chatError, chatErrorCode, agentRuntime, activeThreadId, codexSetup, isStreaming } = useStore();
   // The API-key note competes with toasts as a second notification channel, so
   // make its dismissal sticky (localStorage) — once waved off it stays gone.
   const [apiNoticeDismissed, setApiNoticeDismissed] = useState(false);
@@ -42,6 +42,27 @@ export function ChatArea({
       /* ignore */
     }
   }, []);
+
+  // TTFT 3B: pre-warm the Codex worker the moment a Codex thread is on screen,
+  // so the cold start overlaps the user's read-and-type time instead of
+  // blocking their first message. The action no-ops (and clears the chip) for
+  // native threads; stale watches are superseded internally on every change.
+  useEffect(() => {
+    void useStore.getState().prewarmAgentRuntime();
+  }, [agentRuntime, activeThreadId, currentSession?.id]);
+
+  // The "Ready" confirmation is transient chrome — fade it out after a beat.
+  // (Hiding the chip asserts nothing; a dead worker re-shows "Setting up" on
+  // the next open/prewarm — honest state either way.)
+  const [readyChipVisible, setReadyChipVisible] = useState(true);
+  useEffect(() => {
+    if (codexSetup?.state !== "ready") {
+      setReadyChipVisible(true);
+      return;
+    }
+    const t = setTimeout(() => setReadyChipVisible(false), 2500);
+    return () => clearTimeout(t);
+  }, [codexSetup?.state, codexSetup?.threadId]);
 
   return (
     // data-runtime scopes the Codex theme accent (see globals.css): all
@@ -187,6 +208,31 @@ export function ChatArea({
       <MessageList />
 
       {tailSlot}
+
+      {/* TTFT 3C: honest Codex worker setup state. "Setting up" while the
+          pre-warmed worker spawns (a send during this window is queued
+          server-side and fires the moment it's ready); a brief "Ready"
+          confirmation; nothing at all when there's nothing truthful to show. */}
+      {codexSetup && (codexSetup.state === "starting" || readyChipVisible) && (
+        <div
+          data-testid="codex-setup-state"
+          data-state={codexSetup.state}
+          className="flex items-center gap-2 px-4 py-1.5 text-xs text-muted-foreground border-t border-border bg-surface-0"
+          role="status"
+        >
+          {codexSetup.state === "starting" ? (
+            <>
+              <Loader2 className="h-3 w-3 animate-spin text-primary" />
+              <span>{isStreaming ? "Starting your first turn — Codex is setting up…" : "Setting up Codex…"}</span>
+            </>
+          ) : (
+            <>
+              <Check className="h-3 w-3 text-success" />
+              <span>Codex ready</span>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Input */}
       <ChatInput />

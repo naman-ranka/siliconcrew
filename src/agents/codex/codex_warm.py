@@ -265,9 +265,13 @@ class CodexWorkerPool:
         state = self.state_for(key)
         if state in (STATE_READY, STATE_STARTING):
             return state
-        entry = _Entry(fingerprint, asyncio.get_running_loop().create_task(
-            self._spawn_logged(key, fingerprint, spawn)))
-        self._entries[key] = entry
+        task = asyncio.get_running_loop().create_task(
+            self._spawn_logged(key, fingerprint, spawn))
+        # A pre-warm may finish (or fail) with no awaiter — consume the result
+        # so a failed speculative spawn never logs "exception never retrieved".
+        task.add_done_callback(
+            lambda t: t.exception() if not t.cancelled() else None)
+        self._entries[key] = _Entry(fingerprint, task)
         return STATE_STARTING
 
     async def _spawn_logged(self, key: WorkerKey, fingerprint: str,

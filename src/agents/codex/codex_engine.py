@@ -427,8 +427,6 @@ class CodexEngine:
                 yield CodexEvent(type="start", external_thread_id=worker.external_thread_id)
 
                 turn_kwargs = self._thread_kwargs(openai_codex, turn)
-                turn_kwargs.pop("cwd", None)
-                turn_kwargs["cwd"] = turn.workspace
                 turn_issue_start = time.monotonic()
                 turn_handle = await worker.thread.turn(turn.message, **turn_kwargs)
                 print(
