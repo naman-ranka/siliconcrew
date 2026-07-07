@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { Command } from "cmdk";
 import {
   Cpu,
@@ -101,6 +102,10 @@ export function CommandPalette() {
       contentClassName="fixed left-1/2 top-[14vh] z-50 w-[560px] max-w-[92vw] -translate-x-1/2"
       className="overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-e3"
     >
+      {/* cmdk owns the Radix Dialog; a Dialog.Title registered here satisfies
+          Radix's a11y requirement (screen-reader name, no console warning)
+          without altering the visible layout. */}
+      <Dialog.Title className="sr-only">Command palette</Dialog.Title>
       <div className="flex items-center gap-2 border-b border-border px-3">
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <Command.Input
