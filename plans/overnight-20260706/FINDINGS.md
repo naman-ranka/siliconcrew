@@ -44,6 +44,23 @@ to size each bucket (the server is already instrumented).
   endgame full-flow session. explore-mcp is running ASU p1 now → flagship-bundle
   candidate if it reaches synth/GDS.
 
+## UI findings (skill-ui-nav, verified live in browser)
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| F5 | MEDIUM (a11y) | OPEN | ⌘K/Ctrl+K command palette fires a Radix console error every open: `DialogContent requires a DialogTitle`. Missing accessible title on the palette Dialog → screen-reader + console noise. Fix: add a visually-hidden DialogTitle. |
+| F6 | MEDIUM (UX/layout) | OPEN | Agent posture: open pinned nav rail (264px) shoves the artifacts slide-over tab strip off the right edge on viewports <~1650px → tabs become unclickable until the rail is closed. Real usability break at common laptop widths. |
+| F7 | LOW (UX) | OPEN | Open nav rail overlays its own header hamburger → can only be closed via ⌘O / the rail's collapse control, not the toggle that opened it. |
+| F8 | LOW (UX) | OPEN | File save gives no toast/confirmation — the only signal is the Save button re-disabling. Easy to miss. |
+
+(Also documented, not a bug: Monaco now uses the EditContext API — editable `div.native-edit-context`, no textarea/`.inputarea` — the ui_navigation skill records the reliable type recipe for future e2e.)
+
+## Exploration findings
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| F9 | TBD (flow) | OPEN — awaiting detail | MCP spec→GDS run of ASU p1: sim passed, synth reached PLACE cleanly, but **CTS (clock-tree synthesis) is the blocker** — did not reach routing/GDS. explore-mcp finalizing the exact failure (tool/flow bug vs design/constraint). Determines whether p1 can be the flagship showcase bundle (needs to reach GDS). |
+
 ## Decisions for the owner (surfaced, not guessed)
 
 - **D1 — `.agents/` is gitignored** ("Local agent customizations and skills",
