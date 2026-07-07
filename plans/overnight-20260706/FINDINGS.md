@@ -59,7 +59,9 @@ to size each bucket (the server is already instrumented).
 
 | ID | Severity | Status | Summary |
 |----|----------|--------|---------|
-| F9 | TBD (flow) | OPEN — awaiting detail | MCP spec→GDS run of ASU p1: sim passed, synth reached PLACE cleanly, but **CTS (clock-tree synthesis) is the blocker** — did not reach routing/GDS. explore-mcp finalizing the exact failure (tool/flow bug vs design/constraint). Determines whether p1 can be the flagship showcase bundle (needs to reach GDS). |
+| F9 | HIGH (blocker) | FIXED (04365b2) — DEPLOY PENDING | Hosted spec→GDS dies at CTS with SIGILL: the OpenROAD LEC (logical-equivalence) child exec'd from cts.tcl uses ISA extensions the Cloud Run CPU pool lacks → "illegal instruction" AFTER CTS metrics compute cleanly, blocking all hosted GDS. ASU p1 met timing at place (+0.372ns) but produced no GDS. Owner-directed fix: write `export LEC_CHECK = 0` into ORFS config.mk on HOSTED only (self-host keeps the real equivalence check). Both config.mk builders in synthesis_manager.py covered; regression test tests/test_lec_check_hosted.py. Deployed-CPU root cause = out of scope (owner). Needs a backend deploy to take effect on hosted; batch with the next roll before the flagship GDS run. |
+| F9b | HIGH | OPEN (explore-mcp F2) | `retry_pd` resume-from-CTS doesn't stage the place checkpoint into the resumed worker's `results/<plat>/<top>/base/` → `ORD-0007 3_place.odb does not exist`. Cloud resume/adoption broken; also reported an artifact that isn't physically present (honest-state violation). Independent of F9. |
+| F9c | MEDIUM | OPEN (explore-mcp F3) | Backend/unavailable errors (e.g. during a deploy) are surfaced to the MCP client as JSON-RPC `-32602 "Invalid request parameters"` — a lie that sends external-app devs hunting a nonexistent bad-arg bug. Map to `-32000` server-error + retry hint; health-gate/drain deploys. (This is the -32602 we saw during the F1 roll.) |
 
 ## Decisions for the owner (surfaced, not guessed)
 
