@@ -764,6 +764,18 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
         verilog_file: Name of the Verilog file (e.g., 'design.v').
         top_module: Name of the top-level module.
     """
+    # Hosted has no local Docker, so the Yosys-schematic path can't run — return
+    # an honest answer instead of leaking a raw docker-socket error to the
+    # external app (X2M-5). Mirrors the run_python_analysis hosted gate.
+    from src.platform_engines.settings import get_settings
+
+    if get_settings().hosted:
+        return (
+            "Schematic generation isn't available on the hosted platform yet — "
+            "it needs a local Yosys/Docker toolchain. Run SiliconCrew self-host "
+            "for schematics."
+        )
+
     workspace = get_workspace_path()
     abs_file = os.path.join(workspace, verilog_file)
     
