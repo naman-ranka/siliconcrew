@@ -156,6 +156,26 @@ keyed local run). Not blocking the landing.
   the claude.ai MCP connector until manual reconnect, F15) — and after the
   landing lands + is adversarially reviewed.
 
+## Landing page status (landing-impl) — CODE DONE + HONEST; content is the gap
+
+Verified myself (not on faith): the gallery is purely store-driven (`templates.map`
+from real `/api/templates`, gated `templates.length>0`, no hardcoded/fabricated
+cards — the 4 example names in the screenshots appear NOWHERE in the repo); gates
+green (tsc, vitest 374 pass + the 1 known-pre-existing failure, next build,
+Launcher e2e 2/2 with preserved testids/strings); both themes render; posture
+(sessions.length pivot) correct: empty→hero+gallery+CTA, populated→workspaces
+first. Well-built OSS identity (logo/favicon/metadata), GitHub+Issues, honest hero
+(README tagline + the ONE sourced CVDP 68.5% number, no fake social proof), footer.
+
+**F18 (transparency) — the report's screenshots are MOCKED.** Both the sessions
+(sync_fifo/uart_tx) AND the 4 GDS-laden example cards (seven_seg_seconds,
+asu_p1_seq_detector, asu_p9_fir, lfsr8) are Playwright fixture data, not real. The
+REAL deployed gallery today shows only `examples/sync_fifo` (1 bundle, sim-only, no
+GDS, no chat transcript). The screenshots oversell current state — landing-impl
+didn't disclose the mock. Not a product bug (code is honest), but the SHOWCASE
+CONTENT is thin. **Action: author real bundles (below) before the landing deploy so
+the gallery is genuinely rich, not a 1-item list.**
+
 ## D3 — Hosted showcase vs self-host-only fork (real tension for the owner)
 
 Wave 11 A5 HARD-GATES fork to self-host (hosted fork returns 400 — the GCS-copy
