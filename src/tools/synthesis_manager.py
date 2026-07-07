@@ -27,6 +27,29 @@ def _pinned_num_cores() -> int:
         return 4
 
 
+def _lec_check_export() -> Optional[str]:
+    """ORFS ``config.mk`` line disabling the logical-equivalence (LEC) check, or
+    None to leave the ORFS default (LEC on).
+
+    On the HOSTED deployment the OpenROAD LEC child step SIGILLs: the Cloud Run
+    CPU pool is heterogeneous and lacks ISA extensions the shipped OpenROAD build
+    uses, so the equivalence check exec'd from ``cts.tcl`` dies with "illegal
+    instruction" AFTER CTS metrics compute cleanly — blocking every hosted run
+    from reaching routing/GDS (reports/explore-mcp.md F1). Skipping LEC on hosted
+    lets the flow finish; self-host runs on the user's own CPU and keeps the real
+    formal equivalence check. The deployed-CPU/build mismatch itself is out of
+    scope (owner-directed) — this is the sanctioned workaround.
+    """
+    try:
+        from src.platform_engines.settings import get_settings
+
+        if get_settings().hosted:
+            return "export LEC_CHECK = 0"
+    except Exception:
+        pass
+    return None
+
+
 def _configured_orfs_backend() -> str:
     """The execution backend the ORFS runner is configured for, without running.
 
@@ -1081,6 +1104,9 @@ def _run_orfs(
         # run-to-run nondeterminism) is fixed and runs are reproducible.
         f"export NUM_CORES = {_pinned_num_cores()}\n"
     )
+    lec = _lec_check_export()
+    if lec:
+        config += lec + "\n"
     with open(config_mk, "w", encoding="utf-8") as f:
         f.write(config)
 
@@ -1124,6 +1150,11 @@ def _write_orfs_config(
     ]
     for key, value in (orfs_overrides or {}).items():
         lines.append(f"export {key} = {value}")
+    # Append LEC disable LAST on hosted so the crash workaround can't be
+    # re-enabled by an override (see _lec_check_export). Self-host: no-op.
+    lec = _lec_check_export()
+    if lec:
+        lines.append(lec)
     with open(config_mk, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return config_mk
