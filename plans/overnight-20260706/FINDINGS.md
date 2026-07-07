@@ -219,6 +219,28 @@ findings surfaced:
 | TTC-1 | LOW (DX) | OPEN (documented) | start_synthesis_job needs ABSOLUTE verilog_files paths; a relative path fails with WinError2 at the "constraints" stage (opaque). Producer C worked around it with abspaths. Fix: resolve verilog_files to absolute at the tool boundary, or validate + give a clear error. |
 | TTG-1 | PROCESS | NOTED | Multiple agents in ONE shared working tree: a bare `git commit` commits the whole index and sweeps in another agent's staged files (simon128 landed under the AR-1 commit 9248cce — content valid, attribution blurred; NOT rewritten, since force-push on a shared branch is the destructive option). Lesson for future fleets: agents must commit with explicit paths (`git commit -- <paths>`), or use per-agent worktrees. |
 
+## Explore round 2 — Codex-agent UX via the deployed UI (reports/explore2-codex.md)
+
+Codex tab is drivable + beautifully legible (friendly per-tool cards w/ durations);
+3-turn gray-code conversation succeeded incl. self-driven GDS; continuity strong
+within a chat. F2 LIVE-CONFIRMED as the killer: pre-synth tool calls sub-second,
+but once the workspace holds synth artifacts EVERY call ≈14s (read_file 14.2s,
+write_file 14.0s) → a "add a port + re-verify" turn took 4.1 min. This is exactly
+what the batched F2 fix (f095fcb) removes — the deploy tonight ships it; codex
+LEG 2 must show these drop to sub-second. F3 cold-start = 3.6–14.6s/turn.
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| X2C-5 | HIGH (recoverability) | OPEN (owner-visible) | A LIVE Codex turn's progress isn't recoverable in the UI until it ends: mid-turn, any refetch/focus/reload blanks the assistant block to just the user msg + idles the composer (no Stop) while the turn runs server-side for MINUTES; the UI never reattaches to the running stream. A 698s turn lost its final written summary. Honest mitigations exist (post-turn reload shows full cards + "connection lost" advisory; Artifacts Index authoritative). Cause: codex_runtime persists the assistant msg only at turn-end. Fix: live-stream reattach / incremental persistence — architectural, deferred. Related to X2A-7 (headless turns) as the "long-running-turn UX" cluster. |
+| X2C-6 | LOW (honesty) | OPEN | Model picker still labels the Codex tab "Gemini 3.5 Flash" — a mislabel (codex runs its own model). Small honesty fix in the picker. |
+| X2C-7 | LOW (UX) | OPEN | Codex over-reaches: volunteered a full GDS run on a design+sim-only ask. Steerable ("no synthesis" suppressed it) — a default-scope nudge would help. |
+| X2C-8 | LOW (inv.7) | OPEN | Reload resets the agent sub-tab to Workbench despite the URL indicating Codex. |
+| X2C-1..4 | — | Appendix | CLI route: hosted unreachable from Codex CLI (no bearer/OAuth discovery); self-host latency is 99.6% model-side. Context in report Appendix A. |
+
+Corroboration: codex leg 1b independently did NOT reproduce X2M-2 (all 4 PD tools
+succeeded, ~14s each purely from F2) — supports the X2M-2 schema-disproof (it was
+F2-temporal, not a schema bug).
+
 ## ⚠️ DEPLOY INCIDENT (session 2, 2026-07-07 ~08:2x MST) — caught + reverted
 
 WHAT HAPPENED: I ran `python deploy/roll_cloudrun.py --list` intending to LIST
