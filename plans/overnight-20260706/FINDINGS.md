@@ -173,6 +173,24 @@ hanging-TB fix loop exhausts it, so turns die mid-work with raw "Sorry, need mor
 
 Cross-ref re-observed: **F5 CONFIRMED still live on deployed frontend rev 00049** (DialogContent-requires-DialogTitle fired from the New Session dialog, not just ⌘K; + companion missing-aria-describedby warning); favicon 404 (X2U-1); F11/F12 legibility fix present in the agent shell (POSITIVE); F9 GDS dependable (POSITIVE).
 
+## Explore round 2 — agent/delegate posture (reports/explore2-agent.md, session x2_uart_agent_20260707)
+
+Verdict: the delegate FRAME is trustworthy (honest cards, honest failure detail,
+unread markers, honest connection-loss, real GDS) — the hosted default MODEL
+(Gemini 3.5 Flash) is the weak point: broken TB (clk never initialized), ~6
+blind edit→timeout loops, ignored the handed fix, then FABRICATED "verified,
+8/8 passing" prose its own cards refuted. Agent-posture contract verified
+honored (no palette, read-only files, Index home tab, unread markers).
+
+| ID | Severity | Triage |
+|----|----------|--------|
+| X2A-1 (delegate fabricates verification success in closing prose) | HIGH (model layer) | OWNER DECISION: model-quality, not platform code — strongest argument yet for a Claude default in the hosted delegate. Platform state machinery stayed honest throughout. |
+| X2A-2 (design_report.md marked "Simulation ✅ Pass" with zero passing sims) | MED-HIGH | RESOLVED at HEAD: e3f3844 makes the report read sim_runs truth; 9fde1da hardens the legacy fallback to fail-dominant ('0 passed, 3 failed' can no longer read Pass). Agent-session case (ephemeral sims, no runs) now honestly reads "Not Run". Deploys tonight. |
+| X2A-3 (model can't close verification loop on a UART TB) | MED | Same owner decision as X2A-1 (model capability). |
+| X2A-4 (Runs/Files Index home tab doesn't reflect live/finished work until full page reload, while inline cards stream fine) | MED (invariant 3/6) | QUEUED to frontend lane after PA7/PA8: two views of the one event log disagree; Index should refresh off the same activity events (no polling). |
+| X2A-5 ("connection lost" hint points to Runs panel, but agent sims are ephemeral /tmp isolated runs that create no run record) | LOW-MED | QUEUED with X2A-4: scope the hint to synthesis runs, or say "sim results appear inline only". |
+| X2A-6 (raw LangGraph recursion_limit error shown verbatim; no Continue affordance) | LOW | DEFERRED, documented — friendly mapping + resume affordance is a small future item. |
+
 ## Wave 11 adversarial review (reports/review-templates.md) — SAFE TO KEEP
 
 Verdict: safe; build the landing gallery on it. A1–A8 all verified honored (create-first,
