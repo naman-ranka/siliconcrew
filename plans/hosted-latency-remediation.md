@@ -211,6 +211,28 @@ the fix must preserve every one. Violating any is a bug, not a trade-off.
 
 ---
 
+## Measurement — how to read the Problem B / §4C split post-deploy
+The ~11s Codex `elapsed_setup` bucket is now decomposed by fine-grained
+`[CODEX-TIMING] event=coldstart_*` sub-timers (log-only, additive, no behavior
+change — added on branch `claude/overnight-showcase`):
+- **`src/agents/codex/codex_engine.py`** partitions `elapsed_setup` coarsely:
+  `coldstart_appserver_enter` (the `async with sdk_factory(...)` app-server +
+  required-MCP-child bring-up) and `coldstart_thread_bringup` (thread_start/resume).
+- **`mcp_server.py`** decomposes the cold MCP child: `coldstart_import` (heavy
+  module import), `coldstart_init_schema` (SessionManager + DDL — the hosted Cloud
+  SQL cost), `coldstart_identity` (token/JWKS verify), `coldstart_owns_session`,
+  `coldstart_wiring`, `coldstart_init_total`.
+
+Attribution + local evidence (importtime ranking, sqlite/self-host floors, and why
+the hosted pieces need a deploy) live in
+`plans/overnight-20260706/reports/codex-coldstart-breakdown.md`. **Headline:** only
+the ~1.6–2.3s Python import is provable locally; the remaining ~8.5s is app-server
+launch + MCP spawn + hosted DB/identity round-trips + thread bring-up. **The one
+thing to confirm on deploy:** the `coldstart_appserver_enter` vs
+`coldstart_thread_bringup` split (and, inside the former, the MCP-child internals) —
+it decides whether the §4C quick-cuts move the number or whether only warm-keep does.
+Grep a Codex spec→GDS run for `[CODEX-TIMING] event=coldstart_`.
+
 ## 9. Open questions for the design/review pass
 - 4A: per-file objects vs content-hash manifest — which fits the existing
   `TarBlobStore`/GCS key scheme with the least new surface, while satisfying §5.1–3?

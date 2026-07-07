@@ -269,6 +269,21 @@ def _usage_from_payload(payload: Any) -> CodexUsage:
     )
 
 
+def _emit_codex_timing(thread_id: str, event: str, elapsed: float) -> None:
+    """Best-effort ``[CODEX-TIMING]`` sub-span log (same style as stream_turn's
+    existing setup/turn lines). Decomposes the coarse ``elapsed_setup`` bucket
+    into labelled cold-start sub-spans so the exact split falls out of Cloud Run
+    logs. Log-only, additive — never raises, so a missing clock or a broken
+    stderr can never break a turn."""
+    try:
+        print(
+            f"[CODEX-TIMING] thread={thread_id} event={event} elapsed={elapsed:.2f}s",
+            file=sys.stderr,
+        )
+    except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+        pass
+
+
 class CodexEngine:
     """Runs one Codex turn via the SDK subprocess app-server."""
 
@@ -328,9 +343,21 @@ class CodexEngine:
         sdk_factory = self.sdk_factory or getattr(openai_codex, "AsyncCodex")
 
         try:
+            # [CODEX-TIMING] isolate (a) the app-server subprocess bring-up
+            # (its own launch + the cold-spawn of our required MCP child, whose
+            # internal import/init_schema/identity sub-spans are logged from
+            # mcp_server.py) from the rest of setup.
+            appserver_start = time.monotonic()
             async with sdk_factory(config=config) as codex:
+                _emit_codex_timing(
+                    turn.thread_id, "coldstart_appserver_enter",
+                    time.monotonic() - appserver_start)
                 if turn.api_key:
+                    login_start = time.monotonic()
                     await codex.login_api_key(turn.api_key)
+                    _emit_codex_timing(
+                        turn.thread_id, "coldstart_login",
+                        time.monotonic() - login_start)
                 # Account auth: omit model (an unknown name silently returns 0 tokens).
                 effective_model = turn.model_name if turn.api_key else None
                 sandbox = self._sdk_sandbox(openai_codex, turn.sandbox)
@@ -339,6 +366,7 @@ class CodexEngine:
                     "approval_mode": self._sdk_approval_mode(openai_codex), "service_tier": turn.tier,
                 }.items() if v is not None}
 
+                thread_bringup_start = time.monotonic()
                 if turn.external_thread_id:
                     try:
                         thread = await codex.thread_resume(turn.external_thread_id, **thread_kwargs)
@@ -361,6 +389,9 @@ class CodexEngine:
                         base_instructions=turn.system_prompt, config=self._thread_config(), **thread_kwargs)
 
                 external_thread_id = str(getattr(thread, "id", "") or turn.external_thread_id or "")
+                _emit_codex_timing(
+                    turn.thread_id, "coldstart_thread_bringup",
+                    time.monotonic() - thread_bringup_start)
                 print(
                     f"[CODEX-TIMING] thread={turn.thread_id} event=sdk_thread_ready "
                     f"elapsed_setup={time.monotonic() - setup_start:.2f}s",

@@ -20,12 +20,35 @@ import argparse
 import asyncio
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import quote, unquote
 
 # Add src to path
 sys.path.insert(0, os.path.dirname(__file__))
+
+# [CODEX-TIMING] cold-start sub-timers. This server is cold-spawned as a
+# subprocess per Codex turn (``python mcp_server.py --transport stdio ...``), so
+# the module import below IS the multi-second cold import measured in
+# reports/codex-latency.md §2, and __init__ pays init_schema + identity verify.
+# These labelled sub-spans (import / init_schema / identity / owns_session /
+# wiring) let the exact split fall out of Cloud Run logs on the next deploy.
+# Log-only, additive, guarded — a missing clock or broken stderr never breaks a
+# turn. Set CODEX_COLDSTART_TIMING=0 to silence.
+_COLDSTART_TIMING_ENABLED = os.environ.get("CODEX_COLDSTART_TIMING", "1") != "0"
+
+
+def _emit_coldstart(event: str, elapsed: float) -> None:
+    if not _COLDSTART_TIMING_ENABLED:
+        return
+    try:
+        print(f"[CODEX-TIMING] event={event} elapsed={elapsed:.2f}s", file=sys.stderr)
+    except Exception:  # noqa: BLE001 - instrumentation must never break a turn
+        pass
+
+
+_coldstart_import_start = time.monotonic()
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -134,6 +157,10 @@ from src.api.tool_catalog import (
     MUTATING_TOOLS as _SHARED_MUTATING_TOOLS,
 )
 
+# End of the heavy import block (src.tools.wrappers pulls the full LangChain /
+# engine stack). This span is (b) in the cold-start attribution.
+_emit_coldstart("coldstart_import", time.monotonic() - _coldstart_import_start)
+
 # Flatten for easy lookup
 ALL_CATEGORIZED_TOOLS = set()
 for tools in TOOL_CATEGORIES.values():
@@ -172,6 +199,7 @@ def langchain_to_mcp_schema(langchain_tool) -> Tool:
 
 class RTLDesignMCPServer:
     def __init__(self, codex_tools: bool = False, bound_session: str | None = None):
+        _coldstart_init_start = time.monotonic()
         self.server = Server("rtl-design-agent")
         # Bound-session mode (Codex): this server instance is locked to exactly
         # one session. Session-management + cross-session tool access are refused
@@ -186,7 +214,12 @@ class RTLDesignMCPServer:
         os.makedirs(_data_dir, exist_ok=True)
         db_path = os.path.join(_data_dir, "state.db")
         
+        # (c) SessionManager construction = metadata-store connect + init_schema()
+        # DDL. On hosted Postgres this is a Cloud SQL connect + 6 DDL round-trips
+        # on every spawn (reports/codex-latency.md §2).
+        _t = time.monotonic()
         self.session_manager = SessionManager(base_dir=workspace_dir, db_path=db_path)
+        _emit_coldstart("coldstart_init_schema", time.monotonic() - _t)
         self.current_session = None  # Track active session
         self.tool_filter_mode = "all"  # Options: "all", "essential", "custom"
         self.custom_tool_filter = None  # List of tool names or categories
@@ -195,7 +228,11 @@ class RTLDesignMCPServer:
         # Identity for capability gating. MCP itself is a signed-in feature;
         # stdio/self-host is the trusted local user (full access). Hosted/remote
         # deployments construct the server with a verified identity (token).
+        # (d) On a cold process the token verifier's JWKS cache is empty, so
+        # hosted identity resolution can be a network fetch per spawn.
+        _t = time.monotonic()
         self.identity = self._resolve_identity()
+        _emit_coldstart("coldstart_identity", time.monotonic() - _t)
 
         # Hosted flag, resolved once. In hosted mode the HTTP/SSE transports
         # carry a *per-request* verified identity (see _current_identity); local
@@ -207,16 +244,22 @@ class RTLDesignMCPServer:
         # every subsequent tool call operates only within it. (After _hosted is
         # set — _scoped_user_id resolves identity through it.)
         if self.bound_session:
-            if not self.session_manager.owns_session(self.bound_session, self._scoped_user_id()):
+            _t = time.monotonic()
+            _owns = self.session_manager.owns_session(self.bound_session, self._scoped_user_id())
+            _emit_coldstart("coldstart_owns_session", time.monotonic() - _t)
+            if not _owns:
                 raise RuntimeError(f"Bound session '{self.bound_session}' not found for this MCP identity.")
             self.current_session = self.bound_session
 
         # Wire cloud engines once (no-op in self-host).
+        _t = time.monotonic()
         from src.platform_engines.settings import apply_platform_wiring
         apply_platform_wiring()
+        _emit_coldstart("coldstart_wiring", time.monotonic() - _t)
 
         # Register handlers using decorators
         self._setup_handlers()
+        _emit_coldstart("coldstart_init_total", time.monotonic() - _coldstart_init_start)
 
     def _resolve_identity(self):
         """Resolve the MCP session identity (token in hosted, else local)."""
