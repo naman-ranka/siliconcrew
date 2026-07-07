@@ -42,6 +42,47 @@ function fileFromUnifiedDiff(diff: string | null): string | null {
 
 const SVG_RE = /\b[\w./-]+\.svg\b/;
 
+/** One produced artifact from a `run_python_analysis` result payload. */
+interface PyArtifact {
+  path: string;
+  kind: string;
+  bytes?: number;
+}
+
+/**
+ * `run_python_analysis` returns `{…, artifacts: [{path, kind, bytes}]}` where
+ * kind ∈ image|data|text|vector|file. The card opens ONE primary artifact
+ * (multi-artifact cards are deferred, PA9): the first with a rich viewer
+ * (image → data → text), else the input script so there is always something to
+ * open. Parses defensively — a non-JSON or shapeless result yields the script
+ * fallback / null.
+ */
+function pythonAnalysisArtifactKey(
+  args: Record<string, unknown>,
+  resultText?: string | null
+): ArtifactKey | null {
+  let artifacts: PyArtifact[] = [];
+  if (resultText) {
+    try {
+      const parsed = JSON.parse(resultText) as { artifacts?: unknown };
+      if (Array.isArray(parsed.artifacts)) {
+        artifacts = parsed.artifacts.filter(
+          (a): a is PyArtifact =>
+            !!a && typeof (a as PyArtifact).path === "string" && typeof (a as PyArtifact).kind === "string"
+        );
+      }
+    } catch {
+      // Not JSON (or truncated) — fall through to the script fallback.
+    }
+  }
+  const pick = (kind: string) => artifacts.find((a) => a.kind === kind);
+  const primary = pick("image") ?? pick("data") ?? pick("text");
+  if (primary) return `${primary.kind}:${primary.path}`;
+  // vector/file artifacts have no rich viewer → open the input script instead.
+  const script = firstStringArg(args, ["script_file"]);
+  return script ? `code:${script}` : null;
+}
+
 /**
  * Map a tool call (+ its result text) to the ArtifactKey it produced.
  *
@@ -110,6 +151,9 @@ export function artifactKeyForToolCall(
       const runId = vcd ? runIdFromPath(vcd) : null;
       return runId ? `wave:${runId}` : null;
     }
+
+    case "run_python_analysis":
+      return pythonAnalysisArtifactKey(args, resultText);
 
     default:
       return null;
