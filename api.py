@@ -46,6 +46,7 @@ from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
 from src.tools import manifest as manifest_mod
 from src.api.actions import build_actions_router
 from src.api import workspace_fs
+from src.utils import templates as templates_mod
 
 # Load environment
 load_dotenv()
@@ -186,6 +187,11 @@ class SessionResponse(BaseModel):
     # 0 until its default "Chat 1" row is created (first thread list / connect);
     # the UI treats 0 as "no chats yet". Never triggers workspace hydration.
     thread_count: int = 0
+    # Provenance for a session forked from a template bundle (Wave 11):
+    # {id, name, forked_at} read from the workspace ``.source_template.json``.
+    # None for a normal session. Populated only on the single-session GET (the
+    # provenance chip's source), never on the hot list endpoint.
+    source_template: Optional[Dict[str, Any]] = None
 
 
 class MessageResponse(BaseModel):
@@ -754,6 +760,55 @@ async def create_trial_session(data: SessionCreate, identity: Identity = Depends
         raise HTTPException(status_code=409, detail=str(e))
 
 
+# =============================================================================
+# TEMPLATE ENDPOINTS (Wave 11 — read-only bundles you can FORK into a session)
+# =============================================================================
+#
+# Templates are repo-owned bundles under ``examples/<id>/`` (a workspace snapshot
+# + a small manifest), not sessions. Listing/preview is PUBLIC (they are example
+# content); forking requires a signed-in/self-host identity (it owns the fork).
+# The routes use a SINGLE-segment ``{template_id}`` (no ``:path``), so they never
+# collide with the greedy ``/api/sessions/{session_id:path}`` catch-all.
+
+
+class ForkResponse(BaseModel):
+    sessionId: str
+
+
+@app.get("/api/templates")
+async def list_templates(identity: Identity = Depends(get_identity)):
+    """List curated example bundles (public — no sign-in required)."""
+    return {"templates": templates_mod.list_templates()}
+
+
+@app.get("/api/templates/{template_id}")
+async def get_template(template_id: str, identity: Identity = Depends(get_identity)):
+    """One bundle's manifest + a shallow file/conversation preview (public)."""
+    try:
+        return templates_mod.get_template(template_id)
+    except templates_mod.TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+
+@app.post("/api/templates/{template_id}/fork", response_model=ForkResponse)
+async def fork_template(template_id: str, identity: Identity = Depends(require_signed_in)):
+    """Fork a bundle into a new user-owned session; returns the new session id.
+
+    Level 1 is self-host only — a cloud/hosted deployment gets a clear 400
+    (the hosted gallery is a later wave).
+    """
+    uid = _uid(identity)
+    try:
+        session_id = templates_mod.fork_from_template(
+            session_manager, template_id, user_id=uid
+        )
+    except templates_mod.TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except templates_mod.TemplatesUnavailable as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ForkResponse(sessionId=session_id)
+
+
 # NOTE: the catch-all ``GET /api/sessions/{session_id:path}`` is defined LOWER in
 # this file (after the /threads sub-routes). ``session_id`` uses the greedy
 # ``:path`` converter (session ids can contain a slash for project-scoped
@@ -1136,6 +1191,11 @@ async def get_session(session_id: str, identity: Identity = Depends(get_identity
         total_tokens=meta.get("total_tokens", 0),
         total_cost=meta.get("total_cost", 0.0),
         thread_count=session_manager.count_threads(session_id, user_id=uid),
+        # Read-only workspace-file peek for the forked-from chip. Missing file
+        # (a normal session) → None; never hydrates or mutates the workspace.
+        source_template=templates_mod.read_provenance(
+            session_manager.get_workspace_path(session_id)
+        ),
     )
 
 
