@@ -219,6 +219,32 @@ findings surfaced:
 | TTC-1 | LOW (DX) | OPEN (documented) | start_synthesis_job needs ABSOLUTE verilog_files paths; a relative path fails with WinError2 at the "constraints" stage (opaque). Producer C worked around it with abspaths. Fix: resolve verilog_files to absolute at the tool boundary, or validate + give a clear error. |
 | TTG-1 | PROCESS | NOTED | Multiple agents in ONE shared working tree: a bare `git commit` commits the whole index and sweeps in another agent's staged files (simon128 landed under the AR-1 commit 9248cce — content valid, attribution blurred; NOT rewritten, since force-push on a shared branch is the destructive option). Lesson for future fleets: agents must commit with explicit paths (`git commit -- <paths>`), or use per-agent worktrees. |
 
+## ⚠️ DEPLOY INCIDENT (session 2, 2026-07-07 ~08:2x MST) — caught + reverted
+
+WHAT HAPPENED: I ran `python deploy/roll_cloudrun.py --list` intending to LIST
+current revisions. The script has NO arg parsing — it ignored `--list` and
+executed a deploy, rolling BOTH services to the digests HARDCODED in its
+`updates` dict, which were STALE: image tag `2d291f11b292`, uploaded 2026-06-24
+(the exact example hash from the deploy SKILL.md prerequisites, left in the
+script). This rolled production BACKWARD ~2 weeks (backend 00061, frontend
+00050), transiently regressing the live F1 tenancy fix + F9.
+
+DETECTION + REVERT: caught immediately — health was 200 but I hadn't built
+those digests, so I resolved them via Artifact Registry tags (→ 2d291f1,
+2026-06-24), confirmed the regression, edited the updates dict to the
+pre-mistake digests captured in the roll output (backend 3be1f85 = the F1+F9
+rev-00060 image; frontend 2f2fff3 = rev-00049), re-ran, and restored within
+~2 min. Now: backend **rev 00062** (F1+F9 image, byte-identical to 00060),
+frontend **rev 00051** (= 00049 image). Both /health 200. Net production
+change from the incident: ZERO (same images, renumbered revisions).
+
+ROOT CAUSE + LESSONS: (1) roll_cloudrun.py silently deploys whatever is in its
+hardcoded dict, ignoring argv — running it to "inspect" is destructive. NEVER
+run the deploy script to list/check; read it first. (2) The stale example
+digests should never have been the script's default. FIX FORWARD: give the
+roll script a real `--dry-run`/`--list` that only reads, and stop shipping it
+with example digests. (Logged for the morning report + owner.)
+
 ## Wave 11 adversarial review (reports/review-templates.md) — SAFE TO KEEP
 
 Verdict: safe; build the landing gallery on it. A1–A8 all verified honored (create-first,
