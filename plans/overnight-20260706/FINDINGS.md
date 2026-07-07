@@ -125,6 +125,32 @@ from af0124b). Two real-but-minor defects to fix:
   gitignore (did not override an explicit, commented convention). If you want them in
   the repo, say so and I'll move skills to a tracked path (e.g. `docs/agent-skills/`).
 
+## D2 — Flagship GDS showcase bundle: path decision
+
+The strongest showcase would be a full spec→GDS session (ASU p1) as a forkable
+bundle. But: the p1 GDS session that exists (`asu_p1_mcp_20260706`) lives in the
+HOSTED deployment (GCS, test account), while Wave 11's export utility targets
+LOCAL self-host workspaces (A5). So making it a bundle needs one of:
+  (a) a fresh LOCAL self-host spec→GDS run (needs local ORFS/OpenROAD docker
+      image + a CPU that survives LEC — heavy, not attempted tonight to avoid a
+      rabbit hole), then `export_session_bundle`; OR
+  (b) a hosted-session→bundle export path (net-new; Wave 11 is self-host only).
+Meanwhile `examples/sync_fifo` (sim-only, real trajectory) already ships as a
+working example. RECOMMENDATION: ship sync_fifo now; do a deliberate local
+GDS authoring run for the flagship as a follow-up (or when you point me at a
+keyed local run). Not blocking the landing.
+
+## Deploy status (hosted, us-central1)
+
+- backend **rev 00060** LIVE = F1 tenancy fix + F9 LEC_CHECK=0. (frontend rev
+  00049 unchanged.) Both verified /api/health 200.
+- PENDING deploys (batch into one final backend roll near end of night, after
+  review): F2 codex-latency (in progress), F17 patch_session (minor). F16 is
+  self-host export tooling (no deploy needed). The **landing page** is a FRONTEND
+  deploy — separate image, roll after it lands + is reviewed.
+- Reminder: every backend deploy breaks the claude.ai MCP connector until manual
+  reconnect (F15) — prefer batching + deploy when no MCP-driven agent is mid-run.
+
 ## Notes
 
 - Discovered during setup (2026-07-07 ~04:30 UTC) before the run proper.
