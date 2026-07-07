@@ -188,6 +188,20 @@ in agent-shell cards (POSITIVE); F9 GDS dependable (POSITIVE).
 | X2A-5 ("connection lost" hint points to Runs panel, but agent sims are ephemeral /tmp isolated runs that create no run record) | LOW-MED | FIXED (d0e1ba5): reconnect hint is tool-aware — synth dispatches → Runs panel; sims → "ephemeral, streams inline only"; else → plain continue hint. |
 | X2A-6 (raw LangGraph recursion_limit error shown verbatim; no Continue affordance) | LOW | DEFERRED, documented — friendly mapping + resume affordance is a small future item. |
 
+## Session-2 adversarial review of tonight's code diff (reports/adversarial-review.md, c75a8df)
+
+Report-only; 2 real MED defects, no CRITICAL. The 3 self-flagged concerns all
+resolved: F2 MUTATING_TOOLS = CONFIRMED SAFE (every workspace writer enumerated
+as a member; non-members write nothing durable); design_report fail-dominant =
+CONFIRMED SAFE (never lets a fail read as pass); stateless=True / schematic gate
+/ run_python containment / cocotb base_env / passMarker / ImageArtifact blob =
+all verified safe.
+
+| ID | Severity | Status | Summary |
+|----|----------|--------|---------|
+| AR-1 | MED | ASSIGNED (fixer) | run_python.py docker timeout SIGKILLs the CLI client, not the container; build_docker_argv sets --rm but NO --name → a `while True` script's container survives the 30s timeout indefinitely at its cpu/mem cap. Fix: --name sc_py_<uid> + docker kill on timeout. Native mode unaffected. |
+| AR-2 | MED (inv 4/7) | ASSIGNED (fixer) | store.ts loadManifest AND loadRuns (wired to WS frames by X2A-4, e25207c) lack a post-await stale-session guard and blank on error (manifest→null, runs→[]). (a) transient 500 mid-turn flash-empties the Index; (b) A→B switch mid-flight cross-writes A's manifest/runs into B + detectRunTransitions announces A's transitions against B. Fix: capture sid + loadThreads-style guard; stop blanking on error. (Correction to the frontend lane's note: loadRuns lacks the guard too.) |
+
 ## Wave 11 adversarial review (reports/review-templates.md) — SAFE TO KEEP
 
 Verdict: safe; build the landing gallery on it. A1–A8 all verified honored (create-first,
