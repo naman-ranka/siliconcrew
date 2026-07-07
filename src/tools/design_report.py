@@ -69,16 +69,19 @@ def _simulation_status_cell(workspace_path: str) -> str:
         return f"| Simulation | {icon}{suffix} |"
 
     # Legacy fallback: scan workspace-root sim outputs (pre-isolated-runs).
+    # Fail-dominant: a log line like "0 passed, 3 failed" contains both words,
+    # and a false Pass is the dishonest direction (X2A-2) — so any 'fail'
+    # verdict sticks over 'pass', within and across files.
     sim_passed = None
     for f in (os.listdir(workspace_path) if os.path.exists(workspace_path) else []):
         if f.endswith('.out') or f == 'simulation.log':
             try:
                 with open(os.path.join(workspace_path, f), 'r') as log_file:
                     content = log_file.read().lower()
-                    if 'pass' in content:
-                        sim_passed = True
-                    elif 'fail' in content:
+                    if 'fail' in content:
                         sim_passed = False
+                    elif 'pass' in content and sim_passed is None:
+                        sim_passed = True
             except Exception:
                 pass
     if sim_passed is True:

@@ -431,6 +431,25 @@ class TestReportHonestyX2U2(unittest.TestCase):
         report = generate_design_report(self.test_dir)
         self.assertIn("| Simulation | ⏳ Not Run |", report)
 
+    def test_legacy_log_fail_dominates_pass(self):
+        # X2A-2: "0 passed, 3 failed" contains both words — a false Pass is the
+        # dishonest direction, so 'fail' must win within a legacy log.
+        with open(os.path.join(self.test_dir, "simulation.log"), "w",
+                  encoding="utf-8") as f:
+            f.write("Ran 3 vectors: 0 passed, 3 failed\n")
+        report = generate_design_report(self.test_dir)
+        self.assertIn("| Simulation | ❌ Fail |", report)
+
+    def test_legacy_fail_in_any_file_sticks_over_pass(self):
+        # Across files too: one clean .out and one failing log → Fail overall.
+        with open(os.path.join(self.test_dir, "a.out"), "w", encoding="utf-8") as f:
+            f.write("all checks pass\n")
+        with open(os.path.join(self.test_dir, "simulation.log"), "w",
+                  encoding="utf-8") as f:
+            f.write("assertion failure at 105ns\n")
+        report = generate_design_report(self.test_dir)
+        self.assertIn("| Simulation | ❌ Fail |", report)
+
     def test_markdown_spec_is_recognized(self):
         with open(os.path.join(self.test_dir, "spec.md"), "w", encoding="utf-8") as f:
             f.write("# Widget spec\n\nAn 8-bit widget.\n")
