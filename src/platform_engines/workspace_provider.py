@@ -634,48 +634,69 @@ class CloudWorkspaceProvider:
             prev_scan_ns = None  # unknown history → hash everything once
 
         manifest, entries, scan_ns = self._scan_tree(scratch, prev_entries, prev_scan_ns)
-        raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        manifest_hash = hashlib.sha256(raw).hexdigest()
 
-        to_upload: dict[str, str] = {}
-        for rel, ent in manifest["files"].items():
-            if ent["h"] not in known_hashes:
-                to_upload.setdefault(ent["h"], rel)
-
-        if not to_upload and prior_marker == f"m:{manifest_hash}":
-            # Nothing changed since the commit this instance last made/saw — a
-            # no-change sync costs ZERO writes (the common case now that Codex
-            # syncs once per turn, including turns that only read).
-            self._write_index(session_id, {
-                "scan_ns": scan_ns,
-                "entries": entries,
-                "remote_hashes": sorted(known_hashes),
-            })
-            return
-
-        def push(content_hash: str, rel: str) -> None:
-            self._store.put_file(
-                self._blob_key(session_id, content_hash), os.path.join(scratch, rel)
-            )
-
-        items = list(to_upload.items())
-        if len(items) > 1:
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(max_workers=self._BLOB_WORKERS) as pool:
-                list(pool.map(lambda kv: push(*kv), items))  # list() re-raises
-        elif items:
-            push(*items[0])
-
-        # The commit point: blobs are all in place, now flip the manifest.
-        tmp = scratch + f".manifest-out.{uuid.uuid4().hex}"
+        # Content not yet in storage uploads from a private SNAPSHOT whose hash
+        # is computed from the snapshot itself — so a tool writing the file
+        # concurrently with this sync can never get bytes stored under a hash
+        # they don't match (the content-addressing invariant). On a detected
+        # race the manifest entry is patched to the snapshot's actual hash; the
+        # stat cache's racy-timestamp guard re-hashes that file next sync.
+        pending = [rel for rel, ent in manifest["files"].items() if ent["h"] not in known_hashes]
+        snap_dir = scratch + f".snap.{uuid.uuid4().hex}"
+        upload_map: dict[str, str] = {}  # actual content hash -> snapshot path
         try:
-            with open(tmp, "wb") as f:
-                f.write(raw)
-            self._store.put_file(self._manifest_key(session_id), tmp)
+            if pending:
+                os.makedirs(snap_dir, exist_ok=True)
+            for i, rel in enumerate(pending):
+                snap = os.path.join(snap_dir, str(i))
+                shutil.copyfile(os.path.join(scratch, rel), snap)
+                content_hash = _sha256_file(snap)
+                ent = manifest["files"][rel]
+                if content_hash != ent["h"]:
+                    ent["h"] = content_hash
+                    ent["size"] = os.path.getsize(snap)
+                    if rel in entries:
+                        entries[rel]["h"] = content_hash
+                if content_hash not in known_hashes:
+                    upload_map.setdefault(content_hash, snap)
+
+            raw = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            manifest_hash = hashlib.sha256(raw).hexdigest()
+
+            if not upload_map and prior_marker == f"m:{manifest_hash}":
+                # Nothing changed since the commit this instance last made/saw —
+                # a no-change sync costs ZERO writes (the common case now that
+                # Codex syncs once per turn, including turns that only read).
+                self._write_index(session_id, {
+                    "scan_ns": scan_ns,
+                    "entries": entries,
+                    "remote_hashes": sorted(known_hashes),
+                })
+                return
+
+            def push(content_hash: str, snap: str) -> None:
+                self._store.put_file(self._blob_key(session_id, content_hash), snap)
+
+            items = list(upload_map.items())
+            if len(items) > 1:
+                from concurrent.futures import ThreadPoolExecutor
+
+                with ThreadPoolExecutor(max_workers=self._BLOB_WORKERS) as pool:
+                    list(pool.map(lambda kv: push(*kv), items))  # list() re-raises
+            elif items:
+                push(*items[0])
+
+            # The commit point: blobs are all in place, now flip the manifest.
+            tmp = scratch + f".manifest-out.{uuid.uuid4().hex}"
+            try:
+                with open(tmp, "wb") as f:
+                    f.write(raw)
+                self._store.put_file(self._manifest_key(session_id), tmp)
+            finally:
+                with suppress(OSError):
+                    os.remove(tmp)
         finally:
-            with suppress(OSError):
-                os.remove(tmp)
+            shutil.rmtree(snap_dir, ignore_errors=True)
         self._write_marker(session_id, f"m:{manifest_hash}")
         self._write_index(session_id, {
             "scan_ns": scan_ns,

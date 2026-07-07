@@ -322,6 +322,39 @@ def test_missing_blob_fails_loudly_never_torn(tmp_path):
     assert not os.path.isdir(os.path.join(str(tmp_path / "scratch2"), "s"))
 
 
+def test_concurrent_write_between_scan_and_upload_stays_consistent(tmp_path, monkeypatch):
+    """A tool writing a file WHILE sync runs must never get bytes stored under
+    a hash they don't match (content-addressing invariant): uploads are
+    snapshotted and hashed from the snapshot, and the manifest is patched to
+    the snapshot's actual hash — git's rule. Pre-fix, the live file was
+    uploaded under the stale scan-time hash."""
+    import hashlib
+
+    store = RecordingStore()
+    p = CloudWorkspaceProvider(store, str(tmp_path / "scratch"))
+    ws = p.workspace_for("s")
+    _write(ws, "a.v", "// v1\n")
+
+    real_scan = p._scan_tree
+
+    def racing_scan(scratch, prev_entries, prev_scan_ns):
+        out = real_scan(scratch, prev_entries, prev_scan_ns)
+        _write(ws, "a.v", "// v2 (raced)\n")  # lands after the scan hashed v1
+        return out
+
+    monkeypatch.setattr(p, "_scan_tree", racing_scan)
+    p.sync("s")
+
+    v2_hash = hashlib.sha256(b"// v2 (raced)\n").hexdigest()
+    assert f"workspaces/s/.sc_blobs/{v2_hash}" in store.put_file_keys, (
+        "the uploaded blob must be keyed by the hash of the bytes actually uploaded"
+    )
+    p2 = CloudWorkspaceProvider(store, str(tmp_path / "scratch2"))
+    ws2 = p2.workspace_for("s")
+    with open(os.path.join(ws2, "a.v"), encoding="utf-8") as f:
+        assert f.read() == "// v2 (raced)\n"
+
+
 # --- stat-cache honesty -----------------------------------------------------------
 
 
