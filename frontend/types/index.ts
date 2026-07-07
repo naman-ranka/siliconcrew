@@ -214,6 +214,9 @@ export interface RunSummary {
   mode?: "rtl" | "post_synth";
   vcdPath?: string;
   passMarkerFound?: boolean;
+  /** The exact pass-marker string the sim grepped for (default "TEST PASSED").
+   *  Surfaced so a failed-for-missing-marker run can name what it expected. */
+  passMarker?: string | null;
   failure?: { type?: string; firstFailureLine?: string | null; timeNs?: number | null } | null;
   compileCommand?: string;
   simCommand?: string;
@@ -223,6 +226,10 @@ export interface RunSummary {
   platform?: string | null;
   ppa?: PpaMetrics | null;
   reportAvailable?: boolean;
+  /** The stage the flow reached (and, on a failed run, failed at). */
+  currentStage?: string | null;
+  /** One-line failure/summary reason from the run's auto-checks. */
+  checkNotes?: string | null;
 }
 
 export interface PpaMetrics {
