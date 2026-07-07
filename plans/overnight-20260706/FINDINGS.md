@@ -14,10 +14,14 @@ source is identical to HEAD except mcp_server.py (the fix), CLAUDE.md (docs),
 and the new test — so the deploy shipped exactly the F1 fix, nothing else
 runtime. Built ccdb6e0 → pushed digest sha256:06423cd... → rolled backend to
 **revision siliconcrew-backend-00059-d5c**, 100% traffic, `/api/health` 200.
-Frontend untouched (still rev 00049). The revision swap dropped live MCP client
-sessions (-32602 until reconnect) — expected, explorer notified. Live MCP
-re-verification (list_sessions returns only the caller's sessions) is pending a
-fresh client handshake; code correctness is proven by tests/test_mcp_tenancy_f1.py.
+Frontend untouched (still rev 00049).
+
+**F1 LIVE-CONFIRMED ✅** (explore-mcp, 05:43 UTC, rev 00059): `list_sessions_tool`
+returned exactly 3 sessions — all owned by the test account (rockstarme.the5 /
+same workos_user_id); ZERO foreign-tenant sessions. The 33-session multi-owner
+leak is gone on the deployed backend. (Durable structural follow-up — request-scope
+current_session off the shared instance, REVIEW_FINDINGS P0 #1 — still recommended;
+the deployed pre-dispatch gate is defense-in-depth covering it meantime.)
 
 ## Codex latency findings (reports/codex-latency.md)
 
@@ -59,7 +63,7 @@ to size each bucket (the server is already instrumented).
 
 | ID | Severity | Status | Summary |
 |----|----------|--------|---------|
-| F9 | HIGH (blocker) | FIXED (04365b2) — DEPLOY PENDING | Hosted spec→GDS dies at CTS with SIGILL: the OpenROAD LEC (logical-equivalence) child exec'd from cts.tcl uses ISA extensions the Cloud Run CPU pool lacks → "illegal instruction" AFTER CTS metrics compute cleanly, blocking all hosted GDS. ASU p1 met timing at place (+0.372ns) but produced no GDS. Owner-directed fix: write `export LEC_CHECK = 0` into ORFS config.mk on HOSTED only (self-host keeps the real equivalence check). Both config.mk builders in synthesis_manager.py covered; regression test tests/test_lec_check_hosted.py. Deployed-CPU root cause = out of scope (owner). DEPLOYED backend-only to **rev siliconcrew-backend-00060** (built from the F1 base ccdb6e0 + LEC-only synthesis_manager.py overlay, EXCLUDING the unreviewed Wave 11 backend — templates/api routes/bundles/transcript — since those aren't gated yet; verified the deploy tree had LEC + none of Wave 11). /api/health 200. Live GDS verification in progress (gds-verify agent). |
+| F9 | HIGH (blocker) | FIXED (04365b2) — DEPLOY PENDING | Hosted spec→GDS dies at CTS with SIGILL: the OpenROAD LEC (logical-equivalence) child exec'd from cts.tcl uses ISA extensions the Cloud Run CPU pool lacks → "illegal instruction" AFTER CTS metrics compute cleanly, blocking all hosted GDS. ASU p1 met timing at place (+0.372ns) but produced no GDS. Owner-directed fix: write `export LEC_CHECK = 0` into ORFS config.mk on HOSTED only (self-host keeps the real equivalence check). Both config.mk builders in synthesis_manager.py covered; regression test tests/test_lec_check_hosted.py. Deployed-CPU root cause = out of scope (owner). DEPLOYED backend-only to **rev siliconcrew-backend-00060** (built from the F1 base ccdb6e0 + LEC-only synthesis_manager.py overlay, EXCLUDING the unreviewed Wave 11 backend; verified the deploy tree had LEC + none of Wave 11). /api/health 200. **REFINED understanding (explore-mcp):** the CTS SIGILL is a HETEROGENEOUS-CPU-POOL FLAKE — on the OLD rev (no fix) CTS passed only ~1-in-3 (synth_0001 fail, synth_0003 fail, synth_0004 PASS→real GDS by luck). So hosted GDS was a **coin-flip per run**; the LEC_CHECK=0 fix makes it **dependable by construction** (no LEC child exec'd → no SIGILL regardless of CPU). explore-mcp's asu_p1_mcp_20260706 already has a real 6_final.gds (lucky pass). gds-verify confirming the fix on rev 00060 via a FRESH run whose config.mk must carry LEC_CHECK=0 (a lone CTS pass isn't proof given the coin-flip). |
 | F9b | HIGH | OPEN (explore-mcp F2) | `retry_pd` resume-from-CTS doesn't stage the place checkpoint into the resumed worker's `results/<plat>/<top>/base/` → `ORD-0007 3_place.odb does not exist`. Cloud resume/adoption broken; also reported an artifact that isn't physically present (honest-state violation). Independent of F9. |
 | F9c | MEDIUM | OPEN (explore-mcp F3) | Backend/unavailable errors (e.g. during a deploy) are surfaced to the MCP client as JSON-RPC `-32602 "Invalid request parameters"` — a lie that sends external-app devs hunting a nonexistent bad-arg bug. Map to `-32000` server-error + retry hint; health-gate/drain deploys. (This is the -32602 we saw during the F1 roll.) |
 
