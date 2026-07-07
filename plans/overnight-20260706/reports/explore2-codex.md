@@ -14,7 +14,7 @@ as **Appendix A**. UI session: `x2_codex_ui_20260707` (hosted, test account).
 
 ---
 
-## Leg 1 — UI route (deployed frontend) — DELIVERABLE
+## Leg 1b — Codex via the deployed UI (DELIVERABLE — the primary result)
 
 Frontend `https://siliconcrew-frontend-psp2dkllmq-uc.a.run.app/`, signed in as
 `rockstarme.the5@gmail.com` (already authenticated — no AuthKit step needed).
