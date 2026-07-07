@@ -197,6 +197,24 @@ will LIST + PREVIEW examples but the "Fork this example" action will 400.
   a small Wave-11 gallery fix should present it honestly per deployment mode. To
   do after the landing lands.
 
+## D3 follow-up — RESOLVED (session 2, code-path verified)
+
+Hosted Fork is already presented honestly: `fork_from_template` raises
+`TemplatesUnavailable("Templates are available in self-host today; the hosted
+gallery is a later wave.")` (src/utils/templates.py:338), the route maps it to
+HTTP 400 with that string as `detail` (api.py:813-814), `apiFetch` throws
+`Error(detail)` (frontend/lib/api.ts:60-65), and `TemplatePreview` renders it
+as a `role="alert"` line above the Fork button (TemplatePreview.tsx:201-205).
+No raw 400 reaches the user. Final visual confirmation at endgame live-verify.
+
+## Session 2 baseline (HEAD 608864e, 2026-07-06 ~23:40 MST)
+
+- Backend pytest: **9 failed, 679 passed, 8 skipped** — identical to the known
+  9-failure machine baseline (congestion x2, lint norm_file, llm_factory,
+  orfs_job stage_in, perf_read_no_sync, sby_engine, xls x2). Zero new.
+- Frontend: tsc clean; vitest **1 known pre-existing failure**
+  (chat.threads.store.test.ts, from af0124b) + 367 pass; next build green.
+
 ## Notes
 
 - Discovered during setup (2026-07-07 ~04:30 UTC) before the run proper.
