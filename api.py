@@ -1297,6 +1297,19 @@ async def get_session(session_id: str, identity: Identity = Depends(get_identity
     )
 
 
+# Known model ids for PATCH-time validation: every id either picker offers
+# (native CATALOG + Codex CODEX_CATALOG) plus every id we still price —
+# previous-generation ids stay pinnable. A PATCH carrying an id outside this
+# set is a typo or stale pick, so we 422 at PICK time rather than letting it
+# fail silently when the user later SENDS a message. Aliases are normalized
+# first, so their canonical targets (all present here) validate cleanly.
+_KNOWN_MODEL_IDS = frozenset(
+    {e["id"] for e in model_catalog_entries()}
+    | {e["id"] for e in codex_catalog_entries()}
+    | set(PRICING)
+)
+
+
 @app.patch("/api/sessions/{session_id:path}/threads/{tid}", response_model=ThreadResponse)
 async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: Identity = Depends(get_identity)):
     """Rename a thread and/or set its model (owner-checked)."""
@@ -1312,7 +1325,10 @@ async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: I
     if data.title is not None:
         session_manager.rename_thread(tid, data.title, user_id=uid)
     if data.model is not None:
-        session_manager.set_thread_model(tid, normalize_model_name(data.model), user_id=uid)
+        normalized = normalize_model_name(data.model)
+        if normalized not in _KNOWN_MODEL_IDS:
+            raise HTTPException(status_code=422, detail=f"Unknown model id: {data.model!r}")
+        session_manager.set_thread_model(tid, normalized, user_id=uid)
     return _thread_to_response(session_manager.get_thread(tid, user_id=uid))
 
 
@@ -2235,13 +2251,32 @@ async def get_code_file(session_id: str, filename: str, _acl: Optional[str] = De
 
 @app.get("/api/workspace/{session_id:path}/waveforms")
 async def list_waveform_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
-    """List VCD files in the workspace."""
-    def work() -> List[str]:  # F6: hydration + listdir off-thread
+    """List every VCD file in the workspace, recursively.
+
+    Returns workspace-relative POSIX paths (not bare names) so a nested dump
+    under ``sim_runs/<id>/`` is both listed AND fetchable via the sibling
+    ``/waveform/{filename:path}`` route. A non-recursive ``os.listdir`` used to
+    hide every sim-run VCD. Read-only: a plain walk, no row materialization.
+    ``iter_workspace_files`` is deliberately NOT used here — it prunes
+    ``sim_runs``/``synth_runs``, which is exactly where these VCDs live.
+    """
+    def work() -> List[str]:  # F6: hydration + walk off-thread
         workspace = _resolve_workspace(session_id)
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        return [f for f in os.listdir(workspace) if f.endswith(".vcd")]
+        vcds: List[str] = []
+        for dirpath, dirnames, filenames in os.walk(workspace):
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in ("__pycache__", "node_modules") and not d.startswith(".")
+            ]
+            for name in filenames:
+                if name.endswith(".vcd"):
+                    rel = os.path.relpath(os.path.join(dirpath, name), workspace)
+                    vcds.append(rel.replace(os.sep, "/"))
+        vcds.sort()
+        return vcds
 
     return await asyncio.to_thread(work)
 
@@ -2266,8 +2301,34 @@ async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] 
     return JSONResponse(parsed, headers={"Cache-Control": cache_control})
 
 
+# VCDVCD loads the ENTIRE dump into memory and we serialize per-signal
+# transitions to JSON, so an oversized VCD stalls the request thread and blows
+# up the response. Cap BEFORE parsing and return an honest "too large" signal
+# (mirroring workspace_fs.read_smart_file's text cap) — the viewer offers the
+# raw download instead. Sim-tool VCDs are KB-MB; the "open any workspace VCD"
+# feature is what makes a hundreds-of-MB dump reachable.
+VCD_PARSE_CAP = 25_000_000  # 25 MB
+
+
 def _parse_vcd_file(vcd_path: str, filename: str) -> dict:
     """Parse a VCD into the viewer payload (blocking; run via asyncio.to_thread)."""
+    try:
+        size = os.path.getsize(vcd_path)
+    except OSError:
+        size = 0
+    if size > VCD_PARSE_CAP:
+        # Honest too-large payload: same key shape as the success path so the
+        # viewer can branch on ``tooLarge`` without crashing on missing fields.
+        return {
+            "filename": filename,
+            "tooLarge": True,
+            "size": size,
+            "endtime": None,
+            "timescale": None,
+            "unitSeconds": None,
+            "signalCount": 0,
+            "signals": [],
+        }
     try:
         from vcdvcd import VCDVCD
 
@@ -2346,6 +2407,8 @@ def _parse_vcd_file(vcd_path: str, filename: str) -> dict:
 
         return {
             "filename": filename,
+            "tooLarge": False,
+            "size": size,
             "endtime": endtime,
             "timescale": timescale,
             "unitSeconds": unit_seconds,  # seconds per VCD tick (None/1.0 = unknown)

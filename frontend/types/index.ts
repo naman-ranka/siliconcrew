@@ -143,6 +143,11 @@ export interface WaveformData {
   unitSeconds?: number | null; // seconds per VCD tick (for ns→tick cursor mapping)
   signalCount?: number;
   signals: WaveformSignal[];
+  // Backend caps VCD parsing at VCD_PARSE_CAP (25 MB) and returns this honest
+  // "too large" signal instead of parsed signals — the viewer offers the raw
+  // download rather than a misleading "no signals found" empty state.
+  tooLarge?: boolean;
+  size?: number; // bytes, present when tooLarge
 }
 
 export interface SynthesisRun {

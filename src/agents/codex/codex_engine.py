@@ -347,7 +347,11 @@ class CodexEngine:
         try:
             if turn.api_key:
                 await codex.login_api_key(turn.api_key)
-            thread_kwargs = self._thread_kwargs(openai_codex, turn)
+            # Under account auth, ask the account which model ids it actually
+            # allows (once per worker; cached on the WarmWorker for every turn
+            # it serves). Gates the picked model so it's honest, never 0-token.
+            allowed_models = await self._fetch_allowed_models(codex, turn)
+            thread_kwargs = self._thread_kwargs(openai_codex, turn, allowed_models)
             if turn.external_thread_id:
                 try:
                     thread = await codex.thread_resume(turn.external_thread_id, **thread_kwargs)
@@ -370,20 +374,82 @@ class CodexEngine:
                     base_instructions=turn.system_prompt, config=self._thread_config(), **thread_kwargs)
             external_thread_id = str(getattr(thread, "id", "") or turn.external_thread_id or "")
             return {"cm": cm, "client": codex, "thread": thread,
-                    "external_thread_id": external_thread_id}
+                    "external_thread_id": external_thread_id,
+                    "allowed_models": allowed_models}
         except BaseException:
             with suppress(Exception):
                 await cm.__aexit__(None, None, None)
             raise
 
-    def _thread_kwargs(self, openai_codex: Any, turn: CodexTurn) -> Dict[str, Any]:
-        # Account auth: omit model (an unknown name silently returns 0 tokens).
-        effective_model = turn.model_name if turn.api_key else None
+    def _thread_kwargs(self, openai_codex: Any, turn: CodexTurn,
+                       allowed_models: Optional[frozenset] = None) -> Dict[str, Any]:
+        effective_model = self._effective_model(turn, allowed_models)
         sandbox = self._sdk_sandbox(openai_codex, turn.sandbox)
         return {k: v for k, v in {
             "model": effective_model, "cwd": turn.workspace, "sandbox": sandbox,
             "approval_mode": self._sdk_approval_mode(openai_codex), "service_tier": turn.tier,
         }.items() if v is not None}
+
+    def _effective_model(self, turn: CodexTurn,
+                         allowed_models: Optional[frozenset]) -> Optional[str]:
+        """Which picked model id to actually pass to the SDK for this turn.
+
+        - BYOK key auth: pass the picked id verbatim (the key's account owns
+          model validity; there is nothing to gate it against here).
+        - Account auth: pass the picked id ONLY when the account's own
+          ``model/list`` reports it as a valid, non-hidden id; otherwise omit
+          it and let Codex fall back to the account default. Omitting is the
+          safe path — an unknown name silently returns 0 tokens, so a picker
+          that surfaces an id this account rejects must degrade to the default,
+          never break the turn (invariant 4). ``allowed_models`` is None when
+          the list couldn't be fetched, which also omits (honest degradation).
+        """
+        if turn.api_key:
+            return turn.model_name
+        if turn.model_name and allowed_models and turn.model_name in allowed_models:
+            return turn.model_name
+        return None
+
+    async def _fetch_allowed_models(self, codex: Any, turn: CodexTurn) -> Optional[frozenset]:
+        """Under ACCOUNT auth only, query the SDK's ``model/list`` for the
+        non-hidden ids this account/plan allows (used by _effective_model to
+        gate the picked model). Returns None for BYOK (no gating needed) and on
+        ANY error or empty result, so the caller omits the model rather than
+        risk the 0-token trap. Called once per worker at spawn; the result is
+        cached on the WarmWorker and reused for every turn that worker serves."""
+        if turn.api_key:
+            return None
+        models_fn = getattr(codex, "models", None)
+        if not callable(models_fn):
+            return None
+        try:
+            result = await models_fn()
+        except Exception as exc:  # noqa: BLE001 - any SDK/transport error → omit safely
+            print(f"[CODEX] model/list failed ({exc}); omitting picked model under account auth",
+                  file=sys.stderr)
+            return None
+        # The SDK may return a bare list, or an object/dict wrapping one.
+        items = result
+        for attr in ("models", "data"):
+            wrapped = getattr(result, attr, None)
+            if wrapped is None and isinstance(result, dict):
+                wrapped = result.get(attr)
+            if wrapped is not None:
+                items = wrapped
+                break
+        ids: set[str] = set()
+        for m in (items or []):
+            if isinstance(m, dict):
+                if m.get("hidden"):
+                    continue
+                mid = m.get("id") or m.get("model")
+            else:
+                if getattr(m, "hidden", False):
+                    continue
+                mid = getattr(m, "id", None) or getattr(m, "model", None)
+            if mid:
+                ids.add(str(mid))
+        return frozenset(ids) or None
 
     async def stream_turn(self, turn: CodexTurn) -> AsyncIterator[CodexEvent]:
         if False:  # pragma: no cover - keeps this an async generator
@@ -442,7 +508,7 @@ class CodexEngine:
                 )
                 yield CodexEvent(type="start", external_thread_id=worker.external_thread_id)
 
-                turn_kwargs = self._thread_kwargs(openai_codex, turn)
+                turn_kwargs = self._thread_kwargs(openai_codex, turn, worker.allowed_models)
                 turn_issue_start = time.monotonic()
                 turn_handle = await worker.thread.turn(turn.message, **turn_kwargs)
                 print(
