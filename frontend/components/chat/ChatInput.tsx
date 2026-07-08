@@ -4,11 +4,12 @@ import { useState, useRef, useEffect, KeyboardEvent } from "react";
 import { Send, Square, X, Clock, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelPicker } from "./ModelPicker";
+import { CodexModelPicker } from "./CodexModelPicker";
 import { useStore, MAX_QUEUED_MESSAGES } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export function ChatInput() {
-  const { currentSession, isStreaming, stopPending, sendMessage, stopStreaming, queuedMessages, removeQueuedMessage } = useStore();
+  const { currentSession, isStreaming, stopPending, sendMessage, stopStreaming, queuedMessages, removeQueuedMessage, agentRuntime } = useStore();
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const queueFull = queuedMessages.length >= MAX_QUEUED_MESSAGES;
@@ -147,9 +148,11 @@ export function ChatInput() {
             </div>
           </div>
 
-          {/* Footer: model picker (bottom-left) + keyboard hint. */}
+          {/* Footer: model picker (bottom-left) + keyboard hint. Each agent
+              has its own picker over its own registry — never one picker
+              filtering the other's list. */}
           <div className="flex items-center justify-between mt-2.5 px-1">
-            <ModelPicker />
+            {agentRuntime === "codex" ? <CodexModelPicker /> : <ModelPicker />}
             <span className="text-xs text-muted-foreground/50">
               <kbd className="px-1.5 py-0.5 rounded bg-surface-2 border border-border text-[10px] font-mono">Shift</kbd>
               {" + "}

@@ -28,7 +28,14 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, Tool
 
 from src.agents.architect import create_architect_agent, load_system_prompt
 from src.agents import runtime_registry
-from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name, model_catalog_entries
+from src.model_catalog import (
+    CODEX_DEFAULT_MODEL,
+    DEFAULT_MODEL,
+    PRICING,
+    codex_catalog_entries,
+    normalize_model_name,
+    model_catalog_entries,
+)
 from src.utils.session_manager import SessionManager
 from src.utils.session_context import SessionContext, set_current_session, session_scope
 from src.utils.paths import is_within
@@ -128,7 +135,10 @@ if get_settings().codex_enabled:
             llm_key_resolve=lambda uid, model: _LLM_KEY_PROVIDER.resolve(uid, model),
             account_home_for=_codex_account_home_for,
             system_prompt_loader=load_system_prompt,
-            default_model=DEFAULT_MODEL,
+            # Codex is an OpenAI runtime: a thread with no model pinned must
+            # fall back to a Codex model, never the app-wide (Gemini) default —
+            # that default would resolve a Gemini key and hand it to Codex.
+            default_model=CODEX_DEFAULT_MODEL,
             normalize_model=normalize_model_name,
             enabled=True,
             persist_credential=lambda uid: _CODEX_AUTH_MANAGER.persist(uid),
@@ -1019,13 +1029,29 @@ def _usable_providers(identity: Identity) -> set:
 
 @app.get("/api/models")
 async def list_models(identity: Identity = Depends(get_identity)):
-    """Model registry for the picker, with per-request availability."""
+    """Model registry for the pickers, with per-request availability.
+
+    ``models``/``default`` feed the native (LangChain) picker; ``codex_models``/
+    ``codex_default`` feed the separately curated Codex picker. Codex entries'
+    ``available`` reflects BYOK/env OpenAI keys only — a connected ChatGPT
+    account bypasses key resolution entirely, which the frontend layers on top
+    (the account state lives in the Codex auth endpoints, not here).
+    """
     usable = _usable_providers(identity)
     models = [
         {**e, "available": e["provider"] in usable}
         for e in model_catalog_entries()
     ]
-    return {"models": models, "default": DEFAULT_MODEL}
+    codex_models = [
+        {**e, "available": e["provider"] in usable}
+        for e in codex_catalog_entries()
+    ]
+    return {
+        "models": models,
+        "default": DEFAULT_MODEL,
+        "codex_models": codex_models,
+        "codex_default": CODEX_DEFAULT_MODEL,
+    }
 
 
 # =============================================================================

@@ -22,13 +22,13 @@ const PROVIDER_DOT: Record<ModelInfo["provider"], string> = {
   gemini: "bg-blue-500",
 };
 
-const DEFAULT_MODEL = "gemini-3.5-flash";
-
 /**
- * Model picker at the composer's bottom-left. The chosen model lives on the
- * ACTIVE chat thread (so each chat can use a different model); the WebSocket
- * reads it on the next message. Grouped by provider; unavailable models are
- * greyed with "needs key" so we never offer a model that would 500.
+ * Model picker for the NATIVE (LangChain) agent, at the composer's
+ * bottom-left. The chosen model lives on the ACTIVE chat thread (so each chat
+ * can use a different model); the WebSocket reads it on the next message.
+ * Grouped by provider; unavailable models are greyed with "needs key" so we
+ * never offer a model that would 500. The Codex agent has its OWN picker over
+ * a separately curated registry — see CodexModelPicker.
  */
 export function ModelPicker() {
   const {
@@ -36,10 +36,9 @@ export function ModelPicker() {
     threads,
     activeThreadId,
     models,
+    defaultModel,
     loadModels,
     setActiveThreadModel,
-    agentRuntime,
-    codexAccountConnected,
   } = useStore();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -70,29 +69,17 @@ export function ModelPicker() {
   }, [open, loadModels]);
 
   const activeThread = threads.find((t) => t.id === activeThreadId);
-  const currentId = activeThread?.model || currentSession?.model_name || DEFAULT_MODEL;
+  // Fall back to the registry's declared default (no hardcoded model id here —
+  // the backend catalog is the single source of truth).
+  const currentId = activeThread?.model || currentSession?.model_name || defaultModel || "";
   const currentLabel = models.find((m) => m.id === currentId)?.label || currentId;
   const currentProvider = models.find((m) => m.id === currentId)?.provider;
 
-  // The Codex agent runs on OpenAI models only — show just those in its picker.
-  // A connected ChatGPT account also makes them available with no BYOK key:
-  // codex_runtime.py skips key resolution entirely once an account is
-  // connected (account auth wins over BYOK), so /api/models' key-based
-  // `available` flag — which knows nothing about the Codex account — would
-  // otherwise wrongly grey out every OpenAI model here.
-  const visibleModels = useMemo(() => {
-    if (agentRuntime !== "codex") return models;
-    const bypassesKey = codexAccountConnected;
-    return models
-      .filter((m) => m.provider === "openai")
-      .map((m) => (bypassesKey ? { ...m, available: true } : m));
-  }, [models, agentRuntime, codexAccountConnected]);
-
   const grouped = useMemo(() => {
     const by: Record<string, ModelInfo[]> = {};
-    for (const m of visibleModels) (by[m.provider] ??= []).push(m);
+    for (const m of models) (by[m.provider] ??= []).push(m);
     return by;
-  }, [visibleModels]);
+  }, [models]);
 
   const pick = async (m: ModelInfo) => {
     if (!m.available) return;
@@ -133,7 +120,7 @@ export function ModelPicker() {
           aria-label="Select model"
           className="absolute bottom-full mb-1 left-0 z-50 w-80 max-h-[26rem] overflow-y-auto rounded-md border border-border bg-popover shadow-e2 p-1 animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-1 motion-reduce:animate-none"
         >
-          {visibleModels.length === 0 && (
+          {models.length === 0 && (
             <div className="px-3 py-3 text-xs text-muted-foreground">No models available.</div>
           )}
           {PROVIDER_ORDER.filter((p) => grouped[p]?.length).map((provider) => (

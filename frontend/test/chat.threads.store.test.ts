@@ -95,6 +95,19 @@ describe("chat threads store", () => {
     expect(s.messages[0].content).toBe("hi from t2");
   });
 
+  it("selectThread flips agentRuntime to FOLLOW the target thread (URL-selected Codex chat)", async () => {
+    useStore.setState({
+      threads: [thread("s1", "Chat 1"), { ...thread("cx", "Codex chat"), runtime: "codex" }],
+      activeThreadId: "s1",
+      agentRuntime: "langchain",
+    } as any);
+    await useStore.getState().selectThread("cx");
+    expect(useStore.getState().agentRuntime).toBe("codex");
+
+    await useStore.getState().selectThread("s1");
+    expect(useStore.getState().agentRuntime).toBe("langchain");
+  });
+
   it("deleteThread on the active thread reloads and lands on a remaining thread", async () => {
     useStore.setState({ threads: [thread("s1", "Chat 1"), thread("t2", "Chat 2")], activeThreadId: "t2" } as any);
     (threadsApi.list as any).mockResolvedValue([thread("s1", "Chat 1")]);
