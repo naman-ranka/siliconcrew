@@ -10,7 +10,7 @@ Typical use:
     # full run: generate a config, drive the agent, grade in the container, write results.json
     python cvdp-pipeline/run_all.py \
         --dataset cvdp_benchmark/data/cvdp_v1.0.2_agentic_code_generation_no_commercial.jsonl \
-        --max-problems 92 --agent codex --model gpt-5.5 --flow auto --name cvdp_full92
+        --max-problems 92 --agent claude --model claude-sonnet-5 --flow auto --name cvdp_full92
 
     # grade-only (re-grade existing runs into a fresh, provenance-stamped results.json)
     python cvdp-pipeline/run_all.py --config bench-orchestrator/configs/cvdp_des_smoke.yaml --skip-run
@@ -65,8 +65,8 @@ def main() -> int:
     ap.add_argument("--ids", default="", help="Comma-separated datapoint ids (selection).")
     ap.add_argument("--category", default="", help="Select by category (e.g. cid003).")
     ap.add_argument("--max-problems", type=int, default=0, help="Limit problem count (0 = all matched).")
-    ap.add_argument("--agent", default="codex", help="Agent (codex|claude|antigravity|fake).")
-    ap.add_argument("--model", default="gpt-5.5", help="Model.")
+    ap.add_argument("--agent", default="claude", help="Agent (codex|claude|antigravity|fake).")
+    ap.add_argument("--model", default="claude-sonnet-5", help="Model.")
     ap.add_argument("--flow", default="auto", help="Flow (auto|verilog|xls_force).")
     ap.add_argument("--name", default="cvdp_run", help="Benchmark/config name.")
     ap.add_argument("--image", default=DEFAULT_IMAGE, help="Reference container (digest-pinned by default).")

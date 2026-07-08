@@ -7,7 +7,7 @@
 [![LangGraph](https://img.shields.io/badge/Framework-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
 [![Next.js](https://img.shields.io/badge/Frontend-Next.js%2014-black.svg)](https://nextjs.org/)
 [![MCP](https://img.shields.io/badge/Protocol-MCP-blue.svg)](https://modelcontextprotocol.io/)
-[![CVDP](https://img.shields.io/badge/CVDP-68.5%25%20(63%2F92)-success.svg)](cvdp-pipeline/research/CVDP_RESULTS.md)
+[![CVDP](https://img.shields.io/badge/CVDP-65%25%20(60%2F92)%20leak--gated-success.svg)](cvdp-pipeline/research/CVDP_FINAL_RESULTS.md)
 [![Status: Research](https://img.shields.io/badge/Status-Research%20Prototype-yellow.svg)]()
 
 ---
@@ -28,20 +28,26 @@ This project investigates the following research questions:
 
 ---
 
-## Preliminary Results
+## Results
 
-On **CVDP** (NVIDIA's 92 agentic `no_commercial` problems), every verdict graded in the **official
-reference container** (`ghcr.io/hdl/sim/osvb`, digest-pinned) — not a self-report:
+On **CVDP** (NVIDIA's 92 agentic `no_commercial` problems), every verdict is graded in the **official
+reference container** (`ghcr.io/hdl/sim/osvb`, digest-pinned), not self-reported:
 
 | | Pass rate |
 |---|---|
-| March-2026 baseline | 46.7% (43/92) |
-| **Current best-known** | **68.5% (63/92)** |
+| March 2026 baseline | 46.7% (43/92) |
+| Best pre-leak-gate (retired) | 68.5% (63/92) |
+| **Final, leak-gated (July 2026)** | **65.2% (60/92)** |
 
-> ⚠️ **Preliminary** — best-known across configs, not yet a single reproducible run (±1–2 problems).
-> A multi-run, single-config showcase with one-command reproduction is in progress
-> ([`run_all.py`](cvdp-pipeline/run_all.py) already emits provenance-stamped results). Detail:
-> [`CVDP_RESULTS.md`](cvdp-pipeline/research/CVDP_RESULTS.md).
+The drop from 63 to 60 was deliberate. An audit found that some earlier runs could read grader
+files from inside the agent workspace, so we built a permanent
+[leak detector](cvdp-pipeline/leak_detector.py) and re-checked every run. Anything contaminated
+was discarded and re-run sealed, including our previous best. The surviving number comes from one
+configuration (Claude Sonnet 5, lean prompt, pass@1, single attempt per problem), with per-problem
+verdicts and provenance frozen in
+[`FINAL_MANIFEST.json`](bench-orchestrator/final_runs/FINAL_MANIFEST.json). Expect a few problems
+of run-to-run swing; LLM sampling has no seed control. Full analysis, including the failure-mode
+taxonomy: [`CVDP_FINAL_RESULTS.md`](cvdp-pipeline/research/CVDP_FINAL_RESULTS.md).
 
 ---
 
@@ -67,16 +73,17 @@ reference container** (`ghcr.io/hdl/sim/osvb`, digest-pinned) — not a self-rep
 
 ## Benchmarks
 
-The headline numbers are in [Preliminary Results](#preliminary-results) above. All verdicts are graded
-in the pinned `ghcr.io/hdl/sim/osvb` container running the dataset's own cocotb harness. A single fixed
-agent+prompt configuration reproduces ~60–65%; a cross-agent retry ensemble reaches ~70%. The
-reference-container subset check is ~67% (20/30). Agents used: `codex/gpt-5.5` and `claude-sonnet-4-6`
-driving the SiliconCrew MCP toolchain.
+The headline number is in [Results](#results) above: **60/92 (65%)**, Claude Sonnet 5 driving the
+SiliconCrew MCP toolchain, one attempt per problem, every verdict from the pinned
+`ghcr.io/hdl/sim/osvb` container running the dataset's own cocotb harness. Earlier multi-config
+and ensemble figures were retired when the leak gate landed; the run-by-run history is in
+[`ITERATION_LOG.md`](cvdp-pipeline/research/ITERATION_LOG.md) and the audit that triggered the
+recalibration is in [`AUDIT_XLS_TOOLING_LEAK.md`](cvdp-pipeline/research/AUDIT_XLS_TOOLING_LEAK.md).
 
-The full pipeline — problem selection, agent run, container grading, and a provenance-stamped
-`results.json` (repo commit + pinned image digest + agent/model) — lives in
+The full pipeline (problem selection, agent run, container grading, and a provenance-stamped
+`results.json` with repo commit, pinned image digest, and agent/model) lives in
 [`cvdp-pipeline/`](cvdp-pipeline/). Results detail:
-[`cvdp-pipeline/research/CVDP_RESULTS.md`](cvdp-pipeline/research/CVDP_RESULTS.md).
+[`cvdp-pipeline/research/CVDP_FINAL_RESULTS.md`](cvdp-pipeline/research/CVDP_FINAL_RESULTS.md).
 
 > CVDP is NVIDIA's benchmark; this repository ships no CVDP data. Provide the dataset yourself and
 > comply with NVIDIA's license. The `no_commercial` split is used because the commercial split

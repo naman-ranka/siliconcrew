@@ -76,7 +76,7 @@ docker pull ghcr.io/hdl/sim/osvb                                               #
 # full run: generate a 92-problem config, drive the agent, grade in the container, emit results.json
 python cvdp-pipeline/run_all.py \
     --dataset cvdp_benchmark/data/cvdp_v1.0.2_agentic_code_generation_no_commercial.jsonl \
-    --max-problems 92 --agent codex --model gpt-5.5 --flow auto --name cvdp_full92
+    --max-problems 92 --agent claude --model claude-sonnet-5 --flow auto --name cvdp_full92
 
 # grade-only: re-grade existing runs into a fresh, provenance-stamped results.json (no agent needed)
 python cvdp-pipeline/run_all.py --config bench-orchestrator/configs/cvdp_des_smoke.yaml --skip-run
@@ -87,8 +87,8 @@ python cvdp-pipeline/run_all.py --config bench-orchestrator/configs/cvdp_des_smo
 {
   "benchmark": "cvdp_full92", "dataset": "...jsonl", "generated_at": "2026-...",
   "provenance": { "repo_commit": "<sha>", "image": "ghcr.io/hdl/sim/osvb@sha256:...",
-                  "grader": "cvdp-pipeline/regrade_docker.py", "agent": "codex",
-                  "model": "gpt-5.5", "flow": "auto" },
+                  "grader": "cvdp-pipeline/regrade_docker.py", "agent": "claude",
+                  "model": "claude-sonnet-5", "flow": "auto" },
   "summary": { "passed": 64, "total": 92, "pass_rate": 0.6957 },
   "results": [ { "problem": "DES_0001", "verdict": "PASS", "passed": 1, "failed": 0,
                  "run_dir": "...", "datapoint_id": "cvdp_agentic_DES_0001" } ]
@@ -105,13 +105,13 @@ bit-identical to what produced it.
 python cvdp-pipeline/generate_cvdp_config.py \
     --dataset cvdp_benchmark/data/cvdp_v1.0.2_agentic_code_generation_no_commercial.jsonl \
     --out bench-orchestrator/configs/cvdp_des_smoke.yaml \
-    --ids cvdp_agentic_DES_0001 --agent codex --model gpt-5.5
+    --ids cvdp_agentic_DES_0001 --agent claude --model claude-sonnet-5
 #   (or: --category cid003 --max-problems 5)
 
 # 2. Run the benchmark (fake agent first to smoke-test plumbing, then a real agent)
 python bench-orchestrator/run_benchmark.py --config bench-orchestrator/configs/cvdp_des_smoke.yaml --dry-run
 python bench-orchestrator/run_benchmark.py --config bench-orchestrator/configs/cvdp_des_smoke.yaml --agent fake
-python bench-orchestrator/run_benchmark.py --config bench-orchestrator/configs/cvdp_des_smoke.yaml --agent codex --model gpt-5.5
+python bench-orchestrator/run_benchmark.py --config bench-orchestrator/configs/cvdp_des_smoke.yaml --agent claude --model claude-sonnet-5
 
 # 3. GRADE in the official reference container (trustworthy). Needs Docker running.
 export RTL_WORKSPACE=C:/Users/naman/Desktop/Projects/RTL_AGENT/workspace_new
