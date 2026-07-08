@@ -110,7 +110,8 @@ stores, same tabs.
 - Backend: `python -m pytest tests/ -q --ignore=tests/test_identity_migration.py
   --ignore=tests/test_mcp.py --ignore=tests/test_mcp_remote_auth.py`.
   ~20 KNOWN env-gap failures in this container (llm_factory, mcp_auth,
-  congestion_summary, perf_read_no_sync, cocotb, sby, sby_engine, xls —
+  congestion_summary, perf_read_no_sync, test_run_cocotb, test_run_sby,
+  sby_engine, xls, and test_linter_tool_multifile [no iverilog/verilator] —
   missing deps/binaries). ZERO new failures allowed; when unsure, `git
   stash` and compare against the clean-tree baseline. After suite runs:
   `git checkout -- tests/fixtures/ test_sby_output.txt` (tests dirty the
