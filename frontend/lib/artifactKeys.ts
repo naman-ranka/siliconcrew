@@ -6,6 +6,7 @@ import type { ArtifactKind } from "@/types";
 //                        slashes/dots; we split only on the FIRST ":")
 //   spec               — the design spec (singleton, no ref)
 //   wave:<runId>       — a run's waveform
+//   wavefile:<path>    — a loose workspace VCD (not tied to a run)
 //   report:<runId>     — a run's report
 //   layout:<runId>     — a run's layout
 //   schematic:<name>   — a schematic by file name
@@ -17,6 +18,7 @@ export type ArtifactKey = string;
 const REF_KINDS: ReadonlySet<string> = new Set([
   "code",
   "wave",
+  "wavefile",
   "report",
   "layout",
   "schematic",

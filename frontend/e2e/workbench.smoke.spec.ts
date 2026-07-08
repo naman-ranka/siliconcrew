@@ -546,7 +546,9 @@ test("palette flow: lint → sim (fail) → waveform → synth → report", asyn
   const dock = page.getByTestId("bottom-dock");
   await dock.getByRole("button", { name: /Runs/ }).click();
   await expect(dock.getByText("sim_0001")).toBeVisible();
-  await expect(dock.getByText(/240\s?ns/)).toBeVisible();
+  // Anchor on the status chip — the run-reason line also mentions 240ns, so a
+  // bare /240ns/ is ambiguous under strict mode.
+  await expect(dock.getByText(/failed @ 240\s?ns/)).toBeVisible();
   await expect(dock.locator('[title="new"]')).toBeVisible();
   await page.screenshot({ path: "e2e-artifacts/wb2-sim-fail.png", fullPage: true });
 

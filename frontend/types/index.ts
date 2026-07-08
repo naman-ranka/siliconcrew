@@ -357,6 +357,7 @@ export type ArtifactKind =
   | "code"
   | "spec"
   | "wave"
+  | "wavefile"
   | "report"
   | "layout"
   | "schematic"

@@ -132,9 +132,17 @@ export const templatesApi = {
     }),
 };
 
-// Models API — the registry for the picker (availability per request).
+// Models API — the registry for the pickers (availability per request).
+// `models`/`default` feed the native picker; `codex_models`/`codex_default`
+// feed the separately curated Codex picker.
 export const modelsApi = {
-  list: () => apiFetch<{ models: ModelInfo[]; default: string }>("/api/models"),
+  list: () =>
+    apiFetch<{
+      models: ModelInfo[];
+      default: string;
+      codex_models?: ModelInfo[];
+      codex_default?: string;
+    }>("/api/models"),
 };
 
 // BYOK API keys (hosted, signed-in). The server NEVER returns a stored key —

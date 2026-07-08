@@ -11,8 +11,11 @@ import pytest
 
 from src.model_catalog import (
     CATALOG,
+    CODEX_CATALOG,
+    CODEX_DEFAULT_MODEL,
     DEFAULT_MODEL,
     PRICING,
+    codex_catalog_entries,
     model_catalog_entries,
     normalize_model_name,
 )
@@ -39,6 +42,25 @@ def test_catalog_entries_have_required_fields_and_pricing():
 
 def test_default_model_is_in_catalog():
     assert any(e["id"] == DEFAULT_MODEL for e in CATALOG)
+
+
+# --- codex catalog (maintained separately from the native CATALOG) -----------
+
+
+def test_codex_catalog_is_openai_only_with_required_fields_and_pricing():
+    entries = codex_catalog_entries()
+    assert entries, "codex catalog must not be empty"
+    for e in entries:
+        assert {"id", "label", "provider", "tier", "hint"} <= set(e)
+        assert e["provider"] == "openai"
+        assert e["tier"] in ("fast", "balanced", "capable")
+        # Every codex id must be priced so cost accounting keeps working.
+        assert e["id"] in PRICING
+        assert e["pricing"] == PRICING[e["id"]]
+
+
+def test_codex_default_model_is_in_codex_catalog():
+    assert any(e["id"] == CODEX_DEFAULT_MODEL for e in CODEX_CATALOG)
 
 
 # --- model on thread + inheritance ------------------------------------------

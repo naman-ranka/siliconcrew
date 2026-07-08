@@ -38,7 +38,9 @@ const TEXT_EXT = /\.(txt|log|rpt)$/;
 export function artifactKeyForFile(path: string): ArtifactKey {
   const runId = runIdFromPath(path);
   const lower = path.toLowerCase();
-  if (lower.endsWith(".vcd") && runId) return `wave:${runId}`;
+  // A run's VCD shares the run-scoped tab; any other VCD still gets the
+  // waveform viewer via the path-backed key (never Monaco-as-text).
+  if (lower.endsWith(".vcd")) return runId ? `wave:${runId}` : `wavefile:${path}`;
   if (lower.endsWith(".gds") && runId) return `layout:${runId}`;
   if (lower.endsWith(".md") && runId) return `report:${runId}`;
   if (lower.endsWith(".svg") && !lower.endsWith(".gds.svg") && !runId) {
@@ -55,6 +57,7 @@ const KIND_LABEL: Record<string, string> = {
   code: "Code",
   spec: "Spec",
   wave: "Waveform",
+  wavefile: "Waveform",
   report: "Report",
   layout: "Layout",
   schematic: "Schematic",
@@ -65,7 +68,7 @@ const KIND_LABEL: Record<string, string> = {
 
 // File-path-backed kinds label by basename (like code); run-scoped kinds label
 // by "<Kind> · <ref>".
-const BASENAME_KINDS = new Set(["code", "schematic", "image", "data", "text"]);
+const BASENAME_KINDS = new Set(["code", "schematic", "image", "data", "text", "wavefile"]);
 
 /** Short human label for a tab / quick-open row. */
 export function artifactLabel(key: ArtifactKey): string {

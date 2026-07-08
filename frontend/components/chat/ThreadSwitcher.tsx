@@ -124,11 +124,13 @@ export function ThreadSwitcher() {
   };
 
   return (
-    <div className="flex items-center gap-2">
+    // min-w-0 + wrap: inside the IDE rail's narrow header the agent toggle and
+    // the chat title must reflow, never push each other out of the clip box.
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
       {/* Agent switcher: one agent occupies the panel at a time (not tabs).
           Only shown when the Codex runtime is enabled on the server. */}
       {codexEnabled && (
-        <div className="inline-flex items-center rounded-md border border-border p-0.5 text-[11px]" role="group" aria-label="Agent">
+        <div className="inline-flex shrink-0 items-center rounded-md border border-border p-0.5 text-[11px]" role="group" aria-label="Agent">
           <button
             type="button"
             aria-pressed={!isCodex}

@@ -73,16 +73,42 @@ CATALOG = [
 PROVIDER_LABELS = {"anthropic": "Anthropic", "openai": "OpenAI", "gemini": "Google"}
 
 
-def model_catalog_entries() -> list[dict]:
-    """Catalog rows with pricing merged in (for the picker)."""
+# Codex runtime model registry — maintained SEPARATELY from CATALOG (the
+# native/LangChain picker). The Codex agent runs on OpenAI models only, and
+# not every OpenAI API model is a sensible Codex model, so its picker gets its
+# own curated list rather than a provider filter over CATALOG. Ids stay in
+# PRICING so cost accounting works for threads pinned to them.
+CODEX_DEFAULT_MODEL = "gpt-5.3-codex"
+
+CODEX_CATALOG = [
+    {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex", "provider": "openai",
+     "tier": "capable", "hint": "Code-tuned Codex default — best for RTL work."},
+    {"id": "gpt-5.5", "label": "GPT-5.5", "provider": "openai",
+     "tier": "capable", "hint": "OpenAI flagship; strongest general reasoning."},
+    {"id": "gpt-5.4-mini", "label": "GPT-5.4 mini", "provider": "openai",
+     "tier": "fast", "hint": "Fast and inexpensive for light edits."},
+]
+
+
+def _entries_with_pricing(catalog: list[dict]) -> list[dict]:
     out = []
-    for e in CATALOG:
+    for e in catalog:
         entry = dict(e)
         price = PRICING.get(e["id"])
         if price:
             entry["pricing"] = price
         out.append(entry)
     return out
+
+
+def model_catalog_entries() -> list[dict]:
+    """Catalog rows with pricing merged in (for the picker)."""
+    return _entries_with_pricing(CATALOG)
+
+
+def codex_catalog_entries() -> list[dict]:
+    """Codex catalog rows with pricing merged in (for the Codex picker)."""
+    return _entries_with_pricing(CODEX_CATALOG)
 
 
 def normalize_model_name(model_name: str | None) -> str:

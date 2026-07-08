@@ -145,11 +145,12 @@ export function artifactKeyForToolCall(
     }
 
     case "waveform_tool": {
-      // Only run-scoped VCDs map (sim_runs/<id>/…); a bare "dump.vcd" is
-      // ambiguous across runs → no button.
+      // Run-scoped VCDs share the run's tab; any other VCD opens by path —
+      // the path-backed key is exact, so no run attribution is guessed.
       const vcd = str(args.vcd_file);
-      const runId = vcd ? runIdFromPath(vcd) : null;
-      return runId ? `wave:${runId}` : null;
+      if (!vcd) return null;
+      const runId = runIdFromPath(vcd);
+      return runId ? `wave:${runId}` : `wavefile:${vcd}`;
     }
 
     case "run_python_analysis":

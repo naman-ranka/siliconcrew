@@ -375,6 +375,10 @@ interface AppState {
   // The registry's declared default model id — the launcher's create modal
   // uses it (a new workspace has no model picker; model is a per-chat choice).
   defaultModel: string | null;
+  // Codex model registry — curated separately from `models` (the Codex agent
+  // runs on its own model set, not a provider filter of the native catalog).
+  codexModels: ModelInfo[];
+  codexDefaultModel: string | null;
 
   // WebSocket
   ws: WebSocket | null;
@@ -520,6 +524,7 @@ interface AppState {
     opts: { terminal: boolean }
   ) => Promise<void>;
   loadWaveformArtifact: (runId: string, vcdPath: string) => Promise<void>;
+  loadWaveformFileArtifact: (path: string) => Promise<void>;
   loadReportArtifact: (runId: string) => Promise<void>;
 
   // Unified activity feed (server pages + live WS events; see selectActivity).
@@ -583,6 +588,8 @@ export const useStore = create<AppState>((set, get) => ({
   models: [],
   modelsLoaded: false,
   defaultModel: null,
+  codexModels: [],
+  codexDefaultModel: null,
 
   ws: null,
   wsSessionId: null,
@@ -1474,11 +1481,18 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   selectThread: async (threadId: string) => {
-    const { currentSession, activeThreadId, ws } = get();
+    const { currentSession, activeThreadId, ws, threads, agentRuntime } = get();
     if (!currentSession || threadId === activeThreadId) return;
     if (ws) ws.close();
+    // The runtime FOLLOWS the active thread, always — a Codex thread selected
+    // via URL (?chat=) or any future cross-runtime path must flip the panel to
+    // Codex mode (violet theme + Codex picker), never leave it showing the
+    // native model list against a Codex conversation.
+    const target = threads.find((t) => t.id === threadId);
+    const runtime = target ? (target.runtime === "codex" ? "codex" : "langchain") : agentRuntime;
     set({
       activeThreadId: threadId, messages: [], queuedMessages: [],
+      agentRuntime: runtime,
       ws: null, wsSessionId: null, wsThreadId: null,
       ...chatTurnResetFields(),
     });
@@ -1524,10 +1538,12 @@ export const useStore = create<AppState>((set, get) => ({
       set({
         models: Array.isArray(data?.models) ? data.models : [],
         defaultModel: typeof data?.default === "string" ? data.default : null,
+        codexModels: Array.isArray(data?.codex_models) ? data.codex_models : [],
+        codexDefaultModel: typeof data?.codex_default === "string" ? data.codex_default : null,
         modelsLoaded: true,
       });
     } catch {
-      set({ models: [], modelsLoaded: true });
+      set({ models: [], codexModels: [], modelsLoaded: true });
     }
   },
 
@@ -2312,6 +2328,18 @@ export const useStore = create<AppState>((set, get) => ({
       makeArtifactKey("wave", runId),
       () => workspaceApi.getWaveform(sid, vcdPath),
       { terminal }
+    );
+  },
+
+  loadWaveformFileArtifact: async (path) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    // A loose VCD has no run to declare it terminal — always revalidate.
+    await get().loadArtifact(
+      makeArtifactKey("wavefile", path),
+      () => workspaceApi.getWaveform(sid, path),
+      { terminal: false }
     );
   },
 

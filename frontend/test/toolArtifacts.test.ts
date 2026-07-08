@@ -119,8 +119,8 @@ describe("artifactKeyForToolCall — schematic_tool → schematic:<svg>", () => 
   });
 });
 
-describe("artifactKeyForToolCall — waveform_tool → wave:<runId from vcd path>", () => {
-  it("maps only when vcd_file lives in a run directory", () => {
+describe("artifactKeyForToolCall — waveform_tool → wave:/wavefile: from vcd path", () => {
+  it("maps a run-directory vcd to the run's wave tab", () => {
     expect(
       artifactKeyForToolCall("waveform_tool", {
         vcd_file: "sim_runs/sim_0003/dump.vcd",
@@ -129,10 +129,14 @@ describe("artifactKeyForToolCall — waveform_tool → wave:<runId from vcd path
     ).toBe("wave:sim_0003");
   });
 
-  it("a bare dump.vcd is ambiguous across runs → null", () => {
+  it("a loose vcd opens by path (exact — no run attribution guessed)", () => {
     expect(
       artifactKeyForToolCall("waveform_tool", { vcd_file: "dump.vcd", signals: [] })
-    ).toBeNull();
+    ).toBe("wavefile:dump.vcd");
+  });
+
+  it("no vcd_file → no button", () => {
+    expect(artifactKeyForToolCall("waveform_tool", { signals: [] })).toBeNull();
   });
 });
 
