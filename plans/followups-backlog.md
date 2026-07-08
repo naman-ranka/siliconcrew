@@ -72,3 +72,27 @@ folding into the documented baseline too.)
   the waveform viewer side by side. Cosmetic; self-resolves as tabs close.
 - **WaveArtifact fallback:** for a cleaned-up run it says "run isn't in the list"
   when it could fall back to opening the VCD by path via the new `wavefile:` key.
+
+---
+
+## Round-2 (surfaced while implementing/verifying batch-1 — mostly resolved; two new small ones)
+
+Batch-1 (branch `claude/followups-batch-1`) resolved #1–#7 above (see the
+review-batch1-* and verify-codex-model-live reports). #1 was implemented by
+gating on the account's live `model/list` (NOT CODEX_CATALOG — the default
+`gpt-5.3-codex` isn't account-valid). #7's literal `wavefile:` fallback proved
+infeasible (VCD filename is per-run discovered, not a convention) so the honest
+cached-or-empty version shipped instead. Two new small follow-ups remain:
+
+### 8. Codex picker initial label inherits the native model
+The CodexModelPicker's INITIAL button label shows the session's native
+`model_name` (e.g. "gemini-3.5-flash") until the user picks a Codex model;
+selecting one fixes it. Cosmetic residual of X2C-6. Fix: default the Codex
+picker's displayed label to the Codex default, not the native model_name.
+
+### 9. No model-attribution line in Codex turn logs
+The turn logs prove nonzero tokens but carry no "model=<id>" attribution, so
+logs can't distinguish "picked model applied" from "omitted → account default"
+(both are correct behavior for #1, but not provable from logs). Fix: one
+`[CODEX-TIMING] … model=<effective_model or 'account-default'>` line if we ever
+want the applied-model provable post-hoc.
