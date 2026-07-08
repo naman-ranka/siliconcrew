@@ -2266,8 +2266,34 @@ async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] 
     return JSONResponse(parsed, headers={"Cache-Control": cache_control})
 
 
+# VCDVCD loads the ENTIRE dump into memory and we serialize per-signal
+# transitions to JSON, so an oversized VCD stalls the request thread and blows
+# up the response. Cap BEFORE parsing and return an honest "too large" signal
+# (mirroring workspace_fs.read_smart_file's text cap) — the viewer offers the
+# raw download instead. Sim-tool VCDs are KB-MB; the "open any workspace VCD"
+# feature is what makes a hundreds-of-MB dump reachable.
+VCD_PARSE_CAP = 25_000_000  # 25 MB
+
+
 def _parse_vcd_file(vcd_path: str, filename: str) -> dict:
     """Parse a VCD into the viewer payload (blocking; run via asyncio.to_thread)."""
+    try:
+        size = os.path.getsize(vcd_path)
+    except OSError:
+        size = 0
+    if size > VCD_PARSE_CAP:
+        # Honest too-large payload: same key shape as the success path so the
+        # viewer can branch on ``tooLarge`` without crashing on missing fields.
+        return {
+            "filename": filename,
+            "tooLarge": True,
+            "size": size,
+            "endtime": None,
+            "timescale": None,
+            "unitSeconds": None,
+            "signalCount": 0,
+            "signals": [],
+        }
     try:
         from vcdvcd import VCDVCD
 
@@ -2346,6 +2372,8 @@ def _parse_vcd_file(vcd_path: str, filename: str) -> dict:
 
         return {
             "filename": filename,
+            "tooLarge": False,
+            "size": size,
             "endtime": endtime,
             "timescale": timescale,
             "unitSeconds": unit_seconds,  # seconds per VCD tick (None/1.0 = unknown)
