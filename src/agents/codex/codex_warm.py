@@ -77,6 +77,10 @@ class WarmWorker:
     turn_lock: asyncio.Lock
     last_used: float = field(default_factory=time.monotonic)
     closed: bool = False
+    # Account-auth model/list gate, fetched once at spawn (see
+    # CodexEngine._fetch_allowed_models) and reused for every turn this worker
+    # serves. None = BYOK / list unavailable → the picked model is omitted.
+    allowed_models: Optional[frozenset] = None
 
     async def close(self) -> None:
         if self.closed:
