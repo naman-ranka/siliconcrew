@@ -6,6 +6,8 @@ Provides REST endpoints and WebSocket streaming for the Next.js frontend.
 """
 
 import os
+import sys
+import time
 import json
 import uuid
 import asyncio
@@ -1419,6 +1421,26 @@ def _pending_tool_call_ids(messages) -> list:
     return sorted(pending)
 
 
+def _log_chat_timing(thread_id: str, turn_id: str, event: str, **fields: object) -> None:
+    """Emit a `[CHAT-TIMING]` line for the native (LangChain/LangGraph) chat
+    turn path, mirroring the `[CODEX-TIMING]` format so Cloud Run logs expose
+    where a native turn spends its time — most importantly send->first-token.
+
+    Log-only and defensive: any failure here must NEVER break or delay a turn,
+    so the whole body is wrapped and swallowed. Every line carries thread +
+    turn so turns 1 vs 2+ in the same conversation can be correlated (the
+    implicit-prompt-caching signal). Durations use time.monotonic().
+    """
+    try:
+        extra = "".join(f" {k}={v}" for k, v in fields.items())
+        print(
+            f"[CHAT-TIMING] thread={thread_id} turn={turn_id} event={event}{extra}",
+            file=sys.stderr,
+        )
+    except Exception:
+        pass
+
+
 @app.websocket("/api/chat/{session_id:path}")
 async def chat_websocket(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for streaming chat."""
@@ -1718,6 +1740,17 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
                 await _send({"type": "start"})
 
+                # --- server-side timing instrumentation (additive; log-only) ---
+                # The native turn had no first-token / LLM-latency signal; these
+                # `[CHAT-TIMING]` lines (mirror of `[CODEX-TIMING]`) make the
+                # send->first-token split fall out of Cloud Run logs. Monotonic
+                # reads only; never awaits on the hot path. first_token / first
+                # model response fire exactly once per turn via these flags.
+                _chat_turn_start = time.monotonic()
+                _first_token_logged = False
+                _first_response_logged = False
+                _log_chat_timing(thread_id, turn_id, "turn_start")
+
                 # Bounded: a slow client backpressures the drain task instead
                 # of building unbounded memory.
                 event_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
@@ -1852,6 +1885,15 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             continue
 
                         mode, data = payload
+                        # First LLM round-trip: the first astream event of the
+                        # turn, before any token is forwarded — isolates model
+                        # latency from queue/forward overhead. Fires once.
+                        if not _first_response_logged:
+                            _first_response_logged = True
+                            _log_chat_timing(
+                                thread_id, turn_id, "first_model_response",
+                                elapsed=f"{time.monotonic() - _chat_turn_start:.3f}",
+                            )
                         if mode == "messages":
                             chunk, meta = data
                             if (meta or {}).get("langgraph_node") == "agent":
@@ -1862,6 +1904,15 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                                         segment_id, segment_text = chunk_id, ""
                                         delta_gate = 0.0  # new segment: emit at once
                                     segment_text += piece
+                                    # THE number: send->first streamed model text
+                                    # token. Fires once; compare turn 1 vs 2+ to
+                                    # see implicit prompt caching working.
+                                    if not _first_token_logged:
+                                        _first_token_logged = True
+                                        _log_chat_timing(
+                                            thread_id, turn_id, "first_token",
+                                            elapsed_since_start=f"{time.monotonic() - _chat_turn_start:.3f}",
+                                        )
                                     now = asyncio.get_running_loop().time()
                                     if now - delta_gate >= _WS_DELTA_INTERVAL_SEC:
                                         delta_gate = now
@@ -1949,6 +2000,13 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     })
                 else:
                     await _send({"type": "done", "tokens": tokens})
+
+                _log_chat_timing(
+                    thread_id, turn_id, "turn_end",
+                    elapsed=f"{time.monotonic() - _chat_turn_start:.3f}",
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                )
 
                 # Persist workspace changes to durable storage in hosted mode
                 # (no-op locally) as a background task — this is the ONE slow,
