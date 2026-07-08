@@ -5,7 +5,7 @@ vi.mock("@/lib/api", () => ({
   projectsApi: {},
   sessionsApi: {},
   chatApi: {},
-  workspaceApi: { listWaveforms: vi.fn().mockResolvedValue([]), getWaveform: vi.fn() },
+  workspaceApi: { listWaveforms: vi.fn().mockResolvedValue([]), getWaveform: vi.fn(), downloadRawFile: vi.fn().mockResolvedValue(undefined) },
   workbenchApi: {},
 }));
 
@@ -77,6 +77,31 @@ describe("WaveformViewer", () => {
     });
     render(<WaveformViewer />);
     expect(screen.getAllByText("count")).toHaveLength(1);
+  });
+
+  it("surfaces the backend too-large signal instead of an empty 'no signals' state", () => {
+    // Backend caps VCD parsing at 25 MB and returns tooLarge + size with no
+    // signals. The viewer must own that honestly, not fall through to the normal
+    // renderer (which would show "No signals found" / "0 signals" / "End: null").
+    useStore.setState({
+      waveformData: {
+        filename: "sim_runs/sim_0009/huge.vcd",
+        tooLarge: true,
+        size: 31_457_280, // 30 MB
+        endtime: null,
+        timescale: null,
+        unitSeconds: null,
+        signalCount: 0,
+        signals: [],
+      } as any,
+    });
+    render(<WaveformViewer />);
+    expect(screen.getByTestId("waveform-too-large")).toBeInTheDocument();
+    expect(screen.getByText(/too large to render/i)).toBeInTheDocument();
+    expect(screen.getByText(/30\.0 MB/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
+    // The dishonest empty state must NOT appear.
+    expect(screen.queryByText(/No signals found/i)).not.toBeInTheDocument();
   });
 
   it("follows the selected run's VCD even when another VCD is already loaded", async () => {

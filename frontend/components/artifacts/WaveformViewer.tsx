@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, RefreshCw, ZoomIn, ZoomOut, ChevronRight, ChevronDown, Crosshair, Maximize2 } from "lucide-react";
+import { Activity, RefreshCw, ZoomIn, ZoomOut, ChevronRight, ChevronDown, Crosshair, Maximize2, Download } from "lucide-react";
 import { useStore } from "@/lib/store";
+import { workspaceApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { IconTooltip } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,6 +17,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { WaveformData, WaveformSignal } from "@/types";
+
+// Mirrors CodeArtifact's oversized-file readout so the "too large" states read
+// consistently across viewers.
+function humanSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 const NAME_COL = 168; // px
 const LANE_H = 26;
@@ -190,6 +199,41 @@ export function WaveformViewer({ data: dataProp, runId: runIdProp }: WaveformVie
       >
         Run simulation to generate VCD waveforms from your testbench.
       </EmptyState>
+    );
+  }
+
+  // Honest oversized state: the backend caps VCD parsing and returns
+  // `tooLarge` with no signals. Rendering the normal viewer here would show a
+  // misleading "No signals found" / "0 signals" / "End: null" — surface the cap
+  // and offer the raw download instead (mirrors CodeArtifact's too-large path).
+  if (waveformData?.tooLarge) {
+    const name = waveformData.filename.includes("/")
+      ? waveformData.filename.split("/").slice(-2).join("/")
+      : waveformData.filename;
+    const downloadWaveform = async () => {
+      if (!currentSession) return;
+      try {
+        await workspaceApi.downloadRawFile(currentSession.id, waveformData.filename);
+      } catch {
+        /* best-effort: download is an escape hatch, surfaced via browser errors */
+      }
+    };
+    return (
+      <div
+        className="flex flex-col items-center justify-center h-full p-8 text-center"
+        data-testid="waveform-too-large"
+      >
+        <div className="h-10 w-10 rounded-lg bg-surface-2 flex items-center justify-center mb-3">
+          <Activity className="h-5 w-5 text-muted-foreground" />
+        </div>
+        <p className="text-sm font-medium text-foreground font-mono">{name}</p>
+        <p className="text-xs mt-1 text-muted-foreground">
+          {humanSize(waveformData.size ?? 0)} · Waveform too large to render — download instead
+        </p>
+        <Button size="sm" className="mt-4 gap-2" onClick={downloadWaveform}>
+          <Download className="h-4 w-4" /> Download
+        </Button>
+      </div>
     );
   }
 
