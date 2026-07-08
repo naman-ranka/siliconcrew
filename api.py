@@ -2235,13 +2235,32 @@ async def get_code_file(session_id: str, filename: str, _acl: Optional[str] = De
 
 @app.get("/api/workspace/{session_id:path}/waveforms")
 async def list_waveform_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
-    """List VCD files in the workspace."""
-    def work() -> List[str]:  # F6: hydration + listdir off-thread
+    """List every VCD file in the workspace, recursively.
+
+    Returns workspace-relative POSIX paths (not bare names) so a nested dump
+    under ``sim_runs/<id>/`` is both listed AND fetchable via the sibling
+    ``/waveform/{filename:path}`` route. A non-recursive ``os.listdir`` used to
+    hide every sim-run VCD. Read-only: a plain walk, no row materialization.
+    ``iter_workspace_files`` is deliberately NOT used here — it prunes
+    ``sim_runs``/``synth_runs``, which is exactly where these VCDs live.
+    """
+    def work() -> List[str]:  # F6: hydration + walk off-thread
         workspace = _resolve_workspace(session_id)
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        return [f for f in os.listdir(workspace) if f.endswith(".vcd")]
+        vcds: List[str] = []
+        for dirpath, dirnames, filenames in os.walk(workspace):
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in ("__pycache__", "node_modules") and not d.startswith(".")
+            ]
+            for name in filenames:
+                if name.endswith(".vcd"):
+                    rel = os.path.relpath(os.path.join(dirpath, name), workspace)
+                    vcds.append(rel.replace(os.sep, "/"))
+        vcds.sort()
+        return vcds
 
     return await asyncio.to_thread(work)
 
