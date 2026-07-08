@@ -121,7 +121,7 @@ describe("workbenchUiStore: persistence (partialize)", () => {
     const raw = localStorage.getItem("sc-workbench-ui");
     expect(raw).toBeTruthy();
     const persisted = JSON.parse(raw!);
-    expect(persisted.version).toBe(1);
+    expect(persisted.version).toBe(2);
     expect(Object.keys(persisted.state).sort()).toEqual(["lastSessionId", "perSession"]);
     expect(persisted.state.perSession["s1"].openTabs).toEqual(["spec"]);
     // S1: the /workbench redirect shim reads this back after a reload.
