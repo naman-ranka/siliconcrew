@@ -74,6 +74,14 @@ def regrade(run_dir: Path, image: str, write: bool = False, stage_root: Path = D
     # must never read the harness from the run dir. Legacy runs (pre-fix) still have a materialized
     # harness/src as a fallback.
     dataset = prob.get("dataset")
+    # The per-run run_config.json has its dataset path REDACTED (leak fix — a stuck agent used to read it
+    # to reach the raw dataset). Grading still needs the real dataset, so fall back to $RTL_DATASET or the
+    # canonical path when the run_config copy is redacted/missing.
+    if not dataset or dataset == "<redacted>" or not Path(dataset).exists():
+        dataset = os.environ.get("RTL_DATASET") or (
+            "C:/Users/naman/Desktop/Projects/RTL_AGENT/cvdp_benchmark/data/"
+            "cvdp_v1.0.2_agentic_code_generation_no_commercial.jsonl"
+        )
     row = None
     if dataset and Path(dataset).exists():
         try:

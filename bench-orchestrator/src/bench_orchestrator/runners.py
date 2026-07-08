@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -151,31 +152,12 @@ class ClaudeRunner(BaseRunner):
 
     def run(self, prompt: str, run_dir: Path, model: str, timeout_sec: int) -> RunnerResult:
         claude = _require_cli("claude")
-        cmd = [
-            claude,
-            "-p",
-            "--dangerously-skip-permissions",
-            "--output-format", "stream-json",
-            "--verbose",
-            "--include-partial-messages",
-            "--model", model,
-            "--add-dir", str(Path.cwd()),
-        ]
+        cmd = [claude, *self._BASE, "--model", model, "--add-dir", str(Path.cwd())]
         return _run_json_stream_agent(cmd, prompt, run_dir, "claude", timeout_sec)
 
     def resume(self, prompt: str, run_dir: Path, continuation_dir: Path, model: str, timeout_sec: int) -> RunnerResult:
         claude = _require_cli("claude")
-        cmd = [
-            claude,
-            "-p",
-            "--dangerously-skip-permissions",
-            "--output-format", "stream-json",
-            "--verbose",
-            "--include-partial-messages",
-            "--continue",
-            "--model", model,
-            "--add-dir", str(Path.cwd()),
-        ]
+        cmd = [claude, *self._BASE, "--continue", "--model", model, "--add-dir", str(Path.cwd())]
         return _run_json_stream_agent(cmd, prompt, continuation_dir, "claude_resume", timeout_sec)
 
 
@@ -267,6 +249,19 @@ def _run_and_stream(
     if extra_stdout_path:
         extra_stdout_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Default the Claude Code output-token cap high so long agentic runs don't die mid-flight on the
+    # 32000 default ("response exceeded the 32000 output token maximum" — observed truncating hdbn_codec
+    # BEFORE it could verify, a pure infra fail). Respect an explicit shell override; harmless for codex/agy.
+    env = {**os.environ}
+    env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000")
+    # Claude Code on Windows needs git-bash; if the env var is unset it intermittently fails to start with
+    # an empty transcript ("requires git-bash ... set CLAUDE_CODE_GIT_BASH_PATH") — observed killing a run
+    # before the agent did anything. Pin it if the default install path exists (respect an explicit override).
+    if not env.get("CLAUDE_CODE_GIT_BASH_PATH"):
+        _bash = r"C:\Program Files\Git\bin\bash.exe"
+        if os.path.exists(_bash):
+            env["CLAUDE_CODE_GIT_BASH_PATH"] = _bash
+
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE if prompt_stdin is not None else None,
@@ -275,6 +270,7 @@ def _run_and_stream(
         encoding="utf-8",
         bufsize=1,
         cwd=Path.cwd(),
+        env=env,
     )
 
     if prompt_stdin is not None:
@@ -414,14 +410,7 @@ def _run_agy_transcript(cmd: list[str], out_dir: Path, event_name: str, timeout_
     )
 
 
-def _run_text_agent(
-    cmd: list[str],
-    prompt_stdin: str | None,
-    out_dir: Path,
-    event_name: str,
-    timeout_sec: int,
-    stdout_is_events: bool = False,
-) -> RunnerResult:
+def _run_text_agent(cmd: list[str], prompt_stdin: str | None, out_dir: Path, event_name: str, timeout_sec: int) -> RunnerResult:
     out_dir.mkdir(parents=True, exist_ok=True)
     raw = out_dir / "raw"
     raw.mkdir(parents=True, exist_ok=True)
@@ -435,7 +424,7 @@ def _run_text_agent(
         prompt_stdin=prompt_stdin,
         stdout_path=stdout,
         stderr_path=stderr,
-        extra_stdout_path=events if stdout_is_events else None,
+        extra_stdout_path=None,
         timeout_sec=timeout_sec,
     )
     if stdout.exists():
@@ -444,11 +433,10 @@ def _run_text_agent(
             last.write_text(content[-20000:], encoding="utf-8", newline="\n")
         except Exception:
             pass
-    if not stdout_is_events:
-        _write_jsonl(events, [
-            {"type": "thread.started", "thread_id": f"{event_name}-{int(started)}"},
-            {"type": "agent.completed" if exit_code == 0 else "agent.failed", "agent": event_name, "exit_code": exit_code},
-        ])
+    _write_jsonl(events, [
+        {"type": "thread.started", "thread_id": f"{event_name}-{int(started)}"},
+        {"type": "agent.completed" if exit_code == 0 else "agent.failed", "agent": event_name, "exit_code": exit_code},
+    ])
     return RunnerResult(
         status="completed" if exit_code == 0 else "failed",
         exit_code=exit_code,

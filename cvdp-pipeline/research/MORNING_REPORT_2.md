@@ -6,7 +6,14 @@ pinned osvb container, every workspace leak-scanned (0 leaks all night).*
 
 ## 1. THE MEASURED NUMBER
 
-**FINAL: 63 PASS / 92 of 92 covered = 68.5% best-known** — vs the March-2026 baseline of 37/92 (40%).
+> ⚠️ **CORRECTION (2026-06-25 audit, see `AUDIT_XLS_TOOLING_LEAK.md`):** the 63 below is **inflated by
+> in-place harness leakage** in pre-leak-fix runs (the agent ran the hidden `src/test_runner.py` in
+> place — invisible to our verbatim leak scan). Only **50/92 have a confirmed post-leak-fix pass**;
+> 3 are **confirmed false passes** (cache_controller, des_0001, elevator_control fail on clean re-run);
+> 10 are unconfirmed pending clean re-runs. **Honest number: 50 floor / ~54 realistic / 60 ceiling**,
+> not 63. All June-10-onward runs are clean; the 50 are trustworthy.
+
+**FINAL (as originally measured, NOW SUPERSEDED): 63 PASS / 92 covered** — vs March-2026 baseline 37/92 (40%).
 **100% benchmark coverage**: every problem has >=1 trustworthy container verdict. Tail results (09:00):
 aes_0012 FAIL (real run — genuine, token-death tag cleared); ph_0028 FAIL 0/15 + rgb_0001 FAIL 0/1
 (first-ever verdicts); bst_0001 limit-stub again (keeps incomplete tag — the one soft cell in 92).

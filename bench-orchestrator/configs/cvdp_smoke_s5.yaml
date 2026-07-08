@@ -4,13 +4,13 @@
 #   cvdp-pipeline/regrade_docker.py --run-dir <run>   (needs Docker + the osvb image).
 # NOTE: for real (non-fake) agents, export RTL_WORKSPACE so the orchestrator's workspace
 #       discovery matches where the rtl-codex MCP server writes sessions (its .env root).
-name: cvdp_smoke
+name: cvdp_smoke_s5
 project:
   enabled: false
-  name: bench_cvdp_smoke
+  name: bench_cvdp_smoke_s5
 defaults:
   agent: claude
-  model: claude-sonnet-4-6
+  model: claude-sonnet-5
   flow: auto
   mcp_server: rtl-codex
   timeout_sec: 5400

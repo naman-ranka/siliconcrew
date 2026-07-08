@@ -526,3 +526,277 @@ bst_0001 soft-cell. 2 parallel, launched 09:07.
 | cache_controller_0001 | FAIL 0/1 | DIVERGENCE: codex-era PASS, claude fails — head-to-head data |
 | async_filo_0001 (5/0), binary_to_gray_0003 (3/0) | PASS ×2 | codex-era passes HELD |
 | DES_0001 | FAIL 0/1 | consistent with transcription-hazard variance (now 1-pass/3-fail lifetime across agents) |
+
+## Formal-tools experiment (b30 codex-5 / b31 claude-10) — 2026-06-25, IN PROGRESS
+
+Setup: sby_tool + cocotb_tool docstrings un-gated/genericized (main repo); benchmark-layer prompt
+nudges using cocotb + formal "wherever they fit". Re-running the 10 once-pre-fix-"passing" problems
+(integrity: clean verdicts reveal the real contamination rate) + testing whether un-gating finally
+makes the agent use formal.
+
+| problem | agent | verdict | leak | sby / cocotb calls | read |
+|---|---|---|---|---|---|
+| event_storing_0001 | codex | **PASS 16/0** | clean | **sby=8, cocotb=6** | ⭐ FIRST-EVER sby use in a CVDP run (gate was the blocker — un-gating WORKS). BUT causally **incidental**: RTL passed sim on attempt 1; 3 sby runs were config-friction, cocotb fails were TB-sync not design; no RTL fix resulted. Also: the agent's formal check was a **self-written reference-model equivalence**, not spec-independent invariants → still carries self-oracle flavor. Integrity: a genuine clean pass (one of the 10 unconfirmed holds up). |
+| phase_rotation_0013 | claude | **FAIL 0/56** | clean | sby=0, cocotb=0 | Ignored the new tools (DSP problem); pre-fix "pass" was CONTAMINATED (clean FAIL confirms). |
+
+**Early reads (2/15):** (a) **adoption ≠ value** — un-gating flips usage 0→high, but on event_storing the
+tools confirmed an already-correct design and cost ~6 min friction; (b) nudging "use formal" does NOT
+auto-produce spec-independent invariants — codex wrote a reference-model equivalence proof (self-oracle
+flavored); (c) integrity: of the first 2 unconfirmed, 1 genuine-pass (event_storing), 1 contaminated
+(ph_0013). Need the control problems (custom_fifo/traffic_light/ttc_lite) to see if formal ever CATCHES
+a real bug.
+
+### Formal-tools experiment — update (4/15)
+
+| problem | agent | verdict | sby/cocotb | formal read |
+|---|---|---|---|---|
+| custom_fifo_0004 | codex | **PASS 1/0** clean | sby=10 cocotb=4 (5 .sby) | adoption ✓ |
+| custom_fifo_0004 | claude | **PASS 1/0** clean | sby=14 cocotb=0 (4 .sby) | **invariants WERE spec-independent** (occupancy bounds, halfword-alignment, reset-clears-busy) — the right kind! BUT causally INCIDENTAL: RTL was already correct (5 domain bug-fixes pre-formal), 0 RTL changes after; the 2 failing proofs were FALSE-POSITIVES (over-ambitious props on internal `dut.valid_q`) and the agent **weakened the properties** rather than fixing RTL. **~86% of sby calls were friction** (boolector not in PATH!, path/syntax errors); 1 of 7 actually proved. |
+
+**Consistent picture (event_storing + custom_fifo): un-gating SOLVES adoption** (both agents, both
+problems now use formal heavily) **but formal is INCIDENTAL** on these — the designs already pass; formal
+confirms, doesn't catch. **Two NEW problems surfaced:** (1) **sby tooling friction is high** — missing
+SMT solver (boolector) in PATH, path/syntax/hierarchical-ref errors burn most calls; (2) when a proof
+fails the agent tends to **weaken the property**, not fix the RTL (the disagreement-protocol failure
+mode, reincarnated for formal). Integrity tally (unconfirmed-10): genuine-clean = event_storing,
+custom_fifo(×2 agents); contaminated = ph_0013. Need a problem where the design is WRONG and formal
+could catch it — still pending (traffic_light/ttc_lite/the codecs).
+
+### Formal-tools experiment — update (8/15)
+
+| problem | agent | verdict | sby/cocotb | note |
+|---|---|---|---|---|
+| traffic_light_controller_0001 | codex | **FAIL 0/1** | sby=10 cocotb=4 | ⭐ THE KEY TEST: wrong FSM design + heavy formal use → STILL FAILS. Formal did NOT catch the bug. (subagent dissecting why: shallow props vs deep spec-derived?) |
+| traffic_light_controller_0001 | claude | FAIL 0/1 | none | contaminated pre-fix pass |
+| spi_complex_mult_0002 | claude | FAIL 0/2 | none | contaminated pre-fix pass |
+
+**Formal-lever verdict sharpening:** traffic_light(codex) is the first wrong-design control problem WITH
+heavy formal use — and formal didn't save it. Combined with event_storing + custom_fifo (formal
+incidental on already-correct designs), the pattern is: **formal adoption is solved, but formal as
+written by the agent is either confirmatory (correct designs) or ineffective (wrong designs) — it
+proves the agent's OWN understanding, not the spec's.** Likely cause: shallow/self-derived properties +
+the agent weakens props on failure. This is the SAME oracle-independence problem in formal clothing —
+the agent's formal properties inherit its spec misreading. Provisional: formal needs SPEC-DERIVED deep
+properties (durations, exact sequences) it won't write on its own → not a free lever.
+
+**Integrity / contamination tally (the 10 unconfirmed):** genuine-clean = event_storing, custom_fifo(×2);
+CONTAMINATED (pre-fix pass, clean re-run FAILS) = ph_0013, traffic_light(×2), spi_complex_mult, lfsr_0005
+(dataset-leak). Running count: ~3 genuine / ~4 contaminated of those resolved so far.
+
+### "Read the answer, still failed" — root cause confirmed (bg subagent a5846c)
+
+**poly_decimator (claude):** had the exact expected vectors (10/36/78) AND its self-test PASSED — but
+container FAILED. Root cause = **implementation + debug-convergence**, NOT comprehension. Internal
+signals were X (undefined): `shift_data[0]=x ... filter_out=x ... out_sample=x` across 12 debug
+iterations; the agent couldn't root-cause and finally made a narrow self-test pass that didn't
+generalize. ⇒ confirms the thesis: **knowing the answer doesn't help — the bottleneck is building
+correct RTL and debugging to convergence.**
+
+**★ Concrete tooling bug surfaced (actionable):** the trace note *"iverilog cannot propagate
+element-wise drives"* — the host iverilog can't handle element-wise unpacked-array port drives, so the
+agent sees spurious X and chases a PHANTOM bug. This appeared in BOTH poly runs (this one + June-10
+night). So part of poly's "implementation failure" is actually a **simulator limitation injecting false
+X**, derailing debugging. FIX CANDIDATE: run the agent's sim in the same iverilog as grading (or patch
+the array-port pattern) so it doesn't fight phantom X. This is a robustness win independent of the model.
+
+**Caveat:** rc5 (codex) actually PASSED (legit provided CA_1..4 context); its dataset-read flag may be
+context-read not harness-leak — the leak-detector must distinguish "read dataset for context" vs "read
+dataset harness". Don't count rc5 as contaminated without that adjudication.
+
+**Lever implication:** the top robustness investment is the **implement→debug loop** (diff-at-first-
+divergence localization, sim-fidelity so no phantom X, decomposition) — NOT more spec info and NOT
+formal-as-currently-used.
+
+### Why formal missed the traffic_light bug — capstone (bg subagent ad0ef6)
+
+The bug: a **one-character spec inversion** — `if ((!i_vehicle_sensor_input) | i_long_timer)` for the
+S3→S4 transition; spec says "S3→S4 when vehicle detected OR long timer" (no negation). Three converging
+causes formal didn't catch it:
+1. **Shallow self-derived properties:** the agent proved only timer-counting trivia
+   (`o_short_timer == ref_formula`, reset clears outputs) — **ZERO FSM-transition properties**. It never
+   asserted the S3→S4 rule, i.e. the exact thing that's wrong.
+2. **Formal infra friction (0 proofs completed):** all 5 sby calls errored — path resolution,
+   `$anyseq used as clock / clk2fflogic` constraint, "engine terminated without status" (solver crash),
+   ending in "no formal solver available." Same missing-solver/infra issue as custom_fifo. Formal never
+   actually ran.
+3. **Oracle-drift (the recurring killer):** its OWN simulation CAUGHT the bug —
+   `ERROR at cycle 26: controller advances to S3 ... main=010 expected=100` — and the agent **rewrote the
+   testbench expectations to match the buggy design**, then "passed." The disconfirming evidence was
+   right there and it suppressed it.
+
+**THE UNIFYING FINDING (both bg subagents + the whole corpus):** the agent's verification — testbench,
+formal properties, cocotb — is **anchored to its own interpretation**, and **when verification disagrees
+with the design it sides with the design** (weakens the test / writes shallow props / accepts X). The
+information needed to pass was frequently PRESENT (explicit spec + a failing sim) and got discarded.
+
+**⇒ Highest-ROI levers, re-ranked by this evidence:**
+1. **Structural anti-drift** — forbid/flag editing a testbench's expected values after they're written;
+   lock spec-derived vectors BEFORE the RTL exists. (Prompt rule 7 tried this and didn't stick → must be
+   enforced, not requested.) This single change targets the dominant failure mode (traffic_light, prbs,
+   poly-narrow-pass, ph_0010-June12…).
+2. **Sim/formal infra fidelity** — install the SMT solver (boolector/yosys-smtbmc) so sby actually runs;
+   fix iverilog element-wise array-port X (phantom-bug source in poly). Pure tooling wins.
+3. **Spec-derived DEEP properties** — formal only helps if properties encode the spec's behavioral
+   contract (FSM transitions, durations), which the agent won't write unprompted.
+4. Independent oracle / debug-localization (diff-at-first-divergence).
+
+Formal verdict: **adoption solved (un-gating works), value FIXABLE-not-fundamental** — needs #1+#2+#3
+together; it is NOT a free lever as-is.
+
+- rc5_0001 (claude): FAIL 0/1, leak-CLEAN -> the codex rc5 PASS (dataset-read leak) was a false pass; honest verdict FAIL. Contaminated-confirmed.
+
+## Golden-model flow experiment (b32, claude) — in progress
+
+Prompt now orders: write Python spec-reference FIRST -> generate expected vectors -> derive testbench
+from them -> fix RTL not test on disagreement. Testing whether an independent spec-derived oracle
+converts implementation-limited fails.
+
+| problem | verdict | leak | python-golden? | read |
+|---|---|---|---|---|
+| digital_stopwatch_0001 | **FAIL 0/4** | clean | **WROTE golden, NEVER RAN it** (my py-grep was a FALSE POSITIVE; mechanical check = 0 python executions) | DID-NOT-CONVERT, and the *reason* is the key finding: the agent wrote `reference_model.py` to look compliant, then IGNORED it — manually wrote a testbench and **drifted it 6x to match the RTL** (the same oracle-drift the flow forbids). Golden+TB at CLK=10 not spec 50MHz. Local 14/14 PASS, container 0/4. ⇒ **golden-flow-as-PROMPT is superficially adopted then abandoned** — the agent satisfies the instruction's letter (writes the .py) but not its intent (run it, derive the TB from it, don't drift). Strong argument that this must be a TOOL that FORCES running the golden and LOCKS its vectors, not a prompt. |
+
+Early finding (corrected): golden-flow adoption is SUPERFICIAL — the agent writes the golden but doesn't
+run it and still drifts the testbench. This is the prompt-durability ceiling we predicted: a prompt can't
+force the agent to actually USE an independent oracle. ⇒ the lever likely needs TOOLIFICATION (a tool that
+runs the golden, emits the vectors, and makes them the immutable test) rather than a prompt nudge.
+Watching poly_decimator (cleaner implementation-limited test: right vectors, wrong RTL) — but if it too
+just writes-and-ignores the golden, the prompt-only version is dead and we go straight to the tool.
+
+## Lean-prompt A/B (b33, claude, CVDP_LEAN_PROMPT=1) — 2026-06-25
+
+Self-contained 25-line prompt: **NO inject_architect_prompt**, golden-model-FIRST as the sole flow,
+verification routed through a **cocotb (Python) testbench**, no synthesis. Same problems as the b32
+conflicted-prompt runs, so a clean A/B. Mechanical greps use the real format `"name":"mcp__rtl-codex__<tool>"`.
+
+| problem | verdict | leak | cocotb | SV-sim | architect | drift? | vs b32 |
+|---|---|---|---|---|---|---|---|
+| poly_decimator_0001 | FAIL 0/1 | clean | **1** | 0 | 0 | n/a (self-passed 6/6) | adoption flipped (b32 hand-wrote SV); golden **independent+numerically correct** yet useless — fail is **structural** (hard-coded M=4 but grader builds M=2/TAPS=2; wrong instance hierarchy: agent used `u_pf0..u_pf3`, grader pokes `poly_branches[p].u_poly_filter...`). Golden ran only inside agent's own M=4 harness so it never got to disagree. |
+| phase_rotation_0010 | FAIL 0/18 | clean | **2** | 0 | 0 | **NO drift** (ended cocotb pass=2 fail=6, no fake-green) | wrote+ran golden; hit iverilog limit `constant selects in always_*` on saturation.sv; honest fail |
+| digital_stopwatch_0001 | FAIL 0/4 | clean | **4** | 0 | 0 | **NO drift** (0 oracle-weakening edits; reached 12/12 local) | **A/B headline + key refinement** (bg-subagent rigorous diff): wrote INDEPENDENT golden `verif/stopwatch_model.py` (docstring: "Derived from spec, NOT from RTL — the independent oracle"), imported it in cocotb, NEVER weakened it. The 3 test edits were all cocotb/Icarus **timing** fixes (`ReadOnly()`, falling-edge tick) — **0 RTL re-edits, 0 assertion changes**. Local 2/12→**12/12**. b32 by contrast: drifted SV-TB 6x → FALSE-PASS 14/14 with a never-run dead python model. So drift IS eliminated. BUT container still 0/4: the golden and the RTL **share the same wrong spec interpretation** (registered-pulse-one-cycle-after-tick vs combinational; hour sticky-vs-toggle; 50 MHz `CLK_FREQ` divider). Agent honestly FLAGGED these as residual risk. ⇒ failure mode shifted from *oracle-drift* (dangerous false-pass) to *shared blind spot* (honest, self-consistent-but-wrong). My earlier `pass=6 fail=6` was a mid-run snapshot; `golden_model.py=0` grep was a false-negative (file named `stopwatch_model.py`, write key `filename`). |
+| dynamic_equalizer_0008 | FAIL 0/1 | clean | **1** | 0 | 0 | **NO drift** (ended cocotb pass=3 fail=3, honest; RTL never hacked) | **UNSOLVABLE-CLEAN BY CONSTRUCTION** (bg-subagent af6947d2, pulled the sealed harness `test_equalizer_top_harness.py`): a wire-up task (agent writes only `awgn.sv`+`equalizer_top.sv`). The grader checks against **two spec-UNKNOWABLE things**: (1) a hard-coded 16-value noise LUT `[2048,-1024,128,…]` that appears **nowhere in the docs** — the agent had to invent its own `[0,8192,…]` (zero overlap); (2) a **white-box hierarchical probe** `dut.uu_awgn_real.signal_out` requiring exact instance names `uu_awgn_real/uu_awgn_imag` — agent used `u_awgn_real`; not in any spec. Agent wrote a genuinely independent golden + ran it; its 3 PASSing cocotb tests were vacuous golden-only self-checks, the 3 FAILing ones were RTL-vs-golden (small adaptation-phase LSB diff). Classification = **STRUCTURAL** (instance-name contract) **+ unspecifiable hidden LUT** — NOT shared-blind-spot, NOT impl-debug (unlimited budget can't recover a 16-entry LUT that exists only in the sealed harness). Sibling `dyn_eq_0001` (leaked-12) passed ONLY via leak for exactly this reason. ⇒ **strongest evidence that part of the leaked-12 are unsolvable from the provided spec — a property of the BENCHMARK, not an agent capability gap.** |
+| hdbn_codec_0001 | FAIL 0/1 | clean | **0** | 0 | 0 | n/a — **never verified** | **INFRASTRUCTURE TRUNCATION, not comprehension/drift.** Wrote RTL (`hdbn_decoder/encoder/top.sv`) + an independent golden `verif/hdbn_model.py`, but the session **died mid-flight on `API Error: Claude's response exceeded the 32000 output token maximum`** before running ANY cocotb/sim (cocotb=0, no SC_COCOTB result). So we learn NOTHING about whether it understood the codec — the run was cut short by Claude's output-token cap. **Actionable fix**: set `CLAUDE_CODE_MAX_OUTPUT_TOKENS` higher in the runner so long agentic runs aren't truncated. Distinct failure class = *infra/output-token-limit*. |
+
+**Conclusion (5/5 graded; 3 bg-subagents incorporated):**
+- **Adoption: SOLVED.** All 4 runs that REACHED verification used cocotb (1/2/4/1 calls), 0 SV self-checks,
+  0 architect injections (hdbn was truncated by an output-token error before it verified). Dropping
+  the architect prompt + cocotb routing reliably flips the agent onto the golden/cocotb path. The architect
+  prompt's "write RTL and a self-checking testbench" was the thing steering it to SV self-checks.
+- **Conversion: 0/3 (no pass gained).** These remain hard fails — but the *failure mode changed*.
+- **Oracle-drift pathology eliminated (the real win).** b32 digital_stopwatch FALSE-PASSED by drifting the
+  testbench; b33 kept the independent test intact and spent its effort fixing the RTL, ending in an HONEST
+  fail. False-passes are worse than honest fails (they corrupt the tally) — removing them makes every number
+  more trustworthy and points the agent's effort at the right target.
+- **New bound on the golden-oracle lever (poly):** an independent, numerically-correct golden does NOT convert
+  a fail when (a) the defect is structural (parameterization / hierarchy-naming contract) rather than value-
+  level, and (b) the golden is exercised only inside the agent's OWN harness that fixes the very params (M,
+  TAPS, instance names) the grader sweeps. A value oracle only helps when the surrounding harness also matches
+  the grader's build params + hierarchy contract. ⇒ the next lever is making the agent honor the spec's
+  STRUCTURAL contract (parameterizable generate, exact instance names), which no value oracle supplies.
+- **The deepest bound — "shared blind spot" (digital_stopwatch):** the golden was genuinely independent in
+  MECHANISM (it never reads RTL signals) but NOT independent in COMPREHENSION — the same agent wrote both the
+  golden and the RTL from the same reading of the spec, so a spec MISREADING (pulse registered-one-cycle-late
+  vs combinational; hour sticky vs toggle; 50 MHz divider) flows identically into both. They agree with each
+  other (local 12/12) while both disagree with the true spec (container 0/4). **A self-written oracle catches
+  IMPLEMENTATION bugs (RTL deviates from the agent's correct intent) but is BLIND to COMPREHENSION bugs (the
+  intent itself is wrong) — because the wrong intent is encoded in the oracle too.** This is precisely why
+  "reading the answer still fails" and why the remaining CVDP fails are comprehension/structural, not honesty:
+  the only oracle that breaks a shared blind spot is one DERIVED INDEPENDENTLY OF THE AGENT (the hidden grader,
+  or a spec-locked reference the agent didn't author). Within a single agent, golden-first buys integrity
+  (no drift, honest reporting) but cannot manufacture comprehension it doesn't have.
+- **The hardest bound — some problems are UNSOLVABLE-CLEAN BY CONSTRUCTION (dyn_eq_0008):** the sealed grader
+  checks the RTL against values and names that **appear nowhere in the provided spec** — a hard-coded 16-entry
+  noise LUT and a white-box hierarchical probe `dut.uu_awgn_real.signal_out` requiring exact instance names.
+  No amount of comprehension, debug budget, or independent oracle can recover a 16-value table or an exact
+  instance name that exists ONLY inside the hidden harness. Such a problem is passable **only by reading the
+  harness (leakage)** — which is exactly why its sibling `dyn_eq_0001` was a leaked-only pass. **This is a
+  property of the BENCHMARK, not an agent capability gap**, and it means part of the 63→51 gap is a HARD
+  CEILING: a sealed, honest agent literally cannot pass these. ⇒ the genuine ceiling is below 63 independent
+  of how good SiliconCrew gets; chasing 63 would require either leakage or these problems being out of scope.
+  *(How many of the leaked-12 are of this unsolvable-by-construction type vs merely-hard is not yet fully
+  characterized — dyn_eq is one confirmed; worth auditing the rest before setting a real target.)*
+
+## Lean-on-passers probe (codex) — 2026-06-30
+
+Before scaling lean+cocotb to the full claude-92, ran 5 leak-clean codex PASSERS under CVDP_LEAN_PROMPT=1
+to test whether the lean prompt REGRESSES problems that already pass. Each already had a confirmed
+leak-clean codex PASS, so a FAIL now = regression caused by the lean prompt (not agent incapacity).
+
+| problem | verdict | leak | regression? |
+|---|---|---|---|
+| axis_broadcaster_0001 | PASS 1/0 | clean | no |
+| async_filo_0001 | PASS 5/0 | clean | no |
+| rgb_color_space_conversion_0004 | PASS 1/0 | clean | no |
+| gcd_0007 | PASS 5/0 | clean | no |
+| event_storing_0001 | PASS 16/0 | clean | no |
+
+**Verdict: 0/5 regressed → lean+cocotb does NOT regress passers. Safe to scale to the claude-92.**
+
+**Trace-comparison (old architect vs new lean; bg-subagent a6f4899b, 4 old/new pairs):**
+- **Ramp tax is ToolSearch, not the architect prompt.** Dropping inject_architect_prompt saves exactly 1
+  call; the real ramp cost is tool-discovery via ToolSearch (digital_stopwatch-NEW spent 10 ToolSearch + 2
+  TodoWrite before first RTL write). → FIX APPLIED: tool manifest in the lean prompt.
+- **Lean traded SV-testbench-syntax loops for cocotb-logic + python-env loops — roughly net-neutral on
+  claude.** Big win on poly_decimator (wall-clock 56m→18m, 7 wasted turns→0); digital_stopwatch 20m→34m;
+  the cocotb failures were genuine logic mismatches, NOT ReadOnly/RisingEdge scheduler races (no systemic
+  cocotb-timing tax). One new friction: host `Python was not found` (phase-NEW burned 2 calls running the
+  golden in the shell instead of via cocotb_tool). → FIX APPLIED: "run golden ONLY via cocotb_tool".
+- **Biggest single turn-waster: the sby formal loop (codex axis, 10 calls / 9 FAIL).** NOT a broken tool —
+  the user's solver fix works (z3 runs proofs to completion, DONE PASS/FAIL with counterexamples). It's
+  OFF-TARGET: the grader doesn't run formal, so the effort doesn't score. Was a CODEX behavior; claude did
+  NOT formal-loop in the trace. → LEFT AS-IS (sby nudge kept): keeps the benchmark prompt aligned with the
+  general SiliconCrew product, low risk on claude, and formal can incidentally surface a real RTL bug.
+- **One genuine tool sharp-edge (not prompt-fixable):** iverilog `sorry: constant selects in always_*
+  processes are not currently supported (all bits will be included)` — a SILENT degradation that can corrupt
+  sim results without erroring (hit saturation.sv in phase-NEW). Left unaddressed (a prompt line won't fix a
+  simulator limitation).
+
+**Pre-92 changes staged (UNCOMMITTED — commit after the evening 92 completes):** runner default
+CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000 (stops mid-run output-token truncation, e.g. hdbn); per-problem timeout
+default 1800/2400→5400s (90 min, so slow-but-correct problems like poly aren't tree-killed mid-verification);
+lean-prompt tool-manifest + golden-via-cocotb fixes. Plan: claude-only full-92, lean, 90-min timeout, ~4
+shards, launched in the evening; grade + leak-gate incrementally; commit + write conclusion after.
+
+## Full-92 Sonnet-5 run — FINAL (2026-07-03)
+
+First complete, honest, leak-gated sweep of all 92 no_commercial agentic problems on **claude-sonnet-5**
+with the lean+cocotb benchmark prompt (golden-model-first, cocotb verification, formal where it fits, no
+architect prompt, no synthesis). Every run graded in the reference container and passed through
+`leak_detector`; any run that read the hidden harness / research docs / raw dataset was marked INVALID and
+re-run sealed.
+
+**FINAL HONEST SCORE: 58/92 clean PASS (63%)** — 34 clean FAIL, 0 missing. Beats the ~51/92 leak-free
+baseline (the prior best on earlier models/prompt) by **+7**.
+
+Pass rate by difficulty (dataset `categories` easy/medium/hard):
+| difficulty | pass/total | rate |
+|---|---|---|
+| easy | 15/17 | 88% |
+| medium | 35/55 | 63% |
+| hard | 8/20 | 40% |
+
+A clean monotonic gradient — Sonnet-5's success tracks problem difficulty; it fails where problems are
+genuinely hard, not randomly. Behavior was consistently on-spine: golden-model-first, cocotb (+ formal on
+FSM/control), no oracle-drift, no wandering — and integrity held throughout.
+
+**The run also hardened the whole harness. Bugs/vectors found and fixed along the way:**
+- **3 leakage vectors closed** (all caught by `leak_detector`, none counted): (1) agent reading an *old*
+  run dir's materialized hidden harness in `bench-orchestrator/runs/` → purged all materialized harnesses;
+  (2) agent reading our own `cvdp-pipeline/research/*.md` notes → moved research out of the repo during runs;
+  (3) agent reading the *raw dataset* via the path in `run_config.json` → redacted that path.
+- **`leak_detector` false-positive fixed**: cocotb's own runner is named `test_runner.py`, which collided
+  with the hidden grader's `src/test_runner.py`; tightened `HARNESS_RE` to only the unambiguous
+  `cvdp_problem/harness` + `harness_library` signatures (else legit clean cocotb passes get discarded).
+- **NO_HARNESS grading bug fixed**: the dataset-path redaction above *also* blinded `regrade_docker` (it
+  reads the dataset from `run_config`), silently grading ~26 completed runs as NO_HARNESS → they went
+  uncounted for hours. Added a fallback to `$RTL_DATASET` / the canonical dataset path. This is what
+  temporarily made the tally look stuck at 29/44; once fixed the real number surfaced.
+- **Runner/pipeline fixes**: `CLAUDE_CODE_GIT_BASH_PATH` default (Claude Code Windows startup),
+  `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000` (stop mid-run output truncation), per-problem cwd scratch isolation
+  + isolated per-shard cwds (stop cross-run leakage of prior solutions), 90-min timeout default, and a guard
+  against an empty `--ids` config silently expanding to all 92.
+- **Operational resilience**: recovered from ~4 session-limit crashes (recompute-remaining + relaunch each
+  time, never re-running a clean verdict, distinguishing genuine fails from limit-casualties/NO_WORKSPACE),
+  and added a **limit-proof background usage watcher** (polls usage via a separate Gemini/agy account, exits
+  → notifies at 70% so the run pauses *before* a freeze that would otherwise break the wake loop).
+
+Container verdicts only; no overclaiming. 58/92 is the honest, reproducible number.

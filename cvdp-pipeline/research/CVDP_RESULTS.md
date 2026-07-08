@@ -42,7 +42,7 @@ It solved a broad spread of design classes:
 
 | problem | Verilog | XLS | effect |
 |---|---|---|---|
-| phase_rotation_0010 | FAIL | **PASS** | XLS unlocked it |
+| phase_rotation_0010 | FAIL | ~~PASS~~ **LEAK** | ⚠️ RETRACTED 2026-06-25: the "XLS PASS 18/18" was the agent running the hidden grading harness in-place (pre-leak-fix), NOT an XLS win. Honest verdict: FAIL. See `AUDIT_XLS_TOOLING_LEAK.md`. |
 | monte_carlo | FAIL | **PASS** | XLS unlocked it |
 | spi_complex_mult | **PASS** | FAIL | XLS broke a working design |
 | phase_rotation_0013 / sigma_delta | PASS | PASS | no difference |
