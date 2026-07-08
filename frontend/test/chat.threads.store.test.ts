@@ -79,7 +79,9 @@ describe("chat threads store", () => {
     (threadsApi.create as any).mockResolvedValue(thread("new", "Chat 2"));
     await useStore.getState().newThread();
     const s = useStore.getState();
-    expect(threadsApi.create).toHaveBeenCalledWith("s1");
+    // newThread always passes (sid, title?, model?, runtime?) — a plain
+    // newThread() sends undefined for the optionals (native runtime).
+    expect(threadsApi.create).toHaveBeenCalledWith("s1", undefined, undefined, undefined);
     expect(s.threads[0].id).toBe("new");
     expect(s.activeThreadId).toBe("new");
     expect(s.messages).toEqual([]);
