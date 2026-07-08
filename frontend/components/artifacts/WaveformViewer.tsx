@@ -46,7 +46,10 @@ export function WaveformViewer({ data: dataProp, runId: runIdProp }: WaveformVie
   } = useStore();
   const overridden = dataProp != null;
   const waveformData = dataProp ?? storeWaveformData;
-  const effectiveRunId = runIdProp ?? selectedRunId;
+  // Data-override mode scopes the failure cursor to the caller's run ONLY —
+  // a run-less waveform (loose workspace VCD) must never inherit the globally
+  // selected run's failure time.
+  const effectiveRunId = overridden ? runIdProp ?? null : selectedRunId;
   const [zoom, setZoom] = useState(1);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [manualCursor, setManualCursor] = useState<number | null>(null); // ticks; user-placed

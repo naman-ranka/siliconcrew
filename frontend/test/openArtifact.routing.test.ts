@@ -31,12 +31,18 @@ describe("artifactKeyForFile — rich viewer routing (PA8)", () => {
     expect(artifactKeyForFile("synth_runs/synth_0002/6_final.gds")).toBe("layout:synth_0002");
     expect(artifactKeyForFile("synth_runs/synth_0002/report.md")).toBe("report:synth_0002");
   });
+
+  it("loose VCDs (outside run dirs) open in the waveform viewer via wavefile:", () => {
+    expect(artifactKeyForFile("dump.vcd")).toBe("wavefile:dump.vcd");
+    expect(artifactKeyForFile("scratch/tb_alu.VCD")).toBe("wavefile:scratch/tb_alu.VCD");
+  });
 });
 
 describe("artifactLabel — new kinds label by basename (PA8)", () => {
-  it("labels image/data/text by filename", () => {
+  it("labels image/data/text/wavefile by filename", () => {
     expect(artifactLabel("image:out/plot.png")).toBe("plot.png");
     expect(artifactLabel("data:sub/vectors.csv")).toBe("vectors.csv");
     expect(artifactLabel("text:run.log")).toBe("run.log");
+    expect(artifactLabel("wavefile:scratch/dump.vcd")).toBe("dump.vcd");
   });
 });

@@ -520,6 +520,7 @@ interface AppState {
     opts: { terminal: boolean }
   ) => Promise<void>;
   loadWaveformArtifact: (runId: string, vcdPath: string) => Promise<void>;
+  loadWaveformFileArtifact: (path: string) => Promise<void>;
   loadReportArtifact: (runId: string) => Promise<void>;
 
   // Unified activity feed (server pages + live WS events; see selectActivity).
@@ -2312,6 +2313,18 @@ export const useStore = create<AppState>((set, get) => ({
       makeArtifactKey("wave", runId),
       () => workspaceApi.getWaveform(sid, vcdPath),
       { terminal }
+    );
+  },
+
+  loadWaveformFileArtifact: async (path) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    // A loose VCD has no run to declare it terminal — always revalidate.
+    await get().loadArtifact(
+      makeArtifactKey("wavefile", path),
+      () => workspaceApi.getWaveform(sid, path),
+      { terminal: false }
     );
   },
 

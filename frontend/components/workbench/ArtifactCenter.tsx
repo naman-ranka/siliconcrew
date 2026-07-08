@@ -24,6 +24,7 @@ import type { ArtifactKind } from "@/types";
 import { CodeArtifact } from "./viewers/CodeArtifact";
 import { SpecArtifact } from "./viewers/SpecArtifact";
 import { WaveArtifact } from "./viewers/WaveArtifact";
+import { WaveFileArtifact } from "./viewers/WaveFileArtifact";
 import { ReportArtifact } from "./viewers/ReportArtifact";
 import { LayoutArtifact } from "./viewers/LayoutArtifact";
 import { SchematicArtifact } from "./viewers/SchematicArtifact";
@@ -36,6 +37,7 @@ const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }
   code: Code2,
   spec: FileText,
   wave: Activity,
+  wavefile: Activity,
   report: BarChart3,
   layout: Layers,
   schematic: CircuitBoard,
@@ -59,6 +61,8 @@ function ArtifactBody({ artifactKey, readOnly }: { artifactKey: string; readOnly
       return <SpecArtifact />;
     case "wave":
       return <WaveArtifact runId={parsed.ref ?? ""} />;
+    case "wavefile":
+      return <WaveFileArtifact path={parsed.ref ?? ""} />;
     case "report":
       return <ReportArtifact runId={parsed.ref ?? ""} />;
     case "layout":
