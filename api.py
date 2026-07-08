@@ -1297,6 +1297,19 @@ async def get_session(session_id: str, identity: Identity = Depends(get_identity
     )
 
 
+# Known model ids for PATCH-time validation: every id either picker offers
+# (native CATALOG + Codex CODEX_CATALOG) plus every id we still price —
+# previous-generation ids stay pinnable. A PATCH carrying an id outside this
+# set is a typo or stale pick, so we 422 at PICK time rather than letting it
+# fail silently when the user later SENDS a message. Aliases are normalized
+# first, so their canonical targets (all present here) validate cleanly.
+_KNOWN_MODEL_IDS = frozenset(
+    {e["id"] for e in model_catalog_entries()}
+    | {e["id"] for e in codex_catalog_entries()}
+    | set(PRICING)
+)
+
+
 @app.patch("/api/sessions/{session_id:path}/threads/{tid}", response_model=ThreadResponse)
 async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: Identity = Depends(get_identity)):
     """Rename a thread and/or set its model (owner-checked)."""
@@ -1312,7 +1325,10 @@ async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: I
     if data.title is not None:
         session_manager.rename_thread(tid, data.title, user_id=uid)
     if data.model is not None:
-        session_manager.set_thread_model(tid, normalize_model_name(data.model), user_id=uid)
+        normalized = normalize_model_name(data.model)
+        if normalized not in _KNOWN_MODEL_IDS:
+            raise HTTPException(status_code=422, detail=f"Unknown model id: {data.model!r}")
+        session_manager.set_thread_model(tid, normalized, user_id=uid)
     return _thread_to_response(session_manager.get_thread(tid, user_id=uid))
 
 
