@@ -190,8 +190,12 @@ class CodexWorkerPool:
         """A live worker for ``key`` — reused when warm, spawned when not.
 
         Concurrent acquires (and a pre-warm racing a first send) coalesce onto
-        one spawn. ``expected_external`` guards against a stale worker whose
-        SDK thread no longer matches the persisted external thread id.
+        one spawn. ``expected_external`` guards a REUSED (cache-hit) worker
+        whose SDK thread no longer matches the persisted external thread id —
+        it is deliberately NOT applied to a freshly spawned worker, whose own
+        external id is authoritative for this turn (spawn may legitimately
+        mint a NEW id when ``thread_resume`` fails and it falls back to
+        ``thread_start``; rejecting that id wedged the thread — F-TTFT-1).
         """
         self._bind_loop()
         self._ensure_janitor()
@@ -230,11 +234,11 @@ class CodexWorkerPool:
                 raise
             # Re-validate under the guard (a coalesced awaiter's fingerprint may
             # differ from the spawner's) — usually returns on the next pass.
+            # NO expected_external gate here: this worker was just spawned, so
+            # its external id is authoritative (see docstring / F-TTFT-1).
             async with self._guard:
                 if (self._entries.get(key) is entry and entry.fingerprint == fingerprint
-                        and not worker.closed
-                        and not (expected_external and worker.external_thread_id
-                                 and worker.external_thread_id != expected_external)):
+                        and not worker.closed):
                     worker.last_used = time.monotonic()
                     return worker
         raise RuntimeError("codex warm pool: worker validation kept churning; giving up")

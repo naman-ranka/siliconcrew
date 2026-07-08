@@ -245,6 +245,94 @@ def test_engine_cancellation_retires_worker(wiring):
     assert pool.state_for(("s1", "th1", "alice")) == STATE_COLD
 
 
+# --- F-TTFT-1: resume-failure must accept the fresh external id, not wedge ------
+
+class _ResumeFailsCodex:
+    """A returning user on a NEW instance: the SDK rollout for the persisted
+    external id is gone, so ``thread_resume`` raises and spawn falls back to
+    ``thread_start`` — which mints a DIFFERENT external id."""
+
+    def __init__(self, start_id="ext-2"):
+        self.entered = 0
+        self.exited = 0
+        self.fail_next_stream = False
+        self.resume_calls = 0
+        self.start_calls = 0
+        self._start_id = start_id
+        self.thread = _FakeThread(self, thread_id=start_id)
+
+    async def __aenter__(self):
+        self.entered += 1
+        return self
+
+    async def __aexit__(self, *a):
+        self.exited += 1
+        return False
+
+    async def login_api_key(self, key):
+        pass
+
+    async def thread_start(self, **kw):
+        self.start_calls += 1
+        self.thread.id = self._start_id
+        return self.thread
+
+    async def thread_resume(self, ext_id, **kw):
+        self.resume_calls += 1
+        raise RuntimeError(f"rollout for {ext_id} lived on a now-dead instance")
+
+
+class _ResumeFailsFactory:
+    def __init__(self, start_id="ext-2"):
+        self.instances = []
+        self._start_id = start_id
+
+    def __call__(self, config=None):
+        fake = _ResumeFailsCodex(start_id=self._start_id)
+        self.instances.append(fake)
+        return fake
+
+    @property
+    def spawns(self):
+        return len(self.instances)
+
+
+def test_resume_failure_accepts_fresh_external_id_and_does_not_wedge(wiring):
+    """F-TTFT-1: persisted external id E1 whose rollout is gone → resume raises
+    → thread_start returns a NEW id E2. The pool must ACCEPT the fresh worker
+    (E2 is authoritative), NOT reject it against E1. Prove the turn completes,
+    E2 is persisted, there is exactly one spawn (no respawn storm), and the
+    next turn does not wedge.
+
+    Pre-fix this wedged: the post-spawn revalidation applied expected_external
+    to the fresh worker (E2 != E1), looped 4× → RuntimeError → turn failed →
+    E2 never persisted → every retry repeated the failure."""
+    wiring.store.set_external_thread_id("th1", "ext-1")  # created on a dead instance
+
+    factory = _ResumeFailsFactory(start_id="ext-2")
+    pool = CodexWorkerPool(max_workers=3, idle_sec=60)
+    handler = _handler(wiring, factory, pool)
+
+    async def main():
+        f1, f2 = [], []
+        await handler.run_turn(_ctx(wiring, f1))
+        await handler.run_turn(_ctx(wiring, f2, message="again"))
+        return f1, f2
+
+    f1, f2 = asyncio.run(main())
+    # (a) the turn COMPLETES — no RuntimeError / churn mapped to an error frame
+    assert f1[-1]["type"] == "done", f1[-1]
+    # (b) the fresh external id is persisted
+    assert wiring.store.get_external_thread_id("th1") == "ext-2"
+    # (d) exactly one spawn: one resume attempt, one thread_start fallback
+    assert factory.spawns == 1, "no respawn storm"
+    assert factory.instances[0].resume_calls == 1
+    assert factory.instances[0].start_calls == 1
+    # (c) the next turn does NOT wedge — it reuses the warm worker and completes
+    assert f2[-1]["type"] == "done", f2[-1]
+    assert factory.spawns == 1, "turn 2 must reuse the warm worker"
+
+
 # --- tenant isolation (the must-pass test) --------------------------------------
 
 def test_workers_never_shared_across_sessions_threads_or_owners(wiring):
