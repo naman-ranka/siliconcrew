@@ -333,6 +333,146 @@ def test_resume_failure_accepts_fresh_external_id_and_does_not_wedge(wiring):
     assert factory.spawns == 1, "turn 2 must reuse the warm worker"
 
 
+# --- F-TTFT-2: a worker retired under the turn lock must not be driven ----------
+
+class _GatedThread:
+    def __init__(self, owner, thread_id="ext-1"):
+        self.id = thread_id
+        self.owner = owner
+        self.turns = 0
+
+    async def turn(self, message, **kw):
+        self.turns += 1
+        return _GatedTurnHandle(self.owner)
+
+
+class _GatedTurnHandle:
+    """Streams one delta, then blocks on the shared gate so the first turn
+    holds its worker's turn_lock while a second concurrent turn queues."""
+
+    def __init__(self, owner):
+        self.owner = owner
+
+    async def stream(self):
+        yield _ev("item/agentMessage/delta", delta="hi")
+        await self.owner.gate.wait()
+        if self.owner.fail:
+            raise RuntimeError("SDK stream died")
+        yield _ev("turn/completed")
+
+
+class _GatedCodex:
+    def __init__(self, gate, fail):
+        self.entered = 0
+        self.exited = 0
+        self.gate = gate
+        self.fail = fail
+        self.thread = _GatedThread(self)
+
+    async def __aenter__(self):
+        self.entered += 1
+        return self
+
+    async def __aexit__(self, *a):
+        self.exited += 1
+        return False
+
+    async def login_api_key(self, key):
+        pass
+
+    async def thread_start(self, **kw):
+        return self.thread
+
+    async def thread_resume(self, ext_id, **kw):
+        self.thread.id = ext_id
+        return self.thread
+
+
+class _GatedFactory:
+    """First worker fails its stream (retiring itself); later workers succeed."""
+
+    def __init__(self, gate):
+        self.instances = []
+        self.gate = gate
+
+    def __call__(self, config=None):
+        fail = len(self.instances) == 0
+        fake = _GatedCodex(self.gate, fail)
+        self.instances.append(fake)
+        return fake
+
+    @property
+    def spawns(self):
+        return len(self.instances)
+
+
+def test_concurrent_turn_reacquires_after_worker_retired_under_lock(wiring):
+    """F-TTFT-2: two concurrent same-thread turns queue on one worker's
+    turn_lock. The first crashes and retires the worker; the second — already
+    blocked on that lock — must re-check worker.closed after taking it and
+    re-acquire a fresh worker instead of driving the dead subprocess."""
+    pool = CodexWorkerPool(max_workers=3, idle_sec=60)
+
+    async def main():
+        from src.agents.codex.codex_engine import CodexTurn
+
+        gate = asyncio.Event()
+        factory = _GatedFactory(gate)
+        engine = CodexEngine(enabled=True, sdk_factory=factory, warm_pool=pool,
+                             state_dir=wiring.state_dir, local_sqlite_dir=wiring.state_dir)
+
+        def mk():
+            return CodexTurn(session_id="s1", thread_id="th1", message="hi",
+                             workspace=wiring.workspace, user_id="alice",
+                             model_name="gpt-5.5", api_key="k")
+
+        t1_frames, t2_frames = [], []
+
+        async def drive1():
+            try:
+                async for ev in engine.stream_turn(mk()):
+                    t1_frames.append(ev)
+            except CodexTurnError:
+                t1_frames.append("error")
+
+        async def drive2():
+            async for ev in engine.stream_turn(mk()):
+                t2_frames.append(ev)
+
+        t1 = asyncio.create_task(drive1())
+        # let T1 spawn W1, take its lock, stream one delta, block on the gate
+        for _ in range(200):
+            await asyncio.sleep(0)
+            if factory.spawns == 1 and len(t1_frames) >= 2:
+                break
+        w1 = pool._entries[("s1", "th1", "alice")].worker()
+        assert w1 is not None and w1.turn_lock.locked()
+
+        # T2 acquires the SAME warm worker W1 and queues on its turn_lock
+        t2 = asyncio.create_task(drive2())
+        for _ in range(200):
+            await asyncio.sleep(0)
+            waiters = getattr(w1.turn_lock, "_waiters", None)
+            if waiters and len(waiters) > 0:
+                break
+        assert w1.turn_lock.locked(), "T1 must still hold the lock while T2 queues"
+
+        gate.set()  # T1's stream fails → retires W1 → releases the lock
+        await t1
+        await t2
+        return factory, t1_frames, t2_frames
+
+    factory, t1_frames, t2_frames = asyncio.run(main())
+    assert t1_frames[-1] == "error", "T1 crashed and reported honestly"
+    assert factory.instances[0].exited == 1, "the crashed worker W1 was retired"
+    # T2 must NOT have driven the closed W1; it re-acquired a fresh W2.
+    assert factory.spawns == 2, "T2 re-acquired a fresh worker after W1 was retired"
+    assert factory.instances[0].thread.turns == 1
+    assert factory.instances[1].thread.turns == 1
+    assert factory.instances[1].exited == 0, "T2's fresh worker stays warm"
+    assert t2_frames[-1].type == "done", t2_frames[-1]
+
+
 # --- tenant isolation (the must-pass test) --------------------------------------
 
 def test_workers_never_shared_across_sessions_threads_or_owners(wiring):

@@ -398,27 +398,43 @@ class CodexEngine:
         pool = self.warm_pool
         worker = None
         try:
-            if pool is not None:
-                key = self._worker_key(turn)
-                prior_state = pool.state_for(key)
-                worker = await pool.acquire(
-                    key, self._worker_fingerprint(turn),
-                    lambda: self.spawn_worker(turn),
-                    expected_external=turn.external_thread_id,
-                )
-                warm = {"ready": "hit", "starting": "join"}.get(prior_state, "miss")
+            # Acquire a worker and hold its turn lock for the whole turn. If a
+            # concurrent same-thread turn RETIRED the worker while we were
+            # queued on the lock (F-TTFT-2), the worker is closed under us —
+            # release it and re-acquire a fresh one (bounded; the pool respawns
+            # since the retired entry is already popped).
+            warm = "off"
+            for _attempt in range(2):
+                if pool is not None:
+                    key = self._worker_key(turn)
+                    prior_state = pool.state_for(key)
+                    worker = await pool.acquire(
+                        key, self._worker_fingerprint(turn),
+                        lambda: self.spawn_worker(turn),
+                        expected_external=turn.external_thread_id,
+                    )
+                    warm = {"ready": "hit", "starting": "join"}.get(prior_state, "miss")
+                else:
+                    from src.agents.codex.codex_warm import WarmWorker
+                    import asyncio as _asyncio
+
+                    parts = await self.spawn_worker(turn)
+                    worker = WarmWorker(
+                        key=self._worker_key(turn), fingerprint="", loop=_asyncio.get_running_loop(),
+                        turn_lock=_asyncio.Lock(), **parts,
+                    )
+                    warm = "off"
+                await worker.turn_lock.acquire()
+                if not worker.closed:
+                    break
+                # Retired while we waited on the lock — drop and try once more.
+                worker.turn_lock.release()
+                worker = None
             else:
-                from src.agents.codex.codex_warm import WarmWorker
-                import asyncio as _asyncio
+                raise CodexTurnError(
+                    "Codex worker was retired by a concurrent turn; please retry")
 
-                parts = await self.spawn_worker(turn)
-                worker = WarmWorker(
-                    key=self._worker_key(turn), fingerprint="", loop=_asyncio.get_running_loop(),
-                    turn_lock=_asyncio.Lock(), **parts,
-                )
-                warm = "off"
-
-            async with worker.turn_lock:
+            try:
                 print(
                     f"[CODEX-TIMING] thread={turn.thread_id} event=sdk_thread_ready "
                     f"elapsed_setup={time.monotonic() - setup_start:.2f}s warm={warm}",
@@ -436,6 +452,8 @@ class CodexEngine:
                 )
                 async for event in self._stream_sdk_events(turn_handle):
                     yield event
+            finally:
+                worker.turn_lock.release()
         except (CodexUnavailable, CodexTurnError):
             await self._retire(pool, turn, worker)
             raise
