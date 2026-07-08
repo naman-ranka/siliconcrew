@@ -45,10 +45,6 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function isThinkingBlock(blocks: ContentBlock[], idx: number): boolean {
-  return blocks.slice(idx + 1).some((b) => b.type === "tool");
-}
-
 function ThinkingContent({ content }: { content: string }) {
   const [collapsed, setCollapsed] = useState(true);
 
@@ -98,19 +94,20 @@ function PlanContent({ content }: { content: string }) {
   );
 }
 
-/** Renders a single content block — text (with the thinking heuristic),
- * reasoning ("thinking" stream), plan/todo, or a tool call. Shared by the
- * committed-message and streaming render paths. */
-function BlockView({ block, idx, blocks, isStreaming = false }: {
-  block: ContentBlock; idx: number; blocks: ContentBlock[]; isStreaming?: boolean;
+/** Renders a single content block — visible assistant text, reasoning
+ * ("thinking" stream), plan/todo, or a tool call. Shared by the
+ * committed-message and streaming render paths.
+ *
+ * Only the dedicated `reasoning` stream collapses into the "Thinking" toggle.
+ * Plain `text` is genuine assistant prose (an explanation before a tool call is
+ * still an explanation) and always renders visibly — we key off the real block
+ * type, never position relative to a tool call. */
+function BlockView({ block, isStreaming = false }: {
+  block: ContentBlock; isStreaming?: boolean;
 }) {
   if (block.type === "reasoning") return <ThinkingContent content={block.content} />;
   if (block.type === "plan") return <PlanContent content={block.content} />;
-  if (block.type === "text") {
-    return isThinkingBlock(blocks, idx)
-      ? <ThinkingContent content={block.content} />
-      : <MarkdownContent content={block.content} />;
-  }
+  if (block.type === "text") return <MarkdownContent content={block.content} />;
   return <ToolCallCard toolCall={block.toolCall} result={block.result} isRunning={isStreaming && !block.result} />;
 }
 
@@ -288,11 +285,11 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-function MessageContent({ message }: { message: Message }) {
+export function MessageContent({ message }: { message: Message }) {
   return (
     <div className="space-y-3">
       {message.blocks.map((block, idx) => (
-        <BlockView key={_blockKey(block, idx)} block={block} idx={idx} blocks={message.blocks} />
+        <BlockView key={_blockKey(block, idx)} block={block} />
       ))}
     </div>
   );
@@ -346,7 +343,7 @@ function StreamingMessage({ showIcon = true }: { showIcon?: boolean }) {
           </div>
         ) : (
           streamingMessage.blocks.map((block, idx) => (
-            <BlockView key={_blockKey(block, idx)} block={block} idx={idx} blocks={streamingMessage.blocks} isStreaming />
+            <BlockView key={_blockKey(block, idx)} block={block} isStreaming />
           ))
         )}
       </div>
