@@ -154,6 +154,11 @@ def list_templates(examples_dir: Optional[str] = None) -> List[dict]:
     return out
 
 
+# Internal bookkeeping files that are real on disk but not design content — kept
+# out of the preview file list (A13).
+_PREVIEW_HIDDEN = {".sc_binaries.json", PROVENANCE_FILE}
+
+
 def _shallow_file_preview(ws: str, limit: int = 200) -> List[str]:
     """Workspace-relative file paths for the preview (design files first)."""
     paths: List[str] = []
@@ -161,6 +166,8 @@ def _shallow_file_preview(ws: str, limit: int = 200) -> List[str]:
         # Skip noisy/heavy internals in the shallow preview.
         dirs[:] = [d for d in dirs if d not in ("__pycache__",)]
         for name in files:
+            if name in _PREVIEW_HIDDEN:
+                continue
             rel = os.path.relpath(os.path.join(root, name), ws).replace(os.sep, "/")
             paths.append(rel)
             if len(paths) >= limit:

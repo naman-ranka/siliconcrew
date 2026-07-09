@@ -478,6 +478,53 @@ def test_api_fork_unknown_404(client):
     assert client.post("/api/templates/ghost/fork").status_code == 404
 
 
+def test_layouts_distinguishes_missing_from_never_produced(client, sm, monkeypatch):
+    """A7/§3D: the layouts endpoint separates 'GDS split out, not fetched' (a
+    manifest entry absent on disk) from 'this run never produced a GDS'."""
+    # The endpoint reads through the workspace provider — point it at the same
+    # local root the fixture SessionManager uses so reads see the fork's files.
+    from src.utils.session_context import LocalWorkspaceProvider
+    import src.platform_engines.workspace_provider as wp
+
+    monkeypatch.setattr(wp, "_PROVIDER", LocalWorkspaceProvider(sm.base_dir))
+
+    sid = client.post("/api/templates/demo_fifo/fork").json()["sessionId"]
+    ws = sm.get_workspace_path(sid)
+    gds_rel = "synth_runs/synth_0001/orfs_results/sky130hd/fifo/base/6_final.gds"
+
+    # No manifest yet -> never produced: both lists empty.
+    r = client.get(f"/api/workspace/{sid}/layouts")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"layouts": [], "missing_binaries": []}
+
+    # Manifest lists a GDS that is absent on disk -> honestly "missing".
+    _write(os.path.join(ws, ".sc_binaries.json"), {
+        "version": 1,
+        "files": [{"path": gds_rel, "bytes": 10, "sha256": "deadbeef"}],
+    })
+    body = client.get(f"/api/workspace/{sid}/layouts").json()
+    assert body["layouts"] == []
+    assert body["missing_binaries"] == [gds_rel]
+
+    # Once the GDS is present, it is a layout and no longer missing.
+    _write(os.path.join(ws, gds_rel.replace("/", os.sep)), "GDS")
+    body = client.get(f"/api/workspace/{sid}/layouts").json()
+    assert any(p.endswith("6_final.gds") for p in body["layouts"])
+    assert body["missing_binaries"] == []
+
+
+def test_preview_hides_bookkeeping_files(sm, examples_dir):
+    """A13: .sc_binaries.json / .source_template.json are real on disk but must
+    not appear in the template preview file list."""
+    bundle = os.path.join(examples_dir, "demo_fifo")
+    SPLIT.split_bundle(bundle, apply=True)  # writes workspace/.sc_binaries.json
+    _write(os.path.join(bundle, "workspace", ".source_template.json"), {"id": "x"})
+    detail = T.get_template("demo_fifo", examples_dir)
+    assert ".sc_binaries.json" not in detail["files"]
+    assert ".source_template.json" not in detail["files"]
+    assert "fifo.v" in detail["files"]  # real design content still listed
+
+
 def test_api_patch_session_preserves_provenance(client, sm):
     """F17: rename/move must NOT blank the forked-from chip (invariant 7). The
     store replaces currentSession with the PATCH response, so it must carry

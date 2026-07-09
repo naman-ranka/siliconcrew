@@ -109,7 +109,8 @@ function installMocks(page: Page) {
       return json(route, { ok: true, path: "", entries: ROOT_DIR });
     }
     if (p.endsWith("/tools") && m === "GET") return json(route, { ok: true, tools: [] });
-    if (p.endsWith("/layouts") || p.endsWith("/schematics")) return json(route, []);
+    if (p.endsWith("/layouts")) return json(route, { layouts: [], missing_binaries: [] });
+    if (p.endsWith("/schematics")) return json(route, []);
     if (p.endsWith("/spec")) return json(route, { detail: "No spec" }, 404);
 
     return json(route, []);

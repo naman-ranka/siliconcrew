@@ -2490,9 +2490,15 @@ async def generate_report(session_id: str, run_id: Optional[str] = Query(default
 
 
 @app.get("/api/workspace/{session_id:path}/layouts")
-async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
-    """List GDS files in the workspace."""
-    def work() -> List[str]:  # F6: hydration + os.walk off-thread
+async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> Dict[str, List[str]]:
+    """GDS files on disk, plus any GDS the split manifest lists but that is absent.
+
+    ``missing_binaries`` distinguishes "this run never produced a GDS" (empty
+    layouts AND empty missing) from "the split-out GDS was never fetched" (empty
+    layouts but a non-empty missing list from ``.sc_binaries.json``), so the
+    viewer can say the honest thing (§3D). Paths are workspace-relative.
+    """
+    def work() -> Dict[str, List[str]]:  # F6: hydration + os.walk off-thread
         workspace = _resolve_workspace(session_id)
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
@@ -2504,7 +2510,23 @@ async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verif
                     rel_path = os.path.relpath(os.path.join(root, f), workspace)
                     gds_files.append(rel_path)
 
-        return gds_files
+        # GDS entries recorded in the split manifest but not present on disk.
+        missing_binaries: List[str] = []
+        manifest_path = os.path.join(workspace, ".sc_binaries.json")
+        if os.path.isfile(manifest_path):
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as mf:
+                    manifest = json.load(mf)
+                for entry in (manifest.get("files") or []):
+                    rel = entry.get("path") or ""
+                    if not rel.lower().endswith(".gds"):
+                        continue
+                    if not os.path.isfile(os.path.join(workspace, rel.replace("/", os.sep))):
+                        missing_binaries.append(rel)
+            except (OSError, json.JSONDecodeError, AttributeError):
+                pass
+
+        return {"layouts": gds_files, "missing_binaries": missing_binaries}
 
     return await asyncio.to_thread(work)
 
