@@ -38,6 +38,7 @@ class MetadataStore(Protocol):
     def create_project(self, slug: str, name: str, created_at: Any, user_id: Optional[str] = None) -> None: ...
     def get_project(self, project_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
     def get_all_projects(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
+    def rename_project(self, project_id: str, name: str, user_id: Optional[str] = None) -> None: ...
     def delete_project(self, project_id: str, user_id: Optional[str] = None) -> None: ...
     # sessions
     def upsert_session(self, session_id: str, user_id: Optional[str], session_name: str,
@@ -45,20 +46,28 @@ class MetadataStore(Protocol):
     def get_session(self, session_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
     def get_all_session_rows(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
     def move_session(self, session_id: str, project_id: Optional[str], user_id: Optional[str] = None) -> None: ...
+    # Display-only rename: session_id (the primary key = workspace dir) never changes.
+    def rename_session(self, session_id: str, name: str, user_id: Optional[str] = None) -> None: ...
     def update_stats(self, session_id: str, input_t: int, output_t: int, cached_t: int,
                      total_t: int, cost: float, now: Any, user_id: Optional[str] = None) -> None: ...
-    def delete_session(self, session_id: str, user_id: Optional[str] = None) -> None: ...
+    # Returns the ids of the chat-thread rows cascaded away (the caller may
+    # need them to purge per-thread checkpoints held elsewhere).
+    def delete_session(self, session_id: str, user_id: Optional[str] = None) -> List[str]: ...
     # chat threads (a chat = a LangGraph thread_id; many per session/workspace)
     def create_thread(self, thread_id: str, session_id: str, user_id: Optional[str],
-                      title: str, model: Optional[str], now: Any) -> None: ...
+                      title: str, model: Optional[str], now: Any,
+                      runtime: str = "langchain") -> None: ...
     def ensure_thread(self, thread_id: str, session_id: str, user_id: Optional[str],
-                      title: str, model: Optional[str], now: Any) -> None: ...
+                      title: str, model: Optional[str], now: Any,
+                      runtime: str = "langchain") -> None: ...
     def get_thread(self, thread_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
     def list_threads(self, session_id: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
     def count_threads(self, session_id: str, user_id: Optional[str] = None) -> int: ...
+    # One grouped COUNT for the whole session list ({session_id: rows}) — no N+1.
+    def count_threads_by_session(self, user_id: Optional[str] = None) -> Dict[str, int]: ...
     def update_thread(self, thread_id: str, user_id: Optional[str] = None, *,
                       title: Optional[str] = None, model: Optional[str] = None,
-                      last_active: Any = None) -> None: ...
+                      last_active: Any = None, runtime: Optional[str] = None) -> None: ...
     def delete_thread(self, thread_id: str, user_id: Optional[str] = None) -> None: ...
     # identity migration (operator tool, Slice 3): re-key every row owned by
     # old_user_id to new_user_id. Used to unify google_<sub> -> workos_<sub>
@@ -122,6 +131,7 @@ class SqliteMetadataStore:
                     user_id TEXT,
                     title TEXT,
                     model TEXT,
+                    runtime TEXT NOT NULL DEFAULT 'langchain',
                     created_at TIMESTAMP,
                     last_active TIMESTAMP
                 )
@@ -159,6 +169,14 @@ class SqliteMetadataStore:
         proj_cols = {row[1] for row in cur.execute("PRAGMA table_info(projects)")}
         if "user_id" not in proj_cols:
             cur.execute("ALTER TABLE projects ADD COLUMN user_id TEXT")
+        # Shell-level runtime marker: which registered agent runtime owns a thread
+        # (see src/agents/runtime_registry.py). Generic dispatch infra, not a
+        # Codex primitive — legacy rows backfill to the native default.
+        thread_cols = {row[1] for row in cur.execute("PRAGMA table_info(chat_threads)")}
+        if "runtime" not in thread_cols:
+            cur.execute(
+                "ALTER TABLE chat_threads ADD COLUMN runtime TEXT NOT NULL DEFAULT 'langchain'"
+            )
 
     def _migrate_existing_groups(self, cur) -> None:
         rows = cur.execute("SELECT session_id FROM session_metadata").fetchall()
@@ -203,6 +221,19 @@ class SqliteMetadataStore:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+
+    def rename_project(self, project_id, name, user_id=None):
+        """Rename a project's display name (the id/slug is immutable).
+
+        Tenant-scoped like move_session: a non-owner's rename is a no-op.
+        """
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE projects SET name = ? WHERE id = ?{owner}",
+                (name, project_id, *oparams),
+            )
+            conn.commit()
 
     def delete_project(self, project_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
@@ -264,6 +295,19 @@ class SqliteMetadataStore:
             )
             conn.commit()
 
+    def rename_session(self, session_id, name, user_id=None):
+        """DISPLAY-ONLY rename: updates ``session_name``. The session_id (primary
+        key, and thus the workspace directory it names) never changes.
+        Tenant-scoped like move_session: a non-owner's rename is a no-op.
+        """
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE session_metadata SET session_name = ? WHERE session_id = ?{owner}",
+                (name, session_id, *oparams),
+            )
+            conn.commit()
+
     def update_stats(self, session_id, input_t, output_t, cached_t, total_t, cost, now, user_id=None):
         owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn:
@@ -280,36 +324,60 @@ class SqliteMetadataStore:
 
     def delete_session(self, session_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
+        deleted: list[str] = []
         with self._connect() as conn:
-            conn.execute(
+            # Chat ids first — the cascade below needs them for the checkpoint
+            # tables (keyed by thread_id, no FK anywhere: manual cascade).
+            thread_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM chat_threads WHERE session_id = ?", (session_id,)
+                )
+            ]
+            cur = conn.execute(
                 f"DELETE FROM session_metadata WHERE session_id = ?{owner}",
                 (session_id, *oparams),
             )
-            for table in self._CHECKPOINT_TABLES:
-                try:
-                    conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (session_id,))
-                except sqlite3.OperationalError:
-                    pass
+            # Cascade only when the owner-gated session delete matched (defense
+            # in depth on top of SessionManager's PermissionError); self-host
+            # (user_id=None) also sweeps orphans with no session row.
+            if cur.rowcount or user_id is None:
+                conn.execute(
+                    "DELETE FROM chat_threads WHERE session_id = ?", (session_id,)
+                )
+                deleted = thread_ids
+                # Every chat's checkpoints + the legacy default (thread_id ==
+                # session_id). The tables appear only after LangGraph's first
+                # write, hence the per-table tolerance.
+                for table in self._CHECKPOINT_TABLES:
+                    try:
+                        for tid in {session_id, *thread_ids}:
+                            conn.execute(
+                                f"DELETE FROM {table} WHERE thread_id = ?", (tid,)
+                            )
+                    except sqlite3.OperationalError:
+                        pass
             conn.commit()
+        return deleted
 
     # -- chat threads --
 
-    def create_thread(self, thread_id, session_id, user_id, title, model, now):
+    def create_thread(self, thread_id, session_id, user_id, title, model, now, runtime="langchain"):
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (thread_id, session_id, user_id, title, model, now, now),
+                "INSERT INTO chat_threads (id, session_id, user_id, title, model, runtime, created_at, last_active) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (thread_id, session_id, user_id, title, model, runtime, now, now),
             )
             conn.commit()
 
-    def ensure_thread(self, thread_id, session_id, user_id, title, model, now):
+    def ensure_thread(self, thread_id, session_id, user_id, title, model, now, runtime="langchain"):
         """Insert the thread row only if absent (idempotent; never clobbers)."""
         with self._connect() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (thread_id, session_id, user_id, title, model, now, now),
+                "INSERT OR IGNORE INTO chat_threads (id, session_id, user_id, title, model, runtime, created_at, last_active) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (thread_id, session_id, user_id, title, model, runtime, now, now),
             )
             conn.commit()
 
@@ -342,7 +410,23 @@ class SqliteMetadataStore:
             ).fetchone()
         return int(row[0]) if row else 0
 
-    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None):
+    def count_threads_by_session(self, user_id=None):
+        """{session_id: thread-row count} in ONE grouped query (session-list use).
+
+        Sessions with no thread rows simply aren't in the dict (callers default
+        to 0) — a fresh session has no rows until its default thread is created.
+        """
+        sql = "SELECT session_id, COUNT(*) FROM chat_threads"
+        params: list = []
+        if user_id is not None:
+            sql += " WHERE user_id = ?"
+            params.append(user_id)
+        sql += " GROUP BY session_id"
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return {r[0]: int(r[1]) for r in rows}
+
+    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None, runtime=None):
         sets, params = [], []
         if title is not None:
             sets.append("title = ?"); params.append(title)
@@ -350,6 +434,8 @@ class SqliteMetadataStore:
             sets.append("model = ?"); params.append(model)
         if last_active is not None:
             sets.append("last_active = ?"); params.append(last_active)
+        if runtime is not None:
+            sets.append("runtime = ?"); params.append(runtime)
         if not sets:
             return
         owner, oparams = self._owner_clause(user_id)
@@ -476,10 +562,18 @@ class PostgresMetadataStore:
                     user_id TEXT,
                     title TEXT,
                     model TEXT,
+                    runtime TEXT NOT NULL DEFAULT 'langchain',
                     created_at TIMESTAMPTZ,
                     last_active TIMESTAMPTZ
                 )
                 """
+            )
+            # Shell-level runtime marker (parity with SqliteMetadataStore) — add
+            # to pre-existing hosted tables. Idempotent; legacy rows backfill to
+            # the native default via the column DEFAULT.
+            cur.execute(
+                "ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS "
+                "runtime TEXT NOT NULL DEFAULT 'langchain'"
             )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_session_user_created "
@@ -510,6 +604,16 @@ class PostgresMetadataStore:
         if user_id is not None:
             return self._all("SELECT * FROM projects WHERE user_id = %s ORDER BY name ASC", (user_id,))
         return self._all("SELECT * FROM projects ORDER BY name ASC")
+
+    def rename_project(self, project_id, name, user_id=None):
+        """Postgres parity for :meth:`SqliteMetadataStore.rename_project`."""
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE projects SET name = %s WHERE id = %s{owner}",
+                (name, project_id, *oparams),
+            )
+            conn.commit()
 
     def delete_project(self, project_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
@@ -556,6 +660,17 @@ class PostgresMetadataStore:
             )
             conn.commit()
 
+    def rename_session(self, session_id, name, user_id=None):
+        """Postgres parity for :meth:`SqliteMetadataStore.rename_session` —
+        DISPLAY-ONLY: the session_id/workspace directory never changes."""
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE session_metadata SET session_name = %s WHERE session_id = %s{owner}",
+                (name, session_id, *oparams),
+            )
+            conn.commit()
+
     def update_stats(self, session_id, input_t, output_t, cached_t, total_t, cost, now, user_id=None):
         owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn, conn.cursor() as cur:
@@ -572,27 +687,70 @@ class PostgresMetadataStore:
 
     def delete_session(self, session_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
+        deleted: list[str] = []
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(f"DELETE FROM session_metadata WHERE session_id = %s{owner}", (session_id, *oparams))
+            # Same manual cascade as SQLite (no FK). Conversation checkpoints
+            # (Wave 10) live in THIS same Postgres DB; SessionManager purges
+            # them via delete_thread_checkpoints from the RETURNING ids — never
+            # a separate pre-read that can go stale or fail apart from the delete.
+            if cur.rowcount or user_id is None:
+                cur.execute(
+                    "DELETE FROM chat_threads WHERE session_id = %s RETURNING id",
+                    (session_id,),
+                )
+                deleted = [r[0] for r in cur.fetchall()]
             conn.commit()
+        return deleted
+
+    # LangGraph Postgres-checkpointer tables (Wave 10) — the conversation
+    # content, keyed by thread_id. checkpoint_migrations is schema state, never
+    # deleted.
+    _CKPT_TABLES = ("checkpoint_writes", "checkpoint_blobs", "checkpoints")
+
+    def delete_thread_checkpoints(self, thread_ids) -> None:
+        """Best-effort purge of conversation checkpoints for deleted threads
+        (Postgres mode). Same DB as metadata, so one sync connection reaches
+        them. Guarded per table — the tables exist only after the saver's first
+        write; a purge failure must never block the session delete."""
+        ids = [t for t in thread_ids if t]
+        if not ids:
+            return
+        try:
+            with self._connect() as conn:
+                # Autocommit so each table's DELETE is independent: a transient
+                # failure on one table can't roll back another's already-applied
+                # delete (a non-autocommit transaction would also poison every
+                # subsequent statement after the first error).
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    for table in self._CKPT_TABLES:
+                        try:
+                            cur.execute(
+                                f"DELETE FROM {table} WHERE thread_id = ANY(%s)", (ids,)
+                            )
+                        except Exception:
+                            pass  # table absent / transient — skip, others stand
+        except Exception:
+            pass
 
     # -- chat threads --
 
-    def create_thread(self, thread_id, session_id, user_id, title, model, now):
+    def create_thread(self, thread_id, session_id, user_id, title, model, now, runtime="langchain"):
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (thread_id, session_id, user_id, title, model, now, now),
+                "INSERT INTO chat_threads (id, session_id, user_id, title, model, runtime, created_at, last_active) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (thread_id, session_id, user_id, title, model, runtime, now, now),
             )
             conn.commit()
 
-    def ensure_thread(self, thread_id, session_id, user_id, title, model, now):
+    def ensure_thread(self, thread_id, session_id, user_id, title, model, now, runtime="langchain"):
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO chat_threads (id, session_id, user_id, title, model, created_at, last_active) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
-                (thread_id, session_id, user_id, title, model, now, now),
+                "INSERT INTO chat_threads (id, session_id, user_id, title, model, runtime, created_at, last_active) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                (thread_id, session_id, user_id, title, model, runtime, now, now),
             )
             conn.commit()
 
@@ -615,7 +773,20 @@ class PostgresMetadataStore:
             row = cur.fetchone()
         return int(row[0]) if row else 0
 
-    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None):
+    def count_threads_by_session(self, user_id=None):
+        """Postgres parity for :meth:`SqliteMetadataStore.count_threads_by_session`."""
+        sql = "SELECT session_id, COUNT(*) FROM chat_threads"
+        params: tuple = ()
+        if user_id is not None:
+            sql += " WHERE user_id = %s"
+            params = (user_id,)
+        sql += " GROUP BY session_id"
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return {r[0]: int(r[1]) for r in rows}
+
+    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None, runtime=None):
         sets, params = [], []
         if title is not None:
             sets.append("title = %s"); params.append(title)
@@ -623,6 +794,8 @@ class PostgresMetadataStore:
             sets.append("model = %s"); params.append(model)
         if last_active is not None:
             sets.append("last_active = %s"); params.append(last_active)
+        if runtime is not None:
+            sets.append("runtime = %s"); params.append(runtime)
         if not sets:
             return
         owner, oparams = self._owner_clause(user_id)

@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
  * Sign-in button / account chip. Renders nothing when OAuth is unconfigured
  * (self-host / zero-config) — `enabled` is false, so the header looks exactly
  * like today. Signed-out: "Sign in with Google". Signed-in: avatar + email with
- * a small dropdown (manual popover, matching SessionPicker/ThreadSwitcher) that
+ * a small dropdown (manual popover, matching Breadcrumb/ThreadSwitcher) that
  * offers Sign out.
  */
 export function AccountChip() {
