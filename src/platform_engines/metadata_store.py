@@ -43,6 +43,12 @@ class MetadataStore(Protocol):
     # sessions
     def upsert_session(self, session_id: str, user_id: Optional[str], session_name: str,
                        model_name: str, project_id: Optional[str], now: Any) -> None: ...
+    # Atomic create: INSERT only, raising DuplicateSession on a primary-key
+    # conflict (never DO UPDATE). The DB primary key is the cross-instance
+    # arbiter for a NEW session — unlike upsert_session, a losing racer cannot
+    # be handed a foreign-owned id nor mutate the winner's row.
+    def insert_session(self, session_id: str, user_id: Optional[str], session_name: str,
+                       model_name: str, project_id: Optional[str], now: Any) -> None: ...
     def get_session(self, session_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
     def get_all_session_rows(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
     def move_session(self, session_id: str, project_id: Optional[str], user_id: Optional[str] = None) -> None: ...
@@ -81,6 +87,13 @@ class MetadataStore(Protocol):
 
 
 class DuplicateProject(Exception):
+    pass
+
+
+class DuplicateSession(Exception):
+    """A session_id already exists — raised by the atomic insert_session so a
+    losing fork-allocation race retries a fresh id instead of adopting/mutating
+    the winner's row."""
     pass
 
 
@@ -273,6 +286,20 @@ class SqliteMetadataStore:
                 (session_id, user_id, session_name, model_name, project_id, now, now),
             )
             conn.commit()
+
+    def insert_session(self, session_id, user_id, session_name, model_name, project_id, now):
+        with self._connect() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO session_metadata (session_id, user_id, session_name, model_name, project_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (session_id, user_id, session_name, model_name, project_id, now, now),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError as exc:
+                raise DuplicateSession(session_id) from exc
 
     def get_session(self, session_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
@@ -671,6 +698,22 @@ class PostgresMetadataStore:
                 (session_id, user_id, session_name, model_name, project_id, now, now),
             )
             conn.commit()
+
+    def insert_session(self, session_id, user_id, session_name, model_name, project_id, now):
+        import psycopg.errors as pg_errors  # lazy
+
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO session_metadata (session_id, user_id, session_name, model_name, project_id, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (session_id, user_id, session_name, model_name, project_id, now, now),
+                )
+                conn.commit()
+        except pg_errors.UniqueViolation as exc:
+            raise DuplicateSession(session_id) from exc
 
     def get_session(self, session_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)

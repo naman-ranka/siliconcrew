@@ -522,6 +522,62 @@ def test_cross_tenant_fork_of_same_template_isolates_owner_and_workspace(tmp_pat
     assert not any(k.startswith(f"workspaces/{sid_a}/") for k in bob_writes)
 
 
+def test_concurrent_same_template_fork_race_insert_arbitrates(tmp_path, scratch, monkeypatch):
+    """Genuine concurrent race (MAJOR residual from the first fix): two instances
+    fork the same template; the name-derived pre-check is BLIND during the
+    check-to-insert window (simulated). The atomic INSERT must arbitrate — the
+    loser retries a distinct owned id and NEVER runs delete_workspace/sync on the
+    winner's LIVE workspace. Pre-fix (upsert) the loser adopted alice's id and
+    destroyed her committed workspace."""
+    _go_cloud(monkeypatch)
+    shared_db = str(tmp_path / "shared.db")
+    sm_a = SessionManager(base_dir=str(tmp_path / "A"), db_path=shared_db)
+    sm_b = SessionManager(base_dir=str(tmp_path / "B"), db_path=shared_db)
+    ws_store = RecordingStore()
+    provider = CloudWorkspaceProvider(ws_store, scratch)
+    set_workspace_provider(provider)
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    sid_a = T.fork_from_template(sm_a, "demo_fifo", user_id="alice")
+    _resync_with_file(provider, sid_a, "ALICE_SECRET.txt", "secret")
+    alice_gen = ws_store.generation(_manifest_key(sid_a))
+
+    # Blind pre-check on bob's instance for alice's id (the check-to-insert
+    # window): only the atomic insert stands between bob and alice's data.
+    orig = sm_b._store.get_session
+    monkeypatch.setattr(
+        sm_b._store, "get_session",
+        lambda sid, user_id=None: None if sid == sid_a else orig(sid, user_id),
+    )
+    ws_store.writes.clear()
+    sid_b = T.fork_from_template(sm_b, "demo_fifo", user_id="bob")
+
+    assert sid_b != sid_a  # loser retried to a distinct id
+    assert sm_b.owns_session(sid_b, "bob")
+    # Alice's live workspace untouched — no delete/clobber under her prefix.
+    assert ws_store.generation(_manifest_key(sid_a)) == alice_gen
+    for entry in ws_store.writes:
+        key = entry[1] if isinstance(entry, tuple) else entry
+        assert not key.startswith(f"workspaces/{sid_a}/"), entry
+    assert not os.path.exists(os.path.join(scratch, sid_b, "ALICE_SECRET.txt"))
+
+
+def test_insert_session_raises_on_duplicate(tmp_path):
+    """The atomic arbiter: a second insert of the same id raises DuplicateSession
+    (the PK conflict), never a silent upsert."""
+    from src.platform_engines.metadata_store import DuplicateSession
+    import datetime as _dt
+
+    shared_db = str(tmp_path / "db.sqlite")
+    sm_a = SessionManager(base_dir=str(tmp_path / "a"), db_path=shared_db)
+    sm_a.create_session("dup", user_id="alice")
+    with pytest.raises(DuplicateSession):
+        sm_a._store.insert_session("dup", "bob", "x", "m", None, _dt.datetime.now())
+    assert sm_a.get_session_metadata("dup", user_id="alice")  # alice still owns it
+
+
 def test_create_session_rejects_preexisting_global_row(tmp_path):
     """The root guard: create_session must refuse an id already in the shared
     store even when this instance's local disk is empty (the cross-instance

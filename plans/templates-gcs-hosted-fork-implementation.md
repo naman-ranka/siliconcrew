@@ -345,6 +345,11 @@ proven to fail pre-fix.
 User publish + community tier + moderation (per intent §6); GCS workspace GC
 for orphaned blobs (D7); staleness UI for the gallery TTL cache; per-bundle
 thumbnails in the index; hosted `read_provenance` file-only forks backfill.
+**Cross-tenant session-name enumeration oracle** (re-verify note): because fork
+ids are name-derived in one global namespace, a `create_session` 409 reveals
+that *some* tenant already holds that id. Low severity, pre-existing (inherent
+to the shared name-derived namespace, not introduced by A17/A18); a real fix is
+per-tenant id namespacing or opaque fork ids — deferred, noted for honesty.
 
 ## 6. Open items for the review pass (verify in code before build)
 1. Exact migration idiom in `metadata_store.py` for adding the
@@ -521,3 +526,23 @@ Regression: `tests/test_hosted_fork.py` — re-fork-after-delete pristine,
 cross-tenant fork isolates owner+workspace (two SessionManagers sharing one db,
 separate base_dirs = the multi-instance model), create_session rejects a shared
 global row. All three proven to FAIL on pre-fix code.
+
+**A18 [MAJOR, re-verify residual — concurrent race; FIXED]** The A17 fix
+closed the sequential/ephemeral-instance cases, but a GENUINE concurrent race
+(two users forking one popular template at the same instant on different
+instances) still slipped through: `create_session`'s check-then-insert is not
+atomic and `upsert_session`'s `ON CONFLICT DO UPDATE` never fails, so both
+racers could pass the pre-check and the loser was handed a non-owned id — then
+A17's own `delete_workspace`-before-`workspace_for` turned the former read-leak
+into destructive DATA LOSS (the loser wiped + overwrote the winner's live
+workspace). **Root fix:** make the metadata insert atomic — new
+`MetadataStore.insert_session` (both sqlite + postgres) does an INSERT-only and
+raises `DuplicateSession` on the primary-key conflict; `create_session` uses it
+(cleaning up its just-made local dir on conflict) so the DB PK is the
+cross-instance arbiter. The loser gets `FileExistsError` →
+`_allocate_fork_session` retries a fresh suffix, never touching the winner's
+row or workspace. `upsert_session` is untouched (still used by the idempotent
+`ensure_session`). Regression: `test_concurrent_same_template_fork_race_insert_arbitrates`
+(blind pre-check window simulated; asserts the loser gets a distinct owned id
+and alice's committed workspace generation is unchanged) + `insert_session`
+duplicate raise — both proven to FAIL on the pre-fix upsert path.
