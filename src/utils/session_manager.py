@@ -207,6 +207,14 @@ class SessionManager:
         """
         self._store.rename_session(session_id, name, user_id=user_id)
 
+    def set_source_template(self, session_id, value, user_id=None):
+        """Persist a fork's provenance JSON ({id,name,forked_at}) on the session
+        row (owner-scoped). Thin passthrough — the durable store copy of the
+        workspace ``.source_template.json`` so the "forked from" chip survives on
+        hosted, where list endpoints never hydrate a workspace to read the file.
+        """
+        self._store.set_source_template(session_id, value, user_id=user_id)
+
     def update_session_stats(self, session_id, input_t, output_t, cached_t, cost, user_id=None):
         """Updates token stats and bumps updated_at for a session."""
         self._store.update_stats(
