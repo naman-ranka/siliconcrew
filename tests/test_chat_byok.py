@@ -62,7 +62,9 @@ class _FakeAgent:
         return _FakeState()
 
     async def astream(self, inputs, config, stream_mode=None):
-        yield {"agent": {"messages": [_FakeMsg()]}}
+        # The WS streams with stream_mode=["updates", "messages"], so events
+        # arrive as (mode, payload) tuples.
+        yield ("updates", {"agent": {"messages": [_FakeMsg()]}})
 
 
 @pytest.fixture()
@@ -96,7 +98,7 @@ def harness(monkeypatch):
 
     sm = api.session_manager
     monkeypatch.setattr(sm, "owns_session", lambda sid, uid=None: True)
-    monkeypatch.setattr(sm, "ensure_thread", lambda *a, **k: None)
+    monkeypatch.setattr(sm, "resolve_ws_thread", lambda tid, sid, user_id=None: sid)
     monkeypatch.setattr(sm, "touch_thread", lambda *a, **k: None)
     monkeypatch.setattr(sm, "get_thread", lambda *a, **k: {})
     monkeypatch.setattr(sm, "update_session_stats", lambda *a, **k: None)

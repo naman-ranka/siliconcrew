@@ -141,6 +141,15 @@
   }
 }
 
+/* Codex agent surface: a subtle violet accent scope. The shared chat
+   components read --primary / --ring, so putting data-runtime="codex" on the
+   ChatArea wrapper recolors text-primary / bg-primary / focus rings to violet
+   only inside the Codex panel — same components, a different paint. */
+[data-runtime="codex"] {
+  --primary: 258 90% 66%;   /* ≈ violet-500 */
+  --ring: 258 90% 66%;
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -205,16 +214,6 @@
 [data-panel-group-direction="horizontal"] > [data-panel-resize-handle-id][data-resize-handle-active] {
   width: 3px;
   background: hsl(var(--primary));
-}
-
-/* Monaco editor customization */
-.monaco-editor {
-  padding-top: 8px !important;
-}
-
-.monaco-editor .margin,
-.monaco-editor-background {
-  background: hsl(var(--surface-1)) !important;
 }
 
 /* Prose customization for better markdown rendering */
