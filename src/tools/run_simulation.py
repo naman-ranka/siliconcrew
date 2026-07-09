@@ -118,6 +118,7 @@ def _compile(
     output_executable: str,
     cwd: str,
     timeout: int,
+    top_module: str = "",
 ) -> Dict[str, Any]:
     include_dirs = sorted({os.path.dirname(os.path.abspath(p)) for p in compile_files if p})
     include_args: List[str] = []
@@ -144,7 +145,12 @@ def _compile(
             "command": "iverilog (filelist generation)",
         }
 
-    cmd = ["iverilog", "-g2012"] + include_args + ["-o", output_executable, "-f", filelist]
+    # -s pins the simulation root. Without it iverilog elaborates EVERY
+    # un-instantiated module as a root — with two testbenches in the workspace
+    # both would run interleaved in one simulation. The chosen top makes
+    # "simulate this testbench" true; unchosen TBs become dead code.
+    top_args = ["-s", top_module] if top_module else []
+    cmd = ["iverilog", "-g2012"] + include_args + top_args + ["-o", output_executable, "-f", filelist]
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -399,7 +405,7 @@ def run_simulation(
                     compile_files = compile_files[: len(verilog_files) + 1] + selected
 
     output_exec = os.path.join(cwd, f"{top_module}.out")
-    comp = _compile(compile_files=compile_files, output_executable=output_exec, cwd=cwd, timeout=timeout)
+    comp = _compile(compile_files=compile_files, output_executable=output_exec, cwd=cwd, timeout=timeout, top_module=top_module)
 
     if comp["returncode"] != 0:
         unresolved_cells = _extract_unresolved_cells(comp.get("stderr", "")) if mode == "post_synth" else []

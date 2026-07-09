@@ -3,6 +3,7 @@ FROM python:3.12-slim
 # Install EDA tools, Docker CLI, and Node.js
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iverilog \
+    verilator \
     yosys \
     ca-certificates \
     curl \
