@@ -1,0 +1,14 @@
+{
+  "runs": [
+    {
+      "run_id": "sim_0001",
+      "status": "passed",
+      "created_at": "2026-07-07T08:09:44.617982+00:00",
+      "updated_at": "2026-07-07T08:09:44.827375+00:00",
+      "top": "aes_invsbox_tb",
+      "mode": "rtl",
+      "pinned": false,
+      "parentRunId": null
+    }
+  ]
+}

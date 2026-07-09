@@ -12,6 +12,7 @@ vi.mock("@/lib/api", () => ({
 import { useStore } from "@/lib/store";
 import { FileExplorer } from "@/components/workbench/FileExplorer";
 import { BottomDock } from "@/components/workbench/BottomDock";
+import { ReportArtifact } from "@/components/workbench/viewers/ReportArtifact";
 import type { ActivityEvent } from "@/types";
 
 const SESSION = {
@@ -142,5 +143,85 @@ describe("BottomDock", () => {
     expect(screen.getByText(/place/)).toBeInTheDocument(); // last-known stage
     expect(screen.getByText(/started 5m ago/)).toBeInTheDocument(); // honest staleness
     expect(screen.getByLabelText("Refresh status of synth_0001")).toBeInTheDocument();
+  });
+
+  it("failed sim row without a pass marker names the expected marker (F11)", () => {
+    useStore.setState({
+      runs: [
+        {
+          id: "sim_0002",
+          kind: "sim",
+          status: "failed",
+          createdAt: new Date().toISOString(),
+          top: "decoder_tb",
+          pinned: false,
+          // The TB printed a PASS-ish line but not the exact grepped marker.
+          passMarkerFound: false,
+          passMarker: "TEST PASSED",
+          stdoutTail: "ALL TESTS PASSED\n",
+        },
+      ] as any,
+      synthJob: null,
+    });
+
+    render(<BottomDock />);
+    fireEvent.click(screen.getByRole("button", { name: /Runs/ }));
+    expect(screen.getByText('no pass marker — expected "TEST PASSED"')).toBeInTheDocument();
+  });
+
+  it("failed synth row shows the failing stage and one-line notes (F12)", () => {
+    useStore.setState({
+      runs: [
+        {
+          id: "synth_0002",
+          kind: "synth",
+          status: "failed",
+          createdAt: new Date().toISOString(),
+          top: "decoder",
+          pinned: false,
+          currentStage: "cts",
+          checkNotes: "clock tree synthesis crashed (SIGILL)",
+        },
+      ] as any,
+      synthJob: null,
+    });
+
+    render(<BottomDock />);
+    fireEvent.click(screen.getByRole("button", { name: /Runs/ }));
+    expect(screen.getByText(/@ cts/)).toBeInTheDocument();
+    expect(screen.getByText("clock tree synthesis crashed (SIGILL)")).toBeInTheDocument();
+  });
+});
+
+describe("ReportArtifact", () => {
+  it("failed synth run renders an honest failure panel with stage, notes, and live log tail (F12)", () => {
+    // The viewer never fetches the tail — it uses it only when the live
+    // synthJob is THIS run (invariant 6).
+    useStore.setState({
+      runs: [
+        {
+          id: "synth_0003",
+          kind: "synth",
+          status: "failed",
+          createdAt: new Date().toISOString(),
+          top: "decoder",
+          pinned: false,
+          currentStage: "route",
+          checkNotes: "detailed routing hit DRC violations",
+        },
+      ] as any,
+      synthJob: {
+        runId: "synth_0003",
+        status: "failed",
+        lastLogLines: ["ERROR: 12 DRC violations", "route stage failed"],
+      } as any,
+      // Keep the effect's load a no-op so the panel is what we assert on.
+      loadReportArtifact: (async () => {}) as any,
+    });
+
+    render(<ReportArtifact runId="synth_0003" />);
+    expect(screen.getByText(/Synthesis failed at route/)).toBeInTheDocument();
+    expect(screen.getByText("detailed routing hit DRC violations")).toBeInTheDocument();
+    expect(screen.getByText(/12 DRC violations/)).toBeInTheDocument();
   });
 });

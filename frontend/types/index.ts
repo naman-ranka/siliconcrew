@@ -18,6 +18,39 @@ export interface Session {
   // S0: cheap COUNT over the threads table, included in the session list so
   // launcher cards can show a chat count without hydrating any workspace.
   thread_count?: number;
+  // Wave 11: provenance for a session forked from a template bundle. Populated
+  // only on the single-session GET (a read-only workspace-file peek); null for a
+  // normal session. Drives the "forked from <name>" chip in the workbench.
+  source_template?: TemplateProvenance | null;
+}
+
+// Wave 11 — templates are repo-owned BUNDLES you can fork into a session.
+export interface TemplateProvenance {
+  id: string;
+  name: string;
+  forked_at: string;
+}
+
+// Gallery card shape (GET /api/templates).
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  description: string;
+  highlights: string[];
+  top_module?: string | null;
+  platform?: string | null;
+  source_note?: string | null;
+  file_count: number;
+  run_count: number;
+  // Present on the hosted (gcs) gallery index; "official" today (schema room for
+  // a future community tier). Absent on the self-host local gallery.
+  tier?: string;
+}
+
+// Preview shape (GET /api/templates/{id}) — summary + a shallow peek inside.
+export interface TemplateDetail extends TemplateSummary {
+  files: string[];
+  conversations: string[];
 }
 
 // Model registry (the picker). `available` is per-request: false when the
@@ -113,6 +146,11 @@ export interface WaveformData {
   unitSeconds?: number | null; // seconds per VCD tick (for ns→tick cursor mapping)
   signalCount?: number;
   signals: WaveformSignal[];
+  // Backend caps VCD parsing at VCD_PARSE_CAP (25 MB) and returns this honest
+  // "too large" signal instead of parsed signals — the viewer offers the raw
+  // download rather than a misleading "no signals found" empty state.
+  tooLarge?: boolean;
+  size?: number; // bytes, present when tooLarge
 }
 
 export interface SynthesisRun {
@@ -184,6 +222,9 @@ export interface RunSummary {
   mode?: "rtl" | "post_synth";
   vcdPath?: string;
   passMarkerFound?: boolean;
+  /** The exact pass-marker string the sim grepped for (default "TEST PASSED").
+   *  Surfaced so a failed-for-missing-marker run can name what it expected. */
+  passMarker?: string | null;
   failure?: { type?: string; firstFailureLine?: string | null; timeNs?: number | null } | null;
   compileCommand?: string;
   simCommand?: string;
@@ -193,6 +234,10 @@ export interface RunSummary {
   platform?: string | null;
   ppa?: PpaMetrics | null;
   reportAvailable?: boolean;
+  /** The stage the flow reached (and, on a failed run, failed at). */
+  currentStage?: string | null;
+  /** One-line failure/summary reason from the run's auto-checks. */
+  checkNotes?: string | null;
 }
 
 export interface PpaMetrics {
@@ -316,7 +361,17 @@ export interface SmartFile {
 
 // Artifact tab/key kinds for the v2 workbench (see lib/artifactKeys.ts for the
 // `kind:ref` string-key helpers).
-export type ArtifactKind = "code" | "spec" | "wave" | "report" | "layout" | "schematic";
+export type ArtifactKind =
+  | "code"
+  | "spec"
+  | "wave"
+  | "wavefile"
+  | "report"
+  | "layout"
+  | "schematic"
+  | "image"
+  | "data"
+  | "text";
 
 // --- Tool catalog (GET /api/workspace/{sid}/tools) ---------------------------
 // The backend introspects the SAME LangChain @tool registry the agent and MCP

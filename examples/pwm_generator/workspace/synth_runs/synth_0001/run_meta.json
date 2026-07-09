@@ -1,0 +1,125 @@
+{
+  "run_id": "synth_0001",
+  "dispatched_at": "2026-07-07T07:58:19.232981+00:00",
+  "timeout_sec": 1200,
+  "created_at": "2026-07-07T07:58:19.243941+00:00",
+  "backend": "local_docker",
+  "status": "completed",
+  "current_stage": "finish",
+  "max_stage": "finish",
+  "platform": "sky130hd",
+  "top_module": "pwm_generator",
+  "input_files": [
+    "pwm_generator.v"
+  ],
+  "spec_file": null,
+  "requested_clock_period_ns": 20.0,
+  "effective_clock_period_ns": 20.0,
+  "clock_period_ns": 20.0,
+  "clock_source": "requested",
+  "constraints_mode": "auto",
+  "utilization": 5,
+  "aspect_ratio": 1.0,
+  "core_margin": 2.0,
+  "pd_parameters": {
+    "utilization": 5,
+    "aspect_ratio": 1.0,
+    "core_margin": 2.0
+  },
+  "auto_checks": {
+    "constraints": "pass",
+    "signoff": "pass",
+    "equiv": "skip"
+  },
+  "check_notes": "All guardrails passed",
+  "stages": {
+    "constraints": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "synth": {
+      "status": "completed",
+      "artifacts": {
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\1_synth.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\1_synth.sdc",
+        "stat_report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\pwm_generator\\base\\synth_stat.txt"
+      }
+    },
+    "floorplan": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\pwm_generator\\base\\2_floorplan_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\2_floorplan.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\2_floorplan.sdc"
+      }
+    },
+    "place": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\pwm_generator\\base\\3_3_place_gp.json",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\3_place.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\3_place.sdc"
+      }
+    },
+    "cts": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\pwm_generator\\base\\4_cts_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\4_cts.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\4_cts.sdc"
+      }
+    },
+    "grt": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\pwm_generator\\base\\5_1_grt.log",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\5_1_grt.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\5_1_grt.sdc"
+      }
+    },
+    "route": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\pwm_generator\\base\\5_route_drc.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\5_route.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\5_route.sdc"
+      }
+    },
+    "finish": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\pwm_generator\\base\\6_finish.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\6_final.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\6_final.sdc",
+        "netlist": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\6_final.v",
+        "gds": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\pwm_generator\\base\\6_final.gds"
+      }
+    }
+  },
+  "provenance": {
+    "repo_commit": "ba33e4a0f75fde01c2358eb8030d4a7cbaa8e18f",
+    "orfs_image_digest": null,
+    "pdk": "sky130hd",
+    "iverilog_version": "12.0",
+    "num_cores": 4
+  },
+  "docker_command": "docker run --rm -v <workspace>\\synth_runs\\synth_0001:/workspace -v <workspace>\\synth_runs\\synth_0001\\orfs_results:/OpenROAD-flow-scripts/flow/results -v <workspace>\\synth_runs\\synth_0001\\orfs_logs:/OpenROAD-flow-scripts/flow/logs -v <workspace>\\synth_runs\\synth_0001\\orfs_reports:/OpenROAD-flow-scripts/flow/reports -w /OpenROAD-flow-scripts/flow openroad/orfs:latest bash -c make -B DESIGN_CONFIG=/workspace/config.mk",
+  "docker_success": true,
+  "docker_stdout_tail": "       136 ff5b0e344aff9abb4a31\n2_2_floorplan_macro                0            113 ff5b0e344aff9abb4a31\n2_3_floorplan_tapcell              0            113 80c93d53b5d6272aacf1\n2_4_floorplan_pdn                  0            123 ce535a1cb577268abf36\n3_1_place_gp_skip_io               1            119 029e9351fa98946975c6\n3_2_place_iop                      0            116 adb85f0418ec6f02d7cc\n3_3_place_gp                       3            232 bd21ea3b08bc224b3348\n3_4_place_resized                  2            136 bd21ea3b08bc224b3348\n3_5_place_dp                       1            128 f41e508e1706391c15a8\n4_1_cts                            3            159 2c7b39a2992a48d7cea8\n5_1_grt                           18            258 aa2330de0635d42111e5\n5_2_route                         68            797 406d872399f469213639\n5_3_fillcell                       0            136 70055b2b992d876a06b7\n6_1_fill                           0            126 70055b2b992d876a06b7\n6_1_merge                          2            446                  N/A\n6_report                           4            246                  N/A\nTotal                            114            797                     \n",
+  "docker_stderr_tail": "make: Warning: File 'results/sky130hd/pwm_generator/base/1_synth.sdc' has modification time 0.083 s in the future\nmake: warning:  Clock skew detected.  Your build may be incomplete.\n",
+  "netlist_path": null,
+  "stdcell_manifest_version": null,
+  "stdcell_files_used": [],
+  "summary_metrics": {
+    "area_um2": 8077.7472,
+    "cell_count": 1040,
+    "wns_ns": 0.0,
+    "tns_ns": 0.0,
+    "power_uw": 430.0,
+    "power_mw": 0.43,
+    "fmax_mhz": 50.0
+  },
+  "next_action": "Use search_logs_tool for detailed PPA/error verification.",
+  "finished_at": "2026-07-07T08:00:52.926999+00:00",
+  "elapsed_sec": 153.69
+}

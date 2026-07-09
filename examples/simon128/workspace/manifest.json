@@ -1,0 +1,41 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "simon_datapath_shiftreg.v",
+      "role": "rtl",
+      "path": "simon_datapath_shiftreg.v"
+    },
+    {
+      "name": "simon_key_expansion_shiftreg.v",
+      "role": "rtl",
+      "path": "simon_key_expansion_shiftreg.v"
+    },
+    {
+      "name": "simon_module.v",
+      "role": "rtl",
+      "path": "simon_module.v"
+    },
+    {
+      "name": "simon128_cipher.v",
+      "role": "rtl",
+      "path": "simon128_cipher.v"
+    },
+    {
+      "name": "simon128_cipher_tb.v",
+      "role": "tb",
+      "path": "simon128_cipher_tb.v"
+    }
+  ],
+  "synthTop": "simon128_cipher",
+  "simTop": "simon128_cipher_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "simon128_cipher_tb.v",
+      "module": "simon128_cipher_tb"
+    }
+  ]
+}

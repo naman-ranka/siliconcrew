@@ -1,0 +1,27 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T07:58:31.253333+00:00",
+  "top": "ubcd_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "ba33e4a0f75fde01c2358eb8030d4a7cbaa8e18f",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\ubcd_tb.vcd",
+  "passMarkerFound": true,
+  "passMarker": "TEST PASSED",
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s ubcd_tb -o <workspace>\\sim_runs\\sim_0001\\ubcd_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog_pfz3vhbu.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\ubcd_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile ubcd_tb.vcd opened for output.\nTEST PASSED (16 codes)\n<workspace>/ubcd_tb.v:94: $finish called at 16000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

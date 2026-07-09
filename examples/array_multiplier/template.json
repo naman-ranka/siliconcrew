@@ -1,0 +1,13 @@
+{
+  "id": "array_multiplier",
+  "name": "4x4 Array Multiplier",
+  "description": "A combinational 4x4 unsigned array multiplier (AND-array + full-adder tree), adapted from UACJ Group A's Tiny Tapeout Array-multiplier (Apache-2.0, commit f5291c9), taken spec -> lint -> sim -> GDS on sky130hd entirely through the platform.",
+  "highlights": [
+    "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
+    "Timing met: WNS 0.0 ns; 45 std cells; 0.28 mW",
+    "Exhaustive self-checking TB verifies all 256 products -- TEST PASSED"
+  ],
+  "top_module": "array_multiplier",
+  "platform": "sky130hd",
+  "source_note": "Multiplier RTL adapted from HHRB98/Array-multiplier (Apache-2.0); original exhaustive self-checking TB (all 256 products); authored by dogfooding SiliconCrew locally."
+}

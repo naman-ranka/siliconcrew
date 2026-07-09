@@ -51,11 +51,16 @@ def register_codex_runtime(
         persist_credential=persist_credential,
     )
 
+    def _on_thread_deleted(thread_id, user_id):
+        # Codex owns its transcript; the shared delete path calls this via the
+        # registry so it never references Codex directly. Also drops any warm
+        # worker bound to the deleted thread (TTFT warm-keep lifecycle).
+        store.delete_for_thread(thread_id)
+        handler.on_thread_deleted(thread_id)
+
     register_runtime(
         RuntimeDescriptor(id="codex", display_name="Codex"),
         handler,
-        # Codex owns its transcript; the shared delete path calls this via the
-        # registry so it never references Codex directly.
-        on_thread_deleted=lambda thread_id, user_id: store.delete_for_thread(thread_id),
+        on_thread_deleted=_on_thread_deleted,
     )
     return store

@@ -1,0 +1,125 @@
+{
+  "run_id": "synth_0001",
+  "dispatched_at": "2026-07-07T07:58:31.435646+00:00",
+  "timeout_sec": 1200,
+  "created_at": "2026-07-07T07:58:31.452063+00:00",
+  "backend": "local_docker",
+  "status": "completed",
+  "current_stage": "finish",
+  "max_stage": "finish",
+  "platform": "sky130hd",
+  "top_module": "universal_bcd_decoder",
+  "input_files": [
+    "ubcd.v"
+  ],
+  "spec_file": null,
+  "requested_clock_period_ns": 10.0,
+  "effective_clock_period_ns": 10.0,
+  "clock_period_ns": 10.0,
+  "clock_source": "requested",
+  "constraints_mode": "auto",
+  "utilization": 5,
+  "aspect_ratio": 1.0,
+  "core_margin": 2.0,
+  "pd_parameters": {
+    "utilization": 5,
+    "aspect_ratio": 1.0,
+    "core_margin": 2.0
+  },
+  "auto_checks": {
+    "constraints": "pass",
+    "signoff": "pass",
+    "equiv": "skip"
+  },
+  "check_notes": "All guardrails passed",
+  "stages": {
+    "constraints": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "synth": {
+      "status": "completed",
+      "artifacts": {
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\1_synth.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\1_synth.sdc",
+        "stat_report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\universal_bcd_decoder\\base\\synth_stat.txt"
+      }
+    },
+    "floorplan": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\universal_bcd_decoder\\base\\2_floorplan_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\2_floorplan.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\2_floorplan.sdc"
+      }
+    },
+    "place": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\universal_bcd_decoder\\base\\3_3_place_gp.json",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\3_place.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\3_place.sdc"
+      }
+    },
+    "cts": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\universal_bcd_decoder\\base\\4_cts_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\4_cts.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\4_cts.sdc"
+      }
+    },
+    "grt": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\universal_bcd_decoder\\base\\5_1_grt.log",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\5_1_grt.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\5_1_grt.sdc"
+      }
+    },
+    "route": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\universal_bcd_decoder\\base\\5_route_drc.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\5_route.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\5_route.sdc"
+      }
+    },
+    "finish": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\universal_bcd_decoder\\base\\6_finish.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\6_final.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\6_final.sdc",
+        "netlist": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\6_final.v",
+        "gds": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\universal_bcd_decoder\\base\\6_final.gds"
+      }
+    }
+  },
+  "provenance": {
+    "repo_commit": "ba33e4a0f75fde01c2358eb8030d4a7cbaa8e18f",
+    "orfs_image_digest": null,
+    "pdk": "sky130hd",
+    "iverilog_version": "12.0",
+    "num_cores": 4
+  },
+  "docker_command": "docker run --rm -v <workspace>\\synth_runs\\synth_0001:/workspace -v <workspace>\\synth_runs\\synth_0001\\orfs_results:/OpenROAD-flow-scripts/flow/results -v <workspace>\\synth_runs\\synth_0001\\orfs_logs:/OpenROAD-flow-scripts/flow/logs -v <workspace>\\synth_runs\\synth_0001\\orfs_reports:/OpenROAD-flow-scripts/flow/reports -w /OpenROAD-flow-scripts/flow openroad/orfs:latest bash -c make -B DESIGN_CONFIG=/workspace/config.mk",
+  "docker_success": true,
+  "docker_stdout_tail": "       133 0e9dd2d8c63387df51af\n2_2_floorplan_macro                0            112 0e9dd2d8c63387df51af\n2_3_floorplan_tapcell              0            111 e1c66dbcd4ebd4a9c038\n2_4_floorplan_pdn                  0            115 3925915c71e151c336e7\n3_1_place_gp_skip_io               0            113 f6ae9d5282c147be500e\n3_2_place_iop                      0            112 2f5ebc842c9f491d2896\n3_3_place_gp                       1            211 8236d8c6ded39c2fef71\n3_4_place_resized                  1            132 8236d8c6ded39c2fef71\n3_5_place_dp                       1            117 fe7b6bec34bef3c8b141\n4_1_cts                            2            142 6a3ed891650b8898de63\n5_1_grt                            5            229 b6f7b4c5ebd203fbc8ce\n5_2_route                         45            700 7eee6edb1882b8dbe95d\n5_3_fillcell                       0            117 8f1626b7b4a0c04cefe7\n6_1_fill                           0            114 8f1626b7b4a0c04cefe7\n6_1_merge                          1            429                  N/A\n6_report                           2            181                  N/A\nTotal                             59            700                     \n",
+  "docker_stderr_tail": "make: Warning: File 'results/sky130hd/universal_bcd_decoder/base/1_synth.sdc' has modification time 0.27 s in the future\nmake: warning:  Clock skew detected.  Your build may be incomplete.\n",
+  "netlist_path": null,
+  "stdcell_manifest_version": null,
+  "stdcell_files_used": [],
+  "summary_metrics": {
+    "area_um2": 1232.432,
+    "cell_count": 192,
+    "wns_ns": 0.0,
+    "tns_ns": 0.0,
+    "power_uw": 646.0,
+    "power_mw": 0.646,
+    "fmax_mhz": 100.0
+  },
+  "next_action": "Use search_logs_tool for detailed PPA/error verification.",
+  "finished_at": "2026-07-07T07:59:58.786070+00:00",
+  "elapsed_sec": 87.34
+}

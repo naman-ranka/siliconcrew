@@ -1,0 +1,27 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T08:13:04.803727+00:00",
+  "top": "simon128_cipher_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "657b32b06defeceeda1e31c6468302ffa214e270",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": null,
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\simon128_cipher_tb.vcd",
+  "passMarkerFound": true,
+  "passMarker": "TEST PASSED",
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s simon128_cipher_tb -o <workspace>\\sim_runs\\sim_0001\\simon128_cipher_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog_rn8z0qq8.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\simon128_cipher_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile simon128_cipher_tb.vcd opened for output.\nOK: pt=9f8e9892959afeeea080f1ea63e65b37 -> ct=e0df57e57d292d90fdbab57cfdde08d4\nOK: pt=d5be0328b8f87ffee3ecce3263f6ffc4 -> ct=d9165a86d28b9937cbd2b69142d29997\nTEST PASSED\n<workspace>/simon128_cipher_tb.v:127: $finish called at 98775000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

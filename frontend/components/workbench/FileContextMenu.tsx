@@ -2,10 +2,12 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+  Activity,
   Cpu,
   Download,
   ExternalLink,
   FilePlus2,
+  FileText,
   FolderPlus,
   Link as LinkIcon,
   Play,
@@ -126,11 +128,18 @@ function Menu({ menu }: { menu: ContextMenuState }) {
   const isEmpty = menu.kind === "empty";
   const basename = isEmpty ? "workspace" : path.split("/").pop() || path;
   const isVerilog = !isDir && /\.(v|sv)$/i.test(basename);
+  const isVcd = !isDir && !isEmpty && /\.vcd$/i.test(basename);
   const isSynthTop = isVerilog && isSynthTopFile(basename, manifest);
   const sessionId = currentSession?.id ?? null;
 
   const doOpen = () => {
     if (sessionId) openArtifact(sessionId, artifactKeyForFile(path));
+    close();
+  };
+
+  // Raw view for files whose default Open is a rich viewer (VCD → waveform).
+  const doOpenAsText = () => {
+    if (sessionId) openArtifact(sessionId, `text:${path}`);
     close();
   };
 
@@ -224,7 +233,19 @@ function Menu({ menu }: { menu: ContextMenuState }) {
         </>
       ) : (
         <>
-          <MenuItem onSelect={doOpen} icon={<ExternalLink className="h-3.5 w-3.5" />} label="Open" />
+          <MenuItem
+            onSelect={doOpen}
+            icon={isVcd ? <Activity className="h-3.5 w-3.5" /> : <ExternalLink className="h-3.5 w-3.5" />}
+            label={isVcd ? "Open waveform" : "Open"}
+          />
+          {/* VCDs default to the waveform viewer; the raw dump stays reachable. */}
+          {isVcd && (
+            <MenuItem
+              onSelect={doOpenAsText}
+              icon={<FileText className="h-3.5 w-3.5" />}
+              label="Open as text"
+            />
+          )}
           <MenuItem onSelect={doCopyPath} icon={<LinkIcon className="h-3.5 w-3.5" />} label="Copy path" />
           <MenuItem onSelect={doDownload} icon={<Download className="h-3.5 w-3.5" />} label="Download" />
         </>

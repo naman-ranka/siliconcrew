@@ -1,0 +1,26 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T06:28:08.525714+00:00",
+  "top": "seq_detector_0011_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "c07c374d3366d0c0551e38174c139976e34a85ed",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\seq_detector_0011_tb.vcd",
+  "passMarkerFound": true,
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s seq_detector_0011_tb -o <workspace>\\sim_runs\\sim_0001\\seq_detector_0011_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog_peqe_c5e.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\seq_detector_0011_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile seq_detector_0011_tb.vcd opened for output.\nTEST PASSED\n<workspace>/seq_detector_0011_tb.v:45: $finish called at 426000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

@@ -81,6 +81,43 @@ resource "google_storage_bucket" "workspaces" {
 }
 
 # ---------------------------------------------------------------------------
+# Cloud Storage — official templates gallery (public-read; admin-write only)
+# ---------------------------------------------------------------------------
+#
+# A SEPARATE bucket from workspaces — the workspaces lifecycle rule above would
+# silently DELETE template objects, and public-read must stay isolated to
+# template content. Publish/update bundles with scripts/publish_templates.py
+# (no redeploy). NO lifecycle rule: templates are durable, not staging.
+#
+# NOTE: this bucket already exists live (created via the Storage API on
+# 2026-07-08, staging). Terraform is the IaC record — run
+# `terraform import google_storage_bucket.templates <project>-siliconcrew-templates`
+# before the next apply so plan does not try to recreate it.
+resource "google_storage_bucket" "templates" {
+  name                        = "${var.project_id}-siliconcrew-templates"
+  location                    = var.region
+  uniform_bucket_level_access = true
+  force_destroy               = false
+  labels                      = local.labels
+}
+
+# Public read so the self-host fetch script needs no auth/SDK (sacred: no cloud
+# dependency to obtain public template binaries).
+resource "google_storage_bucket_iam_member" "templates_public_read" {
+  bucket = google_storage_bucket.templates.name
+  role   = "roles/storage.objectViewer"
+  member = "allUsers"
+}
+
+# Backend reads the index + archives (READ-ONLY — listing never writes; publish
+# is the operator tool with its own credentials, never the service SA).
+resource "google_storage_bucket_iam_member" "backend_templates_read" {
+  bucket = google_storage_bucket.templates.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.backend.email}"
+}
+
+# ---------------------------------------------------------------------------
 # Cloud KMS — KEK for BYOK envelope encryption
 # ---------------------------------------------------------------------------
 
@@ -307,6 +344,13 @@ resource "google_cloud_run_v2_service" "backend" {
       env {
         name  = "WORKSPACE_BUCKET"
         value = google_storage_bucket.workspaces.name
+      }
+      # Selects the gcs template gallery (explicit-config-wins; see settings.py).
+      # Set only AFTER publish_templates.py has written official/index.json, or
+      # the gallery serves an honest 503 until then.
+      env {
+        name  = "TEMPLATES_BUCKET"
+        value = google_storage_bucket.templates.name
       }
       env {
         name  = "ORFS_CLOUD_RUN_JOB"

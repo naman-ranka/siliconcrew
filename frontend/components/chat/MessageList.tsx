@@ -11,6 +11,7 @@ import { useStore } from "@/lib/store";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToolCallCard } from "./ToolCallCard";
+import { useChatCompact } from "./density";
 import { cn } from "@/lib/utils";
 import type { Message, ContentBlock } from "@/types";
 
@@ -42,10 +43,6 @@ function CopyButton({ text }: { text: string }) {
       {copied ? "Copied!" : "Copy"}
     </button>
   );
-}
-
-function isThinkingBlock(blocks: ContentBlock[], idx: number): boolean {
-  return blocks.slice(idx + 1).some((b) => b.type === "tool");
 }
 
 function ThinkingContent({ content }: { content: string }) {
@@ -97,19 +94,20 @@ function PlanContent({ content }: { content: string }) {
   );
 }
 
-/** Renders a single content block — text (with the thinking heuristic),
- * reasoning ("thinking" stream), plan/todo, or a tool call. Shared by the
- * committed-message and streaming render paths. */
-function BlockView({ block, idx, blocks, isStreaming = false }: {
-  block: ContentBlock; idx: number; blocks: ContentBlock[]; isStreaming?: boolean;
+/** Renders a single content block — visible assistant text, reasoning
+ * ("thinking" stream), plan/todo, or a tool call. Shared by the
+ * committed-message and streaming render paths.
+ *
+ * Only the dedicated `reasoning` stream collapses into the "Thinking" toggle.
+ * Plain `text` is genuine assistant prose (an explanation before a tool call is
+ * still an explanation) and always renders visibly — we key off the real block
+ * type, never position relative to a tool call. */
+function BlockView({ block, isStreaming = false }: {
+  block: ContentBlock; isStreaming?: boolean;
 }) {
   if (block.type === "reasoning") return <ThinkingContent content={block.content} />;
   if (block.type === "plan") return <PlanContent content={block.content} />;
-  if (block.type === "text") {
-    return isThinkingBlock(blocks, idx)
-      ? <ThinkingContent content={block.content} />
-      : <MarkdownContent content={block.content} />;
-  }
+  if (block.type === "text") return <MarkdownContent content={block.content} />;
   return <ToolCallCard toolCall={block.toolCall} result={block.result} isRunning={isStreaming && !block.result} />;
 }
 
@@ -118,9 +116,20 @@ function _blockKey(block: ContentBlock, idx: number): string | number {
 }
 
 function MarkdownContent({ content }: { content: string }) {
+  const compact = useChatCompact();
 
   return (
-    <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-surface-2 prose-pre:border prose-pre:border-border">
+    // One base size per density; everything inside scales in em off it (the
+    // heading/code/table styles below), so rail and centered chat share one
+    // type system instead of viewport-sized absolutes. (`prose-sm` is inert —
+    // the typography plugin isn't installed; .prose in globals.css only sets
+    // colors — so the explicit base here is what actually sizes the text.)
+    <div
+      className={cn(
+        "prose dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-surface-2 prose-pre:border prose-pre:border-border",
+        compact ? "text-[0.8125rem]" : "text-sm"
+      )}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -131,7 +140,7 @@ function MarkdownContent({ content }: { content: string }) {
             if (isInline) {
               return (
                 <code
-                  className="bg-surface-2 text-primary px-1.5 py-0.5 rounded text-sm font-mono"
+                  className="bg-surface-2 text-primary px-1.5 py-0.5 rounded font-mono"
                   {...props}
                 >
                   {children}
@@ -141,19 +150,20 @@ function MarkdownContent({ content }: { content: string }) {
 
             return (
               <div className="relative group rounded-lg overflow-hidden border border-border">
-                <div className="flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-border">
-                  <span className="text-xs text-muted-foreground font-mono">{match[1]}</span>
+                <div className={cn("flex items-center justify-between py-1.5 bg-surface-2 border-b border-border", compact ? "px-3" : "px-4")}>
+                  <span className="text-[0.8em] text-muted-foreground font-mono">{match[1]}</span>
                   <CopyButton text={String(children)} />
                 </div>
                 <SyntaxHighlighter
                   style={oneDark}
                   language={match[1]}
                   PreTag="div"
-                  className="!bg-surface-1 !m-0 text-sm !rounded-t-none"
+                  className="!bg-surface-1 !m-0 text-[0.9em] !rounded-t-none"
                   customStyle={{
                     margin: 0,
-                    padding: "1rem",
+                    padding: compact ? "0.75rem" : "1rem",
                     background: "hsl(var(--surface-1))",
+                    fontSize: "inherit",
                   }}
                 >
                   {String(children).replace(/\n$/, "")}
@@ -220,15 +230,17 @@ function MarkdownContent({ content }: { content: string }) {
           thead({ children }) {
             return <thead className="bg-surface-2">{children}</thead>;
           },
+          // Cell padding + sizes live in globals.css ([data-density] .prose) —
+          // element rules there out-specificity utilities here.
           th({ children }) {
             return (
-              <th className="px-4 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">
+              <th className="text-left font-semibold text-foreground uppercase tracking-wider">
                 {children}
               </th>
             );
           },
           td({ children }) {
-            return <td className="px-4 py-3 text-sm">{children}</td>;
+            return <td>{children}</td>;
           },
           ul({ children }) {
             return <ul className="list-disc pl-6 space-y-1">{children}</ul>;
@@ -246,17 +258,18 @@ function MarkdownContent({ content }: { content: string }) {
               </blockquote>
             );
           },
+          // Sizes + margins live in globals.css ([data-density] .prose).
           h1({ children }) {
-            return <h1 className="text-xl font-semibold mt-6 mb-3">{children}</h1>;
+            return <h1 className="font-semibold">{children}</h1>;
           },
           h2({ children }) {
-            return <h2 className="text-lg font-semibold mt-5 mb-2">{children}</h2>;
+            return <h2 className="font-semibold">{children}</h2>;
           },
           h3({ children }) {
-            return <h3 className="text-base font-semibold mt-4 mb-2">{children}</h3>;
+            return <h3 className="font-semibold">{children}</h3>;
           },
           p({ children }) {
-            return <p className="my-3 leading-relaxed">{children}</p>;
+            return <p className="leading-relaxed">{children}</p>;
           },
           strong({ children }) {
             return <strong className="font-semibold text-foreground">{children}</strong>;
@@ -272,11 +285,11 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-function MessageContent({ message }: { message: Message }) {
+export function MessageContent({ message }: { message: Message }) {
   return (
     <div className="space-y-3">
       {message.blocks.map((block, idx) => (
-        <BlockView key={_blockKey(block, idx)} block={block} idx={idx} blocks={message.blocks} />
+        <BlockView key={_blockKey(block, idx)} block={block} />
       ))}
     </div>
   );
@@ -305,16 +318,19 @@ function useRunningSeconds(active: boolean): number {
 
 function StreamingMessage({ showIcon = true }: { showIcon?: boolean }) {
   const { streamingMessage, isStreaming } = useStore();
+  const compact = useChatCompact();
   const thinking = isStreaming && !!streamingMessage && streamingMessage.blocks.length === 0;
   const thinkingSecs = useRunningSeconds(thinking);
 
   if (!isStreaming || !streamingMessage) return null;
 
   return (
-    <div className="flex items-start gap-3 px-4 py-3 animate-fade-in">
-      <div className={cn("flex-shrink-0 w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center", !showIcon && "invisible")}>
-        <Bot className="h-4 w-4 text-primary" />
-      </div>
+    <div className={cn("flex items-start animate-fade-in", compact ? "px-3 py-2" : "gap-3 px-4 py-3")}>
+      {!compact && (
+        <div className={cn("flex-shrink-0 w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center", !showIcon && "invisible")}>
+          <Bot className="h-4 w-4 text-primary" />
+        </div>
+      )}
       <div className="flex-1 min-w-0 space-y-3">
         {streamingMessage.blocks.length === 0 ? (
           <div className="flex items-center gap-3 text-muted-foreground">
@@ -327,7 +343,7 @@ function StreamingMessage({ showIcon = true }: { showIcon?: boolean }) {
           </div>
         ) : (
           streamingMessage.blocks.map((block, idx) => (
-            <BlockView key={_blockKey(block, idx)} block={block} idx={idx} blocks={streamingMessage.blocks} isStreaming />
+            <BlockView key={_blockKey(block, idx)} block={block} isStreaming />
           ))
         )}
       </div>
@@ -360,6 +376,7 @@ const WELCOME_SUGGESTIONS = [
 
 function WelcomeScreen() {
   const sendMessage = useStore((state) => state.sendMessage);
+  const compact = useChatCompact();
 
   return (
     <div className="flex-1 flex items-center justify-center px-4">
@@ -374,7 +391,9 @@ function WelcomeScreen() {
           Describe the hardware you need and I&apos;ll draft the spec, implement
           the RTL, and help verify it.
         </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg mx-auto">
+        {/* Column count follows the CONTAINER (rail vs centered), not the
+            viewport — a desktop viewport with a narrow rail is still narrow. */}
+        <div className={cn("grid gap-2 max-w-lg mx-auto", compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2")}>
           {WELCOME_SUGGESTIONS.map((suggestion, idx) => (
             <button
               key={idx}
@@ -414,6 +433,7 @@ function NoSessionScreen() {
 
 export function MessageList() {
   const { messages, currentSession, isStreaming } = useStore();
+  const compact = useChatCompact();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom on new messages
@@ -452,12 +472,16 @@ export function MessageList() {
 
   return (
     <ScrollArea ref={scrollRef} className="flex-1">
-      <div className="max-w-3xl mx-auto py-6">
+      {/* Rail (compact): full pane width so an unbreakable token can't grow the
+          row past the ~415px pane. Centered agent view keeps max-w-3xl. */}
+      <div className={cn(compact ? "max-w-full" : "max-w-3xl mx-auto", compact ? "py-4" : "py-6")}>
         {groups.map((group) =>
           group.role === "user" ? (
-            <div key={group.id} className="flex justify-end gap-3 px-4 py-3">
-              <div className="max-w-[75%]">
-                <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words">
+            // Compact drops the avatars: the right-aligned bubble already says
+            // "you", and every avatar pixel comes out of the text column.
+            <div key={group.id} className={cn("flex justify-end", compact ? "px-3 py-2" : "gap-3 px-4 py-3")}>
+              <div className={compact ? "max-w-[90%]" : "max-w-[75%]"}>
+                <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                   {group.messages[0].content}
                 </div>
                 {group.messages[0].timestamp && (
@@ -466,25 +490,29 @@ export function MessageList() {
                   </p>
                 )}
               </div>
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center self-end mb-0.5">
-                <User className="h-4 w-4 text-primary-foreground" />
-              </div>
+              {!compact && (
+                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center self-end mb-0.5">
+                  <User className="h-4 w-4 text-primary-foreground" />
+                </div>
+              )}
             </div>
           ) : (
-            <div key={group.id} className="flex items-start gap-3 px-4 py-3">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center cursor-default">
-                    <Bot className="h-4 w-4 text-primary" />
-                  </div>
-                </TooltipTrigger>
-                {group.messages[0].timestamp && (
-                  <TooltipContent side="right">
-                    <p className="text-xs">{formatTimestamp(group.messages[0].timestamp)}</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-              <div className="flex-1 min-w-0 space-y-4">
+            <div key={group.id} className={cn("flex items-start", compact ? "px-3 py-2" : "gap-3 px-4 py-3")}>
+              {!compact && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center cursor-default">
+                      <Bot className="h-4 w-4 text-primary" />
+                    </div>
+                  </TooltipTrigger>
+                  {group.messages[0].timestamp && (
+                    <TooltipContent side="right">
+                      <p className="text-xs">{formatTimestamp(group.messages[0].timestamp)}</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              )}
+              <div className={cn("flex-1 min-w-0", compact ? "space-y-3" : "space-y-4")}>
                 {group.messages.map((msg) => (
                   <MessageContent key={msg.id} message={msg} />
                 ))}

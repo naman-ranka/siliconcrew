@@ -39,8 +39,15 @@ import { NavRail } from "./NavRail";
 /** Panel width presets — the outer wrapper animates between 0 and this, the
  *  inner body holds it FIXED so content never reflows mid-transition. One
  *  formula, vw-based, for BOTH: mixing % (of the flex container) with vw (of
- *  the viewport) clips the inner body whenever container ≠ viewport. */
-const PANEL_W = { normal: "min(42vw, 520px)", wide: "min(62vw, 760px)" } as const;
+ *  the viewport) clips the inner body whenever container ≠ viewport.
+ *  The `max(360px, …)` floor is load-bearing (F6): the inner body needs 360px
+ *  to keep its tab strip whole, so the wrapper must never resolve below that —
+ *  on a narrow viewport (42vw < 360 ⇒ <~857px) an un-floored width would let
+ *  the wrapper's overflow-hidden clip the tab strip's right edge. */
+export const PANEL_W = {
+  normal: "max(360px, min(42vw, 520px))",
+  wide: "max(360px, min(62vw, 760px))",
+} as const;
 
 /**
  * Inline manual actions (S5-2): live foreign-actor events (user via IDE/REST,
@@ -428,7 +435,7 @@ export function AgentShell() {
           transitionTimingFunction: "cubic-bezier(.22,1,.36,1)",
         }}
       >
-        <div className="h-full" style={{ width, minWidth: 360 }}>
+        <div className="h-full" data-testid="agent-artifacts-body" style={{ width }}>
           <ArtifactsPanel
             wide={!!artifactsWide}
             onToggleWide={() => setArtifactsWide(!artifactsWide)}

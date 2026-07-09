@@ -1,0 +1,31 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "simon.v",
+      "role": "rtl",
+      "path": "simon.v"
+    },
+    {
+      "name": "simon_game.v",
+      "role": "rtl",
+      "path": "simon_game.v"
+    },
+    {
+      "name": "simon_game_tb.v",
+      "role": "tb",
+      "path": "simon_game_tb.v"
+    }
+  ],
+  "synthTop": "simon_game",
+  "simTop": "simon_game_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "simon_game_tb.v",
+      "module": "simon_game_tb"
+    }
+  ]
+}

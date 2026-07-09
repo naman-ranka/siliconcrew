@@ -101,6 +101,27 @@ sys.exit(0 if (npass > 0 and nfail == 0) else 1)
 """
 
 
+# Toolchain-essential env kept for the NATIVE cocotb subprocess. Everything else
+# (API keys, DB URLs, WorkOS/GCP creds in the backend process env) is dropped so
+# the agent's cocotb Python can't read a backend secret — parity with the docker
+# path (which already starts from a clean image env) and with run_python_analysis.
+_COCOTB_ENV_KEEP = (
+    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "TMPDIR",
+    "TERM", "SHELL",
+    # Windows self-host: the interpreter/toolchain need these to start.
+    "SYSTEMROOT", "SystemRoot", "WINDIR", "PATHEXT", "TEMP", "TMP", "COMSPEC",
+)
+
+
+def _scrubbed_base_env(cwd: str) -> dict:
+    """A minimal explicit base env for the native cocotb subprocess (no backend
+    secrets). The ``SC_*`` runner vars are layered on top by the engine's ``env``."""
+    env = {k: os.environ[k] for k in _COCOTB_ENV_KEEP if k in os.environ}
+    env.setdefault("HOME", cwd)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
+
+
 def _to_rel(path: str, cwd: str) -> str:
     """Express a (possibly absolute) source path relative to the workspace cwd."""
     if os.path.isabs(path):
@@ -150,7 +171,10 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
     }
 
     res = get_tool_engine().run(
-        image=image, command=command, cwd=cwd, env=env, timeout=timeout, name_prefix="sc_cocotb"
+        image=image, command=command, cwd=cwd, env=env, timeout=timeout, name_prefix="sc_cocotb",
+        # Native path only: scrub the backend process env so the agent's cocotb
+        # Python can't read secrets (docker already isolates). See PA1 / Item 3.
+        base_env=_scrubbed_base_env(cwd),
     )
 
     stdout = res.get("stdout", "") or ""

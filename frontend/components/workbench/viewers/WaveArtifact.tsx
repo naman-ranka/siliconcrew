@@ -32,7 +32,28 @@ export function WaveArtifact({ runId }: { runId: string }) {
     if (sessionId && vcdPath) void loadWaveformArtifact(runId, vcdPath);
   }, [sessionId, runId, vcdPath, loadWaveformArtifact]);
 
+  const data = (slice?.data ?? null) as WaveformData | null;
+
   if (!run || !vcdPath) {
+    // Fallback: the run dropped out of the list (GC'd server-side, or capped
+    // off a refreshed list) but we already loaded and cached its VCD earlier
+    // this session. That cached waveform is real data we hold — keep showing it
+    // rather than claiming the run is gone. (We can't re-fetch by path: the VCD
+    // filename is discovered per-run on the backend, so a bare runId can't
+    // reconstruct a `wavefile:` path once the run's metadata is gone.)
+    if (data) {
+      return (
+        <div className="flex flex-col h-full min-h-0">
+          <div className="flex items-center gap-2 h-7 px-3 border-b border-border bg-surface-1 shrink-0 text-[11px] font-mono">
+            <span className="text-foreground">{runId}</span>
+            <span className="text-muted-foreground/70">no longer listed — cached waveform</span>
+          </div>
+          <div className="flex-1 min-h-0">
+            <WaveformViewer data={data} runId={runId} />
+          </div>
+        </div>
+      );
+    }
     return (
       <ViewerEmpty
         icon={<Activity />}
@@ -45,8 +66,6 @@ export function WaveArtifact({ runId }: { runId: string }) {
       />
     );
   }
-
-  const data = (slice?.data ?? null) as WaveformData | null;
 
   if (!data) {
     if (slice?.status === "error") {

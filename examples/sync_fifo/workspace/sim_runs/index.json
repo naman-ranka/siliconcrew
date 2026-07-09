@@ -1,0 +1,24 @@
+{
+  "runs": [
+    {
+      "run_id": "sim_0001",
+      "status": "failed",
+      "created_at": "2026-07-07T05:16:45.987859+00:00",
+      "updated_at": "2026-07-07T05:16:46.537831+00:00",
+      "top": "sync_fifo_tb",
+      "mode": "rtl",
+      "pinned": false,
+      "parentRunId": null
+    },
+    {
+      "run_id": "sim_0002",
+      "status": "passed",
+      "created_at": "2026-07-07T05:16:46.567423+00:00",
+      "updated_at": "2026-07-07T05:16:46.659739+00:00",
+      "top": "sync_fifo_tb",
+      "mode": "rtl",
+      "pinned": false,
+      "parentRunId": null
+    }
+  ]
+}

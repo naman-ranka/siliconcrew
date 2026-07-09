@@ -1,0 +1,13 @@
+{
+  "id": "pwm_generator",
+  "name": "PWM Generator",
+  "description": "A configurable PWM generator (12-bit period, percentage duty 1-99%), adapted from a Tiny Tapeout Apache-2.0 project, taken spec -> lint -> simulation -> GDS on sky130hd entirely through the platform.",
+  "highlights": [
+    "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
+    "Timing met at 50 MHz: WNS 0.0 ns; 1040 std cells; 8078 um2",
+    "Self-checking TB reproduces commanded duty (25/50/75/10% @ period 100, 50% @ 60) PASSED"
+  ],
+  "top_module": "pwm_generator",
+  "platform": "sky130hd",
+  "source_note": "RTL core adapted from Tiny Tapeout MateaSamuel/tt08-pwm-generator (Apache-2.0, commit 731fb91); original self-checking TB; authored by dogfooding SiliconCrew locally (native iverilog sim + local ORFS synth)."
+}

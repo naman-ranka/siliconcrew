@@ -19,6 +19,7 @@ vi.mock("@/lib/api", () => ({
   workbenchApi: {
     listRuns: vi.fn(),
     getActivity: vi.fn(),
+    getManifest: vi.fn(),
   },
 }));
 
@@ -296,5 +297,100 @@ describe("applyRunStatus", () => {
     useStore.getState().applyRunStatus({ status: "completed" });
     expect(useStore.getState().runs[0].status).toBe("running");
     expect(useStore.getState().synthJob).toBeNull();
+  });
+});
+
+// ---- 4. AR-2: stale-session guard + no-blank-on-error for the X2A-4 reloads --------
+// X2A-4 wired loadManifest/loadRuns to fire off live WS tool frames (debounced)
+// and at turn "done" — repeatedly, mid-turn. Two SWR hazards the adversarial
+// review confirmed (invariant 4/7): a transient error must NOT blank populated
+// data, and a fetch started under session A that resolves after a switch to B
+// must NOT cross-write A's slice (or announce A's run transitions against B).
+
+const manifest = (files: { name: string; role: string }[]) => ({ files }) as never;
+
+describe("AR-2: loadManifest / loadRuns stale-session guard + no-blank-on-error", () => {
+  it("A→B switch mid-flight: A's late loadRuns does not cross-write B or toast against B", async () => {
+    const manifestB = manifest([{ name: "b.v", role: "rtl" }]);
+    // Distinct session ids per fetch-triggering test: the module-level
+    // singleFlight map keys on `runs:<sid>:<filter>`, so a shared id would let a
+    // sibling test's cached promise mask this one. A = "sA".
+    useStore.setState({
+      currentSession: { ...SESSION, id: "sA" } as never,
+      runs: [synthRun("synth_0001", "running")],
+      refreshSynthArtifacts: vi.fn(),
+      invalidateDirs: vi.fn(),
+    } as never);
+    // A's fetch is held open until after we switch to B.
+    let resolveA!: (v: RunSummary[]) => void;
+    vi.mocked(workbenchApi.listRuns).mockReturnValue(
+      new Promise<RunSummary[]>((res) => {
+        resolveA = res;
+      })
+    );
+
+    const pending = useStore.getState().loadRuns(); // captures sid = s1
+
+    // User switches to B; B has its own (empty) runs + its own manifest.
+    useStore.setState({
+      currentSession: { ...SESSION, id: "s2" } as never,
+      runs: [],
+      manifest: manifestB,
+    } as never);
+
+    // A's fetch now resolves — with A's run having gone running→terminal.
+    resolveA([synthRun("synth_0001", "passed")]);
+    await pending;
+
+    const s = useStore.getState();
+    expect(s.currentSession?.id).toBe("s2");
+    expect(s.runs).toEqual([]); // B's runs untouched — no cross-write
+    expect(s.manifest).toBe(manifestB); // B's manifest untouched
+    expect(s.toasts).toEqual([]); // no A-transition toast fired against B
+    expect(useWorkbenchUiStore.getState().perSession["sA"]?.unreadRunIds ?? []).toEqual([]);
+  });
+
+  it("A→B switch mid-flight: A's late loadManifest does not cross-write B's manifest", async () => {
+    const manifestA = manifest([{ name: "a.v", role: "rtl" }]);
+    const manifestB = manifest([{ name: "b.v", role: "rtl" }]);
+    useStore.setState({ manifest: manifestA } as never);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let resolveA!: (v: any) => void;
+    vi.mocked(workbenchApi.getManifest).mockReturnValue(
+      new Promise<never>((res) => {
+        resolveA = res;
+      })
+    );
+
+    const pending = useStore.getState().loadManifest(); // captures sid = s1
+    useStore.setState({ currentSession: { ...SESSION, id: "s2" } as never, manifest: manifestB } as never);
+    resolveA(manifestA);
+    await pending;
+
+    expect(useStore.getState().manifest).toBe(manifestB); // not A's manifest
+  });
+
+  it("a rejected loadManifest keeps the prior populated manifest (no blank)", async () => {
+    const manifestA = manifest([{ name: "a.v", role: "rtl" }]);
+    useStore.setState({ manifest: manifestA } as never);
+    vi.mocked(workbenchApi.getManifest).mockRejectedValue(new Error("500"));
+
+    await useStore.getState().loadManifest();
+
+    expect(useStore.getState().manifest).toBe(manifestA); // not null
+    expect(useStore.getState().manifestLoading).toBe(false);
+  });
+
+  it("a rejected loadRuns keeps the prior populated runs (no blank)", async () => {
+    const prev = [synthRun("synth_0001", "passed")];
+    // Unique session id so this test's singleFlight key can't collide with a
+    // sibling's cached promise (see the switch test above).
+    useStore.setState({ currentSession: { ...SESSION, id: "sReject" } as never, runs: prev } as never);
+    vi.mocked(workbenchApi.listRuns).mockRejectedValue(new Error("500"));
+
+    await useStore.getState().loadRuns();
+
+    expect(useStore.getState().runs).toBe(prev); // not []
+    expect(useStore.getState().runsLoading).toBe(false);
   });
 });

@@ -10,8 +10,8 @@ import {
   Github,
   Hash,
   Home,
+  Menu,
   MessageSquare,
-  PanelLeftClose,
   Plus,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
@@ -147,23 +147,27 @@ export function NavRail() {
           open ? "translate-x-0" : "-translate-x-full"
         )}
       >
-        {/* Brand + collapse */}
+        {/* Brand + collapse. The ☰ sits in the top-left where the shell
+            header's opener is, so the SAME corner control both opens and
+            closes the rail (F7 — the open rail no longer buries its opener,
+            which it covers at z-90). */}
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
+          <button
+            type="button"
+            title="Collapse (Esc)"
+            aria-label="Toggle navigation"
+            data-testid="rail-collapse"
+            onClick={() => setOpen(false)}
+            className="-ml-1 grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+          >
+            <Menu className="h-4 w-4" aria-hidden />
+          </button>
           <div className="grid h-6 w-6 place-items-center rounded-md bg-primary/15">
             <CircuitBoard className="h-3.5 w-3.5 text-primary" aria-hidden />
           </div>
           <span className="text-[13px] font-semibold" data-testid="agent-brand">
             SiliconCrew
           </span>
-          <button
-            type="button"
-            title="Collapse (Esc)"
-            aria-label="Collapse navigation"
-            onClick={() => setOpen(false)}
-            className="ml-auto grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-surface-2 hover:text-foreground"
-          >
-            <PanelLeftClose className="h-4 w-4" aria-hidden />
-          </button>
         </div>
 
         {/* New session */}

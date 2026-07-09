@@ -1,0 +1,12 @@
+# Fetched example binaries live in GCS (see workspace/.sc_binaries.json per
+# bundle + scripts/fetch_examples.py), never in git. These patterns mirror the
+# split filter in scripts/split_bundle_binaries.py so a `make fetch-bundles`
+# never dirties the tree or gets re-committed by accident.
+*/workspace/synth_runs/*/orfs_results/**/*.gds
+*/workspace/synth_runs/*/orfs_results/**/*.def
+*/workspace/synth_runs/*/orfs_results/**/*.spef
+*/workspace/synth_runs/*/orfs_results/**/*.rtlil
+*/workspace/synth_runs/*/orfs_results/**/*.v
+*/workspace/synth_runs/*/orfs_results/**/*.guide
+*/workspace/synth_runs/*/orfs_results/**/mem.json
+*/workspace/synth_runs/*/orfs_reports/**/*.webp

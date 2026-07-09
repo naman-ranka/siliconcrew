@@ -66,6 +66,9 @@ def test_mcp_subprocess_env_never_carries_llm_or_secret_keys(monkeypatch, tmp_pa
     assert env["WORKSPACE_ENGINE"] == "cloud"
     assert env["WORKOS_CLIENT_ID"] == "client_abc"
     assert env["RTL_WORKSPACE"] == engine._workspace_base
+    # 4B: the parent owns the once-per-turn workspace sync, so the bound
+    # subprocess must be told to skip its per-tool blocking upload.
+    assert env["SILICONCREW_MCP_DEFER_WORKSPACE_SYNC"] == "1"
 
     # Secrets no MCP tool needs must NEVER transit through the Codex CLI.
     leaked = {k: v for k, v in env.items() if "should-not-leak" in v}

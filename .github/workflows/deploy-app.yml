@@ -14,7 +14,7 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches: [claude/integration-p1p2]
+    branches: [main]
 
 permissions:
   contents: read

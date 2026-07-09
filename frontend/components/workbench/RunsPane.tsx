@@ -35,6 +35,29 @@ function primaryArtifactKey(r: RunSummary): string {
 }
 
 /**
+ * One-line, honest failure reason for a FAILED run (F11/F12) — rendered only
+ * from fields the run already carries; the full text (and any stdout tail)
+ * rides along in `title` so the row stays a single line.
+ */
+function failureReason(r: RunSummary): { text: string; title?: string } | null {
+  if (r.status !== "failed") return null;
+  if (r.kind === "sim") {
+    if (r.failure?.firstFailureLine) {
+      const line = r.failure.firstFailureLine;
+      return { text: line, title: r.stdoutTail ? `${line}\n\n${r.stdoutTail}` : line };
+    }
+    if (r.passMarkerFound === false) {
+      const marker = r.passMarker ?? "TEST PASSED";
+      return { text: `no pass marker — expected "${marker}"`, title: r.stdoutTail ?? undefined };
+    }
+    return null;
+  }
+  // synth — the failing stage rides in the status line; checkNotes is the reason.
+  if (r.checkNotes) return { text: r.checkNotes, title: r.checkNotes };
+  return null;
+}
+
+/**
  * The Runs table (BottomDock "Runs" tab): sim + synth in one lineage-grouped
  * table — retries indent under their root — with unread markers, artifact
  * glyphs and pinning.
@@ -77,6 +100,7 @@ export function RunsPane() {
 
   const renderRow = (r: RunSummary, isChild: boolean) => {
     const unread = unreadRunIds.includes(r.id);
+    const reason = failureReason(r);
     return (
       <div
         key={r.id}
@@ -122,12 +146,24 @@ export function RunsPane() {
 
         {/* Result */}
         <span className="flex min-w-0 items-center gap-1.5 text-[11px]">
-          <span className={cn("truncate", statusTextClass(r.status))}>
+          <span className={cn("shrink-0", statusTextClass(r.status))}>
             {r.status}
             {r.kind === "sim" && r.status === "failed" && r.failure?.timeNs != null
               ? ` @ ${r.failure.timeNs}ns`
               : ""}
+            {r.kind === "synth" && r.status === "failed" && r.currentStage
+              ? ` @ ${r.currentStage}`
+              : ""}
           </span>
+          {reason ? (
+            <span
+              className="min-w-0 truncate text-[10px] text-muted-foreground"
+              title={reason.title}
+              data-testid={`run-reason-${r.id}`}
+            >
+              {reason.text}
+            </span>
+          ) : null}
           {r.kind === "synth" &&
           r.status === "running" &&
           r.id === synthJob?.runId &&

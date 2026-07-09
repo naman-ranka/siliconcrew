@@ -79,7 +79,9 @@ describe("chat threads store", () => {
     (threadsApi.create as any).mockResolvedValue(thread("new", "Chat 2"));
     await useStore.getState().newThread();
     const s = useStore.getState();
-    expect(threadsApi.create).toHaveBeenCalledWith("s1");
+    // newThread always passes (sid, title?, model?, runtime?) — a plain
+    // newThread() sends undefined for the optionals (native runtime).
+    expect(threadsApi.create).toHaveBeenCalledWith("s1", undefined, undefined, undefined);
     expect(s.threads[0].id).toBe("new");
     expect(s.activeThreadId).toBe("new");
     expect(s.messages).toEqual([]);
@@ -93,6 +95,19 @@ describe("chat threads store", () => {
     expect(s.activeThreadId).toBe("t2");
     expect(chatApi.getThreadHistory).toHaveBeenCalledWith("s1", "t2");
     expect(s.messages[0].content).toBe("hi from t2");
+  });
+
+  it("selectThread flips agentRuntime to FOLLOW the target thread (URL-selected Codex chat)", async () => {
+    useStore.setState({
+      threads: [thread("s1", "Chat 1"), { ...thread("cx", "Codex chat"), runtime: "codex" }],
+      activeThreadId: "s1",
+      agentRuntime: "langchain",
+    } as any);
+    await useStore.getState().selectThread("cx");
+    expect(useStore.getState().agentRuntime).toBe("codex");
+
+    await useStore.getState().selectThread("s1");
+    expect(useStore.getState().agentRuntime).toBe("langchain");
   });
 
   it("deleteThread on the active thread reloads and lands on a remaining thread", async () => {

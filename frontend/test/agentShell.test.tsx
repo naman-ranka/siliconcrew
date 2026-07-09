@@ -38,6 +38,7 @@ vi.mock("next/navigation", () => ({
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { Workbench } from "@/components/workbench/Workbench";
+import { PANEL_W } from "@/components/workbench/AgentShell";
 
 // cmdk (QuickOpen) observes its list size; jsdom has no ResizeObserver.
 class RO {
@@ -233,5 +234,28 @@ describe("AgentShell (view=agent, Wave 8 slide-over)", () => {
     expect(rail).toHaveTextContent("SiliconCrew");
     expect(screen.getByTestId("rail-new-session")).toBeInTheDocument();
     expect(screen.getByTestId("rail-session-s1")).toHaveTextContent("sync_fifo");
+  });
+
+  it("the rail's own top-left ☰ closes it — the opener corner also collapses (F7)", async () => {
+    // The header ☰ is buried under the open rail (z-90); the rail carries a
+    // matching ☰ in the same corner so the toggle is never unreachable.
+    render(<Workbench sessionId="s1" view="agent" />);
+    await screen.findByTestId("workbench-agent");
+
+    fireEvent.click(screen.getByTestId("agent-rail-toggle"));
+    expect(screen.getByTestId("agent-nav-rail").getAttribute("data-open")).toBe("true");
+
+    fireEvent.click(screen.getByTestId("rail-collapse"));
+    expect(useWorkbenchUiStore.getState().navRailOpen).toBe(false);
+    expect(screen.getByTestId("agent-nav-rail").getAttribute("data-open")).toBe("false");
+  });
+
+  it("the artifacts panel width is floored at 360px so the tab strip never clips (F6)", () => {
+    // The inner body needs 360px to keep its tab strip whole; the wrapper's
+    // width must never resolve below that (on <~857px, 42vw < 360 would let
+    // overflow-hidden clip the strip). The real no-clip render is a browser
+    // check — this guards the floor that makes it impossible.
+    expect(PANEL_W.normal).toContain("max(360px");
+    expect(PANEL_W.wide).toContain("max(360px");
   });
 });

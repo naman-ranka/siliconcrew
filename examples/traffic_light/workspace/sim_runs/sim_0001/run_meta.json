@@ -1,0 +1,26 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T06:46:24.289337+00:00",
+  "top": "traffic_light_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "8beab2299dc2ed733d052c2106867b1305734c52",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\traffic_light_tb.vcd",
+  "passMarkerFound": true,
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s traffic_light_tb -o <workspace>\\sim_runs\\sim_0001\\traffic_light_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog_iccgcq76.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\traffic_light_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile traffic_light_tb.vcd opened for output.\nTEST PASSED\n<workspace>/traffic_light_tb.v:111: $finish called at 316000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

@@ -8,8 +8,11 @@ import {
   CircuitBoard,
   Code2,
   FileText,
+  Image as ImageIcon,
   Layers,
   Search,
+  Table2,
+  Type,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
@@ -22,18 +25,26 @@ const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }
   code: Code2,
   spec: FileText,
   wave: Activity,
+  wavefile: Activity,
   report: BarChart3,
   layout: Layers,
   schematic: CircuitBoard,
+  image: ImageIcon,
+  data: Table2,
+  text: Type,
 };
 
 const KIND_NAME: Record<ArtifactKind, string> = {
   code: "Code",
   spec: "Spec",
   wave: "Waveform",
+  wavefile: "Waveform",
   report: "Report",
   layout: "Layout",
   schematic: "Schematic",
+  image: "Image",
+  data: "Data",
+  text: "Text",
 };
 
 interface QuickOpenItem {

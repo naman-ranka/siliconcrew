@@ -114,7 +114,11 @@ export function CodeArtifact({ path, forceReadOnly = false }: { path: string; fo
       setBaseline(draft);
       pushToast({ kind: "success", title: "Saved", detail: fileName });
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : "Save failed");
+      // Honest failure: the real error, both inline (persists) and as a toast
+      // (same mechanism as the success signal) — never fake optimism.
+      const message = e instanceof Error ? e.message : "Save failed";
+      setSaveError(message);
+      pushToast({ kind: "error", title: `Couldn't save ${fileName}`, detail: message });
     } finally {
       setSaving(false);
     }

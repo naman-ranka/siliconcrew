@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { ChevronRight, FolderOpen, Home } from "lucide-react";
+import { ChevronRight, FolderOpen, GitFork, Home } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 
@@ -19,6 +19,7 @@ export function Breadcrumb() {
   const setQuickSwitchOpen = useWorkbenchUiStore((s) => s.setQuickSwitchOpen);
 
   const sessionName = currentSession ? currentSession.name ?? currentSession.id : null;
+  const forkedFrom = currentSession?.source_template ?? null;
 
   return (
     <div data-testid="breadcrumb" className="flex min-w-0 items-center gap-1">
@@ -50,6 +51,18 @@ export function Breadcrumb() {
             <FolderOpen className="h-4 w-4 shrink-0 text-primary" aria-hidden />
             <span className="truncate font-mono text-[13px] font-medium">{sessionName}</span>
           </button>
+
+          {/* Provenance chip — this workspace was forked from an example bundle. */}
+          {forkedFrom && (
+            <span
+              data-testid="forked-from-chip"
+              title={`Forked from the ${forkedFrom.name} example`}
+              className="hidden sm:inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-border bg-surface-2/60 px-1.5 text-[11px] text-muted-foreground"
+            >
+              <GitFork className="h-3 w-3" aria-hidden />
+              <span className="truncate max-w-[140px]">forked from {forkedFrom.name}</span>
+            </span>
+          )}
         </>
       )}
     </div>

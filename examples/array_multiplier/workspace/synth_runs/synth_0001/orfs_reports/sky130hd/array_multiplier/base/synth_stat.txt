@@ -1,0 +1,25 @@
+
+20. Printing statistics.
+
+=== array_multiplier ===
+
+        +----------Local Count, excluding submodules.
+        |        +-Local Area, excluding submodules.
+        |        | 
+       52        - wires
+       65        - wire bits
+       10        - public wires
+       23        - public wire bits
+        3        - ports
+       16        - port bits
+       45  392.877 cells
+       13   81.328   sky130_fd_sc_hd__and2_1
+        7    52.55   sky130_fd_sc_hd__buf_4
+        8  160.154   sky130_fd_sc_hd__fa_1
+        4   50.048   sky130_fd_sc_hd__ha_1
+       10   37.536   sky130_fd_sc_hd__inv_1
+        3   11.261   sky130_fd_sc_hd__nand2_1
+
+   Chip area for module '\array_multiplier': 392.876800
+     of which used for sequential elements: 0.000000 (0.00%)
+

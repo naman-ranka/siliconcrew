@@ -1,0 +1,13 @@
+{
+  "id": "ubcd_decoder",
+  "name": "Universal BCD Seven-Segment Decoder",
+  "description": "A multi-standard binary/BCD to seven-segment decoder (decimal, hexadecimal, and vintage calculator fonts), adapted from Tiny Tapeout's Apache-2.0 ubcd (commit b16f134), taken spec -> lint -> simulation -> GDS on sky130hd entirely through the platform.",
+  "highlights": [
+    "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
+    "Timing met: WNS 0.0 ns; 192 std cells; 1232 um^2",
+    "Self-checking testbench (BCD 0-9 + hex A-F vs golden font) PASSED"
+  ],
+  "top_module": "universal_bcd_decoder",
+  "platform": "sky130hd",
+  "source_note": "RTL adapted from Tiny Tapeout ubcd (Apache-2.0, commit b16f134); one portability edit (always_comb -> always @(*)); original self-checking TB; authored by dogfooding SiliconCrew locally."
+}

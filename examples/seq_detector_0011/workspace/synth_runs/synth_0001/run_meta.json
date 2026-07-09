@@ -1,0 +1,125 @@
+{
+  "run_id": "synth_0001",
+  "dispatched_at": "2026-07-07T06:28:08.729057+00:00",
+  "timeout_sec": 1200,
+  "created_at": "2026-07-07T06:28:08.742296+00:00",
+  "backend": "local_docker",
+  "status": "completed",
+  "current_stage": "finish",
+  "max_stage": "finish",
+  "platform": "sky130hd",
+  "top_module": "seq_detector_0011",
+  "input_files": [
+    "seq_detector_0011.v"
+  ],
+  "spec_file": null,
+  "requested_clock_period_ns": 20.0,
+  "effective_clock_period_ns": 20.0,
+  "clock_period_ns": 20.0,
+  "clock_source": "requested",
+  "constraints_mode": "auto",
+  "utilization": 5,
+  "aspect_ratio": 1.0,
+  "core_margin": 2.0,
+  "pd_parameters": {
+    "utilization": 5,
+    "aspect_ratio": 1.0,
+    "core_margin": 2.0
+  },
+  "auto_checks": {
+    "constraints": "pass",
+    "signoff": "pass",
+    "equiv": "skip"
+  },
+  "check_notes": "All guardrails passed",
+  "stages": {
+    "constraints": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "synth": {
+      "status": "completed",
+      "artifacts": {
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\1_synth.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\1_synth.sdc",
+        "stat_report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\seq_detector_0011\\base\\synth_stat.txt"
+      }
+    },
+    "floorplan": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\seq_detector_0011\\base\\2_floorplan_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\2_floorplan.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\2_floorplan.sdc"
+      }
+    },
+    "place": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\seq_detector_0011\\base\\3_3_place_gp.json",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\3_place.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\3_place.sdc"
+      }
+    },
+    "cts": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\seq_detector_0011\\base\\4_cts_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\4_cts.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\4_cts.sdc"
+      }
+    },
+    "grt": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\seq_detector_0011\\base\\5_1_grt.log",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\5_1_grt.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\5_1_grt.sdc"
+      }
+    },
+    "route": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\seq_detector_0011\\base\\5_route_drc.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\5_route.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\5_route.sdc"
+      }
+    },
+    "finish": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\seq_detector_0011\\base\\6_finish.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\6_final.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\6_final.sdc",
+        "netlist": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\6_final.v",
+        "gds": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\seq_detector_0011\\base\\6_final.gds"
+      }
+    }
+  },
+  "provenance": {
+    "repo_commit": "c07c374d3366d0c0551e38174c139976e34a85ed",
+    "orfs_image_digest": null,
+    "pdk": "sky130hd",
+    "iverilog_version": "12.0",
+    "num_cores": 4
+  },
+  "docker_command": "docker run --rm -v <workspace>\\synth_runs\\synth_0001:/workspace -v <workspace>\\synth_runs\\synth_0001\\orfs_results:/OpenROAD-flow-scripts/flow/results -v <workspace>\\synth_runs\\synth_0001\\orfs_logs:/OpenROAD-flow-scripts/flow/logs -v <workspace>\\synth_runs\\synth_0001\\orfs_reports:/OpenROAD-flow-scripts/flow/reports -w /OpenROAD-flow-scripts/flow openroad/orfs:latest bash -c make -B DESIGN_CONFIG=/workspace/config.mk",
+  "docker_success": true,
+  "docker_stdout_tail": "       132 3b3ca4fa92d90c936890\n2_2_floorplan_macro                0            111 3b3ca4fa92d90c936890\n2_3_floorplan_tapcell              0            111 c4564fbbf57c3d554414\n2_4_floorplan_pdn                  0            113 949ff859032d6a4bc482\n3_1_place_gp_skip_io               0            112 cce3fbbd3cfd7d9e0e86\n3_2_place_iop                      0            111 61597d75ce80ec4ce109\n3_3_place_gp                       0            217 9bd9c1cbe0f06aa25ee5\n3_4_place_resized                  1            132 9bd9c1cbe0f06aa25ee5\n3_5_place_dp                       1            114 aea8f8eab921cc026de8\n4_1_cts                            3            152 37a62d5fa41512b7968f\n5_1_grt                            3            225 29954956dd0e5a6e33b9\n5_2_route                          3            565 8d7d54678c108b2c3f6a\n5_3_fillcell                       0            113 5942f352cd16a9596bfb\n6_1_fill                           0            111 5942f352cd16a9596bfb\n6_1_merge                          2            425                  N/A\n6_report                           2            172                  N/A\nTotal                             15            565                     \n",
+  "docker_stderr_tail": "",
+  "netlist_path": null,
+  "stdcell_manifest_version": null,
+  "stdcell_files_used": [],
+  "summary_metrics": {
+    "area_um2": 112.608,
+    "cell_count": 5,
+    "wns_ns": 0.0,
+    "tns_ns": 0.0,
+    "power_uw": 19.9,
+    "power_mw": 0.0199,
+    "fmax_mhz": 50.0
+  },
+  "next_action": "Use search_logs_tool for detailed PPA/error verification.",
+  "finished_at": "2026-07-07T06:28:52.860957+00:00",
+  "elapsed_sec": 44.13
+}

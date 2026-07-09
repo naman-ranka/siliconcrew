@@ -236,6 +236,14 @@
   --tw-prose-td-borders: hsl(var(--border));
 }
 
+/* Long unbreakable tokens — workspace paths, URLs, long inline code — must wrap
+   instead of establishing a min-content width that overflows a narrow chat rail.
+   `anywhere` (not `break-word`) is required: only it lets the element shrink
+   below its longest word, so the flex row can cap to the pane width. */
+.prose {
+  overflow-wrap: anywhere;
+}
+
 .prose code:not([class*="language-"]) {
   background: hsl(var(--surface-2));
   padding: 0.125rem 0.375rem;
@@ -243,6 +251,7 @@
   font-size: 0.875em;
   font-weight: 500;
   color: hsl(var(--primary));
+  overflow-wrap: anywhere;
 }
 
 .prose code::before,
@@ -286,6 +295,42 @@
 
 .prose tbody tr:hover {
   background: hsl(var(--surface-1));
+}
+
+/* Chat markdown — density-scoped type scale. ChatArea measures its own width
+   and stamps data-density (see components/chat/density.tsx); the chat wrapper
+   declares the base font-size and everything below scales in em off it, so
+   the ~350px IDE rail and the centered agent conversation share ONE type
+   system. The absolute .prose sizes above remain for the report viewer.
+   (Specificity note: these element rules are what actually size the chat —
+   utility classes on the rendered elements lose to `.prose h1` etc.) */
+[data-density] .prose h1 {
+  font-size: 1.3em;
+  margin: 1.25em 0 0.5em;
+}
+
+[data-density] .prose h2 {
+  font-size: 1.15em;
+  margin: 1.1em 0 0.45em;
+}
+
+[data-density] .prose h3 {
+  font-size: 1.05em;
+  margin: 1em 0 0.4em;
+}
+
+[data-density] .prose p {
+  margin: 0.6em 0;
+  line-height: 1.65;
+}
+
+[data-density] .prose th,
+[data-density] .prose td {
+  padding: 0.4em 0.65em;
+}
+
+[data-density] .prose th {
+  font-size: 0.8em;
 }
 
 .prose h1, .prose h2, .prose h3, .prose h4 {

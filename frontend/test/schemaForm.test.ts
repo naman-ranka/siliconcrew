@@ -148,8 +148,8 @@ describe("conventionOptions", () => {
     expect(conventionOptions("sby_file", CTX)).toEqual(["check.sby"]);
     expect(conventionOptions("dslx_file", CTX)).toEqual(["adder.x"]);
   });
-  it("filename / file_path / spec_file → all root files", () => {
-    for (const key of ["filename", "file_path", "spec_file"]) {
+  it("filename / file_path / spec_file / script_file → all root files (PA10)", () => {
+    for (const key of ["filename", "file_path", "spec_file", "script_file"]) {
       expect(conventionOptions(key, CTX)).toEqual(CTX.rootFiles);
     }
   });

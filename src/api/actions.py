@@ -225,6 +225,10 @@ def _synth_to_run(workspace: str, item: Dict[str, Any]) -> Dict[str, Any]:
         "ppa": ppa,
         "reportAvailable": item.get("report_available", False),
         "autoChecks": item.get("auto_checks"),
+        # Failing stage + reason (F12) so a failed run card can name the stage
+        # and one-line cause without opening logs. Absent → null.
+        "currentStage": item.get("current_stage"),
+        "checkNotes": item.get("check_notes"),
     }
 
 

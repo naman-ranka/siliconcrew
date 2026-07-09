@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon128_cipher/base/cts_clk.webp",
+      "bytes": 15548,
+      "sha256": "692ae87b5d72357b94ae91944c433d38df3018e90514edf4f89c0dabe7ff9789"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon128_cipher/base/cts_default_clk_layout.webp",
+      "bytes": 25700,
+      "sha256": "a2d215d06e249b96ac5dbb2e047110d5255439948c7d2196e0f5d039c36e12e6"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon128_cipher/base/final_all.webp",
+      "bytes": 348166,
+      "sha256": "fcefeede8dc879e395c4fd135f2d54fe3327872cc95402b70f663d150577b3c7"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon128_cipher/base/final_clocks.webp",
+      "bytes": 23904,
+      "sha256": "c6b8032ca30ce0f0f17a99015f703d7bc12db98d7a4c9e030ddb6e5282d87002"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon128_cipher/base/final_congestion.webp",
+      "bytes": 83732,
+      "sha256": "028f4c7f7e1e757b9a98c7adabde83cb4c35d8271a1e0b61091d5ed5992da4f2"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon128_cipher/base/final_ir_drop.webp",
+      "bytes": 71668,
+      "sha256": "5723e5f11c04f4a9708563d553695c06be53e27c225b5102f95f4b4ed2d303e1"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon128_cipher/base/final_placement.webp",
+      "bytes": 80366,
+      "sha256": "dda1d561200262eceb998d2bc3a86a89307b3400ce6deece2ae9a4f1cbb54a16"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon128_cipher/base/final_resizer.webp",
+      "bytes": 26464,
+      "sha256": "a4ee114c259f36850f47e6ef78380f2197d752e7f23489c2fb3291e31bec88b1"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon128_cipher/base/final_routing.webp",
+      "bytes": 329358,
+      "sha256": "7526448c919a922d2ab22d3c53c49012e3ba025b88a55fd9461b2d9b6a24899d"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon128_cipher/base/final_worst_path.webp",
+      "bytes": 343686,
+      "sha256": "72dc096dfecfabaf8a4dc3a7c2dc8a3323c5968633159e2b967a903c9c249d27"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/1_1_yosys_canonicalize.rtlil",
+      "bytes": 1240084,
+      "sha256": "73203bce00c34a9c396a189ad804eea8496dc9deedeffcf271af1112542729f1"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/1_2_yosys.v",
+      "bytes": 209502,
+      "sha256": "d520caf27b825f6f6790bcd8784c8b4a98da4dda4d4dea85796798de8801e723"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/4_after_rsz_lec.v",
+      "bytes": 144132,
+      "sha256": "1bac31d77da4bb0bd1e56a76197a77fbabdefcbb15b39afbc80296b438e42d9a"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/4_before_rsz_lec.v",
+      "bytes": 144132,
+      "sha256": "1bac31d77da4bb0bd1e56a76197a77fbabdefcbb15b39afbc80296b438e42d9a"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/6_final.def",
+      "bytes": 4390284,
+      "sha256": "d5ea511b293626a9b19f835e03cd0be0cb3c8e2d39d65f7d2126d2f2eba54954"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/6_final.gds",
+      "bytes": 4144072,
+      "sha256": "9f1bdb9dd58a94226deec8c1d708434dd534d7f53d152bbbc58431785b1c6528"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/6_final.spef",
+      "bytes": 1370945,
+      "sha256": "b0762b8ee6eb78bcac9f107d8ab095e1d320bfafc11f64601fd1f788d281894c"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/6_final.v",
+      "bytes": 144132,
+      "sha256": "1bac31d77da4bb0bd1e56a76197a77fbabdefcbb15b39afbc80296b438e42d9a"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/mem.json",
+      "bytes": 164033,
+      "sha256": "ee0c31c562f3b6a2c18cbc4a897abb179d6bc2eda9541c93ade70f04d2cfcd9c"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/route.guide",
+      "bytes": 232214,
+      "sha256": "f38928d86b1b4cc913ae6a5a1ad3008d0143218437ee414b56655c66350fb91b"
+    }
+  ]
+}

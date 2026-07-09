@@ -1,0 +1,26 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "traffic_light.v",
+      "role": "rtl",
+      "path": "traffic_light.v"
+    },
+    {
+      "name": "traffic_light_tb.v",
+      "role": "tb",
+      "path": "traffic_light_tb.v"
+    }
+  ],
+  "synthTop": "traffic_light",
+  "simTop": "traffic_light_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "traffic_light_tb.v",
+      "module": "traffic_light_tb"
+    }
+  ]
+}

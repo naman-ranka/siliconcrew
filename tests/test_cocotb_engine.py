@@ -16,9 +16,9 @@ class FakeEngine:
         self.stdout, self.success, self.timed_out = stdout, success, timed_out
         self.calls = []
 
-    def run(self, *, image, command, cwd, env=None, timeout, workdir="/workspace", name_prefix="sc_tool"):
+    def run(self, *, image, command, cwd, env=None, timeout, workdir="/workspace", name_prefix="sc_tool", base_env=None):
         self.calls.append({"image": image, "command": command, "cwd": cwd, "env": env,
-                           "timeout": timeout, "name_prefix": name_prefix})
+                           "timeout": timeout, "name_prefix": name_prefix, "base_env": base_env})
         return {"success": self.success, "stdout": self.stdout, "stderr": "", "command": command, "timed_out": self.timed_out}
 
 

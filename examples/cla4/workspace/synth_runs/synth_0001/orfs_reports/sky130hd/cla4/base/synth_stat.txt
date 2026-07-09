@@ -1,0 +1,34 @@
+
+20. Printing statistics.
+
+=== cla4 ===
+
+        +----------Local Count, excluding submodules.
+        |        +-Local Area, excluding submodules.
+        |        | 
+       53        - wires
+       62        - wire bits
+       12        - public wires
+       21        - public wire bits
+        7        - ports
+       16        - port bits
+       41  419.152 cells
+        1   12.512   sky130_fd_sc_hd__a211oi_2
+        1    5.005   sky130_fd_sc_hd__a21oi_1
+        5   125.12   sky130_fd_sc_hd__dfrtp_1
+        1   20.019   sky130_fd_sc_hd__fa_1
+        9  112.608   sky130_fd_sc_hd__ha_1
+       11    41.29   sky130_fd_sc_hd__inv_1
+        1    6.256   sky130_fd_sc_hd__nand2b_1
+        3   11.261   sky130_fd_sc_hd__nor2_1
+        2   12.512   sky130_fd_sc_hd__nor2b_1
+        1   13.763   sky130_fd_sc_hd__nor2b_4
+        1    10.01   sky130_fd_sc_hd__o211a_1
+        1    7.507   sky130_fd_sc_hd__o21a_1
+        1   16.266   sky130_fd_sc_hd__o311ai_2
+        1    7.507   sky130_fd_sc_hd__o31ai_1
+        2   17.517   sky130_fd_sc_hd__xnor2_1
+
+   Chip area for module '\cla4': 419.152000
+     of which used for sequential elements: 125.120000 (29.85%)
+
