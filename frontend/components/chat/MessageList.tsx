@@ -472,14 +472,16 @@ export function MessageList() {
 
   return (
     <ScrollArea ref={scrollRef} className="flex-1">
-      <div className={cn("max-w-3xl mx-auto", compact ? "py-4" : "py-6")}>
+      {/* Rail (compact): full pane width so an unbreakable token can't grow the
+          row past the ~415px pane. Centered agent view keeps max-w-3xl. */}
+      <div className={cn(compact ? "max-w-full" : "max-w-3xl mx-auto", compact ? "py-4" : "py-6")}>
         {groups.map((group) =>
           group.role === "user" ? (
             // Compact drops the avatars: the right-aligned bubble already says
             // "you", and every avatar pixel comes out of the text column.
             <div key={group.id} className={cn("flex justify-end", compact ? "px-3 py-2" : "gap-3 px-4 py-3")}>
               <div className={compact ? "max-w-[90%]" : "max-w-[75%]"}>
-                <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words">
+                <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                   {group.messages[0].content}
                 </div>
                 {group.messages[0].timestamp && (
