@@ -1,9 +1,17 @@
+"""Stage visibility through the unified status payload (Wave 9).
+
+get_stage_status was deleted: its content (per-stage table + file-derived
+history) lives on get_synthesis_status(run_id) as ``stages`` /
+``stage_history`` / ``current_stage``. Same scenarios as before: the fixture
+workspace's persisted stage table, max_stage-bounded runs (skipped stages),
+and a live runtime job.
+"""
 import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
 
 from src.tools import synthesis_manager as sm
-from src.tools.synthesis_manager import get_stage_status
 from src.tools.spec_manager import DesignSpec, PortSpec, save_yaml_file
 
 
@@ -45,32 +53,38 @@ def _reset_runtime_workspace(workspace: str) -> None:
 
 
 def _write_file(path: str, content: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
 
-def _wait_for_terminal(job_id: str, workspace: str) -> dict:
+def _wait_for_terminal(run_id: str, workspace: str) -> dict:
     for _ in range(60):
-        status = sm.get_synthesis_job_status(job_id, workspace=workspace)
+        status = sm.get_synthesis_status(run_id, workspace=workspace)
         if status["status"] in {"completed", "failed"}:
             return status
         time.sleep(0.05)
     raise AssertionError("job did not reach terminal status")
 
 
-def test_get_stage_status_reads_stage_metadata():
+def test_status_payload_carries_persisted_stage_table():
     workspace = _fixture_workspace()
-    result = get_stage_status(workspace=workspace, run_id="synth_0001")
+    result = sm.get_synthesis_status("synth_0001", workspace=workspace)
 
-    assert result["status"] == "ok"
-    assert result["run_status"] == "completed"
+    assert result["run_id"] == "synth_0001"
+    assert result["status"] == "completed"
     assert result["current_stage"] == "finish"
-    assert "finish" in result["completed_stages"]
-    assert result["failed_stages"] == []
-    assert result["running_stages"] == []
+    assert result["stage"] == "finish"
+    stage_statuses = {s: m.get("status") for s, m in result["stages"].items()}
+    assert stage_statuses["finish"] == "completed"
+    assert "failed" not in stage_statuses.values()
+    assert "running" not in stage_statuses.values()
+    # File-derived history is always present (this legacy fixture keeps no
+    # artifact files, so it proves shape, not per-stage completion).
+    assert [h["stage"] for h in result["stage_history"]] == sm.PD_STAGE_SEQUENCE
 
 
-def test_get_stage_status_infers_missing_stage_metadata(tmp_path):
+def test_status_derives_stage_history_for_legacy_meta_without_stages(tmp_path):
     workspace = str(tmp_path)
     run_dir = os.path.join(workspace, "synth_runs", "synth_0009")
     reports = os.path.join(run_dir, "orfs_reports", "sky130hd", "legacy_top", "base")
@@ -83,17 +97,68 @@ def test_get_stage_status_infers_missing_stage_metadata(tmp_path):
         json.dumps({"run_id": "synth_0009", "status": "completed", "top_module": "legacy_top", "platform": "sky130hd"}),
     )
     _write_file(os.path.join(reports, "6_finish.rpt"), "wns max 0.01\n")
+    _write_file(os.path.join(results, "1_synth.odb"), "odb")
     _write_file(os.path.join(results, "6_final.v"), "module legacy_top(input clk, output y); endmodule")
 
-    result = get_stage_status(workspace=workspace, run_id="synth_0009")
+    result = sm.get_synthesis_status("synth_0009", workspace=workspace)
 
-    assert result["status"] == "ok"
-    assert result["stage_count"] > 0
-    assert "finish" in result["completed_stages"]
-    assert result["current_stage"] == "finish"
+    assert result["status"] == "completed"
+    # No persisted stage table — the FILE trail still proves stage completion.
+    history = {h["stage"]: h["status"] for h in result["stage_history"]}
+    assert history["synth"] == "completed"
+    assert history["finish"] == "completed"
+    # Completed full-flow run reports its bound as the stage.
+    assert result["stage"] == "finish"
 
 
-def test_get_stage_status_from_runtime_job(monkeypatch):
+def test_bounded_run_reports_skipped_stages_beyond_max_stage(tmp_path):
+    """max_stage bounds the plan: stages past the bound are 'skipped', the
+    completed run sits AT its bound."""
+    workspace = str(tmp_path)
+    run_dir = os.path.join(workspace, "synth_runs", "synth_0001")
+    results = os.path.join(run_dir, "orfs_results", "sky130hd", "counter", "base")
+    os.makedirs(results, exist_ok=True)
+    dispatched = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    _write_file(os.path.join(run_dir, "constraints.sdc"), "create_clock\n")
+    _write_file(os.path.join(results, "1_synth.odb"), "odb")
+    _write_file(os.path.join(results, "2_floorplan.odb"), "odb")
+    _write_file(os.path.join(results, "3_place.odb"), "odb")
+    stages = sm._init_stage_metadata()
+    for s in ["constraints", "synth", "floorplan", "place"]:
+        stages[s]["status"] = "completed"
+    for s in ["cts", "grt", "route", "finish"]:
+        stages[s]["status"] = "skipped"
+    _write_file(
+        os.path.join(run_dir, "run_meta.json"),
+        json.dumps({
+            "run_id": "synth_0001",
+            "status": "completed",
+            "max_stage": "place",
+            "current_stage": "place",
+            "dispatched_at": dispatched,
+            "top_module": "counter",
+            "platform": "sky130hd",
+            "stages": stages,
+        }),
+    )
+
+    result = sm.get_synthesis_status("synth_0001", workspace=workspace)
+
+    assert result["status"] == "completed"
+    assert result["stage"] == "place"
+    assert result["current_stage"] == "place"
+    history = {h["stage"]: h["status"] for h in result["stage_history"]}
+    assert history["constraints"] == "completed"
+    assert history["synth"] == "completed"
+    assert history["floorplan"] == "completed"
+    assert history["place"] == "completed"
+    for s in ["cts", "grt", "route", "finish"]:
+        assert history[s] == "skipped", s
+    skipped = {s for s, m in result["stages"].items() if m.get("status") == "skipped"}
+    assert skipped == {"cts", "grt", "route", "finish"}
+
+
+def test_stage_fields_from_runtime_job(monkeypatch):
     workspace = _runtime_workspace()
     _reset_runtime_workspace(workspace)
     design = os.path.join(workspace, "counter_stage_status.v")
@@ -126,10 +191,12 @@ def test_get_stage_status_from_runtime_job(monkeypatch):
         top_module="counter_stage_status",
         platform="sky130hd",
     )
-    _wait_for_terminal(started["job_id"], workspace)
+    _wait_for_terminal(started["run_id"], workspace)
 
-    result = get_stage_status(workspace=workspace, run_id=started["run_id"])
-    assert result["status"] == "ok"
+    result = sm.get_synthesis_status(started["run_id"], workspace=workspace)
     assert result["run_id"] == started["run_id"]
+    assert result["status"] == "completed"
     assert result["current_stage"] == "finish"
-    assert result["run_status"] == "completed"
+    history = {h["stage"]: h["status"] for h in result["stage_history"]}
+    assert history["constraints"] == "completed"  # this run wrote constraints.sdc post-dispatch
+    assert history["finish"] == "completed"

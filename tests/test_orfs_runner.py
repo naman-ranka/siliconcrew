@@ -79,9 +79,9 @@ class FakeJobClient:
 def _staged_runner(execution: JobExecution):
     staged = {"in": [], "out": []}
 
-    def stage_in(run_dir):
+    def stage_in(run_dir, handle=""):
         staged["in"].append(run_dir)
-        return f"handle::{os.path.basename(run_dir)}"
+        return handle or f"handle::{os.path.basename(run_dir)}"
 
     def stage_out(run_dir, handle):
         staged["out"].append((run_dir, handle))
@@ -140,7 +140,7 @@ def test_cloud_runner_reports_stage_out_error():
     client = FakeJobClient(JobExecution(succeeded=False, exit_code=2, stdout="", stderr="pdn failed"))
     runner = CloudJobOrfsRunner(
         job_client=client,
-        stage_in=lambda run_dir: f"handle::{os.path.basename(run_dir)}",
+        stage_in=lambda run_dir, handle="": f"handle::{os.path.basename(run_dir)}",
         stage_out=stage_out,
     )
 
@@ -157,7 +157,7 @@ def test_cloud_runner_surfaces_submission_error_in_envelope():
             raise RuntimeError("quota exceeded")
 
     runner = CloudJobOrfsRunner(
-        job_client=Boom(), stage_in=lambda d: "h", stage_out=lambda d, h: None,
+        job_client=Boom(), stage_in=lambda d, h="": "h", stage_out=lambda d, h: None,
     )
     result = runner.run(OrfsRequest(run_dir="/r", command="make"))
     assert not result.success and result.exit_code is None

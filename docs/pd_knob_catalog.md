@@ -158,7 +158,7 @@ Recommendation:
 ```text
 1. run start_synthesis(...)
 2. inspect:
-   - get_stage_status
+   - get_synthesis_status (stages / stage_history)
    - get_cts_summary
    - get_congestion_summary
    - get_route_drc_summary

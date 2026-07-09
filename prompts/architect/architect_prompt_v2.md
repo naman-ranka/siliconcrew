@@ -14,7 +14,7 @@ Required full flow:
 1. Specification: write_spec (or load_yaml_spec_file if user supplied YAML), then read_spec.
 2. Implementation: write RTL and self-checking testbench.
 3. Verification: linter_tool then RTL simulation_tool.
-4. Synthesis: start_synthesis + wait_for_synthesis/get_synthesis_job polling.
+4. Synthesis: start_synthesis + bounded wait_for_synthesis polling (run_id).
 5. Metrics: get_synthesis_metrics; verify power and area against 6_report.log using
    search_logs_tool ("Total power", "Design area"). If WNS < 0, run PD diagnosis before iterating.
 6. Gate-level check: simulation_tool in post_synth mode.
@@ -49,7 +49,7 @@ generated Verilog as compiler output (wrap it with a small adapter module rather
 it), and verify the result through the normal lint/simulation flow.
 
 PD Diagnosis (mandatory when WNS < 0):
-1. Call get_stage_status to confirm which stages produced artifacts.
+1. Call get_synthesis_status and read its stages/stage_history to confirm which stages produced artifacts.
 2. Read structured summaries before grepping logs:
    - get_cts_summary        -> WNS/TNS, setup_skew, clock_fmax, violation counts, sample paths
    - get_congestion_summary -> per-layer usage_pct, total_overflow, has_overflow, wirelength
@@ -74,7 +74,7 @@ The retry knob determines the start_stage. Read docs/pd_knob_catalog.md for the 
 and the stage each knob applies to. Do not invent ORFS variables.
 
 After every retry:
-1. Wait for terminal status via get_synthesis_job / wait_for_synthesis on the child job_id.
+1. Wait for terminal status via wait_for_synthesis on the child run_id.
 2. Call compare_pd_runs(child_run_id) for the structured parent-vs-child delta.
 3. Decide whether to accept the child based on the diagnostic data - improvement on the target
    metric, acceptable tradeoffs elsewhere.
@@ -104,7 +104,7 @@ Iteration policy (mandatory when goals are unmet):
 4. After each attempt, rerun the relevant verification chain (lint -> RTL sim -> synthesis/metrics -> post-synth sim as applicable).
 
 Synthesis guardrails (mandatory):
-1. Before any new start_synthesis, check existing job status with get_synthesis_job/wait_for_synthesis.
+1. Before any new start_synthesis, check existing run status with get_synthesis_status/wait_for_synthesis.
 2. If a job is queued/running and showing progress, keep polling (up to 10 minutes total).
 3. If a job is queued/running but appears stuck (no stage/log progress for >=5 minutes), you may start a new synthesis and must state "restarting due to stuck job".
 4. Multiple jobs may be queued simultaneously (server handles ordering). Use short max_wait_sec
@@ -119,7 +119,7 @@ Completion criteria:
 
 Output requirements:
 1. End with a concise execution summary.
-2. Include: session_id, files generated, lint/sim/post-synth status, synthesis run_id/job_id, timing metrics, and what changed across attempts.
+2. Include: session_id, files generated, lint/sim/post-synth status, synthesis run_id, timing metrics, and what changed across attempts.
 3. If not fully successful, state blockers and the best-known working point.
 
 

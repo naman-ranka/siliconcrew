@@ -51,12 +51,16 @@ def test_start_and_poll_synthesis_job_with_guardrails(monkeypatch):
             run_equiv=True,
         )
 
-        assert started["job_id"]
+        # One key: run_id. No process-lifetime job_id anymore (Wave 9).
+        assert "job_id" not in started
         assert started["run_id"] == "synth_0001"
+        assert started["status"] == "queued"
+        assert started["timeout_sec"] > 0
+        assert started["poll_after_sec"] > 0
 
         final = None
         for _ in range(40):
-            status = sm.get_synthesis_job_status(started["job_id"])
+            status = sm.get_synthesis_status(started["run_id"], workspace=workspace)
             if status["status"] in {"completed", "failed"}:
                 final = status
                 break
@@ -106,7 +110,7 @@ def test_constraints_guardrail_blocks_unsafe_success(monkeypatch):
 
         final = None
         for _ in range(40):
-            status = sm.get_synthesis_job_status(started["job_id"])
+            status = sm.get_synthesis_status(started["run_id"], workspace=workspace)
             if status["status"] in {"completed", "failed"}:
                 final = status
                 break
@@ -159,7 +163,7 @@ def test_explicit_clock_overrides_spec_clock(monkeypatch):
 
         final = None
         for _ in range(40):
-            status = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
+            status = sm.get_synthesis_status(started["run_id"], workspace=workspace)
             if status["status"] in {"completed", "failed"}:
                 final = status
                 break
@@ -215,7 +219,7 @@ def test_constraints_guardrail_allows_combinational_default_clock(monkeypatch):
 
         final = None
         for _ in range(40):
-            status = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
+            status = sm.get_synthesis_status(started["run_id"], workspace=workspace)
             if status["status"] in {"completed", "failed"}:
                 final = status
                 break
@@ -253,7 +257,7 @@ def test_constraints_guardrail_strict_can_fail_on_missing_clock(monkeypatch):
 
         final = None
         for _ in range(40):
-            status = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
+            status = sm.get_synthesis_status(started["run_id"], workspace=workspace)
             if status["status"] in {"completed", "failed"}:
                 final = status
                 break
@@ -331,7 +335,7 @@ def test_nonzero_orfs_exit_with_clean_final_artifacts_completes(monkeypatch):
 
         final = None
         for _ in range(40):
-            status = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
+            status = sm.get_synthesis_status(started["run_id"], workspace=workspace)
             if status["status"] in {"completed", "failed"}:
                 final = status
                 break
@@ -380,7 +384,7 @@ def test_nonzero_orfs_exit_with_dirty_final_artifacts_fails(monkeypatch):
 
         final = None
         for _ in range(40):
-            status = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
+            status = sm.get_synthesis_status(started["run_id"], workspace=workspace)
             if status["status"] in {"completed", "failed"}:
                 final = status
                 break
@@ -401,7 +405,6 @@ def test_disk_recovery_and_poll_guidance():
             json.dump(
                 {
                     "run_id": "synth_0001",
-                    "job_id": "job_disk_1",
                     "status": "completed",
                     "auto_checks": {"constraints": "pass", "signoff": "pass", "equiv": "skip"},
                     "check_notes": "Recovered complete",
@@ -411,17 +414,19 @@ def test_disk_recovery_and_poll_guidance():
                 indent=2,
             )
 
+        # Old dirs may still carry a legacy "jobs" mapping — tolerated on read,
+        # never consulted: recovery keys on run_id alone.
         with open(os.path.join(workspace, "synth_runs", "index.json"), "w", encoding="utf-8") as f:
             json.dump(
                 {
                     "runs": [{"run_id": "synth_0001", "status": "completed", "updated_at": "x"}],
-                    "jobs": [{"job_id": "job_disk_1", "run_id": "synth_0001", "status": "completed", "updated_at": "x"}],
+                    "jobs": [{"job_id": "job_legacy_1", "run_id": "synth_0001", "status": "completed", "updated_at": "x"}],
                 },
                 f,
                 indent=2,
             )
 
-        recovered = sm.get_synthesis_job_status("job_disk_1", workspace=workspace)
+        recovered = sm.get_synthesis_status("synth_0001", workspace=workspace)
         assert recovered["status"] == "completed"
         assert recovered["recovered_from_index"] is True
         assert recovered["poll_after_sec"] == 0
@@ -465,8 +470,8 @@ def test_poll_rate_limit_on_running_jobs(monkeypatch):
                 platform="sky130hd",
             )
 
-            first = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
-            second = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
+            first = sm.get_synthesis_status(started["run_id"], workspace=workspace)
+            second = sm.get_synthesis_status(started["run_id"], workspace=workspace)
 
             # Immediate second poll should be throttled while still running/queued.
             if first["status"] in {"running", "queued"}:
@@ -478,7 +483,7 @@ def test_poll_rate_limit_on_running_jobs(monkeypatch):
 
             # Ensure worker is finished before tempdir cleanup on Windows.
             for _ in range(120):
-                final = sm.get_synthesis_job_status(started["job_id"], workspace=workspace)
+                final = sm.get_synthesis_status(started["run_id"], workspace=workspace)
                 if final["status"] in {"completed", "failed"}:
                     break
                 time.sleep(0.05)
