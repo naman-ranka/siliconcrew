@@ -7,10 +7,15 @@ services:
       - "${PORT_MCP:-8080}:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${HOST_WORKSPACE}:/workspace
-      - ${HOST_DATA_DIR}:/root/.siliconcrew
+      # Host bind mounts. start.sh prompts for and exports these; the defaults
+      # let `docker compose up` work straight from a clean checkout too.
+      - ${HOST_WORKSPACE:-./workspace}:/workspace
+      - ${HOST_DATA_DIR:-./.siliconcrew_data}:/root/.siliconcrew
     environment:
       - RTL_WORKSPACE=/workspace
-      - HOST_WORKSPACE=${HOST_WORKSPACE}
+      - HOST_WORKSPACE=${HOST_WORKSPACE:-./workspace}
     env_file:
-      - .env.docker
+      # Created by start.sh from .env.example; optional so `compose config`
+      # doesn't fail before you've made it.
+      - path: .env.docker
+        required: false

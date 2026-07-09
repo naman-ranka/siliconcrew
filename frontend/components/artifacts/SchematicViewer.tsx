@@ -5,6 +5,7 @@ import { CircuitBoard, RefreshCw, Download, ZoomIn, ZoomOut } from "lucide-react
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { EmptyState } from "@/components/workbench/EmptyState";
 import {
   Select,
   SelectContent,
@@ -74,13 +75,13 @@ export function SchematicViewer() {
 
   if (schematicFiles.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-        <CircuitBoard className="h-12 w-12 mb-4" />
-        <p className="text-sm">No schematics yet</p>
-        <p className="text-xs mt-1">
-          Ask the agent to generate a schematic for your design
-        </p>
-      </div>
+      <EmptyState
+        icon={<CircuitBoard />}
+        headline="No schematics yet"
+        assistantHint="…or ask the assistant to generate one for your current design."
+      >
+        Run synthesis to produce a gate-level schematic of your design.
+      </EmptyState>
     );
   }
 

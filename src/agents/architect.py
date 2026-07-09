@@ -599,18 +599,20 @@ def load_system_prompt(prompt_path: Path | None = None) -> str:
     return SYSTEM_PROMPT
 
 
-def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL):
+def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=None):
     """
     Creates the Architect agent using ReAct pattern.
-    
+
     Args:
         checkpointer: Optional LangGraph checkpointer for persistence
         model_name: Name of the LLM model to use
-        
+        api_key: Optional request-scoped LLM key (BYOK / hosted tier). When None,
+            create_llm falls back to the environment key (self-host behavior).
+
     Returns:
         Compiled LangGraph agent
     """
-    llm = create_llm(model_name=model_name, temperature=0.0)
+    llm = create_llm(model_name=model_name, temperature=0.0, api_key=api_key)
     runtime_prompt = load_system_prompt()
 
     # Prefer passing prompt explicitly; keep backward compatibility for older LangGraph signatures.

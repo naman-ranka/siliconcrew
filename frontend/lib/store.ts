@@ -2,6 +2,8 @@ import { create } from "zustand";
 import type {
   Project,
   Session,
+  ChatThread,
+  ModelInfo,
   Message,
   ToolCall,
   ToolResult,
@@ -13,9 +15,52 @@ import type {
   FileInfo,
   ReportData,
   SynthesisRun,
+  DesignManifest,
+  RunSummary,
+  LintResult,
+  FileRole,
+  ConsoleChannel,
+  ConsoleEntry,
+  SynthJobStatus,
+  Toast,
 } from "@/types";
-import { projectsApi, sessionsApi, chatApi, workspaceApi } from "./api";
+import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi } from "./api";
 import { generateId } from "./utils";
+
+// F4/F5: store-level single-flight for the workspace hydrate + workbench load,
+// keyed by session id. Every trigger — mount, selectSession, chat-complete,
+// upload, the active-run poll, manual refresh — shares one in-flight promise, so
+// the heavy hydration runs ONCE even when several fire together (the double-open
+// and the two polling loops overlapping during a synth). Cleared on settle.
+const _inflight = new Map<string, Promise<unknown>>();
+function singleFlight<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = _inflight.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+  const p = fn().finally(() => {
+    if (_inflight.get(key) === p) _inflight.delete(key);
+  });
+  _inflight.set(key, p);
+  return p;
+}
+
+// Which artifact tab a file type maps to (initial-load tab selection).
+const _fileTypeToTab: Record<string, ArtifactTab | undefined> = {
+  spec: "spec",
+  verilog: "code",
+  waveform: "waveform",
+  schematic: "schematic",
+  report: "report",
+};
+function newestArtifactTab(files: FileInfo[]): ArtifactTab | null {
+  let best: { tab: ArtifactTab; ts: number } | null = null;
+  for (const f of files) {
+    const tab = _fileTypeToTab[f.type];
+    if (!tab) continue;
+    const ts = f.modified ? new Date(f.modified).getTime() : 0;
+    if (!best || ts > best.ts) best = { tab, ts };
+  }
+  return best?.tab ?? null;
+}
 
 interface AppState {
   // Project state
@@ -36,10 +81,24 @@ interface AppState {
   isStreaming: boolean;
   streamingMessage: Message | null;
   chatError: string | null;
+  // Machine-readable code from a WS error frame (e.g. "no_key",
+  // "hosted_tier_exhausted") so the chat can render an actionable CTA.
+  chatErrorCode: string | null;
+
+  // Chat threads (many conversations per workspace). The active thread keys the
+  // LangGraph checkpoint; all threads share the live workspace.
+  threads: ChatThread[];
+  activeThreadId: string | null;
+  threadsLoading: boolean;
+
+  // Model registry (the picker). The active thread's model is what the WS uses.
+  models: ModelInfo[];
+  modelsLoaded: boolean;
 
   // WebSocket
   ws: WebSocket | null;
   wsSessionId: string | null;
+  wsThreadId: string | null;
 
   // Sidebar state
   sidebarCollapsed: boolean;
@@ -48,8 +107,18 @@ interface AppState {
   artifactsVisible: boolean;
   activeArtifactTab: ArtifactTab;
 
+  // Settings modal (BYOK API Keys). Opened from the sidebar Settings button and
+  // from the chat "Add an API key" CTA — shared state so either surface can open it.
+  settingsOpen: boolean;
+  setSettingsOpen: (open: boolean) => void;
+
   // Workspace data
   files: FileInfo[];
+  // Set when the session's workspace failed to load (e.g. a transient backend
+  // error / a cold hosted instance that hasn't rehydrated). Distinguishes
+  // "couldn't load" from a genuinely empty new session so the UI surfaces it
+  // instead of silently showing the empty onboarding.
+  workspaceError: string | null;
   spec: SpecData | null;
   codeFiles: CodeFile[];
   selectedCodeFile: string | null;
@@ -60,6 +129,7 @@ interface AppState {
   selectedSynthesisRunId: string | null;
   report: ReportData | null;
   layoutFiles: string[];
+  selectedLayout: string | null;
   schematicFiles: string[];
 
   // Actions
@@ -72,6 +142,17 @@ interface AppState {
   sendMessage: (content: string) => void;
   stopStreaming: () => void;
 
+  // Chat thread actions
+  loadThreads: () => Promise<void>;
+  newThread: () => Promise<void>;
+  selectThread: (threadId: string) => Promise<void>;
+  deleteThread: (threadId: string) => Promise<void>;
+  renameThread: (threadId: string, title: string) => Promise<void>;
+
+  // Model actions
+  loadModels: () => Promise<void>;
+  setActiveThreadModel: (modelId: string) => Promise<void>;
+
   toggleSidebar: () => void;
   toggleArtifacts: () => void;
   setArtifactTab: (tab: ArtifactTab) => void;
@@ -80,12 +161,55 @@ interface AppState {
   loadSpec: () => Promise<void>;
   loadCodeFiles: () => Promise<void>;
   selectCodeFile: (filename: string) => void;
+  saveCodeFile: (filename: string, content: string) => Promise<void>;
   loadWaveforms: () => Promise<void>;
   selectWaveform: (filename: string) => Promise<void>;
   loadSynthesisRuns: () => Promise<void>;
   selectSynthesisRun: (runId: string | null) => Promise<void>;
   loadReport: (runId?: string | null) => Promise<void>;
   generateReport: (runId?: string | null) => Promise<void>;
+  selectLayout: (filename: string) => void;
+
+  // --- Workbench (Phase 1) ---
+  manifest: DesignManifest | null;
+  runs: RunSummary[];
+  selectedRunId: string | null;
+  runKindFilter: "all" | "sim" | "synth";
+  lintResult: LintResult | null;
+  consoleEntries: ConsoleEntry[];
+  activeConsole: ConsoleChannel;
+  // Monotonic counter the Console watches to draw attention to a fresh result
+  // (auto-expand + pulse) — e.g. a lint result that would otherwise be a quiet
+  // one-liner while the center stays on Code. Carries which channel to focus.
+  consoleAttention: { tick: number; channel: ConsoleChannel } | null;
+  // Live ORFS synth job status (stages, elapsed, remote label) while a synth
+  // runs; null when no synth is in flight. Drives the stage-progress UI.
+  synthJob: SynthJobStatus | null;
+  actionPending: { lint: boolean; sim: boolean; synth: boolean };
+  // Section-load flags drive skeleton loaders so a section shows shimmer rows
+  // instead of flashing an empty/"No …" state before content lands.
+  runsLoading: boolean;
+  manifestLoading: boolean;
+  reportLoading: boolean;
+  codeLoading: boolean;
+  uploadNotice: string | null;
+  toasts: Toast[];
+  pushToast: (t: Omit<Toast, "id">, ttlMs?: number) => void;
+  dismissToast: (id: string) => void;
+
+  loadWorkbench: () => Promise<void>;
+  loadManifest: () => Promise<void>;
+  setFileRole: (name: string, role: FileRole) => Promise<void>;
+  uploadFiles: (files: File[]) => Promise<{ uploaded: string[]; notShown: string[] }>;
+  loadRuns: () => Promise<void>;
+  selectRun: (runId: string | null, opts?: { keepTab?: boolean }) => Promise<void>;
+  pinRun: (runId: string, pinned: boolean) => Promise<void>;
+  setRunKindFilter: (kind: "all" | "sim" | "synth") => void;
+  setActiveConsole: (channel: ConsoleChannel) => void;
+  runLint: () => Promise<void>;
+  runSim: (opts?: { mode?: string; runId?: string }) => Promise<void>;
+  runSynth: () => Promise<void>;
+  refreshSynthArtifacts: (runId?: string | null) => Promise<void>;
 }
 
 function buildBlocks(
@@ -117,16 +241,27 @@ export const useStore = create<AppState>((set, get) => ({
   isStreaming: false,
   streamingMessage: null,
   chatError: null,
+  chatErrorCode: null,
+
+  threads: [],
+  activeThreadId: null,
+  threadsLoading: false,
+
+  models: [],
+  modelsLoaded: false,
 
   ws: null,
   wsSessionId: null,
+  wsThreadId: null,
 
   sidebarCollapsed: false,
 
   artifactsVisible: false,
   activeArtifactTab: "spec",
+  settingsOpen: false,
 
   files: [],
+  workspaceError: null,
   spec: null,
   codeFiles: [],
   selectedCodeFile: null,
@@ -137,7 +272,38 @@ export const useStore = create<AppState>((set, get) => ({
   selectedSynthesisRunId: null,
   report: null,
   layoutFiles: [],
+  selectedLayout: null,
   schematicFiles: [],
+
+  // Workbench state
+  manifest: null,
+  runs: [],
+  selectedRunId: null,
+  runKindFilter: "all",
+  lintResult: null,
+  consoleEntries: [],
+  activeConsole: "sim",
+  consoleAttention: null,
+  synthJob: null,
+  actionPending: { lint: false, sim: false, synth: false },
+  runsLoading: false,
+  manifestLoading: false,
+  reportLoading: false,
+  codeLoading: false,
+  uploadNotice: null,
+  toasts: [],
+
+  pushToast: (t, ttlMs = 5000) => {
+    const id = generateId();
+    set((s) => ({ toasts: [...s.toasts, { ...t, id }] }));
+    if (ttlMs > 0) {
+      setTimeout(() => {
+        useStore.setState((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) }));
+      }, ttlMs);
+    }
+  },
+
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })),
 
   // Project actions
   loadProjects: async () => {
@@ -203,8 +369,11 @@ export const useStore = create<AppState>((set, get) => ({
         sessions: [session, ...state.sessions],
         currentSession: session,
         messages: [],
+        threads: [],
+        activeThreadId: null,
         ws: null,
         wsSessionId: null,
+        wsThreadId: null,
         files: [],
         spec: null,
         codeFiles: [],
@@ -213,6 +382,8 @@ export const useStore = create<AppState>((set, get) => ({
         report: null,
         artifactsVisible: false,
       }));
+      // Materialize the session's default thread ("Chat 1") for the switcher.
+      await get().loadThreads();
     } catch (error) {
       throw error;
     }
@@ -249,8 +420,11 @@ export const useStore = create<AppState>((set, get) => ({
     set({
       currentSession: session,
       messages: [],
+      threads: [],
+      activeThreadId: null,
       ws: null,
       wsSessionId: null,
+      wsThreadId: null,
       spec: null,
       codeFiles: [],
       selectedCodeFile: null,
@@ -264,19 +438,25 @@ export const useStore = create<AppState>((set, get) => ({
     });
 
     if (session) {
-      // Load chat history and workspace data
+      // Threads first (sets activeThreadId), then that thread's history, then the
+      // workbench (manifest + runs + workspace) in ONE snapshot hydration. This
+      // is the single load on open — callers no longer follow with loadWorkbench
+      // (F4: was a double refresh).
+      await get().loadThreads();
       await get().loadChatHistory();
-      await get().refreshWorkspace();
+      await get().loadWorkbench();
     }
   },
 
   // Chat actions
   loadChatHistory: async () => {
-    const { currentSession } = get();
+    const { currentSession, activeThreadId } = get();
     if (!currentSession) return;
 
     try {
-      const history = await chatApi.getHistory(currentSession.id);
+      const history = activeThreadId
+        ? await chatApi.getThreadHistory(currentSession.id, activeThreadId)
+        : await chatApi.getHistory(currentSession.id);
       const messages: Message[] = history.map((msg) => ({
         id: generateId(),
         role: msg.role as "user" | "assistant",
@@ -285,16 +465,42 @@ export const useStore = create<AppState>((set, get) => ({
         tool_results: msg.tool_results,
         blocks: buildBlocks(msg.content ?? "", msg.tool_calls, msg.tool_results),
       }));
+      // Reopen reconciliation (F4): if the last assistant turn ends on a tool call
+      // with no closing summary, it was interrupted before finishing (e.g. the WS
+      // dropped mid-synthesis). Mark it honestly instead of leaving a dangling
+      // "Waiting for Synthesis" that looks perpetually in-progress — the real
+      // status lives in the Runs / Signoff panel.
+      const last = messages[messages.length - 1];
+      if (last && last.role === "assistant") {
+        const b = last.blocks ?? [];
+        if (b.length > 0 && b[b.length - 1].type === "tool") {
+          last.blocks = [
+            ...b,
+            { type: "text", content: "_The reply was interrupted before a summary — see the Runs / Signoff panel for the final status._" },
+          ];
+        }
+      }
       set({ messages, chatError: null });
     } catch (error) {
-      set({ chatError: error instanceof Error ? error.message : "Failed to load history" });
+      // A fresh session with no history is NOT an error — the backend now
+      // returns 200 [] for it. Treat "session not found"/empty-history failures
+      // as a calm empty state (no messages, no red banner) rather than alarming
+      // the user before they've even started.
+      const msg = error instanceof Error ? error.message : "Failed to load history";
+      if (/session not found|not found|no history/i.test(msg)) {
+        set({ messages: [], chatError: null });
+      } else {
+        set({ chatError: msg });
+      }
     }
   },
 
   sendMessage: (content: string) => {
-    const { currentSession, ws: existingWs, wsSessionId, messages } = get();
+    const { currentSession, ws: existingWs, wsSessionId, wsThreadId, activeThreadId, messages } = get();
     if (!currentSession || !content.trim()) return;
     const messageContent = content;
+    // The chat thread this message belongs to (defaults to Chat 1 = session id).
+    const threadId = activeThreadId || currentSession.id;
 
     // Add user message
     const userMessage: Message = {
@@ -307,26 +513,27 @@ export const useStore = create<AppState>((set, get) => ({
 
     set({ messages: [...messages, userMessage] });
 
-    // Create or reuse WebSocket
+    // Create or reuse WebSocket. Reconnect when the session OR the active thread
+    // changed, so each chat checkpoints under its own thread_id.
     let ws = existingWs;
-    const sessionMismatch = wsSessionId !== currentSession.id;
-    if (ws && (ws.readyState !== WebSocket.OPEN || sessionMismatch)) {
+    const mismatch = wsSessionId !== currentSession.id || wsThreadId !== threadId;
+    if (ws && (ws.readyState !== WebSocket.OPEN || mismatch)) {
       ws.close();
       ws = null;
     }
 
     if (!ws) {
-      ws = chatApi.createConnection(currentSession.id);
+      ws = chatApi.createConnection(currentSession.id, threadId);
       const socket = ws;
-      set({ ws: socket, wsSessionId: currentSession.id });
+      set({ ws: socket, wsSessionId: currentSession.id, wsThreadId: threadId });
 
       socket.onopen = () => {
         // Ignore stale socket opens after session/socket replacement.
         if (get().ws !== socket) return;
-        socket.send(JSON.stringify({ message: messageContent }));
+        socket.send(JSON.stringify({ message: messageContent, thread_id: threadId }));
       };
     } else {
-      ws.send(JSON.stringify({ message: messageContent }));
+      ws.send(JSON.stringify({ message: messageContent, thread_id: threadId }));
     }
 
     // Create streaming message placeholder
@@ -340,8 +547,9 @@ export const useStore = create<AppState>((set, get) => ({
       timestamp: new Date().toISOString(),
     };
 
-    set({ isStreaming: true, streamingMessage, chatError: null });
+    set({ isStreaming: true, streamingMessage, chatError: null, chatErrorCode: null });
 
+    let terminalReceived = false;
     const socket = ws;
     socket.onmessage = (event) => {
       if (get().ws !== socket) return;
@@ -402,7 +610,11 @@ export const useStore = create<AppState>((set, get) => ({
           break;
         }
 
+        case "ping":
+          break; // server keepalive during long tool jobs; no UI effect
+
         case "done":
+          terminalReceived = true;
           const { streamingMessage: finalMsg, messages: finalMessages } = get();
           if (finalMsg) {
             set({
@@ -413,31 +625,66 @@ export const useStore = create<AppState>((set, get) => ({
           }
           // Final workspace refresh after completion
           get().refreshWorkspace();
+          // Reflect server-side auto-title / last-active reordering in the switcher.
+          get().loadThreads();
           break;
 
-        case "error":
+        case "error": {
+          terminalReceived = true;
+          // Keep whatever streamed so far instead of discarding the trace.
+          const { streamingMessage: em, messages: emsgs } = get();
+          const keep = em && ((em.blocks?.length ?? 0) > 0 || em.content);
           set({
+            messages: keep ? [...emsgs, em!] : emsgs,
             chatError: data.error,
+            chatErrorCode: data.code ?? null,
             isStreaming: false,
             streamingMessage: null,
           });
           break;
+        }
       }
     };
 
-    socket.onerror = () => {
+    // A socket that closes/errors WITHOUT a done/error frame is an unexpected drop
+    // (e.g. an idle/proxy timeout during a long tool job). Recover instead of
+    // leaving the UI stuck "streaming": preserve the partial trace, re-enable
+    // input, surface the state, and refetch persisted history — the agent can keep
+    // running server-side (Cloud Run), so the completed result often lands there.
+    // Guarded so error+close only handle the drop once.
+    const finalizeDrop = () => {
       if (get().ws !== socket) return;
+      if (terminalReceived) {
+        set({ ws: null, wsSessionId: null, wsThreadId: null });
+        return;
+      }
+      terminalReceived = true;
+      const { streamingMessage: dm, messages: dmsgs } = get();
+      const keep = dm && ((dm.blocks?.length ?? 0) > 0 || dm.content);
       set({
-        chatError: "WebSocket connection error",
-        isStreaming: false,
+        messages: keep ? [...dmsgs, dm!] : dmsgs,
         streamingMessage: null,
+        isStreaming: false,
+        ws: null,
+        wsSessionId: null,
+        wsThreadId: null,
+        chatError: "Connection lost — fetching the latest result from the server…",
+        chatErrorCode: "ws_dropped",
       });
+      // Pragmatic resume: refetch persisted history (with a couple of backoff
+      // retries) to pick up a run the server finished after the socket dropped.
+      let attempt = 0;
+      const poll = () => {
+        attempt += 1;
+        void get().loadChatHistory().finally(() => {
+          if (attempt < 3) setTimeout(poll, attempt * 2000);
+        });
+      };
+      setTimeout(poll, 1500);
     };
 
-    socket.onclose = () => {
-      if (get().ws !== socket) return;
-      set({ ws: null, wsSessionId: null });
-    };
+    socket.onerror = finalizeDrop;
+    socket.onclose = finalizeDrop;
   },
 
   stopStreaming: () => {
@@ -459,8 +706,114 @@ export const useStore = create<AppState>((set, get) => ({
         streamingMessage: null,
         ws: null,
         wsSessionId: null,
+        wsThreadId: null,
       });
     }
+  },
+
+  // Chat thread actions — many conversations per workspace. Threads share the
+  // LIVE workspace; switching a thread only swaps the conversation history.
+  loadThreads: async () => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set({ threadsLoading: true });
+    try {
+      const threads = await threadsApi.list(currentSession.id);
+      const cur = get().activeThreadId;
+      // Keep the active thread if it still exists; else land on newest-active.
+      const active = cur && threads.some((t) => t.id === cur) ? cur : threads[0]?.id ?? null;
+      set({ threads, activeThreadId: active, threadsLoading: false });
+    } catch (error) {
+      set({
+        threadsLoading: false,
+        chatError: error instanceof Error ? error.message : "Failed to load chats",
+      });
+    }
+  },
+
+  newThread: async () => {
+    const { currentSession, ws } = get();
+    if (!currentSession) return;
+    const thread = await threadsApi.create(currentSession.id);
+    if (ws) ws.close();
+    set((state) => ({
+      threads: [thread, ...state.threads],
+      activeThreadId: thread.id,
+      messages: [],
+      ws: null,
+      wsSessionId: null,
+      wsThreadId: null,
+      chatError: null,
+    }));
+  },
+
+  selectThread: async (threadId: string) => {
+    const { currentSession, activeThreadId, ws } = get();
+    if (!currentSession || threadId === activeThreadId) return;
+    if (ws) ws.close();
+    set({ activeThreadId: threadId, messages: [], ws: null, wsSessionId: null, wsThreadId: null });
+    await get().loadChatHistory();
+  },
+
+  deleteThread: async (threadId: string) => {
+    const { currentSession, activeThreadId, threads, ws } = get();
+    if (!currentSession) return;
+    await threadsApi.delete(currentSession.id, threadId);
+    const remaining = threads.filter((t) => t.id !== threadId);
+    const wasActive = activeThreadId === threadId;
+    if (wasActive && ws) ws.close();
+    set({
+      threads: remaining,
+      activeThreadId: wasActive ? remaining[0]?.id ?? null : activeThreadId,
+      ...(wasActive ? { messages: [], ws: null, wsSessionId: null, wsThreadId: null } : {}),
+    });
+    if (wasActive) {
+      // Re-materialize (ensures a Chat 1 exists) and load the next conversation.
+      await get().loadThreads();
+      await get().loadChatHistory();
+    }
+  },
+
+  renameThread: async (threadId: string, title: string) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    await threadsApi.patch(currentSession.id, threadId, { title });
+    set((state) => ({
+      threads: state.threads.map((t) => (t.id === threadId ? { ...t, title } : t)),
+    }));
+  },
+
+  // Model actions — the chosen model lives on the active thread; the WS reads it.
+  loadModels: async () => {
+    if (get().modelsLoaded) return;
+    try {
+      const data = await modelsApi.list();
+      // Be defensive about the response shape so the picker never crashes.
+      set({ models: Array.isArray(data?.models) ? data.models : [], modelsLoaded: true });
+    } catch {
+      set({ models: [], modelsLoaded: true });
+    }
+  },
+
+  setActiveThreadModel: async (modelId: string) => {
+    const { currentSession, activeThreadId } = get();
+    if (!currentSession) return;
+    // If no thread is active yet, load threads to get the real default thread UUID
+    // (never use the session ID as a thread ID — threads have auto-generated UUIDs).
+    let tid = activeThreadId;
+    if (!tid) {
+      await get().loadThreads();
+      tid = get().activeThreadId;
+    }
+    if (!tid) return; // no thread exists at all; bail silently
+    // Persist on the thread; the next message uses it (WS reads the thread model).
+    await threadsApi.patch(currentSession.id, tid, { model: modelId });
+    set((state) => ({
+      activeThreadId: tid,
+      threads: state.threads.some((t) => t.id === tid)
+        ? state.threads.map((t) => (t.id === tid ? { ...t, model: modelId } : t))
+        : state.threads,
+    }));
   },
 
   // UI actions
@@ -476,10 +829,15 @@ export const useStore = create<AppState>((set, get) => ({
     set({ activeArtifactTab: tab, artifactsVisible: true });
   },
 
+  setSettingsOpen: (open: boolean) => {
+    set({ settingsOpen: open });
+  },
+
   // Workspace actions
   refreshWorkspace: async () => {
     const { currentSession } = get();
     if (!currentSession) return;
+    return singleFlight(`refresh:${currentSession.id}`, async () => {
 
     const parseModified = (modified?: string) => (modified ? new Date(modified).getTime() : 0);
 
@@ -521,13 +879,27 @@ export const useStore = create<AppState>((set, get) => ({
     const prevReport = get().report;
 
     try {
+      // listFiles is the canonical "did the workspace load" probe — track its
+      // failure explicitly so a transient/unavailable workspace surfaces a
+      // banner instead of masquerading as an empty new session. The secondary
+      // lists stay best-effort.
+      let workspaceLoadFailed = false;
       const [files, waveformFiles, layoutFiles, schematicFiles, synthesisRuns] = await Promise.all([
-        workspaceApi.listFiles(currentSession.id).catch(() => []),
+        workspaceApi.listFiles(currentSession.id).catch(() => {
+          workspaceLoadFailed = true;
+          return [];
+        }),
         workspaceApi.listWaveforms(currentSession.id).catch(() => []),
         workspaceApi.listLayouts(currentSession.id).catch(() => []),
         workspaceApi.listSchematics(currentSession.id).catch(() => []),
         workspaceApi.listSynthesisRuns(currentSession.id).catch(() => []),
       ]);
+
+      set({
+        workspaceError: workspaceLoadFailed
+          ? "Couldn't load this session's workspace. It may be temporarily unavailable — retry."
+          : null,
+      });
 
       const currentRunId = get().selectedSynthesisRunId;
       const nextRunId =
@@ -544,16 +916,14 @@ export const useStore = create<AppState>((set, get) => ({
       const hasCode = files.some((f) => f.type === "verilog");
       const hasReport = files.some((f) => f.type === "report") || synthesisRuns.some((run) => run.report_available);
 
-      // Load content
-      if (hasSpec) {
-        await get().loadSpec();
-      }
-      if (hasCode) {
-        await get().loadCodeFiles();
-      }
-      if (hasReport) {
-        await get().loadReport(nextRunId);
-      }
+      // Load content in parallel — spec, code and report set independent state
+      // slices, so serial awaits only added latency (spec blocked code blocked
+      // report). Fetch them concurrently.
+      await Promise.all([
+        hasSpec ? get().loadSpec() : Promise.resolve(),
+        hasCode ? get().loadCodeFiles() : Promise.resolve(),
+        hasReport ? get().loadReport(nextRunId) : Promise.resolve(),
+      ]);
 
       // Get updated state after loading
       const newState = get();
@@ -601,6 +971,7 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (error) {
       console.error("Failed to refresh workspace:", error);
     }
+    });
   },
 
   loadSpec: async () => {
@@ -619,6 +990,7 @@ export const useStore = create<AppState>((set, get) => ({
     const { currentSession } = get();
     if (!currentSession) return;
 
+    set({ codeLoading: true });
     try {
       const codeFiles = await workspaceApi.getCodeFiles(currentSession.id);
       set({
@@ -627,10 +999,25 @@ export const useStore = create<AppState>((set, get) => ({
       });
     } catch {
       set({ codeFiles: [], selectedCodeFile: null });
+    } finally {
+      set({ codeLoading: false });
     }
   },
 
   selectCodeFile: (filename: string) => {
+    set({ selectedCodeFile: filename });
+  },
+
+  saveCodeFile: async (filename: string, content: string) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const res = await workbenchApi.saveCode(currentSession.id, filename, content);
+    set({ manifest: res.manifest });
+    // Reflect the edit in the open viewer + refresh roles/files.
+    set((state) => ({
+      codeFiles: state.codeFiles.map((f) => (f.filename === filename ? { ...f, content } : f)),
+    }));
+    await get().loadCodeFiles();
     set({ selectedCodeFile: filename });
   },
 
@@ -679,6 +1066,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   selectSynthesisRun: async (runId: string | null) => {
+    // Re-selecting the already-selected run would refetch the same report for
+    // nothing (the report is already loaded for it).
+    if (runId === get().selectedSynthesisRunId) return;
     set({ selectedSynthesisRunId: runId });
     await get().loadReport(runId);
   },
@@ -687,12 +1077,15 @@ export const useStore = create<AppState>((set, get) => ({
     const { currentSession } = get();
     if (!currentSession) return;
 
+    set({ reportLoading: true });
     try {
       const targetRunId = runId === undefined ? get().selectedSynthesisRunId : runId;
       const report = await workspaceApi.getReport(currentSession.id, targetRunId);
       set({ report });
     } catch {
       set({ report: null });
+    } finally {
+      set({ reportLoading: false });
     }
   },
 
@@ -709,4 +1102,466 @@ export const useStore = create<AppState>((set, get) => ({
       throw error;
     }
   },
+
+  selectLayout: (filename: string) => {
+    set({ selectedLayout: filename });
+  },
+
+  // ====================== Workbench actions ======================
+
+  loadWorkbench: async () => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    // F4: single-flight + a ONE-hydration snapshot instead of the ~18-call
+    // fan-out. Falls back to the granular loaders if the snapshot is
+    // unavailable (older backend) or errors — behavior stays correct.
+    return singleFlight(`workbench:${sid}`, async () => {
+      try {
+        const snap = await workbenchApi.getWorkbench(sid);
+        if (get().currentSession?.id !== sid) return; // switched away mid-flight
+        const files = snap.files ?? [];
+        const runs = snap.runs ?? [];
+        const synthesisRuns = snap.synthesisRuns ?? [];
+        set((state) => ({
+          manifest: snap.manifest ?? null,
+          manifestLoading: false,
+          runs,
+          runsLoading: false,
+          selectedRunId:
+            runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
+          files,
+          spec: snap.spec ?? null,
+          codeFiles: snap.code ?? [],
+          selectedCodeFile:
+            snap.code?.find((f) => f.filename === state.selectedCodeFile)?.filename ??
+            snap.code?.[0]?.filename ??
+            null,
+          report: snap.report ?? null,
+          synthesisRuns,
+          selectedSynthesisRunId:
+            synthesisRuns.find((r) => r.run_id === state.selectedSynthesisRunId)?.run_id ??
+            synthesisRuns[0]?.run_id ??
+            null,
+          // Derive the artifact file-lists from the single files listing.
+          waveformFiles: files.filter((f) => f.type === "waveform").map((f) => f.name),
+          layoutFiles: files.filter((f) => f.type === "layout").map((f) => f.name),
+          schematicFiles: files.filter((f) => f.type === "schematic").map((f) => f.name),
+        }));
+        // Reveal the artifacts panel on the newest artifact (initial-load UX).
+        const hasContent =
+          !!snap.spec || (snap.code?.length ?? 0) > 0 || !!snap.report || files.length > 0;
+        if (hasContent) {
+          const tab = newestArtifactTab(files);
+          set((s) => ({
+            artifactsVisible: true,
+            activeArtifactTab: tab ?? s.activeArtifactTab,
+          }));
+        }
+      } catch {
+        // Snapshot unavailable → the original granular fan-out (still correct).
+        await Promise.all([get().loadManifest(), get().loadRuns(), get().refreshWorkspace()]);
+      }
+    });
+  },
+
+  loadManifest: async () => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set({ manifestLoading: true });
+    try {
+      const manifest = await workbenchApi.getManifest(currentSession.id);
+      set({ manifest });
+    } catch {
+      set({ manifest: null });
+    } finally {
+      set({ manifestLoading: false });
+    }
+  },
+
+  setFileRole: async (name: string, role: FileRole) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const manifest = await workbenchApi.updateManifest(currentSession.id, { files: [{ name, role }] });
+    set({ manifest });
+  },
+
+  uploadFiles: async (files: File[]) => {
+    const { currentSession } = get();
+    if (!currentSession || files.length === 0) return { uploaded: [], notShown: [] };
+    const res = await workbenchApi.uploadFiles(currentSession.id, files);
+    set({ manifest: res.manifest });
+    // Files the server stored but the manifest doesn't surface (non-design types
+    // like .txt) — so the upload isn't a silent black box (hobbyist feedback).
+    const shown = new Set(res.manifest.files.map((f) => f.name));
+    const notShown = res.uploaded.filter((n) => !shown.has(n));
+    const notice =
+      `✓ Uploaded ${res.uploaded.length} file(s)` +
+      (notShown.length ? ` · ${notShown.length} non-design file(s) stored, not shown` : "");
+    // Store-driven so the confirmation shows regardless of which surface triggered
+    // the upload (file-tree button, drag-drop, or the onboarding CTA).
+    set({ uploadNotice: notice });
+    get().pushToast({
+      kind: "success",
+      title: `Uploaded ${res.uploaded.length} file(s)`,
+      detail: notShown.length ? `${notShown.length} non-design file(s) stored, not shown` : undefined,
+    });
+    const token = ++_uploadNoticeToken;
+    setTimeout(() => {
+      if (_uploadNoticeToken === token) useStore.setState({ uploadNotice: null });
+    }, 5000);
+    pushConsole(set, get, {
+      channel: get().activeConsole,
+      status: "info",
+      summary: notice,
+    });
+    await get().refreshWorkspace();
+    return { uploaded: res.uploaded, notShown };
+  },
+
+  loadRuns: async () => {
+    const { currentSession, runKindFilter } = get();
+    if (!currentSession) return;
+    // F5: single-flight so the two synth-time loops (the runSynth job poll and
+    // the useWorkbenchSync active-run poll) never double-pull the run list.
+    return singleFlight(`runs:${currentSession.id}:${runKindFilter}`, async () => {
+      set({ runsLoading: true });
+      try {
+        const runs = await workbenchApi.listRuns(currentSession.id, runKindFilter);
+        set((state) => ({
+          runs,
+          selectedRunId:
+            runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
+        }));
+      } catch {
+        set({ runs: [] });
+      } finally {
+        set({ runsLoading: false });
+      }
+    });
+  },
+
+  setRunKindFilter: (kind) => {
+    // Clicking the already-active filter shouldn't trigger a refetch.
+    if (get().runKindFilter === kind) return;
+    set({ runKindFilter: kind });
+    void get().loadRuns();
+  },
+
+  setActiveConsole: (channel) => set({ activeConsole: channel }),
+
+  selectRun: async (runId: string | null, opts?: { keepTab?: boolean }) => {
+    set({ selectedRunId: runId });
+    if (!runId) return;
+    const run = get().runs.find((r) => r.id === runId);
+    if (!run) return;
+
+    if (run.kind === "sim") {
+      set({ activeConsole: "sim" });
+      // Backfill the console from the selected run's stored record so a user
+      // landing on a historical failure sees its command + ERROR immediately
+      // (not "No sim output yet").
+      pushConsole(set, get, {
+        channel: "sim",
+        status: run.status === "running" ? "running" : run.status,
+        runId: run.id,
+        command: [run.compileCommand, run.simCommand].filter(Boolean).join("\n") || undefined,
+        summary:
+          run.status === "passed"
+            ? `${run.id} passed (${run.top})${run.passMarkerFound ? " · TEST PASSED" : ""}`
+            : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}` +
+              (run.failure?.firstFailureLine ? ` — ${run.failure.firstFailureLine.slice(0, 90)}` : ""),
+        detail: [run.failure?.firstFailureLine, run.stdoutTail, run.stderrTail].filter(Boolean).join("\n") || undefined,
+      });
+      if (run.vcdPath) {
+        await get().selectWaveform(run.vcdPath);
+        if (!opts?.keepTab) set({ artifactsVisible: true, activeArtifactTab: "waveform" });
+      }
+    } else {
+      set({ activeConsole: "synth", selectedSynthesisRunId: runId });
+      await get().loadReport(runId);
+      if (!opts?.keepTab) set({ artifactsVisible: true, activeArtifactTab: "report" });
+    }
+  },
+
+  pinRun: async (runId: string, pinned: boolean) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    await workbenchApi.pinRun(currentSession.id, runId, pinned);
+    set((state) => ({ runs: state.runs.map((r) => (r.id === runId ? { ...r, pinned } : r)) }));
+  },
+
+  runLint: async () => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set((s) => ({ activeConsole: "lint", actionPending: { ...s.actionPending, lint: true } }));
+    pushConsole(set, get, { channel: "lint", status: "running", summary: "Linting…" });
+    try {
+      const result = await workbenchApi.lint(currentSession.id);
+      set({ lintResult: result });
+      const n = result.errors.length;
+      pushConsole(set, get, {
+        channel: "lint",
+        status: result.status,
+        command: result.command,
+        summary:
+          result.status === "passed"
+            ? `Lint passed (${result.warnings.length} warning(s))`
+            : `Lint failed — ${n} error(s), ${result.warnings.length} warning(s)`,
+        detail: [...result.errors, ...result.warnings]
+          .map((d) => `${d.file ?? ""}:${d.line ?? "?"} ${d.severity}: ${d.message}`)
+          .join("\n"),
+      });
+      // Lint has no center-artifact surface, so make the result noticeable:
+      // ask the Console to auto-expand + pulse on the Lint channel.
+      bumpConsoleAttention(set, "lint");
+    } catch (e) {
+      pushConsole(set, get, { channel: "lint", status: "failed", summary: friendlyError(e) });
+    } finally {
+      set((s) => ({ actionPending: { ...s.actionPending, lint: false } }));
+    }
+  },
+
+  runSim: async (opts) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set((s) => ({ activeConsole: "sim", actionPending: { ...s.actionPending, sim: true } }));
+    pushConsole(set, get, { channel: "sim", status: "running", summary: "Simulating…" });
+    try {
+      const run = await workbenchApi.simulate(currentSession.id, opts ?? {});
+      await get().loadRuns();
+      pushConsole(set, get, {
+        channel: "sim",
+        status: run.status,
+        command: [run.compileCommand, run.simCommand].filter(Boolean).join("\n"),
+        runId: run.id,
+        summary:
+          run.status === "passed"
+            ? `${run.id} passed (${run.top})${run.passMarkerFound ? " · TEST PASSED" : ""}`
+            : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}` +
+              // surface the human reason inline, not just behind the console chevron
+              (run.failure?.firstFailureLine ? ` — ${run.failure.firstFailureLine.slice(0, 90)}` : ""),
+        detail: [run.failure?.firstFailureLine, run.stdoutTail, run.stderrTail].filter(Boolean).join("\n"),
+      });
+      // Keep the user on the Code tab if they're mid-iteration (edit→re-run),
+      // otherwise reveal the waveform for the fresh run.
+      const onCode = get().activeArtifactTab === "code";
+      await get().selectRun(run.id, { keepTab: onCode });
+      // Human-first titles: lead with the action ("Simulation passed/failed"),
+      // demote the run id into the detail line (a run id reads like a DB key).
+      get().pushToast(
+        run.status === "passed"
+          ? {
+              kind: "success",
+              title: "Simulation passed",
+              detail: [run.id, run.top].filter(Boolean).join(" · ") || undefined,
+            }
+          : {
+              kind: "error",
+              title: `Simulation failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`,
+              detail:
+                [run.id, run.failure?.firstFailureLine].filter(Boolean).join(" — ") || undefined,
+            }
+      );
+    } catch (e) {
+      pushConsole(set, get, { channel: "sim", status: "failed", summary: friendlyError(e) });
+      get().pushToast({ kind: "error", title: "Simulation failed", detail: friendlyError(e) });
+    } finally {
+      set((s) => ({ actionPending: { ...s.actionPending, sim: false } }));
+    }
+  },
+
+  runSynth: async () => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    set((s) => ({ activeConsole: "synth", actionPending: { ...s.actionPending, synth: true } }));
+    pushConsole(set, get, { channel: "synth", status: "running", summary: "Starting synthesis…" });
+    try {
+      const { jobId, runId } = await workbenchApi.synthesize(currentSession.id);
+      pushConsole(set, get, { channel: "synth", status: "running", runId, summary: `${runId} queued (job ${jobId})` });
+      // Seed the live job status so the stage-progress UI appears immediately
+      // (before the first poll lands).
+      set({ synthJob: { jobId, runId, status: "queued", currentStage: "constraints" } });
+      await get().loadRuns();
+
+      // Poll the job until terminal (bounded), surfacing stage progress.
+      const sid = currentSession.id;
+      const deadline = Date.now() + 20 * 60 * 1000;
+      let interval = 3000;
+      // eslint-disable-next-line no-constant-condition
+      while (Date.now() < deadline) {
+        await sleep(interval);
+        if (get().currentSession?.id !== sid) {
+          set({ synthJob: null });
+          return; // session switched away
+        }
+        let job: Record<string, unknown>;
+        try {
+          job = await workbenchApi.getJob(sid, jobId);
+        } catch {
+          continue;
+        }
+        const state = String(job.status ?? "");
+        const stage = String(job.current_stage ?? job.stage ?? "");
+        // Publish the structured job status for the stage-progress UI.
+        set({ synthJob: toSynthJobStatus(jobId, runId, job) });
+        pushConsole(set, get, { channel: "synth", status: "running", runId, summary: `${runId} ${state}${stage ? ` · ${stage}` : ""}` });
+        if (state === "completed" || state === "failed") {
+          await get().loadRuns();
+          // On failure, surface whatever the job knows (notes + log tail) so the
+          // user sees *why* (e.g. ORFS/Docker unavailable) instead of just "failed".
+          const notes = job.check_notes;
+          const logTail = Array.isArray(job.last_log_lines) ? (job.last_log_lines as string[]).slice(-12).join("\n") : "";
+          const detail =
+            state === "failed"
+              ? [typeof notes === "string" ? notes : "", logTail, job.next_action as string]
+                  .filter(Boolean)
+                  .join("\n")
+              : undefined;
+          pushConsole(set, get, {
+            channel: "synth",
+            status: state === "completed" ? "passed" : "failed",
+            runId,
+            summary: `${runId} ${state}`,
+            detail,
+          });
+          if (state === "completed") {
+            // A successful tape-out must immediately LOOK successful without a
+            // hard reload: refresh the layout/schematic file lists, auto-generate
+            // the report, then select the run (lands on Report with PPA + GDS).
+            await get().refreshSynthArtifacts(runId);
+            await get().selectRun(runId);
+          }
+          set({ synthJob: null });
+          break;
+        }
+        interval = Math.min(interval * 1.5, 30000);
+      }
+    } catch (e) {
+      pushConsole(set, get, { channel: "synth", status: "failed", summary: friendlyError(e) });
+      set({ synthJob: null });
+    } finally {
+      set((s) => ({ actionPending: { ...s.actionPending, synth: false } }));
+    }
+  },
+
+  // After a synth reaches a passed state, re-pull the artifact file lists and
+  // ensure a report exists — so Layout/Schematic/Report update live (the review
+  // found they said "No layout yet" until a hard reload).
+  refreshSynthArtifacts: async (runId?: string | null) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    const targetRunId = runId ?? get().selectedSynthesisRunId ?? null;
+    try {
+      const [layoutFiles, schematicFiles] = await Promise.all([
+        workspaceApi.listLayouts(sid).catch(() => get().layoutFiles),
+        workspaceApi.listSchematics(sid).catch(() => get().schematicFiles),
+      ]);
+      set({ layoutFiles, schematicFiles });
+      if (layoutFiles.length > 0 && !get().selectedLayout) {
+        set({ selectedLayout: layoutFiles[0] });
+      }
+      await get().loadSynthesisRuns();
+      // Auto-generate the report once (idempotent on the backend) so a passed
+      // synth shows its timing/PPA summary without a manual click.
+      try {
+        await get().generateReport(targetRunId);
+      } catch {
+        // Generation may legitimately not apply (e.g. failed run) — fall back to
+        // loading whatever report exists.
+        await get().loadReport(targetRunId);
+      }
+    } catch {
+      /* best-effort refresh */
+    }
+  },
 }));
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+// Translate the backend's terse action errors into plain language + a next step
+// (the #1 quit-point for newcomers, per the first-time-user review).
+function friendlyError(e: unknown): string {
+  const raw = errMsg(e);
+  const r = raw.toLowerCase();
+  if (r.includes("no simtop"))
+    return "No testbench found. Simulation needs a testbench (a *_tb.v that instantiates your design). Add or upload one, then Run Sim.";
+  if (r.includes("no rtl/tb") || (r.includes("no files") && r.includes("simulate")))
+    return "Nothing to simulate yet — add or upload your Verilog (RTL + a testbench) first.";
+  if (r.includes("no rtl files") || r.includes("no_rtl"))
+    return "No RTL to lint yet — add or upload a .v file, then Run Lint.";
+  if (r.includes("no synthtop"))
+    return "No top module for synthesis. Add your RTL (the design's top module), then Run Synth.";
+  if (r.includes("no rtl files to synthesize"))
+    return "Nothing to synthesize yet — add or upload your RTL first.";
+  return raw;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Normalize the backend job-status payload into the typed SynthJobStatus the
+// stage-progress UI consumes.
+function toSynthJobStatus(jobId: string, runId: string, job: Record<string, unknown>): SynthJobStatus {
+  const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
+  return {
+    jobId,
+    runId,
+    status: String(job.status ?? ""),
+    currentStage: (job.current_stage as string | null) ?? null,
+    stages: (job.stages as SynthJobStatus["stages"]) ?? undefined,
+    elapsedSec: num(job.elapsed_sec),
+    backend: typeof job.backend === "string" ? job.backend : null,
+    remote: typeof job.remote === "boolean" ? job.remote : null,
+    executionLabel: typeof job.execution_label === "string" ? job.execution_label : null,
+  };
+}
+
+// Token so a newer upload notice isn't cleared early by an older timeout.
+let _uploadNoticeToken = 0;
+
+// Bump the attention counter so the Console auto-expands + pulses on a fresh
+// result for `channel`. Monotonic tick lets the component fire its effect even
+// when the channel is unchanged between consecutive results.
+let _consoleAttentionTick = 0;
+function bumpConsoleAttention(
+  set: (fn: (s: AppState) => Partial<AppState>) => void,
+  channel: ConsoleChannel
+) {
+  _consoleAttentionTick += 1;
+  set(() => ({ consoleAttention: { tick: _consoleAttentionTick, channel } }));
+}
+
+// Append a console entry, collapsing the most recent "running" entry on the
+// same channel so a finished action replaces its own spinner line.
+function pushConsole(
+  set: (fn: (s: AppState) => Partial<AppState>) => void,
+  get: () => AppState,
+  entry: Omit<ConsoleEntry, "ts">
+) {
+  const full: ConsoleEntry = { ...entry, ts: new Date().toISOString() };
+  set((s) => {
+    const entries = [...s.consoleEntries];
+    const last = entries[entries.length - 1];
+    // Collapse a finished action onto its own spinner line…
+    if (last && last.channel === entry.channel && last.status === "running") {
+      entries[entries.length - 1] = full;
+    } else if (
+      // …and skip exact re-selections (same channel+run+summary) so re-clicking
+      // a historical run doesn't spam the console.
+      last &&
+      last.channel === entry.channel &&
+      last.runId === entry.runId &&
+      last.summary === entry.summary
+    ) {
+      return {};
+    } else {
+      entries.push(full);
+    }
+    return { consoleEntries: entries.slice(-100) };
+  });
+}

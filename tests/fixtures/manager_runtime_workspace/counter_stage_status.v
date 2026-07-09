@@ -1,0 +1,1 @@
+module counter_stage_status(input clk, output reg q); always @(posedge clk) q<=~q; endmodule

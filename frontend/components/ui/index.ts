@@ -6,3 +6,4 @@ export * from "./tooltip";
 export * from "./dialog";
 export * from "./select";
 export * from "./separator";
+export * from "./skeleton";

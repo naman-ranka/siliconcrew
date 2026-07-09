@@ -6,9 +6,14 @@
 
 # Testing
 /coverage
+/e2e-artifacts
+/test-results
+/playwright-report
 
 # Next.js
 /.next/
+/.next-s5/
+/.next-s5build/
 /out/
 
 # Production

@@ -227,8 +227,31 @@ function MessageContent({ message }: { message: Message }) {
   );
 }
 
+// Counts seconds while `active`; resets when inactive. Shows elapsed time during
+// a "Thinking" gap so a long wait never reads as a frozen/broken spinner.
+function useRunningSeconds(active: boolean): number {
+  const [secs, setSecs] = useState(0);
+  const startRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active) {
+      startRef.current = null;
+      setSecs(0);
+      return;
+    }
+    startRef.current = Date.now();
+    const id = setInterval(
+      () => setSecs(Math.floor((Date.now() - (startRef.current ?? Date.now())) / 1000)),
+      500
+    );
+    return () => clearInterval(id);
+  }, [active]);
+  return secs;
+}
+
 function StreamingMessage({ showIcon = true }: { showIcon?: boolean }) {
   const { streamingMessage, isStreaming } = useStore();
+  const thinking = isStreaming && !!streamingMessage && streamingMessage.blocks.length === 0;
+  const thinkingSecs = useRunningSeconds(thinking);
 
   if (!isStreaming || !streamingMessage) return null;
 
@@ -245,7 +268,7 @@ function StreamingMessage({ showIcon = true }: { showIcon?: boolean }) {
               <span className="w-2 h-2 rounded-full bg-primary animate-pulse" style={{ animationDelay: "150ms" }} />
               <span className="w-2 h-2 rounded-full bg-primary animate-pulse" style={{ animationDelay: "300ms" }} />
             </div>
-            <span className="text-sm">Thinking...</span>
+            <span className="text-sm">Thinking{thinkingSecs > 0 ? ` · ${thinkingSecs}s` : "…"}</span>
           </div>
         ) : (
           streamingMessage.blocks.map((block, idx) =>
@@ -298,26 +321,28 @@ function WelcomeScreen() {
 
   return (
     <div className="flex-1 flex items-center justify-center px-4">
-      <div className="text-center max-w-2xl">
-        <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-6">
-          <Sparkles className="h-8 w-8 text-primary" />
+      {/* Calm, secondary welcome — the workbench is the product; chat is the aid.
+          Smaller, lighter, less-saturated than the artifact viewers. */}
+      <div className="text-center max-w-md">
+        <div className="w-9 h-9 rounded-xl bg-surface-2 flex items-center justify-center mx-auto mb-3">
+          <Sparkles className="h-4 w-4 text-muted-foreground" />
         </div>
-        <h2 className="text-2xl font-semibold mb-2">Welcome to SiliconCrew</h2>
-        <p className="text-muted-foreground mb-8 max-w-md mx-auto">
-          I can help you design digital hardware. Describe what you need, and I'll create
-          specifications, implement RTL, and verify your designs.
+        <h2 className="text-sm font-medium text-foreground mb-1">Welcome to SiliconCrew</h2>
+        <p className="text-xs text-muted-foreground mb-5 max-w-xs mx-auto leading-relaxed">
+          Describe the hardware you need and I&apos;ll draft the spec, implement
+          the RTL, and help verify it.
         </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg mx-auto">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg mx-auto">
           {WELCOME_SUGGESTIONS.map((suggestion, idx) => (
             <button
               key={idx}
-              className="text-left p-4 rounded-lg bg-surface-1 hover:bg-surface-2 border border-border hover:border-primary/50 transition-all group"
+              className="text-left p-3 rounded-lg bg-surface-1/60 hover:bg-surface-2 border border-border/70 hover:border-border transition-all group"
               onClick={() => sendMessage(suggestion.prompt)}
             >
-              <p className="text-sm font-medium text-foreground group-hover:text-primary transition-colors">
+              <p className="text-xs font-medium text-foreground/90 group-hover:text-foreground transition-colors">
                 {suggestion.title}
               </p>
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="text-[11px] text-muted-foreground mt-0.5">
                 {suggestion.description}
               </p>
             </button>

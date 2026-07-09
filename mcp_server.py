@@ -85,8 +85,18 @@ from src.tools.wrappers import (
 from src.agents.architect import SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
 from src.utils.attempt_logger import log_tool_call, log_tool_result
+from src.platform_engines.request_scope import run_in_session
+from src.platform_engines import auth as auth_engine
+from src.platform_engines.identity import Action, AuthError, authorize
 
 load_dotenv()
+
+# Single source of truth for tool dispatch: derive the name→tool map from the
+# same ``mcp_tools`` list that ``list_tools`` advertises from. Building it by
+# hand drifted (tools got listed but not dispatchable → "Unknown tool", e.g.
+# run_isolated_simulation / get_manifest / update_manifest); deriving it keeps
+# "advertised" and "callable" in lockstep. See test_mcp_tool_registry.
+TOOL_REGISTRY = {t.name: t for t in mcp_tools}
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts" / "architect"
 DEFAULT_ARCHITECT_PROMPT_VERSION = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v2") or "v2").strip().lower()
@@ -193,9 +203,69 @@ class RTLDesignMCPServer:
         self.tool_filter_mode = "all"  # Options: "all", "essential", "custom"
         self.custom_tool_filter = None  # List of tool names or categories
         self.codex_tools = codex_tools  # Expose Codex-only MCP helpers when enabled
-        
+
+        # Identity for capability gating. MCP itself is a signed-in feature;
+        # stdio/self-host is the trusted local user (full access). Hosted/remote
+        # deployments construct the server with a verified identity (token).
+        self.identity = self._resolve_identity()
+
+        # Hosted flag, resolved once. In hosted mode the HTTP/SSE transports
+        # carry a *per-request* verified identity (see _current_identity); local
+        # / stdio keeps the single trusted process identity above, unchanged.
+        from src.platform_engines.settings import get_settings
+        self._hosted = get_settings().hosted
+
+        # Wire cloud engines once (no-op in self-host).
+        from src.platform_engines.settings import apply_platform_wiring
+        apply_platform_wiring()
+
         # Register handlers using decorators
         self._setup_handlers()
+
+    def _resolve_identity(self):
+        """Resolve the MCP session identity (token in hosted, else local)."""
+        token = os.environ.get("SILICONCREW_MCP_TOKEN")
+        try:
+            return auth_engine.authenticate(token, session_hint="mcp")
+        except AuthError:
+            # An invalid token degrades to anonymous (synth/save then blocked).
+            from src.platform_engines.identity import new_anonymous
+            return new_anonymous("mcp")
+
+    # Tools that mutate/persist or are compute-heavy require a signed-in user.
+    _PROTECTED_TOOLS = frozenset(TOOL_CATEGORIES["synthesis"]) | {
+        "write_spec", "write_file", "apply_patch_tool", "edit_file_tool",
+        "save_metrics_tool", "generate_report_tool",
+    }
+
+    def _current_identity(self):
+        """The identity to act as for the in-flight call.
+
+        Hosted HTTP/SSE: the per-request identity verified by the auth
+        middleware and stashed on the request scope (``scope["state"]``), which
+        the transport surfaces via ``server.request_context.request.state``. This
+        replaces the process-wide ``self.identity`` so every tool runs as the
+        calling user. Local / stdio: there is no request — return the trusted
+        process identity (``LOCAL_IDENTITY``) verbatim, exactly as before.
+        """
+        if self._hosted:
+            ident = self._request_identity()
+            if ident is not None:
+                return ident
+        return self.identity
+
+    def _request_identity(self):
+        from src.platform_engines.mcp_auth import MCP_IDENTITY_STATE_KEY
+
+        try:
+            request = self.server.request_context.request
+        except (LookupError, AttributeError):
+            return None
+        state = getattr(request, "state", None) if request is not None else None
+        return getattr(state, MCP_IDENTITY_STATE_KEY, None) if state is not None else None
+
+    def _scoped_user_id(self):
+        return auth_engine.scoped_user_id(self._current_identity())
     
     def _setup_handlers(self):
         """Setup MCP protocol handlers"""
@@ -407,15 +477,16 @@ class RTLDesignMCPServer:
                 import datetime
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 session_id = f"mcp_session_{timestamp}"
-            session_id = self.session_manager.ensure_session(tag=session_id, model_name="claude-via-mcp")
+            session_id = self.session_manager.ensure_session(
+                tag=session_id, model_name="claude-via-mcp", user_id=self._scoped_user_id()
+            )
             
             workspace = self.session_manager.get_workspace_path(session_id)
             
-            # Set as current session
+            # Set as current session. Workspace resolution is now per-call via
+            # session_request_scope (no process-global env mutation).
             self.current_session = session_id
-            
-            # Set workspace for tools
-            os.environ["RTL_WORKSPACE"] = workspace
+
             prompt_text, prompt_source, resolved_version = _load_architect_prompt()
             
             return GetPromptResult(
@@ -604,11 +675,11 @@ Ready to design! What would you like to create?"""
             project_id = arguments.get("project_id") or None
             try:
                 session_id = self.session_manager.create_session(
-                    tag=session_name, model_name=model_name, project_id=project_id
+                    tag=session_name, model_name=model_name, project_id=project_id,
+                    user_id=self._scoped_user_id(),
                 )
                 self.current_session = session_id
                 workspace = self.session_manager.get_workspace_path(session_id)
-                os.environ["RTL_WORKSPACE"] = workspace
                 project_line = f"\nProject: {project_id}" if project_id else ""
                 return [TextContent(
                     type="text",
@@ -641,12 +712,13 @@ Ready to design! What would you like to create?"""
         
         elif name == "set_active_session":
             session_id = arguments["session_id"]
-            workspace = self.session_manager.get_workspace_path(session_id)
-            if not os.path.exists(workspace):
+            # Tenant check: only switch to a session the caller owns (self-host
+            # uid is None → any existing session).
+            if not self.session_manager.owns_session(session_id, self._scoped_user_id()):
                 return [TextContent(type="text", text=f"❌ Session '{session_id}' not found.")]
-            
+            workspace = self.session_manager.get_workspace_path(session_id)
+
             self.current_session = session_id
-            os.environ["RTL_WORKSPACE"] = workspace
             return [TextContent(
                 type="text",
                 text=f"✅ Switched to session '{session_id}'\nWorkspace: {workspace}\nAll tools will now use this workspace."
@@ -711,14 +783,12 @@ Ready to design! What would you like to create?"""
             workspace = None
 
             if session_id:
-                workspace = self.session_manager.get_workspace_path(session_id)
-                if not os.path.exists(workspace):
+                if not self.session_manager.owns_session(session_id, self._scoped_user_id()):
                     return [TextContent(type="text", text=f"❌ Session '{session_id}' not found.")]
+                workspace = self.session_manager.get_workspace_path(session_id)
                 self.current_session = session_id
-                os.environ["RTL_WORKSPACE"] = workspace
             elif self.current_session:
                 workspace = self.session_manager.get_workspace_path(self.current_session)
-                os.environ["RTL_WORKSPACE"] = workspace
 
             prompt_text, prompt_source, resolved_version = _load_architect_prompt()
             payload = f"{prompt_text}"
@@ -740,58 +810,34 @@ Ready to design! What would you like to create?"""
 
             return [TextContent(type="text", text=payload)]
         
-        # Ensure workspace is set for regular tools
-        if self.current_session:
-            workspace = self.session_manager.get_workspace_path(self.current_session)
-            os.environ["RTL_WORKSPACE"] = workspace
-        
-        # Map tool names to implementations
-        tool_map = {
-            "write_spec": write_spec,
-            "read_spec": read_spec,
-            "load_yaml_spec_file": load_yaml_spec_file,
-            "write_file": write_file,
-            "read_file": read_file,
-            "apply_patch_tool": apply_patch_tool,
-            "edit_file_tool": edit_file_tool,
-            "list_files_tool": list_files_tool,
-            "linter_tool": linter_tool,
-            "simulation_tool": simulation_tool,
-            "waveform_tool": waveform_tool,
-            "cocotb_tool": cocotb_tool,
-            "sby_tool": sby_tool,
-            "start_synthesis": start_synthesis,
-            "retry_pd": retry_pd,
-            "get_synthesis_job": get_synthesis_job,
-            "wait_for_synthesis": wait_for_synthesis,
-            "get_synthesis_metrics": get_synthesis_metrics,
-            "read_stage_report": read_stage_report,
-            "get_route_drc_summary": get_route_drc_summary,
-            "get_cts_summary": get_cts_summary,
-            "get_congestion_summary": get_congestion_summary,
-            "compare_pd_runs": compare_pd_runs,
-            "get_stage_status": get_stage_status,
-            "search_logs_tool": search_logs_tool,
-            "schematic_tool": schematic_tool,
-            "save_metrics_tool": save_metrics_tool,
-            "generate_report_tool": generate_report_tool,
-            "run_dslx_interpreter": run_dslx_interpreter,
-            "compile_dslx_to_ir": compile_dslx_to_ir,
-            "experimental_compile_cpp_to_ir": experimental_compile_cpp_to_ir,
-            "optimize_xls_ir": optimize_xls_ir,
-            "codegen_xls": codegen_xls,
-            "benchmark_xls": benchmark_xls,
-            "run_xls_flow": run_xls_flow,
-        }
-        
+        # A session must be active for regular tools (workspace is resolved
+        # per-call via session_request_scope — no process-global env mutation).
+        if not self.current_session:
+            return [TextContent(type="text", text="❌ No active session. Create or select one first.")]
+
+        # Capability gating: protected (synth/save) tools require a signed-in
+        # identity. Self-host's local identity is non-anonymous → always allowed.
+        if name in self._PROTECTED_TOOLS:
+            try:
+                authorize(self._current_identity(), Action.SYNTHESIZE if name in TOOL_CATEGORIES["synthesis"] else Action.SAVE)
+            except AuthError as e:
+                return [TextContent(type="text", text=f"❌ {e.message}")]
+
+        # Dispatch from the single source of truth (TOOL_REGISTRY, derived from
+        # mcp_tools) so every advertised tool is callable — no hand-maintained
+        # map to drift out of sync.
+        tool_map = TOOL_REGISTRY
+
         if name not in tool_map:
             raise ValueError(f"Unknown tool: {name}")
         
         # Execute the tool
         tool_func = tool_map[name]
-        active_workspace = os.environ.get("RTL_WORKSPACE") or (self.session_manager.get_workspace_path(self.current_session) if self.current_session else "")
         active_session = self.current_session
-        
+        active_workspace = self.session_manager.get_workspace_path(active_session)
+        identity = self._current_identity()
+        uid = auth_engine.scoped_user_id(identity)
+
         try:
             log_tool_call(
                 workspace=active_workspace,
@@ -800,10 +846,16 @@ Ready to design! What would you like to create?"""
                 tool=name,
                 arguments=arguments,
             )
-            # LangChain tools are sync, so we run in executor for async
-            result = await asyncio.get_event_loop().run_in_executor(
-                None, 
-                lambda: tool_func.invoke(arguments)
+            # Run the sync LangChain tool inside a per-call session scope bound in
+            # the worker thread, so the workspace resolves task-locally and
+            # concurrent MCP clients are isolated (replaces the RTL_WORKSPACE
+            # env mutation). user_id/tier flow to tenancy + quota enforcement.
+            result = await run_in_session(
+                active_session,
+                tool_func.invoke,
+                arguments,
+                user_id=uid,
+                tier=identity.tier,
             )
             log_tool_result(
                 workspace=active_workspace,
@@ -830,6 +882,88 @@ Ready to design! What would you like to create?"""
             )
             return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
     
+    def _hosted_auth_middleware(self):
+        """Starlette middleware enforcing WorkOS bearer auth — hosted only.
+
+        Returns an empty list in local/self-host so the remote transports are
+        byte-for-byte today's "no auth" apps. In hosted mode it prepends the
+        per-request auth middleware (which runs *inside* CORS so 401s still get
+        CORS headers).
+        """
+        if not self._hosted:
+            return []
+        from starlette.middleware import Middleware
+        from src.platform_engines.mcp_auth import HostedMCPAuthMiddleware
+
+        return [Middleware(HostedMCPAuthMiddleware)]
+
+    def _well_known_routes(self):
+        """RFC 9728 protected-resource metadata route — hosted only (Slice 2)."""
+        if not self._hosted:
+            return []
+        from starlette.routing import Route
+        from starlette.responses import JSONResponse
+        from src.platform_engines.mcp_auth import (
+            PROTECTED_RESOURCE_PATH,
+            _resource_metadata_url,
+            protected_resource_metadata,
+        )
+
+        async def protected_resource(request):
+            # Name this exact deployment as the resource; the issuer/auth-server
+            # come from config so the AI client knows where to sign in.
+            resource = str(request.base_url).rstrip("/") + "/mcp"
+            return JSONResponse(protected_resource_metadata(resource_url=resource))
+
+        return [Route(PROTECTED_RESOURCE_PATH, endpoint=protected_resource, methods=["GET"])]
+
+    def _auth_banner(self) -> str:
+        return (
+            "   Auth: WorkOS bearer required (hosted); "
+            f"metadata at /.well-known/oauth-protected-resource"
+            if self._hosted
+            else "   No authentication required"
+        )
+
+    def get_http_app(self):
+        """Construct the Starlette app for Streamable HTTP transport (without starting uvicorn).
+
+        Returns a tuple: (app, session_transport)
+        """
+        from mcp.server.streamable_http import StreamableHTTPServerTransport
+        from starlette.applications import Starlette
+        from starlette.routing import Mount
+        from starlette.middleware import Middleware
+        from starlette.middleware.cors import CORSMiddleware
+
+        # Create a session-less transport (no auth, stateless)
+        session_transport = StreamableHTTPServerTransport(
+            mcp_session_id=None,  # Stateless mode
+        )
+
+        async def handle_mcp(scope, receive, send):
+            await session_transport.handle_request(scope, receive, send)
+
+        app = Starlette(
+            debug=False,
+            routes=[
+                Mount("/mcp", app=handle_mcp),
+                *self._well_known_routes(),
+            ],
+            middleware=[
+                Middleware(
+                    CORSMiddleware,
+                    allow_origins=["*"],
+                    allow_methods=["*"],
+                    allow_headers=["*"],
+                ),
+                # Hosted-only: per-request WorkOS auth, inside CORS. Empty in
+                # self-host → identical to today's no-auth Streamable HTTP app.
+                *self._hosted_auth_middleware(),
+            ],
+        )
+        return app, session_transport
+
     async def run(self, transport: str = "stdio", host: str = "0.0.0.0", port: int = 8080):
         """Run the MCP server with the specified transport."""
         if transport == "stdio":
@@ -865,6 +999,7 @@ Ready to design! What would you like to create?"""
                 routes=[
                     Route("/sse", endpoint=handle_sse),
                     Mount("/messages/", app=sse.handle_post_message),
+                    *self._well_known_routes(),
                 ],
                 middleware=[
                     Middleware(
@@ -872,14 +1007,17 @@ Ready to design! What would you like to create?"""
                         allow_origins=["*"],
                         allow_methods=["*"],
                         allow_headers=["*"],
-                    )
+                    ),
+                    # Hosted-only: per-request WorkOS auth, inside CORS. Empty in
+                    # self-host → identical to today's no-auth SSE app.
+                    *self._hosted_auth_middleware(),
                 ],
             )
 
             print(f"🚀 MCP SSE server running on http://{host}:{port}")
             print(f"   SSE endpoint:     http://{host}:{port}/sse")
             print(f"   Messages endpoint: http://{host}:{port}/messages/")
-            print(f"   No authentication required")
+            print(self._auth_banner())
 
             config = uvicorn.Config(app, host=host, port=port, log_level="info")
             server = uvicorn.Server(config)
@@ -906,6 +1044,7 @@ Ready to design! What would you like to create?"""
                 debug=True,
                 routes=[
                     Mount("/mcp", app=handle_mcp),
+                    *self._well_known_routes(),
                 ],
                 middleware=[
                     Middleware(
@@ -913,13 +1052,16 @@ Ready to design! What would you like to create?"""
                         allow_origins=["*"],
                         allow_methods=["*"],
                         allow_headers=["*"],
-                    )
+                    ),
+                    # Hosted-only: per-request WorkOS auth, inside CORS. Empty in
+                    # self-host → identical to today's no-auth Streamable HTTP app.
+                    *self._hosted_auth_middleware(),
                 ],
             )
 
             print(f"🚀 MCP Streamable HTTP server running on http://{host}:{port}")
             print(f"   MCP endpoint: http://{host}:{port}/mcp")
-            print(f"   No authentication required")
+            print(self._auth_banner())
 
             config = uvicorn.Config(app, host=host, port=port, log_level="info")
             web_server = uvicorn.Server(config)

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
-import { Send, Square, Sparkles } from "lucide-react";
+import { Send, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ModelPicker } from "./ModelPicker";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -90,17 +91,9 @@ export function ChatInput() {
             </div>
           </div>
 
-          {/* Footer hints */}
+          {/* Footer: model picker (bottom-left) + keyboard hint. */}
           <div className="flex items-center justify-between mt-2.5 px-1">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground/70">
-              <Sparkles className="h-3 w-3" />
-              <span>
-                {currentSession
-                  ? `Using ${currentSession.model_name || "gemini-3-flash-preview"}`
-                  : "AI-powered RTL design assistant"
-                }
-              </span>
-            </div>
+            <ModelPicker />
             <span className="text-xs text-muted-foreground/50">
               <kbd className="px-1.5 py-0.5 rounded bg-surface-2 border border-border text-[10px] font-mono">Shift</kbd>
               {" + "}

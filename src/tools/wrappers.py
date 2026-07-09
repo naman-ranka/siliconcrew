@@ -23,18 +23,11 @@ from src.tools.synthesis_manager import (
 )
 from src.tools.file_patch import apply_unified_patch
 
-# Helper to get workspace path
-def get_workspace_path():
-    """
-    Returns the active workspace directory.
-    Defaults to 'workspace/' relative to project root, 
-    but can be overridden by RTL_WORKSPACE env var for isolated runs.
-    """
-    env_path = os.environ.get("RTL_WORKSPACE")
-    if env_path:
-        return os.path.abspath(env_path)
-        
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), '../../workspace'))
+# Workspace resolution lives in a dependency-light module (src.utils.workspace)
+# so the tenancy seam and its concurrency gate test do not require this heavy
+# tool/agent module. Re-exported here for backward compatibility — ~30 call
+# sites in this file resolve the workspace via get_workspace_path().
+from src.utils.workspace import get_workspace_path
 
 
 def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
@@ -98,13 +91,14 @@ def write_file(filename: str, content: str | None = None) -> str:
             "Retry the tool call with both 'filename' and the complete file text in 'content'."
         )
 
+    # Route through the single shared write path so the agent and the human
+    # editor's Save are one tracked mutation (and the manifest stays in sync).
+    from src.tools.file_ops import write_file as _write_file
     workspace = get_workspace_path()
-    if not os.path.exists(workspace):
-        os.makedirs(workspace)
-    
-    filepath = os.path.join(workspace, filename)
-    with open(filepath, "w", encoding="utf-8", newline="\n") as f:
-        f.write(content)
+    try:
+        _write_file(workspace, filename, content)
+    except ValueError as exc:
+        return f"Error: {exc}"
     return f"Successfully wrote to {filename}"
 
 @tool
@@ -200,6 +194,78 @@ def simulation_tool(
     return json.dumps(result, indent=2)
 
 from src.tools.search_logs import search_logs
+from src.tools import manifest as manifest_mod
+from src.tools.sim_manager import run_sim_isolated
+
+
+@tool
+def get_manifest() -> str:
+    """
+    Returns the design manifest (files + roles + synthTop/simTop + clock + platform).
+    The manifest is the single source of truth shared with the UI; auto-derived if absent.
+    """
+    workspace = get_workspace_path()
+    m = manifest_mod.read_manifest(workspace)
+    return json.dumps(m.model_dump(), indent=2)
+
+
+@tool
+def update_manifest(updates_json: str) -> str:
+    """
+    Upserts manifest fields. Pass a JSON object with any of:
+    synthTop, simTop, clockPeriodNs, platform, or files: [{name, role}] to override roles.
+    Roles: rtl | tb | sdc | include | other.
+    """
+    workspace = get_workspace_path()
+    try:
+        updates = json.loads(updates_json) if updates_json else {}
+        if not isinstance(updates, dict):
+            return "Error: updates_json must be a JSON object."
+    except Exception as exc:
+        return f"Error: invalid updates_json ({exc})."
+    m = manifest_mod.write_manifest(workspace, updates)
+    return json.dumps(m.model_dump(), indent=2)
+
+
+@tool
+def run_isolated_simulation(
+    sim_top: str = "",
+    mode: str = "rtl",
+    run_id: str = None,
+    sim_profile: str = "auto",
+    pass_marker: str = "TEST PASSED",
+) -> str:
+    """
+    Runs a manifest-driven simulation in an isolated sim_runs/sim_NNNN/ directory
+    (its own VCD, persisted run record + provenance). Prefer this over simulation_tool
+    so runs stay comparable and waveforms never collide.
+    Args:
+        sim_top: testbench top module; defaults to the manifest's simTop.
+        mode: 'rtl' or 'post_synth'.
+        run_id: optional synthesis run id for post_synth mode (resolves the netlist).
+        sim_profile: 'auto' (default), 'pinned', or 'compat'.
+        pass_marker: explicit pass marker required for a passing status.
+    """
+    workspace = get_workspace_path()
+    m = manifest_mod.read_manifest(workspace)
+    top = sim_top or m.simTop
+    if not top:
+        return "Error: no simTop in manifest and none provided. Set it with update_manifest."
+    files = manifest_mod.files_for_stage(m, "simulate")
+    if not files:
+        return "Error: manifest has no rtl/tb files to simulate."
+    result = run_sim_isolated(
+        workspace=workspace,
+        verilog_files=files,
+        top_module=top,
+        mode=mode,
+        run_id=run_id,
+        platform=m.platform,
+        sim_profile=sim_profile,
+        pass_marker=pass_marker,
+    )
+    return json.dumps(result, indent=2)
+
 
 @tool
 def start_synthesis(
@@ -809,12 +875,12 @@ def generate_report_tool(run_id: str = None) -> str:
 @tool
 def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
     """
-    Run a cocotb (Python) testbench against your RTL in the CVDP reference container.
+    Run a cocotb (Python) testbench against your RTL in a pinned simulator container.
 
-    This is the trustworthy way to verify a design against a cocotb testbench: it runs in the SAME
-    pinned simulator image used for grading, so a PASS here predicts the real verdict. A run that does
-    not terminate is reported as a TIMEOUT — treat it as a FAILURE (combinational loop, missing clock,
-    or unbounded test), not an inconclusive result.
+    Compiles the listed sources and runs the named cocotb test module against the top-level design.
+    A run that does not terminate is reported as a TIMEOUT — treat it as a FAILURE (combinational
+    loop, missing clock, or unbounded test), not an inconclusive result. Returns a structured
+    pass/fail with an output tail.
 
     Args:
         verilog_files: DUT + dependency Verilog/SV sources (workspace-relative).
@@ -830,7 +896,7 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
 
     r = run_cocotb(abs_files, top_module, python_module, cwd=workspace)
     status = r.get("status")
-    tail = ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()[-1200:]
+    tail = ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()[-16000:]
 
     if status == "PASS":
         return f"Cocotb Test PASSED ✅  ({r['passed']} testcase(s)) — verified in the reference container."
@@ -844,10 +910,47 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
 @tool
 def sby_tool(sby_file: str) -> str:
     """
-    Runs Formal Verification using SymbiYosys (SBY).
-    Use this ONLY when the user explicitly asks for "Formal Verification", "SBY", or "Proofs".
+    Run formal verification with SymbiYosys (SBY).
+
+    Proves or disproves assertions/properties about a design by exploring reachable states
+    (bounded or unbounded), rather than running specific input vectors. Well suited to checking
+    invariants that should hold for all inputs: state-machine legality (one-hot, no illegal states),
+    value and occupancy bounds (a counter or FIFO level stays in range), protocol/handshake
+    properties (request held until acknowledge, no overflow/underflow), and absence of deadlock or
+    combinational loops.
+
+    HOW TO WRITE A WORKING SETUP (these are the common mistakes):
+      * Clocks and resets are NORMAL input ports of your design. NEVER drive a clock with $anyseq.
+        Use $anyseq / $anyconst only for free DATA inputs you want the solver to range over.
+      * Put your `assert property (...)` (and any `assume`) in a thin formal harness module that
+        instantiates the DUT — or inline in the DUT under `ifdef FORMAL`.
+      * Engine: use `smtbmc z3` (z3 is the installed solver). boolector/yices are NOT available.
+      * `[files]` paths are resolved from the workspace root — list them workspace-relative
+        (e.g. `rtl/dut.sv`, `verif/dut_formal.sv`). (The tool also auto-resolves/normalizes these.)
+
+    Minimal example — dut_formal.sby:
+        [options]
+        mode bmc
+        depth 20
+        [engines]
+        smtbmc z3
+        [script]
+        read -formal dut.sv
+        read -formal dut_formal.sv
+        prep -top dut_formal
+        [files]
+        rtl/dut.sv
+        verif/dut_formal.sv
+    ...with verif/dut_formal.sv:
+        module dut_formal(input clk, input rst, input [7:0] data_in);
+            wire [3:0] count;
+            dut u(.clk(clk), .rst(rst), .data_in(data_in), .count(count));
+            always @(posedge clk) assert (count <= 4'd8);   // occupancy bound holds for ALL inputs
+        endmodule
+
     Args:
-        sby_file: Name of the .sby configuration file (e.g., 'fifo.sby').
+        sby_file: Name of the .sby configuration file (e.g., 'fifo.sby') describing the design and
+            the properties to prove.
     """
     workspace = get_workspace_path()
     abs_file = os.path.join(workspace, sby_file)
@@ -866,9 +969,12 @@ def sby_tool(sby_file: str) -> str:
     if status == "TIMEOUT":
         return ("SBY DID NOT FINISH ⏱️ within the time budget — the proof is inconclusive (deepen "
                 f"incrementally or simplify the property). Output:\n{tail}")
-    if status == "ERROR" and "rc=16" in tail:
-        return ("SBY could not run ⚠️ — no formal solver is available in this environment, so the proof "
-                f"engine errored. Rely on simulation/cocotb for now.\nOutput:\n{tail}")
+    if status == "ERROR":
+        return ("SBY did not complete ⚠️ — the proof engine errored (NOT a formal-verification dead end; "
+                "z3 IS available). Common causes: a clock driven by $anyseq (clocks/resets are normal "
+                "input ports — only use $anyseq for free data inputs), invalid Verilog in the formal "
+                "harness, or a missing source file in [files]. Use `[engines] smtbmc z3`, fix the harness, "
+                f"and retry.\nOutput:\n{tail}")
     return f"SBY Run finished. Status: {status} ⚠️\nOutput:\n{tail}"
 
 @tool
@@ -964,7 +1070,8 @@ def codegen_xls(
     pipeline_stages: int = 0,
     clock_period_ps: int = 0,
     delay_model: str = "sky130",
-    module_name: str = None
+    module_name: str = None,
+    use_system_verilog: bool = False,
 ) -> str:
     """
     Schedules optimized XLS IR and generates synthesizable Verilog.
@@ -975,6 +1082,7 @@ def codegen_xls(
         clock_period_ps: Target clock period in picoseconds.
         delay_model: Delay model (e.g., 'sky130', 'asap7').
         module_name: Optional custom name for the generated Verilog module.
+        use_system_verilog: If True, emit SystemVerilog (default is False to ensure Yosys synthesis compatibility).
     """
     from src.tools.run_xls import codegen_xls as run_codegen
     workspace = get_workspace_path()
@@ -985,6 +1093,7 @@ def codegen_xls(
         clock_period_ps=clock_period_ps,
         delay_model=delay_model,
         module_name=module_name,
+        use_system_verilog=use_system_verilog,
         cwd=workspace
     )
     return json.dumps(result, indent=2)
@@ -1013,6 +1122,7 @@ def run_xls_flow(
     module_name: str = None,
     keep_intermediates: bool = True,
     run_lint: bool = True,
+    use_system_verilog: bool = False,
 ) -> str:
     """
     Executes the entire high-level XLS synthesis flow:
@@ -1028,6 +1138,7 @@ def run_xls_flow(
         module_name: Optional custom name for the generated Verilog module.
         keep_intermediates: Preserve .ir and .opt.ir artifacts for debugging/provenance.
         run_lint: Run Icarus Verilog syntax lint on generated Verilog before returning success.
+        use_system_verilog: If True, emit SystemVerilog (default is False to ensure Yosys synthesis compatibility).
     """
     from src.tools.run_xls import run_xls_flow as run_flow
     workspace = get_workspace_path()
@@ -1041,6 +1152,7 @@ def run_xls_flow(
         module_name=module_name,
         keep_intermediates=keep_intermediates,
         run_lint=run_lint,
+        use_system_verilog=use_system_verilog,
         cwd=workspace
     )
     return json.dumps(result, indent=2)
@@ -1057,9 +1169,13 @@ mcp_tools = [
     apply_patch_tool,
     edit_file_tool,
     list_files_tool,
+    # Design manifest (shared source of truth with the UI)
+    get_manifest,
+    update_manifest,
     # Verification tools
     linter_tool,
     simulation_tool,
+    run_isolated_simulation,
     waveform_tool,
     cocotb_tool,
     sby_tool,

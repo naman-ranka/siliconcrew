@@ -1,6 +1,7 @@
 import subprocess
 import os
 import sys
+import uuid
 
 # When running inside a container (DooD mode), HOST_WORKSPACE holds the
 # host-side path to the workspace bind mount so sibling ORFS containers
@@ -39,7 +40,7 @@ def _translate_dood_volume(volume):
     return ":".join([host_path] + parts[1:])
 
 
-def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flow-scripts/flow", workspace_path=None, volumes=None, timeout=3600):
+def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flow-scripts/flow", workspace_path=None, volumes=None, timeout=3600, env=None, name=None):
     """
     Executes a command inside the OpenROAD Docker container.
 
@@ -51,13 +52,19 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
                               If None, defaults to ../../workspace relative to this file.
         volumes (list): Optional list of volume mappings ["host_path:container_path"].
         timeout (int): Timeout in seconds (default 3600s).
+        env (dict): Optional environment variables passed into the container (-e).
+        name (str): Optional container name. When given, a timeout hard-kills the
+            named container (``docker kill``) so a non-terminating run cannot
+            orphan a container after the CLI is killed. Defaults to None
+            (today's behavior — unchanged for existing callers).
 
     Returns:
         dict: {
             "success": bool,
             "stdout": str,
             "stderr": str,
-            "command": str
+            "command": str,
+            "timed_out": bool,
         }
     """
 
@@ -85,15 +92,19 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
     # Construct Docker command
     # We use --rm to clean up the container after exit
     # We mount the workspace to /workspace
-    docker_cmd = [
-        "docker", "run", "--rm",
-        "-v", f"{workspace_path}:/workspace"
-    ]
+    docker_cmd = ["docker", "run", "--rm"]
+    if name:
+        docker_cmd += ["--name", name]
+    docker_cmd += ["-v", f"{workspace_path}:/workspace"]
 
     # Add custom volumes
     if volumes:
         for vol in volumes:
             docker_cmd.extend(["-v", vol])
+
+    # Pass-through environment (e.g. cocotb's SC_* runner vars).
+    for key, value in (env or {}).items():
+        docker_cmd.extend(["-e", f"{key}={value}"])
 
     docker_cmd.extend([
         "-w", cwd,
@@ -116,16 +127,22 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
             "success": proc.returncode == 0,
             "stdout": stdout,
             "stderr": stderr,
-            "command": " ".join(docker_cmd)
+            "command": " ".join(docker_cmd),
+            "timed_out": False,
         }
 
     except subprocess.TimeoutExpired:
+        # Killing the docker CLI alone can orphan the container; when a name was
+        # supplied, hard-kill the container too.
+        if name:
+            subprocess.run(["docker", "kill", name], capture_output=True, text=True)
         if proc: proc.kill()
         return {
             "success": False,
             "stdout": "",
             "stderr": "Error: Docker command timed out.",
-            "command": " ".join(docker_cmd)
+            "command": " ".join(docker_cmd),
+            "timed_out": True,
         }
     except Exception as e:
         if proc: proc.kill()
@@ -133,7 +150,8 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
             "success": False,
             "stdout": "",
             "stderr": f"Docker Execution Error: {str(e)}",
-            "command": " ".join(docker_cmd)
+            "command": " ".join(docker_cmd),
+            "timed_out": False,
         }
     finally:
         if proc and proc.poll() is None:
