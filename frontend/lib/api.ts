@@ -14,6 +14,10 @@ import type {
   RunSummary,
   LintResult,
   PpaDiff,
+  ActivityEvent,
+  DirEntry,
+  SmartFile,
+  ToolCatalogEntry,
 } from "@/types";
 import { authHeader, getAuthToken, recoverAuthExpired } from "./authToken";
 
@@ -72,6 +76,13 @@ export const projectsApi = {
       body: JSON.stringify({ name }),
     }),
 
+  // S0: rename a project (UI calls these "groups" — pure relabel, same entity).
+  rename: (projectId: string, name: string) =>
+    apiFetch<Project>(`/api/projects/${encodeURIComponent(projectId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
+
   delete: (projectId: string) =>
     apiFetch<{ status: string }>(`/api/projects/${encodeURIComponent(projectId)}`, {
       method: "DELETE",
@@ -82,7 +93,7 @@ export const projectsApi = {
 export const sessionsApi = {
   list: () => apiFetch<Session[]>("/api/sessions"),
 
-  create: (name: string, model: string = "gemini-3.1-flash", projectId?: string | null) =>
+  create: (name: string, model: string = "gemini-3.5-flash", projectId?: string | null) =>
     apiFetch<Session>("/api/sessions", {
       method: "POST",
       body: JSON.stringify({ name, model, project_id: projectId ?? null }),
@@ -90,10 +101,12 @@ export const sessionsApi = {
 
   get: (sessionId: string) => apiFetch<Session>(`/api/sessions/${encodeSessionId(sessionId)}`),
 
-  patch: (sessionId: string, projectId: string | null) =>
+  // S0: PATCH accepts `name` (display-only rename — the workspace dir/id never
+  // changes) and/or `project_id` (explicit null removes from the group).
+  patch: (sessionId: string, body: { name?: string; project_id?: string | null }) =>
     apiFetch<Session>(`/api/sessions/${encodeSessionId(sessionId)}`, {
       method: "PATCH",
-      body: JSON.stringify({ project_id: projectId }),
+      body: JSON.stringify(body),
     }),
 
   delete: (sessionId: string) =>
@@ -132,10 +145,10 @@ export const threadsApi = {
   list: (sessionId: string) =>
     apiFetch<ChatThread[]>(`/api/sessions/${encodeSessionId(sessionId)}/threads`),
 
-  create: (sessionId: string, title?: string, model?: string) =>
+  create: (sessionId: string, title?: string, model?: string, runtime?: string) =>
     apiFetch<ChatThread>(`/api/sessions/${encodeSessionId(sessionId)}/threads`, {
       method: "POST",
-      body: JSON.stringify({ title: title ?? null, model: model ?? null }),
+      body: JSON.stringify({ title: title ?? null, model: model ?? null, runtime: runtime ?? null }),
     }),
 
   getHistory: (sessionId: string, threadId: string) =>
@@ -154,6 +167,26 @@ export const threadsApi = {
       `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}`,
       { method: "DELETE" }
     ),
+};
+
+// Codex runtime capability + account-auth (ChatGPT device-code login) status.
+// runtime_enabled reflects the CODEX_ENABLED server flag; connected reflects a
+// completed device-auth login; while in_progress the login_url + user_code are
+// what the user opens/enters to sign in.
+export interface CodexAuthStatus {
+  connected: boolean;
+  runtime_enabled: boolean;
+  in_progress?: boolean;
+  login_url?: string | null;
+  user_code?: string | null;
+  message?: string;
+}
+
+export const codexApi = {
+  status: () => apiFetch<CodexAuthStatus>("/api/codex/auth"),
+  startDeviceAuth: () => apiFetch<CodexAuthStatus>("/api/codex/auth/device/start", { method: "POST" }),
+  cancelDeviceAuth: () => apiFetch<CodexAuthStatus>("/api/codex/auth/device/cancel", { method: "POST" }),
+  disconnect: () => apiFetch<CodexAuthStatus>("/api/codex/auth", { method: "DELETE" }),
 };
 
 // Chat API
@@ -231,6 +264,50 @@ export const workspaceApi = {
     apiFetch<{ filename: string; content: string }>(
       `/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(filename)}`
     ),
+
+  // --- Workbench v2: lazy file tree + honest file payloads -------------------
+
+  // Immediate children of one directory ("" = workspace root). Dirs first,
+  // dotfiles/__pycache__ excluded; 404 on missing/traversal. { ok } envelope.
+  getDir: (sessionId: string, path: string = "") =>
+    actionFetch<{ ok: true; path: string; entries: DirEntry[] }>(
+      `/api/workspace/${encodeSessionId(sessionId)}/dir${path ? `?path=${encodeURIComponent(path)}` : ""}`
+    ),
+
+  // Flat recursive file-path index for quick-open (⌘P).
+  getDirPaths: (sessionId: string) =>
+    actionFetch<{ ok: true; paths: string[]; truncated: boolean }>(
+      `/api/workspace/${encodeSessionId(sessionId)}/dir?recursive=paths`
+    ),
+
+  // Honest file payload — content is null for binary/oversized files (plain
+  // endpoint, NOT the { ok } envelope).
+  getFileSmart: (sessionId: string, path: string) =>
+    apiFetch<SmartFile>(
+      `/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(path)}`
+    ),
+
+  // Raw-bytes escape hatch (?raw=1): fetch with the auth header, then trigger a
+  // programmatic download. Browser-only (no-op during SSR).
+  downloadRawFile: async (sessionId: string, path: string): Promise<void> => {
+    if (typeof window === "undefined") return;
+    const response = await fetchWithAuthRecovery(() =>
+      fetch(
+        `${getApiBase()}/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(path)}?raw=1`,
+        { headers: { ...authHeader() } }
+      )
+    );
+    if (!response.ok) throw new Error(`Download failed (HTTP ${response.status})`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = path.split("/").pop() || path;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };
 
 // Workbench action layer — manifest, IDE-first buttons, unified runs.
@@ -283,8 +360,13 @@ export const workbenchApi = {
       { method: "PUT", body: JSON.stringify({ content }) }
     ),
 
-  lint: (sessionId: string) =>
-    actionFetch<LintResult & { ok: true }>(`${ws(sessionId)}/lint`, { method: "POST" }),
+  lint: (sessionId: string, body?: { engine?: string }) =>
+    actionFetch<LintResult & { ok: true }>(`${ws(sessionId)}/lint`, {
+      method: "POST",
+      // Body is optional on the backend too — omit it entirely for the
+      // no-arg call so legacy servers keep working.
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    }),
 
   simulate: (sessionId: string, body: { simTop?: string; mode?: string; runId?: string } = {}) =>
     actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/simulate`, {
@@ -292,8 +374,9 @@ export const workbenchApi = {
       body: JSON.stringify(body),
     }).then((r) => r.run),
 
+  // Dispatch-only: returns the durable run key immediately (no job_id).
   synthesize: (sessionId: string, body: Record<string, unknown> = {}) =>
-    actionFetch<{ ok: true; jobId: string; runId: string }>(`${ws(sessionId)}/synthesize`, {
+    actionFetch<{ ok: true; runId: string; pollAfterSec?: number }>(`${ws(sessionId)}/synthesize`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
@@ -313,13 +396,58 @@ export const workbenchApi = {
       code: CodeFile[];
       report: ReportData | null;
       synthesisRuns: SynthesisRun[];
+      // v2 additions (same shapes as GET /activity and GET /dir) so the first
+      // paint of the Activity dock + file tree costs no extra round trips.
+      activity?: ActivityEvent[];
+      rootDir?: DirEntry[];
     }>(`${ws(sessionId)}/workbench`),
+
+  // Newest-first page of the unified tool-event log (agent WS, user REST, MCP).
+  // `before` = last event id of the previous page; nextBefore is null at the end.
+  getActivity: (sessionId: string, opts: { limit?: number; before?: string | null } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.limit != null) params.set("limit", String(opts.limit));
+    if (opts.before) params.set("before", opts.before);
+    const qs = params.toString();
+    return actionFetch<{ ok: true; events: ActivityEvent[]; nextBefore: string | null }>(
+      `${ws(sessionId)}/activity${qs ? `?${qs}` : ""}`
+    );
+  },
 
   getRun: (sessionId: string, runId: string) =>
     actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/runs/${encodeURIComponent(runId)}`).then((r) => r.run),
 
-  getJob: (sessionId: string, jobId: string) =>
-    actionFetch<{ ok: true; job: Record<string, unknown> }>(`${ws(sessionId)}/jobs/${encodeURIComponent(jobId)}`).then((r) => r.job),
+  // Self-healing run-status read (GET /runs/{run_id}/status). The UI never
+  // calls this on its own cadence — it exists for actor-style reads; the
+  // user-gesture Refresh goes through invokeTool("get_synthesis_status")
+  // instead so the gesture lands in the activity log.
+  getRunStatus: (sessionId: string, runId: string) =>
+    actionFetch<{ ok: true; job: Record<string, unknown> }>(
+      `${ws(sessionId)}/runs/${encodeURIComponent(runId)}/status`
+    ).then((r) => r.job),
+
+  // Introspected tool catalog — every UI-invocable tool with its real JSON
+  // Schema + policy flags, straight from the agent's @tool registry.
+  getToolCatalog: (sessionId: string) =>
+    actionFetch<{ ok: true; tools: ToolCatalogEntry[] }>(`${ws(sessionId)}/tools`).then(
+      (r) => r.tools
+    ),
+
+  invokeTool: (sessionId: string, tool: string, args: Record<string, unknown>) =>
+    actionFetch<{ ok: true; tool: string; result: unknown }>(`${ws(sessionId)}/invoke`, {
+      method: "POST",
+      body: JSON.stringify({ tool, arguments: args }),
+    }),
+
+  retryRun: (
+    sessionId: string,
+    runId: string,
+    body: { fromStage: string; maxStage?: string; overrides?: Record<string, unknown> }
+  ) =>
+    actionFetch<{ ok: true; runId: string; pollAfterSec?: number }>(
+      `${ws(sessionId)}/runs/${encodeURIComponent(runId)}/retry`,
+      { method: "POST", body: JSON.stringify(body) }
+    ),
 
   pinRun: (sessionId: string, runId: string, pinned: boolean) =>
     actionFetch<{ ok: true; runId: string; pinned: boolean }>(`${ws(sessionId)}/runs/${encodeURIComponent(runId)}/pin`, {

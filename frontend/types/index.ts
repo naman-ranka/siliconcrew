@@ -15,6 +15,9 @@ export interface Session {
   updated_at: string | null;
   total_tokens: number;
   total_cost: number;
+  // S0: cheap COUNT over the threads table, included in the session list so
+  // launcher cards can show a chat count without hydrating any workspace.
+  thread_count?: number;
 }
 
 // Model registry (the picker). `available` is per-request: false when the
@@ -36,6 +39,7 @@ export interface ChatThread {
   session_id: string;
   title: string | null;
   model: string | null;
+  runtime?: string | null; // 'langchain' (native) | 'codex'
   created_at: string | null;
   last_active: string | null;
 }
@@ -55,6 +59,8 @@ export interface ToolResult {
 
 export type ContentBlock =
   | { type: "text"; content: string }
+  | { type: "reasoning"; content: string } // agent "thinking" stream (Codex)
+  | { type: "plan"; content: string }       // agent plan/todo (Codex)
   | { type: "tool"; toolCall: ToolCall; result?: ToolResult };
 
 export interface Message {
@@ -146,6 +152,11 @@ export interface DesignManifest {
   simTop: string;
   clockPeriodNs: number;
   platform: string;
+  /** Derived by the backend on each reconcile: every role=tb file with its
+   *  top module — the enumerable "which testbench?" choices. */
+  testbenches?: { file: string; module: string }[];
+  /** User-maintained fnmatch globs (workspace-relative) excluded from scans. */
+  ignore?: string[];
 }
 
 // --- Unified run model ------------------------------------------------------
@@ -198,6 +209,8 @@ export interface LintDiag {
   line: number | null;
   severity: "error" | "warning";
   message: string;
+  /** Engine diagnostic code when the engine emits one (verilator: WIDTH, LATCH…). */
+  code?: string | null;
 }
 
 export interface LintResult {
@@ -207,6 +220,8 @@ export interface LintResult {
   byFile: Record<string, LintDiag[]>;
   command: string;
   files: string[];
+  /** Engine that actually ran (auto resolves to iverilog or verilator). */
+  engine?: string | null;
 }
 
 export interface PpaDiff {
@@ -223,20 +238,9 @@ export interface Toast {
   detail?: string;
 }
 
-// Console entries surfaced under the artifact viewers (lint/sim/synth).
-export type ConsoleChannel = "lint" | "sim" | "synth";
-export interface ConsoleEntry {
-  channel: ConsoleChannel;
-  status: "running" | "passed" | "failed" | "info";
-  command?: string;
-  summary: string;
-  detail?: string;
-  runId?: string;
-  ts: string;
-}
-
-// Live synthesis (ORFS) job status — drives the stage-progress UI while a
-// remote synth runs. Mirrors the backend job-status payload (snake_case).
+// Last-known synthesis (ORFS) run status — the UI is a VIEWER: this is fed
+// only by explicit user Refresh results / run-status responses, never by a
+// client-side poller. Mirrors the backend status payload (snake_case).
 export type SynthStageId =
   | "constraints"
   | "synth"
@@ -248,15 +252,119 @@ export type SynthStageId =
   | "finish";
 export type SynthStageStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 export interface SynthJobStatus {
-  jobId: string;
   runId: string;
   status: string; // queued | running | completed | failed
   currentStage?: SynthStageId | string | null;
   stages?: Partial<Record<SynthStageId, { status: SynthStageStatus; artifacts?: Record<string, unknown> }>>;
+  /** Per-stage lifecycle derived from file evidence (backend stage truth). */
+  stageHistory?: { stage: string; status: string; ended_at?: string | null }[];
+  dispatchedAt?: string | null;
+  lastLogLines?: string[];
   elapsedSec?: number | null;
+  checkNotes?: string | null;
   backend?: string | null;
   remote?: boolean | null;
   executionLabel?: string | null;
+}
+
+// --- Workbench v2 data layer (SWR slices, activity feed, file tree) ---------
+
+// Lifecycle of a cached data slice. The SWR iron rule: a populated slice NEVER
+// goes back to "loading" — a refetch is "revalidating" (old data stays visible)
+// and a failed revalidate keeps the data and sets the error.
+export type SliceStatus = "empty" | "loading" | "ready" | "revalidating" | "error";
+
+export interface Slice<T> {
+  data: T | null;
+  status: SliceStatus;
+  error: string | null;
+}
+
+// One tool invocation in the unified per-session activity feed
+// (GET /api/workspace/{sid}/activity — agent WS, user REST, and MCP sources).
+export interface ActivityEvent {
+  id: string;
+  ts: string;
+  source: "agent" | "user" | "mcp";
+  tool: string;
+  args: Record<string, unknown>;
+  status: "ok" | "error" | "running";
+  resultSummary: string;
+  durationMs: number | null;
+  runId: string | null;
+  threadId: string | null;
+}
+
+// One entry of the lazy directory listing (GET /api/workspace/{sid}/dir).
+export interface DirEntry {
+  name: string;
+  path: string;
+  kind: "dir" | "file";
+  size?: number;
+  modified?: string;
+}
+
+// Honest file payload (GET /api/workspace/{sid}/file/{path}) — content is null
+// (never lossy garbage) for binary or oversized files; `?raw=1` downloads.
+export interface SmartFile {
+  filename: string;
+  content: string | null;
+  size: number;
+  binary: boolean;
+  tooLarge: boolean;
+}
+
+// Artifact tab/key kinds for the v2 workbench (see lib/artifactKeys.ts for the
+// `kind:ref` string-key helpers).
+export type ArtifactKind = "code" | "spec" | "wave" | "report" | "layout" | "schematic";
+
+// --- Tool catalog (GET /api/workspace/{sid}/tools) ---------------------------
+// The backend introspects the SAME LangChain @tool registry the agent and MCP
+// clients use (src/api/tool_catalog.py), so these entries are the contract the
+// Command Surface renders from — no hand-written command list.
+
+// A single JSON-Schema property as pydantic emits it. Deliberately loose:
+// only the fields the form-model mapping reads are typed.
+export interface SchemaProperty {
+  type?: "string" | "integer" | "number" | "boolean" | "array" | "object" | "null" | string;
+  enum?: (string | number)[];
+  default?: unknown;
+  items?: { type?: string } & Record<string, unknown>;
+  // pydantic Optional[X] arrives as anyOf: [{type: X}, {type: "null"}].
+  anyOf?: SchemaProperty[];
+  description?: string;
+  minimum?: number;
+  exclusiveMinimum?: number;
+  maximum?: number;
+  multipleOf?: number;
+  [key: string]: unknown;
+}
+
+export interface JsonSchema {
+  type?: string;
+  properties?: Record<string, SchemaProperty>;
+  required?: string[];
+  [key: string]: unknown;
+}
+
+export type ToolCategory =
+  | "essential"
+  | "manifest"
+  | "verification"
+  | "synthesis"
+  | "editing"
+  | "reporting"
+  | "hls";
+
+export interface ToolCatalogEntry {
+  name: string;
+  /** FULL docstring incl. the "Args:" section — display only the part before it. */
+  description: string;
+  category: ToolCategory | string;
+  argsSchema: JsonSchema;
+  requiresSignIn: boolean;
+  async: boolean;
+  mutates: boolean;
 }
 
 // WebSocket message types
