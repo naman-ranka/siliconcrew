@@ -2,6 +2,7 @@ import os
 import tempfile
 
 from src.tools import run_simulation as rs
+from src.tools import sim_manager as sm
 
 
 def test_simulation_requires_explicit_pass_marker(monkeypatch):
@@ -11,6 +12,45 @@ def test_simulation_requires_explicit_pass_marker(monkeypatch):
     result = rs.run_simulation(verilog_files=[], top_module="tb", mode="rtl", pass_marker="TEST PASSED")
     assert result["status"] == "test_failed"
     assert result["pass_marker_found"] is False
+
+
+def test_near_miss_pass_marker_reports_grepped_marker(monkeypatch):
+    """F11: a TB that prints "ALL TESTS PASSED" (but not the exact grepped
+    substring "TEST PASSED") is honestly test_failed, and the result carries
+    the exact marker that was searched for so the UI can explain the miss."""
+    monkeypatch.setattr(rs, "_compile", lambda **kwargs: {"returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"})
+    monkeypatch.setattr(rs, "_simulate", lambda **kwargs: {"returncode": 0, "stdout": "ALL TESTS PASSED\n", "stderr": "", "command": "vvp"})
+
+    result = rs.run_simulation(verilog_files=[], top_module="tb", mode="rtl", pass_marker="TEST PASSED")
+    assert result["status"] == "test_failed"
+    assert result["pass_marker_found"] is False
+    assert result["pass_marker"] == "TEST PASSED"
+
+
+def test_sim_run_meta_persists_grepped_pass_marker(monkeypatch):
+    """F11: the SimRun run_meta records the exact grepped marker beside
+    passMarkerFound, so the failed run stays self-describing on disk."""
+    monkeypatch.setattr(rs, "_compile", lambda **kwargs: {"returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"})
+    monkeypatch.setattr(rs, "_simulate", lambda **kwargs: {"returncode": 0, "stdout": "ALL TESTS PASSED\n", "stderr": "", "command": "vvp"})
+
+    with tempfile.TemporaryDirectory() as workspace:
+        tb = os.path.join(workspace, "tb.v")
+        open(tb, "w", encoding="utf-8").write("module tb; endmodule")
+
+        sim_run = sm.run_sim_isolated(
+            workspace=workspace,
+            verilog_files=[tb],
+            top_module="tb",
+            mode="rtl",
+            pass_marker="TEST PASSED",
+        )
+
+        assert sim_run["status"] == "failed"
+        assert sim_run["passMarkerFound"] is False
+        assert sim_run["passMarker"] == "TEST PASSED"
+
+        persisted = sm.get_sim_run(workspace, sim_run["id"])
+        assert persisted["passMarker"] == "TEST PASSED"
 
 
 def test_simulation_compile_failed_reports_unresolved_cells(monkeypatch):
