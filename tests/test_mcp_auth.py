@@ -104,9 +104,8 @@ def _verifier_with_key(public_key, *, audience=""):
     from types import SimpleNamespace
 
     v = WorkOSVerifier(issuer=ISS, audience=audience, jwks_url="unused")
-    v._jwk_client = SimpleNamespace(
-        get_signing_key_from_jwt=lambda _t: SimpleNamespace(key=public_key)
-    )
+    # Bypass only the key transport (file-cached JWKS; identity._signing_key_for).
+    v._signing_key_for = lambda _t: SimpleNamespace(key=public_key)
     return v
 
 
