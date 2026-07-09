@@ -364,5 +364,114 @@ thumbnails in the index; hosted `read_provenance` file-only forks backfill.
 
 ---
 
-## Amendments (AUTHORITATIVE — filled by the second-agent review)
-_(pending)_
+## Amendments (AUTHORITATIVE — override the body wherever they conflict)
+
+Second-agent review verdict: implementation-ready AFTER these amendments.
+Architecture confirmed sound (engine-selection mirroring, READ-ONLY listing,
+owner-scoped fork, separate bucket vs the `main.tf:77-80` lifecycle-delete,
+zero tool/MCP consumers, `_safe_extract` zip-slip coverage, guard ceilings ≫
+bundle sizes).
+
+**A1 [CRITICAL] — Narrow the split line to heavy file TYPES.** D1's "no UI
+viewer reads orfs_results except .gds" was an inaccurate read:
+`_STAGE_COMPLETION_MARKERS` (synthesis_manager.py:136-144) keys stage
+completion off files UNDER `orfs_results` (`route→5_route.sdc`,
+`place→3_place.odb`, …; `_find_stage_completion_marker` :165-178), and
+`get_ppa_metrics` (get_ppa.py:21-34) recursively scans it;
+`design_report.py:10,21` falls back to get_ppa (not "summary_metrics only").
+SPLIT = `**/orfs_results/**/*.{gds,def,spef,rtlil}` + synthesized netlist
+`.v` under orfs_results + `orfs_reports/*.webp`. KEEP `.sdc/.json/.guide/
+.tcl/.txt` (tens of KB) so stage-status/reconcile/PPA are byte-identical on
+self-host-without-fetch. ADD a parity test: fork a split bundle (no binaries)
+and assert get_ppa/get_stage_status/design-report outputs identical to
+pre-split.
+
+**A2 [MAJOR] — Fork off the event loop.** `fork_template` (api.py:822-838) is
+`async def` calling `fork_from_template` synchronously; all other blocking
+api.py ops use `asyncio.to_thread` (:1261, :1524, :2476, :2489). Wrap the
+fork call in `asyncio.to_thread` in Item 3.
+
+**A3 [MAJOR] — Object naming is `.tar.gz`, not `.tgz`.**
+`GcsObjectStore._blob` (workspace_provider.py:189-191) appends `.tar.gz` and
+prepends the prefix. Index stores suffix-less store-relative keys
+(`bundles/<id>/source`); `GcsTemplateSource` uses
+`GcsObjectStore(prefix="official").get_tree(key)`; fetch builds
+`https://storage.googleapis.com/<bucket>/official/<key>.tar.gz`.
+
+**A4 [MAJOR] — Verify per-file sha256 post-extraction**, from
+`.sc_binaries.json` (archives are gzip-mtime-nondeterministic —
+`_tar_dir_to_bytes` workspace_provider.py:94-100). Index archive hashes
+advisory only. Per-file verify is also what makes fetch idempotence work.
+
+**A5 [MAJOR] — Provenance needs a NEW store setter.** `upsert_session` has a
+fixed COALESCE column list (metadata_store.py:250-266, 628-643); no arbitrary-
+column write path and no JSON field to piggyback. Work: (a) SQLite column via
+`_migrate_columns` (:153-179) `ADD COLUMN source_template TEXT`; Postgres
+`ADD COLUMN IF NOT EXISTS` in init_schema (mirror :574-577); (b) new
+owner-scoped `set_source_template(session_id, value, user_id)` on BOTH stores
++ the MetadataStore Protocol (:34-75); (c) SessionManager passthrough;
+(d) fork calls it after `_write_provenance`. Reads flow free (SELECT *).
+
+**A6 [MAJOR] — Mixed-engine policy (RULING).** Hosted-workspace +
+local-templates (deployed split image, no TEMPLATES_BUCKET yet) would produce
+a binary-less hosted fork, which D6 forbade. Ruling: **D6 is scoped to the
+gcs source** — a source must deliver everything it PROMISES. `gcs` source:
+index promised binaries → missing/failed `binaries` archive = fork fails +
+rollback (all-or-nothing). `local` source: copies what is present (existing
+semantics) → binary-less fork is HONEST degradation, on self-host or hosted
+alike (GDS is regenerable; viewers already honest). Drop D6's "never on
+hosted." ADD mixed-combo tests: cloud-workspace+local-source AND
+local-workspace+gcs-source (both coherent: destination and materialization
+are independent axes).
+
+**A7 [MAJOR] — Layouts honest signal is a response-shape change (do it
+properly).** GET `/api/workspace/{sid}/layouts` (api.py:2492-2509) returns
+`List[str]`; `listLayouts` types `string[]` (api.ts:291-292). Change the
+response to `{"layouts": [...], "missing_binaries": [...]}` (paths from
+`.sc_binaries.json` entries absent on disk, `.gds` only), update `api.ts`,
+`LayoutArtifact.tsx` (new copy branch "GDS not present — re-run synthesis, or
+fetch the example binaries"), any other listLayouts consumer, and the e2e
+mock (templates.spec.ts:112). Enumerate consumers before editing.
+
+**A8 [MAJOR] — Tests that assert the OLD gate.**
+`test_fork_hosted_is_gated` (test_templates_fork.py:241-247) and
+`test_api_fork_hosted_400` (:468-469) FAIL after the gate lift — rewrite both
+in Item 3 as hosted-fork-succeeds tests. Frontend blast radius of
+`TemplatesUnavailable` removal = templatePreview.test.tsx:52-60 mock string
+only (the `role="alert"` surface stays; no production code asserts the text).
+
+**A9 [MAJOR] — source archive roots at the `workspace/` SUBTREE.** Session
+workspaces must not contain `template.json` or a nested `workspace/` dir
+(self-host copies `examples/<id>/workspace/` — templates.py:346,355-357).
+`template.json` content is index-only. `get_tree` has NO size guard
+(copytree_guarded enforces during copy) → the post-extract max_bytes/
+max_files guard is NET-NEW code; tar traversal is covered by `_safe_extract`
+(workspace_provider.py:116-123 — NOT `_guard_member`, that's the manifest
+path). Ceilings hold: largest bundle 15 MB ≪ 512 MiB / 20k files
+(bundles.py:26-27).
+
+**A10 [MINOR] — Open items #2/#3 resolved.** `workspace_for` on a brand-new
+sid is SAFE from the REST handler: no manifest → `os.makedirs(scratch)`
+return (workspace_provider.py:532-553); fresh per-session lock; no
+request-lifecycle middleware to race (only CORS api.py:490 + MCP :575). Must
+still be off-loop (A2). Archive format = stdlib `tarfile` w:gz/r:gz,
+recursive top-level arcnames — fetch can urllib+tarfile (with A3 naming).
+
+**A11 [MINOR] — Publish `--ref` = `git worktree add --detach <tmp> <ref>`**,
+read via FS, `git worktree remove`. Publish auth = ADC /
+GOOGLE_APPLICATION_CREDENTIALS via `storage.Client()` (roll_cloudrun.py:14 is
+a different mechanism — service_account + AuthorizedSession REST; don't cite
+it as the pattern).
+
+**A12 [MINOR] — .dockerignore is correct as-is**: `workspace/`+`workspace*/`
+match context-root only, so `examples/<id>/workspace/` stays baked. Do NOT
+"fix" it to `**/workspace/` — that would silently exclude all bundle sources.
+
+**A13 [MINOR] — Preview hygiene.** Filter `.sc_binaries.json` and
+`.source_template.json` out of `_shallow_file_preview` and publish-time file
+lists. `file_count`/`run_count` divergence local-vs-index (source-only vs
+full) is accepted and documented.
+
+**A14 [MINOR] — Index TTL cache is last-good/SWR by declaration**: store
+outage serves cached entries up to TTL then 503s; that staleness contract is
+intended, not accidental.
