@@ -51,3 +51,28 @@ def get_workspace_path() -> str:
 
     # 3. Default project-local workspace.
     return os.path.abspath(_DEFAULT_WORKSPACE)
+
+
+def resolve_in_workspace(filename: str, *, workspace: str | None = None) -> str:
+    """Resolve an agent-supplied ``filename`` INSIDE the workspace, or raise.
+
+    The file tools take a caller-supplied path. Without confinement,
+    ``os.path.join(workspace, "/etc/passwd")`` returns ``/etc/passwd`` (an
+    absolute arg overrides the join) and ``"../secret"`` climbs out — letting an
+    agent (native OR Codex) read/write anywhere on the host, e.g. the credential
+    vault or another tenant's files. This is the single confinement point every
+    filename-taking tool funnels through: it rejects absolute paths and any path
+    whose resolved real location is not under the workspace root, and returns the
+    safe absolute path otherwise. Raises ``ValueError`` on escape.
+    """
+    if not isinstance(filename, str) or not filename.strip():
+        raise ValueError("Access denied: empty filename.")
+    if os.path.isabs(filename) or filename.startswith("~"):
+        raise ValueError(
+            f"Access denied: '{filename}' — only paths inside the workspace are allowed."
+        )
+    ws = os.path.realpath(workspace or get_workspace_path())
+    real = os.path.realpath(os.path.join(ws, filename))
+    if real != ws and not real.startswith(ws + os.sep):
+        raise ValueError(f"Access denied: '{filename}' escapes the workspace.")
+    return real
