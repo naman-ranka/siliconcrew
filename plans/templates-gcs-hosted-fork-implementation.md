@@ -494,3 +494,30 @@ actually pre-synthesis RTL — dishonest for gate-level sim. Item 3 rule: in
 "keep .json/.guide" was overbroad; the principle is keep-what-a-reader-
 consumes, and no reader touches these. `design_metrics.json` and all stage
 `.sdc`/`.rpt`/logs remain in git.
+
+**A17 [CRITICAL, adversarial review — cross-tenant leak+clobber; FIXED]** Fork
+ids are name-derived (`slug(name)`), so every fork of a template competes for
+ONE global id. `create_session`'s only collision guard was
+`os.path.exists(local_dir)` — but hosted instance disk is ephemeral and
+per-instance while the metadata store + GCS are SHARED. So on a second instance
+(or after a cold start), the guard is a no-op, `upsert_session`'s
+`ON CONFLICT DO UPDATE ... COALESCE(owner)` silently kept the FIRST owner, and
+the cloud fork then `workspace_for`-hydrated that id's existing manifest —
+leaking another tenant's private files into the new fork AND clobbering the
+victim's workspace on the fork's `sync`. Two sequences reproduced against the
+Item-3 fakes: (A) delete-then-refork same template inherited the deleted
+session's private files (delete leaves GCS behind, D7); (B) a different user
+forking the same template adopted the first user's row+workspace. This wave
+turned a latent collision into destructive data loss (fork was gated off
+before), so it is fixed here. **Fix (defense in depth, all three):**
+(1) `create_session` rejects a pre-existing SHARED-store row, not just a local
+dir (`session_manager.py` — the shared metadata store is the authoritative
+cross-instance namespace; `_allocate_fork_session`'s retry loop then suffixes
+to a free id); (2) the cloud fork calls `provider.delete_workspace(sid)` BEFORE
+`workspace_for` so it always starts from truly-empty scratch (purges orphaned
+manifests); (3) cloud `delete_session` now also purges the GCS workspace
+(closes the D7 orphan window at the source; self-host unaffected — no provider).
+Regression: `tests/test_hosted_fork.py` — re-fork-after-delete pristine,
+cross-tenant fork isolates owner+workspace (two SessionManagers sharing one db,
+separate base_dirs = the multi-instance model), create_session rejects a shared
+global row. All three proven to FAIL on pre-fix code.

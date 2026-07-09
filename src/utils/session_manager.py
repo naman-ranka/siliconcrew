@@ -146,7 +146,14 @@ class SessionManager:
 
         path = self._session_path(session_id)
 
-        if os.path.exists(path):
+        # Reject a collision against BOTH the local dir AND the shared metadata
+        # store. On hosted, instance disk is ephemeral and per-instance, so
+        # os.path.exists misses an id already owned by someone on another
+        # instance; the metadata store (Cloud SQL) is the authoritative shared
+        # namespace. Without this, an ON CONFLICT upsert would silently keep the
+        # first owner and hand this caller a session it does not own — a
+        # cross-tenant hazard on the name-derived ids that forks allocate.
+        if os.path.exists(path) or self._store.get_session(session_id, user_id=None):
             raise FileExistsError(f"Session '{session_id}' already exists.")
 
         os.makedirs(path)
@@ -232,6 +239,24 @@ class SessionManager:
         session_path = os.path.join(self.base_dir, session_id)
         if os.path.exists(session_path):
             shutil.rmtree(session_path)
+        # On cloud, the durable workspace lives in object storage, NOT the local
+        # dir just removed. Purge it too so a deleted id leaves no adoptable
+        # manifest for a later same-name fork to hydrate (the D7 GC gap made
+        # concrete by name-derived fork ids). Lazy + best-effort + cloud-only:
+        # self-host has no provider and skips this entirely.
+        try:
+            from src.platform_engines.settings import get_settings
+
+            if get_settings().is_cloud_workspace:
+                from src.platform_engines.workspace_provider import (
+                    get_workspace_provider,
+                )
+
+                delete_ws = getattr(get_workspace_provider(), "delete_workspace", None)
+                if callable(delete_ws):
+                    delete_ws(session_id)
+        except Exception:
+            pass
         # The store returns the cascaded chat ids — conversation checkpoints
         # are keyed by thread_id, so the purge works from EXACTLY what was
         # deleted (no separate pre-read that could fail or go stale apart

@@ -28,6 +28,7 @@ SDK absent.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -238,6 +239,48 @@ class GcsTemplateSource:
         self._store.get_tree(source_key, dst_dir)
         self._store.get_tree(binaries_key, dst_dir)
         _enforce_ceiling(dst_dir, max_bytes=max_bytes, max_files=max_files)
+        _verify_binaries(dst_dir, template_id)
+
+
+_SC_BINARIES = ".sc_binaries.json"
+
+
+def _verify_binaries(dst_dir: str, template_id: str) -> None:
+    """A4: verify every split-out file against its recorded sha256 after extract.
+
+    The source archive carries ``.sc_binaries.json`` (the per-file manifest the
+    split tool wrote); the binaries archive carries the files it lists. A
+    truncated/corrupt ``binaries.tar.gz`` would otherwise yield a silently
+    wrong-bytes fork — the same integrity contract the self-host fetch script
+    enforces. Absent manifest (a source-only bundle like sync_fifo) → nothing to
+    verify. A mismatch is a hard failure (caller rolls back)."""
+    manifest_path = os.path.join(dst_dir, _SC_BINARIES)
+    if not os.path.isfile(manifest_path):
+        return
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            listed = json.load(f).get("files", [])
+    except (OSError, ValueError):
+        return
+    bad: List[str] = []
+    for entry in listed:
+        rel = entry.get("path", "")
+        abs_path = os.path.join(dst_dir, rel.replace("/", os.sep))
+        if not os.path.isfile(abs_path) or _sha256(abs_path) != entry.get("sha256"):
+            bad.append(rel)
+    if bad:
+        raise TemplateStoreUnavailable(
+            f"template '{template_id}': {len(bad)} binary file(s) failed sha256 "
+            f"verify after extract (corrupt/incomplete archive): {bad[:5]}"
+        )
+
+
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _enforce_ceiling(root: str, *, max_bytes: int, max_files: int) -> None:

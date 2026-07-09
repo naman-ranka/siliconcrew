@@ -459,6 +459,19 @@ def fork_from_template(
     new_session_id = _allocate_fork_session(session_manager, base_tag, user_id)
     try:
         if cloud:
+            # Purge any orphaned object-storage workspace for this id BEFORE
+            # hydrating. delete_session does not remove GCS state (D7 GC is
+            # deferred), so a previously-deleted session that reused this
+            # name-derived id could leave a committed manifest that
+            # workspace_for would otherwise hydrate — contaminating a "pristine"
+            # fork with the deleted session's private files. Best-effort; a
+            # genuinely-new id has nothing to delete.
+            delete_ws = getattr(provider, "delete_workspace", None)
+            if callable(delete_ws):
+                try:
+                    delete_ws(new_session_id)
+                except Exception:
+                    pass
             dst_ws = provider.workspace_for(new_session_id)  # empty scratch (D5)
         else:
             dst_ws = session_manager.get_workspace_path(new_session_id)

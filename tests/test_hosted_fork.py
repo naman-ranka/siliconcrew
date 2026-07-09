@@ -332,6 +332,32 @@ def test_gcs_missing_binaries_fails_all_or_nothing(sm, scratch, tmp_path, monkey
     assert _manifest_key_absent(ws_store)
 
 
+def test_gcs_corrupt_binaries_fails_sha_verify(sm, scratch, tmp_path, monkeypatch):
+    """A4: a binaries archive whose bytes don't match .sc_binaries.json sha256
+    is a corrupt/incomplete publish — materialize must reject it, not hand back a
+    silently wrong-bytes fork. Repack the binaries blob with tampered content."""
+    _go_cloud(monkeypatch)
+    ws_store = RecordingStore()
+    set_workspace_provider(CloudWorkspaceProvider(ws_store, scratch))
+
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    # Rebuild the binaries tree with corrupted content, re-put under the same key.
+    corrupt_dir = os.path.join(tmp_path, "corrupt")
+    gate = os.path.join(
+        corrupt_dir, "synth_runs", "synth_0001", "orfs_results", "sky130hd", "fifo", "base", "6_final.v"
+    )
+    _w(gate, "TAMPERED — not the published bytes\n")
+    tmpl_store.put_tree("bundles/demo_fifo/binaries", corrupt_dir)
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    before = set(sm.get_all_sessions())
+    with pytest.raises(TemplateStoreUnavailable):
+        T.fork_from_template(sm, "demo_fifo", user_id="alice")
+    assert set(sm.get_all_sessions()) == before  # rolled back
+    assert _manifest_key_absent(ws_store)
+
+
 # ---------------------------------------------------------------------------
 # Mixed engines (A6) — destination and materialization are independent axes
 # ---------------------------------------------------------------------------
@@ -393,12 +419,14 @@ def test_tenancy_all_writes_under_fork_prefix_template_store_read_only(sm, scrat
 
     sid = T.fork_from_template(sm, "demo_fifo", user_id="alice")
 
-    # Every workspace-store write is under THIS fork's prefix — no other tenant's
-    # workspace, no template bucket.
+    # Every workspace-store op (writes AND the pre-hydrate orphan-purge deletes)
+    # is under THIS fork's prefix — no other tenant's workspace, no template
+    # bucket. Deletes are recorded as (op, key) tuples; writes as bare keys.
     prefix = f"workspaces/{sid}/"
     assert ws_store.writes, "sync must have written blobs + manifest"
-    for key in ws_store.writes:
-        assert isinstance(key, str) and key.startswith(prefix), key
+    for entry in ws_store.writes:
+        key = entry[1] if isinstance(entry, tuple) else entry
+        assert key.startswith(prefix), entry
     # Template store saw zero writes (READ-ONLY browsing/materialization).
     assert tmpl_store.writes == []
     # Owner immutable: a second upsert by 'bob' cannot claim the fork.
@@ -406,6 +434,105 @@ def test_tenancy_all_writes_under_fork_prefix_template_store_read_only(sm, scrat
     sm._store.upsert_session(sid, "bob", "x", "m", None, _dt.datetime.now())
     assert sm.get_session_metadata(sid, user_id="bob") is None
     assert sm.owns_session(sid, "alice")
+
+
+# ---------------------------------------------------------------------------
+# Re-fork / cross-tenant id reuse (adversarial review — CRITICAL leak+clobber).
+# Fork ids are name-derived (slug of the template name), so every fork of the
+# same template competes for ONE global id. On hosted, local disk is ephemeral
+# per-instance while the metadata store + GCS are shared, so a name collision
+# must be caught against the SHARED store — never the local dir — and a fork must
+# never hydrate a foreign/orphaned object-storage workspace.
+# ---------------------------------------------------------------------------
+
+
+def _resync_with_file(provider, sid, relpath, content):
+    """Write a user file into a synced fork's scratch and re-commit it, so the
+    file lives in the committed object-storage workspace (what a later same-id
+    fork would hydrate if the id were wrongly reused)."""
+    ws = provider.workspace_for(sid)
+    _w(os.path.join(ws, relpath), content)
+    provider.sync(sid)
+
+
+def test_refork_after_delete_is_not_contaminated_by_prior_session(sm, scratch, tmp_path, monkeypatch):
+    """Sequence A: fork → add a private file → delete → re-fork the SAME template.
+    The fresh fork must be pristine (no leftover file), even though delete leaves
+    object storage behind (D7 GC deferred). Pre-fix this leaked the deleted
+    session's private file into a 'pristine' fork."""
+    _go_cloud(monkeypatch)
+    ws_store = RecordingStore()
+    provider = CloudWorkspaceProvider(ws_store, scratch)
+    set_workspace_provider(provider)
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    sid1 = T.fork_from_template(sm, "demo_fifo", user_id="alice")
+    _resync_with_file(provider, sid1, "SECRET_user_notes.txt", "alice private notes")
+    assert os.path.isfile(os.path.join(scratch, sid1, "SECRET_user_notes.txt"))
+
+    sm.delete_session(sid1, user_id="alice")
+
+    sid2 = T.fork_from_template(sm, "demo_fifo", user_id="alice")
+    assert sid2 == sid1  # id is free again → legitimately reused
+    ws2 = os.path.join(scratch, sid2)
+    assert not os.path.exists(os.path.join(ws2, "SECRET_user_notes.txt"))  # pristine
+    assert os.path.isfile(os.path.join(ws2, "fifo.v"))  # real template content
+    assert sm.owns_session(sid2, "alice")
+
+
+def test_cross_tenant_fork_of_same_template_isolates_owner_and_workspace(tmp_path, scratch, monkeypatch):
+    """Sequence B: alice forks a template and keeps it; bob forks the SAME
+    template from a DIFFERENT instance (own ephemeral disk, shared Cloud SQL +
+    GCS). Bob must get his OWN id + empty workspace — never alice's row, files,
+    or a clobber of her committed workspace."""
+    _go_cloud(monkeypatch)
+    shared_db = str(tmp_path / "shared_state.db")
+    sm_a = SessionManager(base_dir=str(tmp_path / "instanceA"), db_path=shared_db)
+    sm_b = SessionManager(base_dir=str(tmp_path / "instanceB"), db_path=shared_db)
+
+    ws_store = RecordingStore()
+    provider = CloudWorkspaceProvider(ws_store, scratch)
+    set_workspace_provider(provider)
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    sid_a = T.fork_from_template(sm_a, "demo_fifo", user_id="alice")
+    _resync_with_file(provider, sid_a, "ALICE_SECRET.txt", "top secret")
+    alice_manifest_gen = ws_store.generation(_manifest_key(sid_a))
+
+    ws_store.writes.clear()  # isolate the writes bob's fork makes
+    sid_b = T.fork_from_template(sm_b, "demo_fifo", user_id="bob")
+
+    assert sid_b != sid_a  # bob did NOT adopt alice's id
+    assert sm_b.owns_session(sid_b, "bob")
+    assert sm_a.get_session_metadata(sid_b, user_id="alice") is None  # not alice's
+    # Bob's workspace has the template, NOT alice's private file.
+    ws_b = os.path.join(scratch, sid_b)
+    assert os.path.isfile(os.path.join(ws_b, "fifo.v"))
+    assert not os.path.exists(os.path.join(ws_b, "ALICE_SECRET.txt"))  # no leak
+    # Alice still owns her session and her committed workspace is untouched.
+    assert sm_a.owns_session(sid_a, "alice")
+    assert ws_store.generation(_manifest_key(sid_a)) == alice_manifest_gen  # no clobber
+    # Every workspace write during bob's fork stayed under bob's own prefix.
+    bob_writes = [k for k in ws_store.writes if isinstance(k, str)]
+    assert any(k.startswith(f"workspaces/{sid_b}/") for k in bob_writes)
+    assert not any(k.startswith(f"workspaces/{sid_a}/") for k in bob_writes)
+
+
+def test_create_session_rejects_preexisting_global_row(tmp_path):
+    """The root guard: create_session must refuse an id already in the shared
+    store even when this instance's local disk is empty (the cross-instance
+    hazard). Model two instances sharing one db."""
+    shared_db = str(tmp_path / "db.sqlite")
+    sm_a = SessionManager(base_dir=str(tmp_path / "a"), db_path=shared_db)
+    sm_b = SessionManager(base_dir=str(tmp_path / "b"), db_path=shared_db)
+    sm_a.create_session("shared-name", user_id="alice")
+    # Bob's instance has no local dir for "shared-name" but the shared store does.
+    with pytest.raises(FileExistsError):
+        sm_b.create_session("shared-name", user_id="bob")
 
 
 # ---------------------------------------------------------------------------
