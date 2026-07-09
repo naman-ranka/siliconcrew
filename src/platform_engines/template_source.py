@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 import time
 import uuid
 from typing import List, Optional, Protocol
@@ -163,8 +164,7 @@ class GcsTemplateSource:
         the uniform last-good/stale policy for every failure shape.
         """
         tmp = os.path.join(
-            os.environ.get("TEMP") or os.environ.get("TMPDIR") or ".",
-            f".sc_templates_index.{uuid.uuid4().hex}.json",
+            tempfile.gettempdir(), f".sc_templates_index.{uuid.uuid4().hex}.json"
         )
         try:
             if not self._store.get_file(INDEX_KEY, tmp):
