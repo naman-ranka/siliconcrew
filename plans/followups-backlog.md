@@ -4,6 +4,12 @@ Owner-reviewed findings after the sidebar/Codex-picker/VCD wave (PR #27, merged
 into `endgame`). Ordered by how much they matter. Each is TODO — none block the
 current staging build. "Happy to take any — say which."
 
+**Landed since:** the templates source-in-git / binaries-in-GCS / dynamic gallery
+/ hosted-fork wave (PR #29) and the narrow-rail chat-overflow fix (PR #30) are
+both merged into `endgame`. The templates wave passed three independent reviews
+(correctness / philosophy / requirements) DEPLOY-SAFE; its two LOW residuals are
+logged as #13–#14 below (the review's higher findings were fixed in `a2949d3`).
+
 ---
 
 ## P1 — do next
@@ -128,3 +134,28 @@ compromised. Fix: stage on tmpfs + wipe after the turn.
 One KEK/master compromise = total blast radius, and no rotation path (the "v":1
 version field is unused). Fix: KEK rotation; harden the self-host SHA-256(master)
 path. Only matters on KEK/master compromise.
+
+---
+
+## Templates wave residuals (from the 3-pass review — LOW; PR #29)
+
+The review's higher-severity findings (honest hosted-fork docstring; malformed
+`.sc_binaries.json` must hard-fail rather than silently skip sha256 verify) were
+fixed in `a2949d3` before merge. These two LOWs were left as deferred:
+
+### 13. `allUsers:objectViewer` on the template bucket grants public LIST (gate before community wave) — LOW now, MUST-FIX before user-publish
+The public-read grant used for the fetch-script / hosted gallery is bucket-wide
+`objectViewer`, which also confers `storage.objects.list` — anyone can enumerate
+the bucket, not just fetch a known object. Harmless for the official read-only
+gallery (nothing secret there), but it becomes a real boundary the moment §6's
+community/user-publish direction lands (users would be able to list every other
+user's published prefix). **Fix before that wave:** scope public read to the
+`official/` prefix only (or serve via an index + signed/known object paths and
+drop bucket-wide list), keeping any future `community/` space separately gated.
+
+### 14. Second fork of the same template by the same user returns a bare 409
+`fork_from_template` correctly refuses to silently overwrite an existing forked
+session (tenancy-safe, invariant-8 correct), but the surfaced error is a plain
+409 rather than a friendly "you already forked this — open it / fork a copy."
+Cosmetic UX; the safe behavior is already right. Fix: friendlier message + a
+"open existing" affordance, or allow an explicit "fork again" that mints a new sid.
