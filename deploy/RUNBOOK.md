@@ -129,12 +129,30 @@ frontend's auth seam / `sessionStorage["sc-auth-token"]`).
 
 ## 4. Initialize the database
 
-The backend calls `MetadataStore.init_schema()` on boot (idempotent). Verify:
+The backend calls `MetadataStore.init_schema()` on boot (idempotent), and — in
+hosted/Postgres mode — the LangGraph checkpointer runs its own `.setup()` on
+startup to create the conversation tables (Wave 10). Verify:
 
 ```bash
 gcloud sql connect siliconcrew-metadata --user=siliconcrew --database=siliconcrew \
-  -e "\dt"   # expect: projects, session_metadata
+  -e "\dt"   # expect: projects, session_metadata, chat_threads,
+             #         checkpoints, checkpoint_blobs, checkpoint_writes, checkpoint_migrations
 ```
+
+**Connection budget (Wave 10).** The checkpointer pools against this same
+instance. Keep `CHECKPOINT_POOL_MAX` (default 10) × `backend_max_instances`
+(default 10) + metadata connect-per-op headroom **under** Postgres
+`max_connections`. On the default `db_tier` (db-custom-1-3840, 3.75 GB)
+Postgres's computed default is in the hundreds — ample for 10 × 10 = 100 — so
+the terraform pins no lower value. `min_size` is 0, so idle/scaled-to-zero
+instances hold no connections; the budget is a peak-load ceiling. If you shrink
+`db_tier` to a shared-core micro, add an explicit `database_flags`
+`max_connections` ≥ the budget. See `plans/hosted-chat-durability.md`.
+
+**Config fail-fast.** With `persistence_engine=postgres` (the hosted default) and
+an empty `DATABASE_URL`, the backend **refuses to boot** (rather than silently
+degrading to ephemeral SQLite and losing conversations). If startup logs show
+that RuntimeError, the `database-url` secret is unpopulated or mis-resolved.
 
 ## 5. Smoke test
 
