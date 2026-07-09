@@ -56,6 +56,7 @@ from src.tools import manifest as manifest_mod
 from src.api.actions import build_actions_router
 from src.api import workspace_fs
 from src.utils import templates as templates_mod
+from src.platform_engines import template_source as template_source_mod
 
 # Load environment
 load_dotenv()
@@ -806,17 +807,27 @@ class ForkResponse(BaseModel):
 
 @app.get("/api/templates")
 async def list_templates(identity: Identity = Depends(get_identity)):
-    """List curated example bundles (public — no sign-in required)."""
-    return {"templates": templates_mod.list_templates()}
+    """List curated example bundles (public — no sign-in required).
+
+    Routes through the template-source engine (local ``examples/`` vs a GCS
+    index). An unreachable store is an honest 503 — NEVER an empty 200 that would
+    read as "no templates" (invariant 4). READ-ONLY: no rows are materialized.
+    """
+    try:
+        return {"templates": template_source_mod.get_template_source().list()}
+    except template_source_mod.TemplateStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Template gallery is unreachable")
 
 
 @app.get("/api/templates/{template_id}")
 async def get_template(template_id: str, identity: Identity = Depends(get_identity)):
     """One bundle's manifest + a shallow file/conversation preview (public)."""
     try:
-        return templates_mod.get_template(template_id)
+        return template_source_mod.get_template_source().get(template_id)
     except templates_mod.TemplateNotFound:
         raise HTTPException(status_code=404, detail="Template not found")
+    except template_source_mod.TemplateStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Template gallery is unreachable")
 
 
 @app.post("/api/templates/{template_id}/fork", response_model=ForkResponse)
