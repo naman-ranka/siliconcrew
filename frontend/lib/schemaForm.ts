@@ -25,6 +25,10 @@ const MANIFEST_KEYS = new Set([
 /** Keys that stay basic (visible) even when optional with no convention options. */
 const BASIC_KEYS = new Set(["query", "stage", "mode", "generator"]);
 
+/** Keys naming a workspace file → a file combo (suggestions from the tree,
+ *  free entry still allowed). Includes `script_file` (run_python_analysis). */
+const FILE_KEYS = new Set(["filename", "file_path", "spec_file", "script_file"]);
+
 // --- schema unwrapping ------------------------------------------------------------
 
 export interface UnwrappedProp {
@@ -99,7 +103,7 @@ export function conventionOptions(key: string, ctx: SurfaceCtx): string[] | null
   }
   if (key === "sby_file") return ctx.rootFiles.filter((f) => f.endsWith(".sby"));
   if (key === "dslx_file") return ctx.rootFiles.filter((f) => f.endsWith(".x"));
-  if (key === "filename" || key === "file_path" || key === "spec_file") {
+  if (FILE_KEYS.has(key)) {
     return [...ctx.rootFiles];
   }
   if (key === "sim_top" || key === "toplevel") return testbenchModules(ctx);

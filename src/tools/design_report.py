@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, Tuple
 from src.tools.spec_manager import load_yaml_file, DesignSpec
 from src.tools.get_ppa import get_ppa_metrics
 from src.tools.synthesis_manager import get_run_dir, get_synthesis_metrics
+from src.tools.sim_manager import list_sim_runs
 
 
 # =============================================================================
@@ -19,6 +20,75 @@ from src.tools.synthesis_manager import get_run_dir, get_synthesis_metrics
 
 METRICS_FILENAME = "design_metrics.json"
 RUN_REPORT_FILENAME = "design_report.md"
+
+# Spec files the platform (or a user) may write. The structured summary table
+# needs a YAML ``*_spec.yaml`` (write_spec's output), but a session can carry a
+# markdown/text spec (e.g. ``spec.md`` from the Spec tab). Detecting these keeps
+# the report honest instead of claiming "no spec" when one plainly exists.
+_SPEC_LIKE_EXACT_NAMES = {"spec.md", "spec.yaml", "spec.yml", "spec.txt"}
+
+
+def _is_spec_like(name: str) -> bool:
+    low = name.lower()
+    return (
+        low.endswith("_spec.yaml")
+        or low.endswith("_spec.yml")
+        or low.endswith("_spec.md")
+        or low in _SPEC_LIKE_EXACT_NAMES
+    )
+
+
+def _spec_like_files(dir_path: str) -> list:
+    """Spec-like filenames present in a directory (sorted, may be empty)."""
+    if not dir_path or not os.path.isdir(dir_path):
+        return []
+    return sorted(f for f in os.listdir(dir_path) if _is_spec_like(f))
+
+
+def _simulation_status_cell(workspace_path: str) -> str:
+    """The Simulation verification-table cell.
+
+    Reads the authoritative isolated sim runs (``sim_runs/<id>/run_meta.json``)
+    and reports the LATEST run's verdict, noting the count when there are
+    several. Falls back to the legacy workspace-root ``.out`` / ``simulation.log``
+    scan for sessions that predate isolated runs. "Not Run" only when nothing
+    actually ran — so a session with passing sims never reads as un-run.
+    """
+    try:
+        runs = list_sim_runs(workspace_path)  # newest-first
+    except Exception:
+        runs = []
+    if runs:
+        latest = runs[0]
+        icon = "✅ Pass" if latest.get("status") == "passed" else "❌ Fail"
+        detail = latest.get("id") or ""
+        n = len(runs)
+        if n > 1:
+            detail = f"{detail}, latest of {n} runs" if detail else f"latest of {n} runs"
+        suffix = f" ({detail})" if detail else ""
+        return f"| Simulation | {icon}{suffix} |"
+
+    # Legacy fallback: scan workspace-root sim outputs (pre-isolated-runs).
+    # Fail-dominant: a log line like "0 passed, 3 failed" contains both words,
+    # and a false Pass is the dishonest direction (X2A-2) — so any 'fail'
+    # verdict sticks over 'pass', within and across files.
+    sim_passed = None
+    for f in (os.listdir(workspace_path) if os.path.exists(workspace_path) else []):
+        if f.endswith('.out') or f == 'simulation.log':
+            try:
+                with open(os.path.join(workspace_path, f), 'r') as log_file:
+                    content = log_file.read().lower()
+                    if 'fail' in content:
+                        sim_passed = False
+                    elif 'pass' in content and sim_passed is None:
+                        sim_passed = True
+            except Exception:
+                pass
+    if sim_passed is True:
+        return "| Simulation | ✅ Pass |"
+    if sim_passed is False:
+        return "| Simulation | ❌ Fail |"
+    return "| Simulation | ⏳ Not Run |"
 
 
 def _resolve_report_scope(workspace_path: str, run_id: str = None) -> Tuple[str, Optional[str]]:
@@ -229,7 +299,19 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
             width = port.width if port.width else 1
             report_lines.append(f"| `{port.name}` | {port.direction} | {width} | {port.description or '-'} |")
     else:
-        report_lines.append("*No specification file found.*\n")
+        # No structured YAML spec parsed — but a markdown/text spec (e.g.
+        # spec.md) may still be present. Report it honestly rather than
+        # claiming none exists.
+        present = _spec_like_files(report_dir)
+        if report_dir != workspace_path:
+            present += [f for f in _spec_like_files(workspace_path) if f not in present]
+        if present:
+            report_lines.append(
+                f"*Specification file present: {', '.join(present)} — open the Spec tab to view. "
+                "(A structured summary table requires a YAML `*_spec.yaml` spec.)*\n"
+            )
+        else:
+            report_lines.append("*No specification file found.*\n")
     
     # Generated Files
     report_lines.append("\n---\n## 📁 Generated Files\n")
@@ -239,7 +321,7 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
         
         rtl_files = [f for f in files if f.endswith(('.v', '.sv')) and not f.endswith('_tb.v')]
         tb_files = [f for f in files if f.endswith('_tb.v')]
-        spec_files = [f for f in files if f.endswith('_spec.yaml')]
+        spec_files = [f for f in files if _is_spec_like(f)]
         sdc_files = [f for f in files if f.endswith('.sdc')]
         vcd_files = [f for f in files if f.endswith('.vcd')]
         
@@ -270,41 +352,20 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
     
     # Verification Results
     report_lines.append("\n---\n## ✅ Verification Results\n")
-    
-    # Check for simulation log or output
-    sim_passed = None
-    sim_log_path = os.path.join(workspace_path, "simulation.log")
-    
-    # Check for testbench outputs in various files
-    for f in os.listdir(workspace_path) if os.path.exists(workspace_path) else []:
-        if f.endswith('.out') or f == 'simulation.log':
-            try:
-                with open(os.path.join(workspace_path, f), 'r') as log_file:
-                    content = log_file.read().lower()
-                    if 'pass' in content:
-                        sim_passed = True
-                    elif 'fail' in content:
-                        sim_passed = False
-            except:
-                pass
-    
+
     report_lines.append("| Check | Status |")
     report_lines.append("|-------|--------|")
-    
+
     # Lint status (assume passed if RTL exists)
     if rtl_files:
         report_lines.append("| Syntax (Lint) | ✅ Pass |")
     else:
         report_lines.append("| Syntax (Lint) | ⏳ Pending |")
-    
-    # Simulation status
-    if sim_passed is True:
-        report_lines.append("| Simulation | ✅ Pass |")
-    elif sim_passed is False:
-        report_lines.append("| Simulation | ❌ Fail |")
-    else:
-        report_lines.append("| Simulation | ⏳ Not Run |")
-    
+
+    # Simulation status — the authoritative isolated sim runs, not a stale
+    # workspace-root scan (which never matched isolated runs → false "Not Run").
+    report_lines.append(_simulation_status_cell(workspace_path))
+
     # Synthesis Results
     report_lines.append("\n---\n## 🔧 Synthesis Results (PPA)\n")
     

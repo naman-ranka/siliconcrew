@@ -119,8 +119,8 @@ describe("artifactKeyForToolCall — schematic_tool → schematic:<svg>", () => 
   });
 });
 
-describe("artifactKeyForToolCall — waveform_tool → wave:<runId from vcd path>", () => {
-  it("maps only when vcd_file lives in a run directory", () => {
+describe("artifactKeyForToolCall — waveform_tool → wave:/wavefile: from vcd path", () => {
+  it("maps a run-directory vcd to the run's wave tab", () => {
     expect(
       artifactKeyForToolCall("waveform_tool", {
         vcd_file: "sim_runs/sim_0003/dump.vcd",
@@ -129,10 +129,14 @@ describe("artifactKeyForToolCall — waveform_tool → wave:<runId from vcd path
     ).toBe("wave:sim_0003");
   });
 
-  it("a bare dump.vcd is ambiguous across runs → null", () => {
+  it("a loose vcd opens by path (exact — no run attribution guessed)", () => {
     expect(
       artifactKeyForToolCall("waveform_tool", { vcd_file: "dump.vcd", signals: [] })
-    ).toBeNull();
+    ).toBe("wavefile:dump.vcd");
+  });
+
+  it("no vcd_file → no button", () => {
+    expect(artifactKeyForToolCall("waveform_tool", { signals: [] })).toBeNull();
   });
 });
 
@@ -174,5 +178,47 @@ describe("artifactKeyForActivity", () => {
         runId: null,
       })
     ).toBeNull();
+  });
+});
+
+describe("artifactKeyForToolCall — run_python_analysis (PA9)", () => {
+  const result = (artifacts: unknown[]) => JSON.stringify({ ok: true, artifacts });
+
+  it("prefers the first image, then data, then text artifact", () => {
+    expect(
+      artifactKeyForToolCall("run_python_analysis", { script_file: "gen.py" }, result([
+        { path: "notes.txt", kind: "text", bytes: 10 },
+        { path: "out/plot.png", kind: "image", bytes: 100 },
+        { path: "vectors.csv", kind: "data", bytes: 50 },
+      ]))
+    ).toBe("image:out/plot.png");
+
+    expect(
+      artifactKeyForToolCall("run_python_analysis", { script_file: "gen.py" }, result([
+        { path: "vectors.csv", kind: "data", bytes: 50 },
+        { path: "log.txt", kind: "text", bytes: 10 },
+      ]))
+    ).toBe("data:vectors.csv");
+
+    expect(
+      artifactKeyForToolCall("run_python_analysis", { script_file: "gen.py" }, result([
+        { path: "run.log", kind: "text", bytes: 10 },
+      ]))
+    ).toBe("text:run.log");
+  });
+
+  it("falls back to the input script when only vector/file artifacts (no rich viewer) exist", () => {
+    expect(
+      artifactKeyForToolCall("run_python_analysis", { script_file: "gen.py" }, result([
+        { path: "rom.hex", kind: "vector", bytes: 8 },
+      ]))
+    ).toBe("code:gen.py");
+  });
+
+  it("falls back to the script when the result isn't parseable, and is null without a script", () => {
+    expect(
+      artifactKeyForToolCall("run_python_analysis", { script_file: "gen.py" }, "not json")
+    ).toBe("code:gen.py");
+    expect(artifactKeyForToolCall("run_python_analysis", {}, "not json")).toBeNull();
   });
 });

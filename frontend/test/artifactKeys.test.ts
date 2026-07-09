@@ -18,6 +18,19 @@ describe("artifactKeys: make/parse round-trip", () => {
     }
   });
 
+  it("round-trips the python-analysis artifact kinds (PA8)", () => {
+    const cases = [
+      ["image", "out/plot.png"],
+      ["data", "vectors.csv"],
+      ["text", "run.log"],
+    ] as const;
+    for (const [kind, ref] of cases) {
+      const key = makeArtifactKey(kind, ref);
+      expect(key).toBe(`${kind}:${ref}`);
+      expect(parseArtifactKey(key)).toEqual({ kind, ref });
+    }
+  });
+
   it("spec is a singleton key with no ref", () => {
     expect(makeArtifactKey("spec")).toBe("spec");
     expect(parseArtifactKey("spec")).toEqual({ kind: "spec", ref: null });

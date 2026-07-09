@@ -1,0 +1,34 @@
+# SiliconCrew Python-analysis image (run_python_analysis, docker engine).
+#
+# A small, pinned image with the analysis libs baked in — NO pip at runtime
+# (the container runs with --network=none, so installs are impossible by
+# construction). Matches the libs available in native mode (already in the app
+# image's requirements): numpy + matplotlib + pyyaml + vcdvcd.
+#
+# The tool runs scripts as: python -I /workspace/<script>.py — read-only rootfs,
+# non-root user, memory/cpu/pids caps, /tmp on tmpfs (see src/tools/run_python.py
+# build_docker_argv). MPLBACKEND=Agg is forced by the caller so matplotlib never
+# needs a display.
+#
+# Build (no build context needed):
+#   docker build -t siliconcrew/python-analysis:1 - < Dockerfile.python-analysis
+#
+# Pin the tag in PYTHON_ANALYSIS_IMAGE (defaults to siliconcrew/python-analysis:1).
+FROM python:3.12-slim
+
+# Pinned analysis libs. Keep in lockstep with the app image / requirements so a
+# script behaves identically under the native and docker engines.
+RUN pip install --no-cache-dir \
+      numpy==2.1.3 \
+      matplotlib==3.9.2 \
+      pyyaml==6.0.2 \
+      vcdvcd==2.3.5
+
+# A non-root user for the runtime (the caller also passes --user 1000:1000).
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin analyst
+USER 1000:1000
+
+# Fail the build if the libs didn't land — the image is useless without them.
+RUN python -I -c "import numpy, matplotlib, yaml, vcdvcd; print('python-analysis image OK')"
+
+WORKDIR /workspace

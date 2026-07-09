@@ -24,6 +24,11 @@ class Action(str, Enum):
     SYNTHESIZE = "synthesize"
     SAVE = "save"
     MCP = "mcp"
+    # Local-only Python analysis. Deliberately NOT in ANONYMOUS_ALLOWED, but the
+    # load-bearing "hosted OFF" switch is get_settings().hosted checked INSIDE the
+    # tool (authorize() only distinguishes anonymous — a signed-in hosted user
+    # would pass any Action). See run_python_analysis wrapper.
+    PYTHON = "python"
 
 
 # Anonymous trial is limited to the cheap, safe stages.
@@ -107,6 +112,61 @@ class GoogleOAuthVerifier:
         return id_token.verify_oauth2_token(token, g_requests.Request(), self._client_id)
 
 
+# --- JWKS file cache (4C, hosted-latency plan) ------------------------------
+#
+# Every Codex turn spawns a fresh MCP subprocess whose first act is verifying
+# the caller's bearer token; with PyJWKClient's in-memory cache that meant a
+# cold HTTPS fetch of the WorkOS JWKS per spawn. Public signing keys are not
+# secrets and rotate rarely, so a short-TTL file cache on instance-local disk
+# (shared by every process on the instance) is the standard fix. A kid miss
+# forces one refresh, so rotation still works within a single request. Purely
+# a cache — never durable state (twelve-factor safe).
+
+_JWKS_CACHE_TTL_SEC = 600
+
+
+def _jwks_cache_path(jwks_url: str) -> str:
+    import hashlib
+    import os
+    import tempfile
+
+    digest = hashlib.sha256(jwks_url.encode("utf-8")).hexdigest()[:16]
+    return os.path.join(tempfile.gettempdir(), f"siliconcrew-jwks-{digest}.json")
+
+
+def _fetch_jwks(jwks_url: str) -> dict:
+    import json
+    from urllib.request import urlopen
+
+    with urlopen(jwks_url, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _load_jwks_cached(jwks_url: str, force_refresh: bool = False) -> dict:
+    """The JWKS dict for ``jwks_url`` — from the file cache when fresh."""
+    import json
+    import os
+    import time
+
+    path = _jwks_cache_path(jwks_url)
+    if not force_refresh:
+        try:
+            if time.time() - os.stat(path).st_mtime < _JWKS_CACHE_TTL_SEC:
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+        except (OSError, ValueError):
+            pass  # absent/stale/corrupt cache → fetch
+    data = _fetch_jwks(jwks_url)
+    try:
+        tmp = f"{path}.tmp.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)  # atomic vs concurrent spawns
+    except OSError:
+        pass  # cache write is best-effort; a miss only costs a re-fetch
+    return data
+
+
 class WorkOSVerifier:
     """Verify a WorkOS-issued access token (hosted remote-MCP + web auth).
 
@@ -131,7 +191,6 @@ class WorkOSVerifier:
         self._audience = audience or None
         self._jwks_url = jwks_url
         self._verify_fn = _verify_fn  # injectable for tests (no network / JWKS)
-        self._jwk_client = None
 
     def verify(self, token: str) -> Identity:
         claims = self._verify_token(token)
@@ -145,17 +204,45 @@ class WorkOSVerifier:
             provider="workos",
         )
 
+    def _signing_key_for(self, token: str):
+        """Resolve the token's RS256 signing key via the file-cached JWKS.
+
+        Verification itself is unchanged (real signature check, fail-closed);
+        only the key *transport* is cached. A kid absent from the cached set
+        forces exactly one refresh so key rotation is honored immediately.
+        """
+        import jwt
+        from jwt import PyJWKSet
+        from jwt.exceptions import PyJWKClientError
+
+        try:
+            kid = jwt.get_unverified_header(token).get("kid")
+        except jwt.PyJWTError as exc:
+            raise PyJWKClientError(f"Unable to read token header: {exc}") from exc
+        for force in (False, True):
+            try:
+                key_set = PyJWKSet.from_dict(_load_jwks_cached(self._jwks_url, force_refresh=force))
+            except Exception as exc:  # network failure or malformed/stale JWKS
+                if not force:
+                    continue  # one forced refresh before giving up
+                if isinstance(exc, jwt.PyJWTError):
+                    raise
+                raise PyJWKClientError(f"JWKS fetch failed: {exc}") from exc
+            signing_keys = [k for k in key_set.keys if k.public_key_use in ("sig", None) and k.key_id]
+            if kid is None and len(signing_keys) == 1:
+                return signing_keys[0]
+            for k in signing_keys:
+                if k.key_id == kid:
+                    return k
+        raise PyJWKClientError(f'Unable to find a signing key that matches: "{kid}"')
+
     def _verify_token(self, token: str) -> dict:
         if self._verify_fn is not None:
             return self._verify_fn(token)
         import jwt  # lazy (PyJWT) — only imported in hosted mode
 
-        if self._jwk_client is None:
-            from jwt import PyJWKClient
-
-            self._jwk_client = PyJWKClient(self._jwks_url)
         try:
-            signing_key = self._jwk_client.get_signing_key_from_jwt(token)
+            signing_key = self._signing_key_for(token)
             return jwt.decode(
                 token,
                 signing_key.key,
