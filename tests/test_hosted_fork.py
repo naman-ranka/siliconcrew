@@ -406,3 +406,95 @@ def test_tenancy_all_writes_under_fork_prefix_template_store_read_only(sm, scrat
     sm._store.upsert_session(sid, "bob", "x", "m", None, _dt.datetime.now())
     assert sm.get_session_metadata(sid, user_id="bob") is None
     assert sm.owns_session(sid, "alice")
+
+
+# ---------------------------------------------------------------------------
+# REST leg (Item 3, commit c) — to_thread + error mapping + store-first reads
+# ---------------------------------------------------------------------------
+
+pytest.importorskip("fastapi")
+from starlette.testclient import TestClient  # noqa: E402
+import api  # noqa: E402
+
+
+@pytest.fixture
+def client(sm, monkeypatch):
+    monkeypatch.setattr(api, "session_manager", sm)
+    return TestClient(api.app)
+
+
+def _go_cloud_rest(monkeypatch):
+    monkeypatch.setattr(api.templates_mod, "_is_cloud_workspace", lambda: True)
+
+
+def test_rest_hosted_fork_succeeds_and_chip_reads_from_store(client, sm, scratch, tmp_path, monkeypatch):
+    """POST fork on a cloud workspace returns a ForkResponse; the forked-from
+    chip resolves from the STORE (the workspace .source_template.json lives in
+    the provider scratch, unreachable from the local get_workspace_path)."""
+    _go_cloud_rest(monkeypatch)
+    ws_store = RecordingStore()
+    set_workspace_provider(CloudWorkspaceProvider(ws_store, scratch))
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    r = client.post("/api/templates/demo_fifo/fork")
+    assert r.status_code == 200, r.text
+    sid = r.json()["sessionId"]
+    assert sid
+
+    # The local workspace path has NO provenance file (fork wrote to scratch),
+    # proving the chip came from the store row.
+    assert not os.path.isfile(os.path.join(sm.get_workspace_path(sid), ".source_template.json"))
+    got = client.get(f"/api/sessions/{sid}").json()
+    assert got["source_template"]["id"] == "demo_fifo"
+    # List + PATCH carry it too (invariant 7: populated data never blanks).
+    listed = {s["id"]: s for s in client.get("/api/sessions").json()}
+    assert listed[sid]["source_template"]["id"] == "demo_fifo"
+    patched = client.patch(f"/api/sessions/{sid}", json={"name": "Renamed"}).json()
+    assert patched["name"] == "Renamed"
+    assert patched["source_template"]["id"] == "demo_fifo"
+
+
+def test_rest_fork_missing_binaries_maps_to_503(client, sm, scratch, tmp_path, monkeypatch):
+    _go_cloud_rest(monkeypatch)
+    set_workspace_provider(CloudWorkspaceProvider(RecordingStore(), scratch))
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    tmpl_store.delete_tree("bundles/demo_fifo/binaries")  # promised but absent
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    r = client.post("/api/templates/demo_fifo/fork")
+    assert r.status_code == 503, r.text
+    assert "unreachable" in r.json()["detail"].lower()
+    assert sm.get_all_sessions() == []  # rollback ran
+
+
+def test_rest_fork_guard_failure_maps_to_500(client, sm, scratch, monkeypatch):
+    _go_cloud_rest(monkeypatch)
+    set_workspace_provider(CloudWorkspaceProvider(RecordingStore(), scratch))
+    TS.set_template_source(_RaisingSource(BundleTooLarge("ceiling exceeded")))
+
+    r = client.post("/api/templates/demo_fifo/fork")
+    assert r.status_code == 500, r.text
+    assert sm.get_all_sessions() == []  # rollback ran
+
+
+def test_rest_fork_unknown_template_still_404(client, scratch, tmp_path, monkeypatch):
+    _go_cloud_rest(monkeypatch)
+    set_workspace_provider(CloudWorkspaceProvider(RecordingStore(), scratch))
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+    assert client.post("/api/templates/ghost/fork").status_code == 404
+
+
+def test_rest_provenance_file_fallback_when_store_null(client, sm):
+    """A pre-existing self-host fork (provenance file, no store column) still
+    lights the chip — the file fallback path, exercised independently."""
+    sid = sm.create_session("legacy")
+    _w(os.path.join(sm.get_workspace_path(sid), ".source_template.json"),
+       {"id": "legacy_tmpl", "name": "Legacy", "forked_at": "2026-01-01T00:00:00+00:00"})
+    assert sm.get_session_metadata(sid).get("source_template") is None  # no store value
+    got = client.get(f"/api/sessions/{sid}").json()
+    assert got["source_template"]["id"] == "legacy_tmpl"

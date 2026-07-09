@@ -201,10 +201,30 @@ class SessionResponse(BaseModel):
     # the UI treats 0 as "no chats yet". Never triggers workspace hydration.
     thread_count: int = 0
     # Provenance for a session forked from a template bundle (Wave 11):
-    # {id, name, forked_at} read from the workspace ``.source_template.json``.
-    # None for a normal session. Populated only on the single-session GET (the
-    # provenance chip's source), never on the hot list endpoint.
+    # {id, name, forked_at}. Resolved store-first (the durable session-row copy,
+    # the only source reachable on hosted list endpoints) then the workspace
+    # ``.source_template.json`` file. None for a normal session.
     source_template: Optional[Dict[str, Any]] = None
+
+
+def _source_template(meta: Optional[Dict[str, Any]], workspace_path: str) -> Optional[Dict[str, Any]]:
+    """Resolve a fork's provenance for the "forked from" chip (D8).
+
+    The metadata-store row first — its durable copy is the ONLY source reachable
+    from a list endpoint on hosted (no workspace hydration there) — then the
+    workspace ``.source_template.json`` file, which covers pre-existing self-host
+    forks that predate the store column. A null/malformed stored value falls
+    through to the file. Read-only: never hydrates or mutates a workspace.
+    """
+    raw = (meta or {}).get("source_template")
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except (TypeError, ValueError):
+            pass
+    return templates_mod.read_provenance(workspace_path)
 
 
 class MessageResponse(BaseModel):
@@ -717,11 +737,12 @@ async def list_sessions(identity: Identity = Depends(get_identity)):
             total_tokens=meta.get("total_tokens", 0) if meta else 0,
             total_cost=meta.get("total_cost", 0.0) if meta else 0.0,
             thread_count=thread_counts.get(session_id, 0),
-            # Cheap read-only provenance-file stat (no workspace hydration, no row
-            # materialization) so the "forked from" chip survives a reload — the
-            # store selects currentSession from this list.
-            source_template=templates_mod.read_provenance(
-                session_manager.get_workspace_path(session_id)
+            # Store-first provenance (durable row copy; file fallback) so the
+            # "forked from" chip survives a reload on hosted too — no workspace
+            # hydration, no row materialization. The store selects currentSession
+            # from this list.
+            source_template=_source_template(
+                meta, session_manager.get_workspace_path(session_id)
             ),
         ))
 
@@ -834,18 +855,26 @@ async def get_template(template_id: str, identity: Identity = Depends(get_identi
 async def fork_template(template_id: str, identity: Identity = Depends(require_signed_in)):
     """Fork a bundle into a new user-owned session; returns the new session id.
 
-    Level 1 is self-host only — a cloud/hosted deployment gets a clear 400
-    (the hosted gallery is a later wave).
+    Self-host and hosted both fork here (Item 3). The fork does real, blocking
+    work — a workspace copy/materialize + rewrites + (on cloud) an object-storage
+    sync — so it runs off the event loop via ``asyncio.to_thread`` (A2). It is
+    owned by the TRUE forking user by construction (``user_id=_uid(identity)``).
     """
     uid = _uid(identity)
     try:
-        session_id = templates_mod.fork_from_template(
-            session_manager, template_id, user_id=uid
+        session_id = await asyncio.to_thread(
+            templates_mod.fork_from_template, session_manager, template_id, user_id=uid
         )
     except templates_mod.TemplateNotFound:
         raise HTTPException(status_code=404, detail="Template not found")
-    except templates_mod.TemplatesUnavailable as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except template_source_mod.TemplateStoreUnavailable:
+        # An unreachable gallery, or a gcs bundle that promised binaries it can't
+        # deliver (all-or-nothing, A6). Rollback already ran inside the fork.
+        raise HTTPException(status_code=503, detail="Template gallery is unreachable")
+    except Exception:
+        # Guard-ceiling / materialize / sync failure — the fork rolled itself
+        # back; report honestly rather than leaking a stack.
+        raise HTTPException(status_code=500, detail="Fork failed — please try again")
     return ForkResponse(sessionId=session_id)
 
 
@@ -1300,10 +1329,10 @@ async def get_session(session_id: str, identity: Identity = Depends(get_identity
         total_tokens=meta.get("total_tokens", 0),
         total_cost=meta.get("total_cost", 0.0),
         thread_count=session_manager.count_threads(session_id, user_id=uid),
-        # Read-only workspace-file peek for the forked-from chip. Missing file
-        # (a normal session) → None; never hydrates or mutates the workspace.
-        source_template=templates_mod.read_provenance(
-            session_manager.get_workspace_path(session_id)
+        # Store-first (durable row copy; workspace-file fallback) for the
+        # forked-from chip. None for a normal session; never hydrates the workspace.
+        source_template=_source_template(
+            meta, session_manager.get_workspace_path(session_id)
         ),
     )
 
@@ -1403,10 +1432,10 @@ async def patch_session(session_id: str, data: SessionPatch, identity: Identity 
         thread_count=session_manager.count_threads(session_id, user_id=uid),
         # Rename/move must NOT blank the "forked from" chip (invariant 7:
         # populated data never blanks). The store replaces the session in the
-        # list + currentSession with this response, so it has to carry provenance
-        # exactly like the single GET / list do.
-        source_template=templates_mod.read_provenance(
-            session_manager.get_workspace_path(session_id)
+        # list + currentSession with this response, so it carries provenance
+        # exactly like the single GET / list do (store-first, file fallback).
+        source_template=_source_template(
+            meta, session_manager.get_workspace_path(session_id)
         ),
     )
 
