@@ -58,6 +58,7 @@ class CodexRuntimeHandler:
         mcp_data_dir: Optional[str] = None,
         engine_factory: Optional[Callable[..., CodexEngine]] = None,
         persist_credential: Optional[Callable[[Optional[str]], None]] = None,
+        warm_pool: Optional[Any] = None,
     ):
         self._store = codex_store
         self._sessions = session_manager
@@ -70,6 +71,14 @@ class CodexRuntimeHandler:
         self._default_model = default_model
         self._normalize_model = normalize_model
         self._enabled = enabled
+        # TTFT warm-keep (plans/codex-ttft-remediation.md): one per-process pool
+        # of session/thread/user-bound workers. Default ON for hosted (where the
+        # ~8.5s per-turn rebuild was measured), opt-in for self-host via
+        # CODEX_WARM_KEEP=1, and CODEX_WARM_KEEP=0 disables everywhere.
+        # Injectable so tests share one pool between the handler and the
+        # engines their explicit engine_factory builds.
+        self._pool = warm_pool if warm_pool is not None else (
+            self._build_pool() if enabled else None)
         # The bound MCP subprocess must read the SAME state.db as the app (so it
         # finds the session it is bound to). Pass the app's data dir through as
         # the engine's mcp_data_dir → config.toml's RTL_DATA_DIR.
@@ -78,7 +87,102 @@ class CodexRuntimeHandler:
             state_dir=os.environ.get("SILICONCREW_CODEX_STATE_DIR", "/app/codex-state"),
             local_sqlite_dir=os.environ.get("SILICONCREW_CODEX_SQLITE_DIR", "/app/codex-sqlite"),
             mcp_data_dir=mcp_data_dir,
+            warm_pool=self._pool,
         ))
+
+    @staticmethod
+    def _build_pool():
+        raw = (os.environ.get("CODEX_WARM_KEEP") or "").strip().lower()
+        if raw in ("0", "false", "no", "off"):
+            return None
+        if raw in ("1", "true", "yes", "on"):
+            enabled = True
+        else:  # unset → hosted default-on, self-host default-off (untouched)
+            from src.platform_engines.settings import get_settings
+
+            enabled = get_settings().hosted
+        if not enabled:
+            return None
+        from src.agents.codex.codex_warm import CodexWorkerPool
+
+        return CodexWorkerPool()
+
+    def _system_prompt(self) -> str:
+        # ONE composition used by run_turn AND prewarm — the worker fingerprint
+        # includes the prompt, so the two must build it identically or the
+        # first real turn would discard its own pre-warmed worker.
+        policy_on = os.environ.get("CODEX_TOOL_POLICY", "1").lower() not in ("0", "false", "no")
+        return self._load_system_prompt() + (_CODEX_TOOL_POLICY if policy_on else "")
+
+    def on_thread_deleted(self, thread_id: str) -> None:
+        """Drop any warm worker for a deleted thread (registry cleanup hook)."""
+        if self._pool is not None:
+            self._pool.close_thread_sync(thread_id)
+
+    def worker_state(self, *, session_id: str, thread_id: str, user_id) -> str:
+        """Honest readiness for the UI: ready | starting | cold | unavailable."""
+        from src.agents.codex.codex_warm import STATE_UNAVAILABLE
+
+        if not self._enabled or self._pool is None:
+            return STATE_UNAVAILABLE
+        return self._pool.state_for((session_id, thread_id, user_id or ""))
+
+    async def prewarm(self, *, session_id: str, thread_id: str, user_id,
+                      workspace: str, tier=None, auth_token=None,
+                      thread_row=None) -> str:
+        """Start (or confirm) this thread's worker WITHOUT waiting for it (3B).
+
+        Returns the resulting state. Anything that would make a real turn fail
+        with an actionable error (no key, Codex disabled) reports "unavailable"
+        here — the turn path owns the user-facing error, prewarm never spawns
+        speculatively without resolvable auth.
+        """
+        from src.agents.codex.codex_warm import STATE_UNAVAILABLE
+
+        if not self._enabled or self._pool is None:
+            return STATE_UNAVAILABLE
+        model = self._model_for(thread_row)
+        api_key = None
+        account_home = self._account_home_for(user_id)
+        if not account_home:
+            try:
+                key = self._resolve_key(user_id, model)
+            except Exception:
+                return STATE_UNAVAILABLE
+            api_key = getattr(key, "api_key", None)
+            if getattr(key, "model", None):
+                model = self._normalize_model(key.model)
+            if not api_key:
+                return STATE_UNAVAILABLE
+
+        engine = self._engine_factory()
+        if getattr(engine, "warm_pool", None) is None:
+            return STATE_UNAVAILABLE
+        try:
+            engine.check_available()
+        except CodexUnavailable:
+            return STATE_UNAVAILABLE
+        turn = CodexTurn(
+            session_id=session_id, thread_id=thread_id, message="",
+            workspace=workspace, user_id=user_id, model_name=model,
+            api_key=api_key,
+            external_thread_id=self._store.get_external_thread_id(thread_id),
+            system_prompt=self._system_prompt(), tier=tier,
+            codex_account_home=None if api_key else account_home,
+            sandbox=os.environ.get("CODEX_SANDBOX", "read-only"),
+            mcp_token=auth_token,
+            history=self._store.list_messages(thread_id),
+        )
+        key_tuple = engine._worker_key(turn)
+        state = self._pool.ensure(
+            key_tuple, engine._worker_fingerprint(turn),
+            lambda: engine.spawn_worker(turn),
+        )
+        print(
+            f"[CODEX-TIMING] thread={thread_id} event=prewarm state={state}",
+            file=sys.stderr,
+        )
+        return state
 
     def _model_for(self, thread_row: Optional[dict]) -> str:
         model = (thread_row or {}).get("model") or self._default_model
@@ -163,8 +267,7 @@ class CodexRuntimeHandler:
                 session_id=ctx.session_id, thread_id=ctx.thread_id, message=ctx.message,
                 workspace=ctx.workspace, user_id=ctx.user_id, model_name=model,
                 api_key=api_key, external_thread_id=external_id,
-                system_prompt=self._load_system_prompt()
-                    + (_CODEX_TOOL_POLICY if os.environ.get("CODEX_TOOL_POLICY", "1").lower() not in ("0", "false", "no") else ""),
+                system_prompt=self._system_prompt(),
                 tier=ctx.tier,
                 codex_account_home=None if api_key else account_home,
                 # LangChain-parity default: read-only so Codex acts only through
