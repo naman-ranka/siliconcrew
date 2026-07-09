@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/alu4/base/cts_clk.webp",
+      "bytes": 12374,
+      "sha256": "87a999112d74b6e3578188de89c7e63fe6bfde009d6e7520809ebf0e4e499dd3"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/alu4/base/cts_default_clk_layout.webp",
+      "bytes": 5662,
+      "sha256": "f87b7204d376535e85b70f2bbf521e896bebd0e88caaaa10c77c12155deb048b"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/alu4/base/final_all.webp",
+      "bytes": 190954,
+      "sha256": "5b6560e811f02375c4f57a5919cc128c9928dac48fa838e9e3c1ac148a04b3c7"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/alu4/base/final_clocks.webp",
+      "bytes": 5096,
+      "sha256": "1f1360205ea3681676e47c064f928fe60fcacb5ea8b4486d5f34126ad37e7099"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/alu4/base/final_congestion.webp",
+      "bytes": 33658,
+      "sha256": "32d89abdf042389cf3c7f8c3b447c7f9155e6400312c5559fbd81ca0bcb55c3b"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/alu4/base/final_ir_drop.webp",
+      "bytes": 29430,
+      "sha256": "b069bf0b227361bf6482e1fcf98c8101b67bf8bbca2522c741f5b236723f231c"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/alu4/base/final_placement.webp",
+      "bytes": 27686,
+      "sha256": "48d258421c3dff2dadbd3dfac15559c2f2d04f01e1c6438abf3209f7322e00ee"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/alu4/base/final_resizer.webp",
+      "bytes": 16184,
+      "sha256": "29fea6f6c54f1e2b1243130ac087496f0a53851833941ae6b85d4a318e018ae7"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/alu4/base/final_routing.webp",
+      "bytes": 179260,
+      "sha256": "bc064c792b19f7a1c68aaf59cc3ddb1bf6d5ee6c9e1f84eb2286b291c21c57bf"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/alu4/base/final_worst_path.webp",
+      "bytes": 136106,
+      "sha256": "e6d1479f601dac5e6d83ba8c395be6bf0fb09633f13c3f849d1058d22885a41d"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/alu4/base/1_1_yosys_canonicalize.rtlil",
+      "bytes": 1139123,
+      "sha256": "b5cb5cdae1741aadcbd2fa28927c55c4e4459bdec1d8e8088d69fa0f25a95cf2"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/alu4/base/1_2_yosys.v",
+      "bytes": 50267,
+      "sha256": "d0b156b7a03aad40808d1866b3805e40fdbba8a7e8fa10e5a2e26e2fca3a624c"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/alu4/base/4_after_rsz_lec.v",
+      "bytes": 28096,
+      "sha256": "5e55983c58cb3e26aee34b06ded713ac13dc959d9f8b282af2944956788b3dee"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/alu4/base/4_before_rsz_lec.v",
+      "bytes": 28096,
+      "sha256": "5e55983c58cb3e26aee34b06ded713ac13dc959d9f8b282af2944956788b3dee"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/alu4/base/6_final.def",
+      "bytes": 867252,
+      "sha256": "401871365222a52762be588efb9414bb51ff37d32307f4f4e3bd29afb0737111"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/alu4/base/6_final.gds",
+      "bytes": 1104020,
+      "sha256": "b9c68300b792c7afd087c1e99f140f8704fda1dbec433a132278ce76340ec161"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/alu4/base/6_final.spef",
+      "bytes": 329606,
+      "sha256": "459a19fced53a48027343c49d8a936c31411335b0a0d67e1b66dba5555adcca1"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/alu4/base/6_final.v",
+      "bytes": 28096,
+      "sha256": "5e55983c58cb3e26aee34b06ded713ac13dc959d9f8b282af2944956788b3dee"
+    }
+  ]
+}

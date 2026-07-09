@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/traffic_light/base/cts_clk.webp",
+      "bytes": 12928,
+      "sha256": "9c0bc36a17a0a842d34d5dee9254403f2079faa348574ac8bb7a3fb0deb3cdf8"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/traffic_light/base/cts_default_clk_layout.webp",
+      "bytes": 10494,
+      "sha256": "608e0259530c5e4b1f1a9d6a185c5bc14cdb5278128374744e432d9d43f60e4b"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/traffic_light/base/final_all.webp",
+      "bytes": 183548,
+      "sha256": "8d3ca2f8c39d3c07a2f4794c42d5afdc7c8d34b06bcaff19f4fea6f9c8137dfc"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/traffic_light/base/final_clocks.webp",
+      "bytes": 8784,
+      "sha256": "0397a1fa6e7fe5120be9b8f910cb5aec8e1bab0fc9eb8f996d0ad29f3ebd7832"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/traffic_light/base/final_congestion.webp",
+      "bytes": 30758,
+      "sha256": "cd8a4951866bd2cd62624bcee1cfe335abfc1f175deb1b4b085600a3ca09f3a1"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/traffic_light/base/final_ir_drop.webp",
+      "bytes": 28726,
+      "sha256": "75ca695c4bc21d2c91741b06463d32a681d4c1806938bc4a0650a118eb1c3f75"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/traffic_light/base/final_placement.webp",
+      "bytes": 25866,
+      "sha256": "67f0dcde7d8cb10a20b19ab72a6c384b955ae30dcec9008b3427b0fd8c909fbe"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/traffic_light/base/final_resizer.webp",
+      "bytes": 11348,
+      "sha256": "ce8e5574e1a61efc6fadb252568db0422c250f89c27bffdd69af96b0c6948d7d"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/traffic_light/base/final_routing.webp",
+      "bytes": 172946,
+      "sha256": "afe7095d86cfb2f16a92644a157543faeae910b2c614ca40bf9039c7867ec36f"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/traffic_light/base/final_worst_path.webp",
+      "bytes": 138150,
+      "sha256": "e03c000417070b1fa55533575596c4fb5c8c28de2e9ddc2cbf000f1ce62e5788"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/1_1_yosys_canonicalize.rtlil",
+      "bytes": 1124694,
+      "sha256": "d812bce15006909f7ea9f5798c5454dcde84b50288eb43116993566b4ec0cc66"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/1_2_yosys.v",
+      "bytes": 29646,
+      "sha256": "23a72f6cd5e1d7553179eb2fae485dcd6e21a16b9d4524b4487e4f8f943ba73a"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/4_after_rsz_lec.v",
+      "bytes": 21695,
+      "sha256": "2d3dd899189dc92d5d30847ee40a1da38111772d3db6879cd8d8c951fbaf2d09"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/4_before_rsz_lec.v",
+      "bytes": 21695,
+      "sha256": "2d3dd899189dc92d5d30847ee40a1da38111772d3db6879cd8d8c951fbaf2d09"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/6_final.def",
+      "bytes": 772491,
+      "sha256": "5d5c5cda7ac9799012a046b1420334010fc9da129781f51a865505176b040cd0"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/6_final.gds",
+      "bytes": 981182,
+      "sha256": "70c4ee43feee829506fc0f513c0bf2cc078ea2ac373c3c25ec0025938d4c71b1"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/6_final.spef",
+      "bytes": 256645,
+      "sha256": "20157895bc56e52579fd203ea9c9d549244e98a48a43260d2ca319e6b30bdddc"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/6_final.v",
+      "bytes": 21695,
+      "sha256": "2d3dd899189dc92d5d30847ee40a1da38111772d3db6879cd8d8c951fbaf2d09"
+    }
+  ]
+}

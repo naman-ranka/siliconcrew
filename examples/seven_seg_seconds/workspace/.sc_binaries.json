@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seven_segment_seconds/base/cts_clk.webp",
+      "bytes": 13040,
+      "sha256": "7b99b2542c5133bcae01d223ed9655a09326bd2c907a4a5555c5a1b1759477f2"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seven_segment_seconds/base/cts_default_clk_layout.webp",
+      "bytes": 10986,
+      "sha256": "c245bbf3e65836fc0e64b414b7c9eced462cef327b1689ae2ffd630873f281fe"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seven_segment_seconds/base/final_all.webp",
+      "bytes": 188758,
+      "sha256": "c3fdf4c8e842fa343971c9593b5e58140afcaa0de8ddf4c3de479104e9c3376b"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seven_segment_seconds/base/final_clocks.webp",
+      "bytes": 9282,
+      "sha256": "5351ebb8bef411e098fef7cd3c42056fc486e905c929006788247de8f55ccb80"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seven_segment_seconds/base/final_congestion.webp",
+      "bytes": 31056,
+      "sha256": "a3b31e86fda2133647d4b7d7bdc2675f30d16c7d8903f984d716c327399e2cac"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seven_segment_seconds/base/final_ir_drop.webp",
+      "bytes": 29624,
+      "sha256": "a6adf89ff9f18a89f5968bea62fc7518956678b3a13e6b7aae868ce9ed7a4de5"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seven_segment_seconds/base/final_placement.webp",
+      "bytes": 27858,
+      "sha256": "f881b8e91ad2c0e7c16c3ed9ba2e14942dffcc2168d3b0f0404d602ec4c3e985"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seven_segment_seconds/base/final_resizer.webp",
+      "bytes": 12932,
+      "sha256": "1fd0613f0c2f10b8965ce73f318d67ee0e874d034a04667ab44a0fb4834d7a0e"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seven_segment_seconds/base/final_routing.webp",
+      "bytes": 175446,
+      "sha256": "dedcd125186f93d9b04a0bbd40bd3d3f4f6f3c34203af76be1c8ca4d9f40f6be"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seven_segment_seconds/base/final_worst_path.webp",
+      "bytes": 134732,
+      "sha256": "442693758c97c8ff9060bfa8a10c6d386da9dea7686086c92a960f7048601301"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seven_segment_seconds/base/1_1_yosys_canonicalize.rtlil",
+      "bytes": 1126814,
+      "sha256": "66471285e75b8b09bc5ab226a208f7b7cf0d605e8181f784d41cfca6fe94564e"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seven_segment_seconds/base/1_2_yosys.v",
+      "bytes": 33688,
+      "sha256": "964a91c3bd84e5d8675e7db0ae6bfdd0ed0d0bdccea959af02de36608f42e9f9"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seven_segment_seconds/base/4_after_rsz_lec.v",
+      "bytes": 24667,
+      "sha256": "77d7f56a1f5650a185e572213466b6fd977e440bcb991d114dfd766ac6b311c7"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seven_segment_seconds/base/4_before_rsz_lec.v",
+      "bytes": 24667,
+      "sha256": "77d7f56a1f5650a185e572213466b6fd977e440bcb991d114dfd766ac6b311c7"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seven_segment_seconds/base/6_final.def",
+      "bytes": 768987,
+      "sha256": "4dd0f438c1659cacf64a373cefbca2d35c2f523cc56969d48740199404f96317"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seven_segment_seconds/base/6_final.gds",
+      "bytes": 1007674,
+      "sha256": "270d5a566452644e8ea51ce687a41f20347d8e95518fe428c39701db32f485ca"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seven_segment_seconds/base/6_final.spef",
+      "bytes": 257986,
+      "sha256": "4b045e9337456b3e25abc81cf807c9dbf95c2be6e6c6d2344d23692a01871467"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seven_segment_seconds/base/6_final.v",
+      "bytes": 24667,
+      "sha256": "77d7f56a1f5650a185e572213466b6fd977e440bcb991d114dfd766ac6b311c7"
+    }
+  ]
+}

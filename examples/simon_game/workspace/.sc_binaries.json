@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon_game/base/cts_clk.webp",
+      "bytes": 13936,
+      "sha256": "e783cfb38a529d2ac695347cb606203d8a1ac38c5871fed80071678fa4d65541"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon_game/base/cts_default_clk_layout.webp",
+      "bytes": 18746,
+      "sha256": "447cb64559fe8a258b1abf398e4a2f0890ca2b867755668a42205383d61abada"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon_game/base/final_all.webp",
+      "bytes": 342884,
+      "sha256": "ece032ed8d14245573aeb0b0385a9aa33cd9c08f222964ee7011eaeec3110bf9"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon_game/base/final_clocks.webp",
+      "bytes": 17428,
+      "sha256": "357933ff3fffceec9f155bed85037b03218bb5387f6339aecdfddbecb8fba228"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon_game/base/final_congestion.webp",
+      "bytes": 83508,
+      "sha256": "f57ea0198e3b8f20c528aa4cf9ac1d4a6fa4f944d8300ff5cced67d6c68c143b"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon_game/base/final_ir_drop.webp",
+      "bytes": 72790,
+      "sha256": "0f286914b19d027c56bdbad0de9ac257f518d6947970c01bdeb5b4bbd3dc35d4"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon_game/base/final_placement.webp",
+      "bytes": 84508,
+      "sha256": "c65dab21b0c8d113f1e864d71aee309759fe80ba9a4a364b2240e53f62728070"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon_game/base/final_resizer.webp",
+      "bytes": 29390,
+      "sha256": "dd8e12bc1a59cbd24451f3bb72f827a93a3710f8e08092e5d7d82bb0d70d6692"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon_game/base/final_routing.webp",
+      "bytes": 323682,
+      "sha256": "f9eedf9077149e02f525df7ff7fe59ca02b3d75c0d51e4e67df8b4ea4ca32d08"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/simon_game/base/final_worst_path.webp",
+      "bytes": 335856,
+      "sha256": "bcac1f00d6a3be11c8500e9fb86a13ecf60e083fef265df49171ca391216e1d7"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/1_1_yosys_canonicalize.rtlil",
+      "bytes": 1255100,
+      "sha256": "808b5387fb6c47d047785baf74b7f379b5c368298e5c9fd51f0cf73e292e5735"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/1_2_yosys.v",
+      "bytes": 186104,
+      "sha256": "0b36ef0f31e06a8edcab18bf89e6d00bcd80875dc837571c727a91d3532a176a"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/4_after_rsz_lec.v",
+      "bytes": 146307,
+      "sha256": "1a35ea04d8dcb82efb1531b52a0a82c6e0ebca24babd029447d8315355b78e9a"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/4_before_rsz_lec.v",
+      "bytes": 146307,
+      "sha256": "1a35ea04d8dcb82efb1531b52a0a82c6e0ebca24babd029447d8315355b78e9a"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/6_final.def",
+      "bytes": 4517402,
+      "sha256": "2b5d5abcbe447b0ab6fce2ade02c9d6b8ffe563289b13bd533f5918e5829f3be"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/6_final.gds",
+      "bytes": 4507252,
+      "sha256": "39ef380343d3018a620ac78e2f307ff88c3a03deffea06a080c2e2f29c260321"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/6_final.spef",
+      "bytes": 1716747,
+      "sha256": "7b9d8a4c181867c0a5eded6946cbc84ebf28eb0f071e9a92d39b797b08ee4ae8"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/6_final.v",
+      "bytes": 146307,
+      "sha256": "1a35ea04d8dcb82efb1531b52a0a82c6e0ebca24babd029447d8315355b78e9a"
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seq_detector_0011/base/cts_clk.webp",
+      "bytes": 11556,
+      "sha256": "cc86daa07cc94c7b702225cfabee75c2997e15409fc5ed458833d2f7fcd7517e"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seq_detector_0011/base/cts_default_clk_layout.webp",
+      "bytes": 7848,
+      "sha256": "9ac8594b596ffece109c869fc7ceccd583d03092a61898a016ba5b4168b29ef2"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seq_detector_0011/base/final_all.webp",
+      "bytes": 51054,
+      "sha256": "9674bc7b540f12bd9194ba73b0f7aa15a980967a6764ca21a170a5a4d50df3f4"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seq_detector_0011/base/final_clocks.webp",
+      "bytes": 6606,
+      "sha256": "c6335623095c38bfda2c817110ea5313004fbc7d908cd27d6c7b2d2ad47539fb"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seq_detector_0011/base/final_congestion.webp",
+      "bytes": 7370,
+      "sha256": "07bbe09cb581e7bac487e1fafd88304e09ece2cb0146e98a9f804cf64346e119"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seq_detector_0011/base/final_ir_drop.webp",
+      "bytes": 10430,
+      "sha256": "1a2a2dd6e2967880c30509506955f1fef333ac2b85eac45a28d4f9d5a7c49086"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seq_detector_0011/base/final_placement.webp",
+      "bytes": 6428,
+      "sha256": "19d52811442319a6973a08e0e9f7e4132181e0e8e76a1eea1f4d792921f4d0b4"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seq_detector_0011/base/final_resizer.webp",
+      "bytes": 5022,
+      "sha256": "de6fa0ee61d1523514884ba65a4edd95ff6a93a6f5ba65f73ebbac0d06bc341a"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seq_detector_0011/base/final_routing.webp",
+      "bytes": 56358,
+      "sha256": "290687a8d6f8148a3d1eaf0915403b5bf441e4a586a91de5653a99a7a7cadbc7"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_reports/sky130hd/seq_detector_0011/base/final_worst_path.webp",
+      "bytes": 26500,
+      "sha256": "79d04b63eff4147103f3a99a5047aa36c20bd01b2770cf37687cc3bdfa48e6ba"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/1_1_yosys_canonicalize.rtlil",
+      "bytes": 1120386,
+      "sha256": "31826c33b6911e48672bf595a3726455bbf0d3f35c022d414c8cb31656cf3190"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/1_2_yosys.v",
+      "bytes": 1975,
+      "sha256": "38fb75f853cdc3480e0c0c32e92997655202ce73abb6304dcc869f8703d1ce76"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/4_after_rsz_lec.v",
+      "bytes": 1529,
+      "sha256": "28b108b42a70112b1dcc4940b7a6e0628f9be1bd648823e2b0119327b6088850"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/4_before_rsz_lec.v",
+      "bytes": 1529,
+      "sha256": "28b108b42a70112b1dcc4940b7a6e0628f9be1bd648823e2b0119327b6088850"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/6_final.def",
+      "bytes": 48878,
+      "sha256": "82ce49585ed66b6a2fa4c0d6ffcb33718d5e39d20f7ae55653f45f2b4d939df1"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/6_final.gds",
+      "bytes": 86130,
+      "sha256": "19a094a059aaaecc7423ec8575f685d381adea51c6ca97f1fdeb88cd31143a36"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/6_final.spef",
+      "bytes": 12868,
+      "sha256": "2853123088bcd5cdfb0c26184d727d56e58b1f9d62cbe9f48c041f8c8633a51f"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/6_final.v",
+      "bytes": 1529,
+      "sha256": "28b108b42a70112b1dcc4940b7a6e0628f9be1bd648823e2b0119327b6088850"
+    }
+  ]
+}
