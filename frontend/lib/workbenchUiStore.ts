@@ -28,6 +28,42 @@ export interface SessionUiState {
   shell?: "agent" | "ide";
 }
 
+// Pre-VCD-viewer tabs opened a `.vcd` as `code:<path>` (Monaco). VCDs now
+// belong to the waveform viewer via `wavefile:<path>`. A stale `code:*.vcd`
+// key would render the same dump in BOTH Monaco and the waveform viewer — remap
+// it on rehydration (see the persist `migrate` below).
+function migrateVcdTabKey(key: string): string {
+  if (key.startsWith("code:") && key.slice(5).toLowerCase().endsWith(".vcd")) {
+    return `wavefile:${key.slice(5)}`;
+  }
+  return key;
+}
+
+/** persist v1 → v2: remap stale `code:*.vcd` tab keys to `wavefile:*`.
+ * Defensive (never throws): a throwing migrate makes persist drop all saved
+ * tabs, so every shape is guarded. Exported for direct testing. */
+export function migrateWorkbenchUi(persisted: unknown, version: number): unknown {
+  const state = persisted as { perSession?: Record<string, SessionUiState> } | null;
+  if (!state || version >= 2 || !state.perSession) return state;
+  const perSession: Record<string, SessionUiState> = {};
+  for (const [sid, ui] of Object.entries(state.perSession)) {
+    if (!ui || !Array.isArray(ui.openTabs)) {
+      perSession[sid] = ui;
+      continue;
+    }
+    const seen = new Set<string>();
+    const openTabs = ui.openTabs
+      .map(migrateVcdTabKey)
+      .filter((k) => (seen.has(k) ? false : (seen.add(k), true)));
+    perSession[sid] = {
+      ...ui,
+      openTabs,
+      activeTab: ui.activeTab ? migrateVcdTabKey(ui.activeTab) : ui.activeTab,
+    };
+  }
+  return { ...state, perSession };
+}
+
 export function emptySessionUi(): SessionUiState {
   return {
     openTabs: [],
@@ -226,7 +262,11 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
     },
     {
       name: "sc-workbench-ui",
-      version: 1,
+      version: 2,
+      // v1 → v2: remap stale `code:*.vcd` tab keys to `wavefile:*` (see
+      // migrateWorkbenchUi) so an old session no longer shows a .vcd in both
+      // Monaco and the waveform viewer.
+      migrate: migrateWorkbenchUi,
       // SSR-safe: on the server `localStorage` doesn't exist — createJSONStorage
       // catches the getter throwing and persist quietly skips hydration.
       storage: createJSONStorage(() => localStorage),

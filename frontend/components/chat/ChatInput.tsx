@@ -4,11 +4,14 @@ import { useState, useRef, useEffect, KeyboardEvent } from "react";
 import { Send, Square, X, Clock, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelPicker } from "./ModelPicker";
+import { CodexModelPicker } from "./CodexModelPicker";
 import { useStore, MAX_QUEUED_MESSAGES } from "@/lib/store";
+import { useChatCompact } from "./density";
 import { cn } from "@/lib/utils";
 
 export function ChatInput() {
-  const { currentSession, isStreaming, stopPending, sendMessage, stopStreaming, queuedMessages, removeQueuedMessage } = useStore();
+  const { currentSession, isStreaming, stopPending, sendMessage, stopStreaming, queuedMessages, removeQueuedMessage, agentRuntime } = useStore();
+  const compact = useChatCompact();
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const queueFull = queuedMessages.length >= MAX_QUEUED_MESSAGES;
@@ -42,7 +45,7 @@ export function ChatInput() {
   const isDisabled = !currentSession || !input.trim();
 
   return (
-    <div className="border-t border-border bg-surface-0 px-4 py-4">
+    <div className={cn("border-t border-border bg-surface-0", compact ? "px-3 py-3" : "px-4 py-4")}>
       <div className="max-w-3xl mx-auto">
         <div className="relative">
           {queuedMessages.length > 0 && (
@@ -67,7 +70,11 @@ export function ChatInput() {
             </div>
           )}
 
-          <div className="relative rounded-xl border border-border bg-surface-1 shadow-sm focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary/50 transition-all">
+          {/* Composer: textarea over a controls row INSIDE the border — the
+              buttons never overlay (and never overlap) the typed text at any
+              container width, unlike the old absolute bottom-right overlay
+              with a fixed padding reserve. */}
+          <div className="rounded-xl border border-border bg-surface-1 shadow-sm focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary/50 transition-all">
             <textarea
               ref={textareaRef}
               value={input}
@@ -82,22 +89,24 @@ export function ChatInput() {
               }
               disabled={!currentSession}
               className={cn(
-                "w-full resize-none bg-transparent px-4 py-3.5 pr-28 text-sm",
+                "w-full resize-none bg-transparent text-sm",
+                compact ? "px-3 pt-2.5 pb-1" : "px-4 pt-3 pb-1",
                 "placeholder:text-muted-foreground/60",
                 "focus:outline-none",
                 "disabled:cursor-not-allowed disabled:opacity-50",
-                "min-h-[56px] max-h-[200px]"
+                "min-h-[44px] max-h-[200px]"
               )}
               rows={1}
             />
-            <div className="absolute right-2 bottom-2 flex items-center gap-1.5">
+            <div className={cn("flex items-center justify-end gap-1.5", compact ? "px-2 pb-2" : "px-2.5 pb-2.5")}>
               {isStreaming && input.trim() && (
                 <Button
                   variant="secondary"
                   size="sm"
-                  className="h-9 px-3 gap-2 font-medium"
+                  className={cn("h-8 font-medium", compact ? "w-8 p-0" : "px-3 gap-2")}
                   onClick={handleSubmit}
                   disabled={queueFull}
+                  aria-label="Queue message"
                   title={
                     queueFull
                       ? `Queue is full (max ${MAX_QUEUED_MESSAGES}) — remove a queued message first`
@@ -105,26 +114,28 @@ export function ChatInput() {
                   }
                 >
                   <Send className="h-3.5 w-3.5" />
-                  Queue
+                  {!compact && "Queue"}
                 </Button>
               )}
               {isStreaming ? (
                 <Button
                   variant="destructive"
                   size="sm"
-                  className="h-9 px-3 gap-2 font-medium"
+                  className={cn("h-8 font-medium", compact ? "w-8 p-0" : "px-3 gap-2")}
                   onClick={stopStreaming}
                   disabled={stopPending}
+                  aria-label={stopPending ? "Stopping" : "Stop response"}
+                  title={stopPending ? "Stopping…" : "Stop response"}
                 >
                   {stopPending ? (
                     <>
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      Stopping…
+                      {!compact && "Stopping…"}
                     </>
                   ) : (
                     <>
                       <Square className="h-3.5 w-3.5" />
-                      Stop
+                      {!compact && "Stop"}
                     </>
                   )}
                 </Button>
@@ -132,30 +143,38 @@ export function ChatInput() {
                 <Button
                   size="sm"
                   className={cn(
-                    "h-9 px-3 gap-2 font-medium transition-all",
+                    "h-8 font-medium transition-all",
+                    compact ? "w-8 p-0" : "px-3 gap-2",
                     isDisabled
                       ? "bg-surface-2 text-muted-foreground hover:bg-surface-3"
                       : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
                   )}
                   onClick={handleSubmit}
                   disabled={isDisabled}
+                  aria-label="Send message"
+                  title="Send (Enter)"
                 >
                   <Send className="h-3.5 w-3.5" />
-                  Send
+                  {!compact && "Send"}
                 </Button>
               )}
             </div>
           </div>
 
-          {/* Footer: model picker (bottom-left) + keyboard hint. */}
-          <div className="flex items-center justify-between mt-2.5 px-1">
-            <ModelPicker />
-            <span className="text-xs text-muted-foreground/50">
-              <kbd className="px-1.5 py-0.5 rounded bg-surface-2 border border-border text-[10px] font-mono">Shift</kbd>
-              {" + "}
-              <kbd className="px-1.5 py-0.5 rounded bg-surface-2 border border-border text-[10px] font-mono">Enter</kbd>
-              {" for new line"}
-            </span>
+          {/* Footer: model picker (bottom-left) + keyboard hint. Each agent
+              has its own picker over its own registry — never one picker
+              filtering the other's list. The hint yields to the picker when
+              the rail is narrow. */}
+          <div className="flex items-center justify-between mt-2 px-1">
+            {agentRuntime === "codex" ? <CodexModelPicker /> : <ModelPicker />}
+            {!compact && (
+              <span className="text-xs text-muted-foreground/50">
+                <kbd className="px-1.5 py-0.5 rounded bg-surface-2 border border-border text-[10px] font-mono">Shift</kbd>
+                {" + "}
+                <kbd className="px-1.5 py-0.5 rounded bg-surface-2 border border-border text-[10px] font-mono">Enter</kbd>
+                {" for new line"}
+              </span>
+            )}
           </div>
         </div>
       </div>
