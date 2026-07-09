@@ -55,10 +55,6 @@ class TemplateNotFound(Exception):
     """Requested template id has no bundle under the examples dir → 404."""
 
 
-class TemplatesUnavailable(Exception):
-    """Fork is not available in this deployment (hosted/cloud, Level 1)."""
-
-
 def default_examples_dir() -> str:
     """``<repo-root>/examples`` — resolved from this file's location."""
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -245,6 +241,56 @@ def _iter_run_metas(ws: str):
             yield root, os.path.join(root, "run_meta.json")
 
 
+SC_BINARIES_FILE = ".sc_binaries.json"
+
+
+def _split_binaries_paths(ws: str) -> List[str]:
+    """Workspace-relative paths listed in ``.sc_binaries.json`` (empty if none).
+
+    These are the heavy PnR outputs the split moved to GCS; on a self-host clone
+    that never fetched them the paths are present in the manifest but absent on
+    disk. Fork uses this to keep ``netlist_path`` honest (A15).
+    """
+    path = os.path.join(ws, SC_BINARIES_FILE)
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    return [
+        e["path"]
+        for e in data.get("files", [])
+        if isinstance(e, dict) and isinstance(e.get("path"), str)
+    ]
+
+
+def _run_has_split_out_netlist(ws: str, run_dir: str, binaries_paths: List[str]) -> bool:
+    """True when a synthesized gate netlist for THIS run is split-out + absent.
+
+    A15: a real bundle keeps ``synth_runs/*/inputs/*.v`` (pre-synthesis RTL) in
+    git, and ``_find_netlist`` scans BOTH ``orfs_results`` and ``inputs`` — so a
+    binary-less fork would otherwise re-derive ``netlist_path`` to the RTL input,
+    claiming a "netlist" that is actually pre-synthesis source (dishonest for
+    gate-level sim). When the run's ``.sc_binaries.json`` lists an
+    ``orfs_results/**/*.v`` that isn't on disk, the gate netlist was split out
+    (not merely never produced), so the fork forces ``netlist_path=None``.
+    """
+    run_rel = os.path.relpath(run_dir, ws).replace(os.sep, "/")
+    prefix = "" if run_rel == "." else run_rel + "/"
+    for rel in binaries_paths:
+        if prefix and not rel.startswith(prefix):
+            continue
+        parts = rel.split("/")
+        if "orfs_results" in parts[:-1] and parts[-1].lower().endswith(".v"):
+            if not os.path.exists(os.path.join(ws, rel.replace("/", os.sep))):
+                return True
+    return False
+
+
 def _rewrite_run_meta_netlists(ws: str) -> None:
     """Re-derive ``netlist_path`` in each copied run_meta against the fork's dir.
 
@@ -253,9 +299,12 @@ def _rewrite_run_meta_netlists(ws: str) -> None:
     The netlist lives inside its own run dir, which was copied intact, so
     ``_find_netlist`` re-derives the fork-local absolute path exactly as the
     original synthesis did (A2). A run with no netlist (failed synth) resolves to
-    None, same as it was.
+    None, same as it was. A15: a run whose gate netlist was split out to GCS and
+    not fetched resolves to None rather than the ``inputs/`` RTL source.
     """
     from src.tools.synthesis_manager import _find_netlist
+
+    binaries_paths = _split_binaries_paths(ws)
 
     for run_dir, meta_path in _iter_run_metas(ws):
         try:
@@ -266,7 +315,10 @@ def _rewrite_run_meta_netlists(ws: str) -> None:
         if not isinstance(meta, dict) or "netlist_path" not in meta:
             continue
         top = meta.get("top_module")
-        new_netlist = _find_netlist(run_dir, top) if top else None
+        if binaries_paths and _run_has_split_out_netlist(ws, run_dir, binaries_paths):
+            new_netlist = None  # gate netlist split out, not fetched — honest None
+        else:
+            new_netlist = _find_netlist(run_dir, top) if top else None
         if new_netlist != meta.get("netlist_path"):
             meta["netlist_path"] = new_netlist
             try:
@@ -276,12 +328,13 @@ def _rewrite_run_meta_netlists(ws: str) -> None:
                 pass
 
 
-def _write_provenance(ws: str, template_id: str, name: str) -> None:
+def _write_provenance(ws: str, template_id: str, name: str) -> dict:
     """Stamp ``.source_template.json`` — read by the workbench provenance chip.
 
     ``forked_at`` is an AWARE UTC ISO timestamp (never a naive datetime — a naive
     value read back as local time is the timezone sharp edge this repo has paid
-    for before).
+    for before). Returns the exact dict written so the caller can persist a
+    byte-identical copy to the metadata store (the hosted durable path).
     """
     provenance = {
         "id": template_id,
@@ -290,6 +343,7 @@ def _write_provenance(ws: str, template_id: str, name: str) -> None:
     }
     with open(os.path.join(ws, PROVENANCE_FILE), "w", encoding="utf-8") as f:
         json.dump(provenance, f, indent=2)
+    return provenance
 
 
 def read_provenance(ws: str) -> Optional[dict]:
@@ -324,6 +378,29 @@ def _allocate_fork_session(session_manager, base_tag: str, user_id) -> str:
     return session_manager.create_session(tag=f"{base_tag}-{uuid.uuid4().hex[:8]}", user_id=user_id)
 
 
+def _rollback_fork(session_manager, provider, session_id: str, user_id) -> None:
+    """Undo a failed fork: cloud workspace staging first, then the session row.
+
+    On cloud, ``delete_session`` removes the (empty local) dir + metadata +
+    seeded Chat 1 but NOT the object-storage staging — so drop the staged
+    scratch + the committed manifest via the provider so no adoptable half-fork
+    survives (D7). Best-effort throughout — never mask the original error. Only
+    orphaned content-addressed blobs may remain (unreferenced, harmless; GC is
+    deferred with run retention).
+    """
+    if provider is not None:
+        delete_ws = getattr(provider, "delete_workspace", None)
+        if callable(delete_ws):
+            try:
+                delete_ws(session_id)
+            except Exception:
+                pass
+    try:
+        session_manager.delete_session(session_id, user_id=user_id)
+    except Exception:
+        pass
+
+
 def fork_from_template(
     session_manager,
     template_id: str,
@@ -336,43 +413,72 @@ def fork_from_template(
     """Fork a bundle into a new user-owned session. Returns the new session id.
 
     Sequence (A1): ``create_session`` FIRST (empty dir + metadata + seeded Chat
-    1), THEN copy the bundle workspace into it (``dirs_exist_ok``), THEN rewrite
-    the identity/path leaks and stamp provenance. On ANY failure after the
-    session is created, ``delete_session`` rolls back the dir + metadata + seeded
-    chat (A6) so a half-fork never survives.
+    1), THEN materialize the bundle workspace into it, THEN rewrite the
+    identity/path leaks and stamp provenance. The two engine-dependent pieces:
+
+    * **destination** — self-host copies into ``get_workspace_path`` (a real
+      local dir); a cloud workspace materializes into the provider's empty
+      scratch (``workspace_for``), the path the tools actually read (D5).
+    * **materialization** — routed through the :class:`TemplateSource` engine:
+      local = today's ``copytree_guarded`` of the bundle ``workspace/`` (behavior
+      -identical); gcs = pull the source + binaries archives, guarded post-extract.
+      An explicit ``examples_dir`` (self-host / tests) pins a local source.
+
+    On cloud, ``provider.sync`` runs LAST (D5/D7): the manifest is written last
+    within sync, so it is the atomic initial commit — any earlier failure leaves
+    no adoptable workspace. On ANY failure after the session is created,
+    :func:`_rollback_fork` undoes the dir + metadata + seeded chat and, on cloud,
+    the staged workspace (A6/D7) so a half-fork never survives.
     """
-    if _is_cloud_workspace():
-        raise TemplatesUnavailable(
-            "Templates are available in self-host today; the hosted gallery is a "
-            "later wave."
-        )
+    # Lazy import: template_source imports this module, so a top-level import
+    # would be circular. Local source honors an explicit examples_dir (tests /
+    # self-host callers); otherwise the process-wide configured engine.
+    from src.platform_engines.template_source import (
+        LocalTemplateSource,
+        get_template_source,
+    )
 
-    root = _examples_dir(examples_dir)
-    bundle_dir = _safe_bundle_dir(root, template_id)
-    data = _load_template_json(bundle_dir)
-    src_ws = os.path.join(bundle_dir, WORKSPACE_SUBDIR)
-    if data is None or not os.path.isdir(src_ws):
-        raise TemplateNotFound(template_id)
+    source = (
+        LocalTemplateSource(examples_dir)
+        if examples_dir is not None
+        else get_template_source()
+    )
 
-    name = data.get("name") or template_id
+    info = source.get(template_id)  # raises TemplateNotFound for an unknown id
+    name = info.get("name") or template_id
+    template_ref = info.get("id") or template_id
     base_tag = slugify(name, fallback=template_id) or template_id
+
+    cloud = _is_cloud_workspace()
+    provider = None
+    if cloud:
+        from src.platform_engines.workspace_provider import get_workspace_provider
+
+        provider = get_workspace_provider()
 
     new_session_id = _allocate_fork_session(session_manager, base_tag, user_id)
     try:
-        dst_ws = session_manager.get_workspace_path(new_session_id)
-        copytree_guarded(
-            src_ws, dst_ws, max_bytes=max_bytes, max_files=max_files, dirs_exist_ok=True
+        if cloud:
+            dst_ws = provider.workspace_for(new_session_id)  # empty scratch (D5)
+        else:
+            dst_ws = session_manager.get_workspace_path(new_session_id)
+        source.materialize(
+            template_id, dst_ws, max_bytes=max_bytes, max_files=max_files
         )
         _clear_manifest_session_id(dst_ws)
         _rewrite_run_meta_netlists(dst_ws)
-        _write_provenance(dst_ws, data.get("id") or template_id, name)
-    except BaseException:
-        # A6: undo the dir + metadata + seeded Chat 1 (Wave 9 cascade covers
-        # threads/checkpoints). Best-effort — never mask the original error.
+        provenance = _write_provenance(dst_ws, template_ref, name)
+        # Durable copy for the "forked from" chip on hosted list endpoints (D8).
         try:
-            session_manager.delete_session(new_session_id, user_id=user_id)
+            session_manager.set_source_template(
+                new_session_id, json.dumps(provenance), user_id=user_id
+            )
         except Exception:
-            pass
+            pass  # the workspace file remains authoritative; store copy is a cache
+        if cloud:
+            provider.sync(new_session_id)  # atomic initial commit — manifest LAST
+    except BaseException:
+        _rollback_fork(session_manager, provider, new_session_id, user_id)
         raise
     return new_session_id
 

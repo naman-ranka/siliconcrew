@@ -1,0 +1,408 @@
+"""Hosted fork (Wave 11, Item 3) — cloud workspace + gcs/local template source.
+
+Forced-hosted harness (no live GCS/Cloud Run): a ``CloudWorkspaceProvider`` over
+an ``InMemoryObjectStore`` for the WORKSPACE side, and a ``GcsTemplateSource``
+over a SECOND in-memory store the ``publish_templates`` tool pre-populated with a
+real-shaped bundle (source + binaries archives + index). ``_is_cloud_workspace``
+is toggled on directly (it is a thin settings read); the workspace provider and
+template source are injected via their ``set_*`` seams and ALWAYS restored in
+teardown (with ``reset_settings_cache``) so nothing leaks into sibling tests.
+
+No pytest-asyncio: the fork backend is synchronous; the REST leg (to_thread,
+error mapping) lives in the commit-(c) additions at the bottom of this file.
+"""
+import json
+import os
+import shutil
+
+import pytest
+
+from src.utils.session_manager import SessionManager
+from src.utils import templates as T
+from src.utils.bundles import BundleTooLarge
+from src.platform_engines import settings as settings_mod
+from src.platform_engines import template_source as TS
+from src.platform_engines.template_source import (
+    GcsTemplateSource,
+    LocalTemplateSource,
+    TemplateStoreUnavailable,
+)
+from src.platform_engines.workspace_provider import (
+    CloudWorkspaceProvider,
+    InMemoryObjectStore,
+    set_workspace_provider,
+)
+from src.tools.synthesis_manager import _find_netlist
+from scripts import split_bundle_binaries as SPLIT
+from scripts import publish_templates as PUB
+
+
+# ---------------------------------------------------------------------------
+# Recording object store — spies on every mutating call (tenancy proof).
+# ---------------------------------------------------------------------------
+
+
+class RecordingStore(InMemoryObjectStore):
+    """InMemoryObjectStore that records the KEY of every write/delete."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.writes: list = []
+
+    def put_tree(self, key, local_dir):
+        self.writes.append(key)
+        super().put_tree(key, local_dir)
+
+    def put_file(self, key, local_path):
+        self.writes.append(key)
+        super().put_file(key, local_path)
+
+    def delete_tree(self, key):
+        self.writes.append(("delete_tree", key))
+        super().delete_tree(key)
+
+    def delete_file(self, key):
+        self.writes.append(("delete_file", key))
+        super().delete_file(key)
+
+
+# ---------------------------------------------------------------------------
+# Bundle builders + gcs publish (all in-memory; no live GCS import)
+# ---------------------------------------------------------------------------
+
+
+def _w(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content if isinstance(content, str) else json.dumps(content))
+
+
+def _make_full_bundle(root, tid="demo_fifo", top="fifo", *, with_inputs_rtl=True):
+    """A realistic FULL bundle (binaries present): RTL/tb/manifest + a completed
+    synth run whose gate netlist lives under ``orfs_results`` and, optionally, a
+    pre-synthesis ``inputs/<top>.v`` (the A15 trap)."""
+    bundle = os.path.join(root, tid)
+    ws = os.path.join(bundle, "workspace")
+    _w(os.path.join(bundle, "template.json"), {
+        "id": tid, "name": "Demo FIFO", "description": "A tiny FIFO example.",
+        "highlights": ["Lints clean"], "top_module": top, "platform": "sky130hd",
+    })
+    _w(os.path.join(ws, f"{top}.v"), f"module {top}(); endmodule\n")
+    _w(os.path.join(ws, f"{top}_tb.v"), f"module {top}_tb(); endmodule\n")
+    _w(os.path.join(ws, "manifest.json"), {
+        "sessionId": "ORIGINAL_SOURCE_SESSION",
+        "files": [{"name": f"{top}.v", "role": "rtl", "path": f"{top}.v"}],
+        "synthTop": top, "simTop": f"{top}_tb",
+    })
+    _w(os.path.join(ws, "attempt_events.jsonl"),
+       '{"event_type":"tool_call","session_id":"ORIGINAL_SOURCE_SESSION"}\n')
+    run = os.path.join(ws, "synth_runs", "synth_0001")
+    _w(os.path.join(run, "orfs_results", "sky130hd", top, "base", "6_final.v"),
+       f"module {top}(); endmodule // gate netlist\n")
+    if with_inputs_rtl:
+        # RTL input stays in git (not under orfs_results) — _find_netlist would
+        # otherwise latch onto it in a binary-less fork (the A15 dishonesty).
+        _w(os.path.join(run, "inputs", f"{top}.v"), f"module {top}(); endmodule // rtl\n")
+    _w(os.path.join(run, "run_meta.json"), {
+        "id": "synth_0001", "status": "completed", "top_module": top,
+        "netlist_path": r"C:\some\other\machine\orfs_results\6_final.v",
+    })
+    _w(os.path.join(run, "completion.event"), "")
+    return bundle, ws
+
+
+def _make_split_bundle(root, tid="demo_fifo", top="fifo", *, with_inputs_rtl=True):
+    """Build a full bundle then split its binaries out (writes .sc_binaries.json,
+    deletes the orfs_results binaries) — the self-host-without-fetch shape."""
+    _make_full_bundle(root, tid, top, with_inputs_rtl=with_inputs_rtl)
+    SPLIT.split_bundle(os.path.join(root, tid), apply=True)
+    return root
+
+
+def _publish_gcs(store, tmp_path, tid="demo_fifo", top="fifo"):
+    """Publish a real-shaped bundle (source+binaries archives+index) into ``store``.
+
+    Mirrors the operator flow: source comes from a SPLIT tree, binaries from the
+    pre-split (full) tree — exactly ``publish_templates --ref <split> --binaries-
+    from <full>``.
+    """
+    full_root = os.path.join(tmp_path, "examples_full")
+    split_root = os.path.join(tmp_path, "examples_split")
+    _make_full_bundle(full_root, tid, top)
+    shutil.copytree(os.path.join(full_root, tid), os.path.join(split_root, tid))
+    SPLIT.split_bundle(os.path.join(split_root, tid), apply=True)
+    PUB.publish(store, split_root, full_root, [tid], log=lambda *a, **k: None)
+    return split_root, full_root
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sm(tmp_path):
+    return SessionManager(base_dir=str(tmp_path / "workspace"), db_path=str(tmp_path / "state.db"))
+
+
+@pytest.fixture
+def scratch(tmp_path):
+    d = str(tmp_path / "scratch")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+@pytest.fixture(autouse=True)
+def _restore_seams():
+    """Always reset the injected engines + settings cache after each test."""
+    yield
+    set_workspace_provider(None)
+    TS.set_template_source(None)
+    settings_mod.reset_settings_cache()
+
+
+def _go_cloud(monkeypatch):
+    """Toggle the fork onto the cloud-workspace branch."""
+    monkeypatch.setattr(T, "_is_cloud_workspace", lambda: True)
+
+
+def _manifest_key(sid):
+    return f"workspaces/{sid}/.sc_manifest.json"
+
+
+# ---------------------------------------------------------------------------
+# Happy path — cloud workspace + gcs source (WITH binaries)
+# ---------------------------------------------------------------------------
+
+
+def test_hosted_fork_happy_path(sm, scratch, tmp_path, monkeypatch):
+    _go_cloud(monkeypatch)
+    ws_store = RecordingStore()
+    provider = CloudWorkspaceProvider(ws_store, scratch)
+    set_workspace_provider(provider)
+
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    tmpl_store.writes.clear()  # only care about writes DURING the fork
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    sid = T.fork_from_template(sm, "demo_fifo", user_id="alice")
+
+    # Files landed in the provider scratch (the path tools actually read).
+    ws = os.path.join(scratch, sid)
+    assert os.path.isfile(os.path.join(ws, "fifo.v"))
+    assert os.path.isfile(os.path.join(ws, "attempt_events.jsonl"))
+    assert os.path.isfile(os.path.join(ws, ".sc_binaries.json"))
+    gate = os.path.join(ws, "synth_runs", "synth_0001", "orfs_results", "sky130hd", "fifo", "base", "6_final.v")
+    assert os.path.isfile(gate)  # binaries archive materialized
+
+    # sync ran LAST → the workspace manifest is committed (adoptable by any instance).
+    assert _manifest_key(sid) in ws_store._files
+
+    # Identity leaks scrubbed; netlist re-derived into the fork's own run dir.
+    manifest = json.load(open(os.path.join(ws, "manifest.json")))
+    assert manifest["sessionId"] == ""
+    meta = json.load(open(os.path.join(ws, "synth_runs", "synth_0001", "run_meta.json")))
+    assert meta["netlist_path"] and os.path.exists(meta["netlist_path"])
+    assert os.path.abspath(ws) in os.path.abspath(meta["netlist_path"])
+    assert "machine" not in meta["netlist_path"]  # not the stale source-machine path
+
+    # Provenance: workspace file AND the durable store copy.
+    prov = T.read_provenance(ws)
+    assert prov["id"] == "demo_fifo" and prov["forked_at"].endswith("+00:00")
+    row = sm.get_session_metadata(sid, user_id="alice")
+    assert json.loads(row["source_template"])["id"] == "demo_fifo"
+
+    # Chat 1 seeded; owned by alice; invisible to bob.
+    assert sm.count_threads(sid, user_id="alice") == 1
+    assert sm.owns_session(sid, "alice")
+    assert sm.get_session_metadata(sid, user_id="bob") is None
+
+    # Template store was READ-ONLY throughout the fork.
+    assert tmpl_store.writes == []
+
+
+# ---------------------------------------------------------------------------
+# A15 — binary-less fork must NOT re-derive netlist_path onto inputs/ RTL
+# ---------------------------------------------------------------------------
+
+
+def test_binary_less_fork_forces_netlist_none_not_inputs_rtl(sm, tmp_path):
+    split_root = os.path.join(tmp_path, "examples")
+    _make_split_bundle(split_root, "demo_fifo", "fifo", with_inputs_rtl=True)
+    run_dir = os.path.join(split_root, "demo_fifo", "workspace", "synth_runs", "synth_0001")
+    # Sanity: the gate netlist was split out, the RTL input remains, and
+    # _find_netlist WOULD (pre-A15) latch onto that RTL — the rule is what bites.
+    assert not os.path.exists(os.path.join(run_dir, "orfs_results", "sky130hd", "fifo", "base", "6_final.v"))
+    assert os.path.isfile(os.path.join(run_dir, "inputs", "fifo.v"))
+    assert _find_netlist(run_dir, "fifo") is not None  # inputs/fifo.v — the trap
+
+    # Self-host fork (examples_dir → local source); A15 runs regardless of engine.
+    fid = T.fork_from_template(sm, "demo_fifo", examples_dir=split_root)
+    ws = sm.get_workspace_path(fid)
+    meta = json.load(open(os.path.join(ws, "synth_runs", "synth_0001", "run_meta.json")))
+    assert meta["netlist_path"] is None  # honest: gate netlist split out, not RTL
+    # The RTL input is still on disk (proving None came from the rule, not absence).
+    assert os.path.isfile(os.path.join(ws, "synth_runs", "synth_0001", "inputs", "fifo.v"))
+
+
+# ---------------------------------------------------------------------------
+# Rollback — no adoptable half-fork survives a failure
+# ---------------------------------------------------------------------------
+
+
+class _RaisingSource:
+    """A template source whose get() succeeds but materialize() explodes."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def get(self, template_id):
+        return {"id": template_id, "name": "Demo FIFO"}
+
+    def materialize(self, template_id, dst_dir, **kw):
+        os.makedirs(dst_dir, exist_ok=True)
+        _w(os.path.join(dst_dir, "partial.txt"), "half-written")  # leave debris
+        raise self._exc
+
+
+def test_rollback_on_materialize_failure(sm, scratch, monkeypatch):
+    _go_cloud(monkeypatch)
+    ws_store = RecordingStore()
+    provider = CloudWorkspaceProvider(ws_store, scratch)
+    set_workspace_provider(provider)
+    TS.set_template_source(_RaisingSource(RuntimeError("boom mid-materialize")))
+
+    before = set(sm.get_all_sessions())
+    with pytest.raises(RuntimeError):
+        T.fork_from_template(sm, "demo_fifo", user_id="alice")
+
+    # Session row gone, scratch gone, manifest never committed.
+    assert set(sm.get_all_sessions()) == before
+    assert not any(os.scandir(scratch)) if os.path.isdir(scratch) else True
+    assert not any(k for k in ws_store._files if k.endswith(".sc_manifest.json"))
+
+
+def test_rollback_on_sync_failure(sm, scratch, tmp_path, monkeypatch):
+    _go_cloud(monkeypatch)
+    ws_store = RecordingStore()
+    provider = CloudWorkspaceProvider(ws_store, scratch)
+    # Real materialization succeeds, then the commit (sync) blows up.
+    monkeypatch.setattr(provider, "sync", lambda sid: (_ for _ in ()).throw(RuntimeError("commit failed")))
+    set_workspace_provider(provider)
+
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    before = set(sm.get_all_sessions())
+    with pytest.raises(RuntimeError):
+        T.fork_from_template(sm, "demo_fifo", user_id="alice")
+
+    assert set(sm.get_all_sessions()) == before
+    assert not any(os.scandir(scratch)) if os.path.isdir(scratch) else True
+    assert _manifest_key_absent(ws_store)
+
+
+def _manifest_key_absent(store) -> bool:
+    return not any(k.endswith(".sc_manifest.json") for k in store._files)
+
+
+# ---------------------------------------------------------------------------
+# All-or-nothing (A6) — a gcs source that promised binaries but can't deliver
+# ---------------------------------------------------------------------------
+
+
+def test_gcs_missing_binaries_fails_all_or_nothing(sm, scratch, tmp_path, monkeypatch):
+    _go_cloud(monkeypatch)
+    ws_store = RecordingStore()
+    set_workspace_provider(CloudWorkspaceProvider(ws_store, scratch))
+
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    # Drop the binaries archive: the index still promises it → all-or-nothing.
+    tmpl_store.delete_tree("bundles/demo_fifo/binaries")
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    before = set(sm.get_all_sessions())
+    with pytest.raises(TemplateStoreUnavailable):
+        T.fork_from_template(sm, "demo_fifo", user_id="alice")
+    # Full rollback: no session, no committed workspace.
+    assert set(sm.get_all_sessions()) == before
+    assert _manifest_key_absent(ws_store)
+
+
+# ---------------------------------------------------------------------------
+# Mixed engines (A6) — destination and materialization are independent axes
+# ---------------------------------------------------------------------------
+
+
+def test_cloud_workspace_local_source_degrades_and_syncs(sm, scratch, tmp_path, monkeypatch):
+    """Deployed split image, no TEMPLATES_BUCKET yet: cloud workspace + LOCAL
+    (binary-less) source. Honest degradation — the fork succeeds, syncs, and the
+    missing gate netlist resolves to None (not the inputs RTL)."""
+    _go_cloud(monkeypatch)
+    ws_store = RecordingStore()
+    provider = CloudWorkspaceProvider(ws_store, scratch)
+    set_workspace_provider(provider)
+
+    split_root = os.path.join(tmp_path, "examples")
+    _make_split_bundle(split_root, "demo_fifo", "fifo", with_inputs_rtl=True)
+
+    sid = T.fork_from_template(sm, "demo_fifo", user_id="alice", examples_dir=split_root)
+
+    ws = os.path.join(scratch, sid)
+    assert os.path.isfile(os.path.join(ws, "fifo.v"))
+    assert _manifest_key(sid) in ws_store._files  # synced
+    meta = json.load(open(os.path.join(ws, "synth_runs", "synth_0001", "run_meta.json")))
+    assert meta["netlist_path"] is None  # A15 honest degradation
+
+
+def test_local_workspace_gcs_source(sm, tmp_path, monkeypatch):
+    """Self-host forking FROM the bucket: local workspace + gcs source (no sync).
+    The destination is the local workspace dir; materialization pulls the bucket
+    archives into it."""
+    monkeypatch.setattr(T, "_is_cloud_workspace", lambda: False)
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    sid = T.fork_from_template(sm, "demo_fifo", user_id="alice")
+    ws = sm.get_workspace_path(sid)
+    assert os.path.isfile(os.path.join(ws, "fifo.v"))
+    gate = os.path.join(ws, "synth_runs", "synth_0001", "orfs_results", "sky130hd", "fifo", "base", "6_final.v")
+    assert os.path.isfile(gate)  # binaries came from the bucket
+    meta = json.load(open(os.path.join(ws, "synth_runs", "synth_0001", "run_meta.json")))
+    assert meta["netlist_path"] and os.path.exists(meta["netlist_path"])
+
+
+# ---------------------------------------------------------------------------
+# Tenancy red-team — writes stay under the fork's own workspace prefix
+# ---------------------------------------------------------------------------
+
+
+def test_tenancy_all_writes_under_fork_prefix_template_store_read_only(sm, scratch, tmp_path, monkeypatch):
+    _go_cloud(monkeypatch)
+    ws_store = RecordingStore()
+    set_workspace_provider(CloudWorkspaceProvider(ws_store, scratch))
+
+    tmpl_store = RecordingStore()
+    _publish_gcs(tmpl_store, tmp_path)
+    tmpl_store.writes.clear()
+    TS.set_template_source(GcsTemplateSource(bucket="ignored", store=tmpl_store))
+
+    sid = T.fork_from_template(sm, "demo_fifo", user_id="alice")
+
+    # Every workspace-store write is under THIS fork's prefix — no other tenant's
+    # workspace, no template bucket.
+    prefix = f"workspaces/{sid}/"
+    assert ws_store.writes, "sync must have written blobs + manifest"
+    for key in ws_store.writes:
+        assert isinstance(key, str) and key.startswith(prefix), key
+    # Template store saw zero writes (READ-ONLY browsing/materialization).
+    assert tmpl_store.writes == []
+    # Owner immutable: a second upsert by 'bob' cannot claim the fork.
+    import datetime as _dt
+    sm._store.upsert_session(sid, "bob", "x", "m", None, _dt.datetime.now())
+    assert sm.get_session_metadata(sid, user_id="bob") is None
+    assert sm.owns_session(sid, "alice")

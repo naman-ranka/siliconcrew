@@ -67,6 +67,11 @@ class ObjectStore(Protocol):
     # for the one-time legacy-tar cleanup after a workspace converts to the
     # incremental per-file format; the provider guards with getattr + suppress.
     def delete_tree(self, key: str) -> None: ...
+    # Delete the raw object at ``key`` (put_file scheme, no ``.tar.gz`` — the
+    # manifest / durable-meta namespace; may raise if absent). Optional — used
+    # by fork rollback to drop a partially-committed workspace manifest; callers
+    # guard with getattr + suppress.
+    def delete_file(self, key: str) -> None: ...
 
 
 def _store_generation(store, key: str) -> Optional[str]:
@@ -166,6 +171,9 @@ class InMemoryObjectStore:
         self._blobs.pop(key, None)
         self._gen.pop(key, None)
 
+    def delete_file(self, key: str) -> None:
+        self._files.pop(key, None)
+
 
 class GcsObjectStore:
     """Google Cloud Storage tar-blob store (lazy SDK import).
@@ -235,6 +243,11 @@ class GcsObjectStore:
     def delete_tree(self, key: str) -> None:
         # Raises NotFound when absent — callers doing best-effort cleanup suppress.
         self._blob(key).delete()
+
+    def delete_file(self, key: str) -> None:
+        # Raw object at the key itself (no ``.tar.gz``) — put_file namespace.
+        # Raises NotFound when absent; best-effort callers suppress.
+        self._raw_blob(key).delete()
 
 
 # ---------------------------------------------------------------------------
@@ -712,6 +725,29 @@ class CloudWorkspaceProvider:
             if callable(delete):
                 with suppress(Exception):
                     delete(key)
+
+    def delete_workspace(self, session_id: str) -> None:
+        """Best-effort teardown of a session's staged workspace (fork rollback).
+
+        Drops the local scratch tree + its sibling caches AND the committed
+        manifest object, so a failed hosted fork leaves no adoptable workspace
+        (D7): only the manifest makes a workspace adoptable, so deleting it
+        suffices — the content-addressed blobs it referenced become unreferenced
+        orphans (harmless, GC deferred). Never raises; the caller is unwinding an
+        error and must not have it masked.
+        """
+        with self._lock_for(session_id):
+            shutil.rmtree(self._scratch(session_id), ignore_errors=True)
+            for sibling in (
+                self._marker_path(session_id),
+                self._index_path(session_id),
+            ):
+                with suppress(OSError):
+                    os.remove(sibling)
+            delete_file = getattr(self._store, "delete_file", None)
+            if callable(delete_file):
+                with suppress(Exception):
+                    delete_file(self._manifest_key(session_id))
 
 
 # ---------------------------------------------------------------------------

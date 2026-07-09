@@ -1,10 +1,12 @@
 """Wave 11 — session templates (bundles) & forks.
 
-Covers the fork backend (create-first ordering, workspace copy, provenance,
-netlist/manifest rewrites, rollback, hosted gate, copy ceilings), the export
+Covers the self-host fork backend (create-first ordering, workspace copy,
+provenance, netlist/manifest rewrites, rollback, copy ceilings), the export
 utility round-trip, the pure transcript renderer, and the REST surface — all
 following the existing test patterns (SessionManager over a tmp workspace, no
-pytest-asyncio: async is driven with asyncio.run inside the utilities).
+pytest-asyncio: async is driven with asyncio.run inside the utilities). The
+hosted-fork path (cloud workspace + gcs source, tenancy, A15) lives in
+``test_hosted_fork.py``.
 """
 import asyncio
 import json
@@ -266,13 +268,9 @@ def test_half_fork_rolls_back_dir_and_metadata(sm, examples_dir):
     assert not os.path.isdir(os.path.join(sm.base_dir, "demo-fifo"))
 
 
-def test_fork_hosted_is_gated(sm, examples_dir, monkeypatch):
-    """Level 1 is self-host only — a cloud workspace engine hard-gates (A5)."""
-    monkeypatch.setattr(T, "_is_cloud_workspace", lambda: True)
-    with pytest.raises(T.TemplatesUnavailable):
-        T.fork_from_template(sm, "demo_fifo", examples_dir=examples_dir)
-    # And nothing was created.
-    assert sm.get_all_sessions() == []
+# The hosted fork (cloud workspace + gcs/local source, rollback, tenancy, A15)
+# is exercised in test_hosted_fork.py — the gate that used to raise here was
+# lifted in Item 3.
 
 
 # ---------------------------------------------------------------------------
@@ -538,10 +536,3 @@ def test_api_patch_session_preserves_provenance(client, sm):
     # And the list keeps it too (chip survives a launcher refresh).
     listed = {s["id"]: s for s in client.get("/api/sessions").json()}
     assert listed[sid]["source_template"]["id"] == "demo_fifo"
-
-
-def test_api_fork_hosted_400(client, monkeypatch):
-    monkeypatch.setattr(api.templates_mod, "_is_cloud_workspace", lambda: True)
-    r = client.post("/api/templates/demo_fifo/fork")
-    assert r.status_code == 400
-    assert "self-host" in r.json()["detail"]
