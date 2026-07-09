@@ -7,6 +7,11 @@ langchain-anthropic>=1.3.4,<2.0.0
 langgraph>=1.0.10,<2.0.0
 langgraph-checkpoint-sqlite>=2.0.11
 aiosqlite>=0.19.0
+# Durable checkpointer on hosted (Cloud SQL Postgres). Imported lazily only in
+# the postgres branch — self-host stays on sqlite and never needs these at
+# runtime (psycopg[binary] below is already present for the metadata store).
+langgraph-checkpoint-postgres>=2.0.0
+psycopg-pool>=3.2.0
 mcp[cli]>=1.0.0
 streamlit>=1.40.1
 gradio>=4.0.0
@@ -32,3 +37,8 @@ google-cloud-logging
 # Remote-MCP auth (hosted only): validate WorkOS-issued JWTs (RS256 via JWKS).
 # Standard JWT-verify library — no hand-rolled crypto. Unused in local/self-host.
 pyjwt[crypto]>=2.0.0
+# Codex agent runtime (optional, flag-gated by CODEX_ENABLED — see
+# src/agents/codex/). Lazily imported, so this is only needed when the flag is
+# on; pinned to the beta the reference capture (plans/codex-engine-reference.md)
+# was written against.
+openai-codex==0.1.0b3

@@ -17,11 +17,11 @@ def test_linter_tool_supports_multi_file_workspace_inputs():
                 f.write("module tb; reg a; wire y; dut u(.a(a), .y(y)); initial begin a=0; #1; $finish; end endmodule")
 
             # Using single-file mode for dut still passes
-            assert "Syntax OK" in linter_tool.invoke({"verilog_files": "dut.v"})
+            assert any(s in linter_tool.invoke({"verilog_files": "dut.v"}) for s in ("Syntax OK", "Lint passed"))
 
             # Multi-file mode should also pass (tb references dut)
             result = linter_tool.invoke({"verilog_files": ["dut.v", "tb.v"]})
-            assert "Syntax OK" in result
+            assert any(s in result for s in ("Syntax OK", "Lint passed"))
         finally:
             if old is None:
                 os.environ.pop("RTL_WORKSPACE", None)

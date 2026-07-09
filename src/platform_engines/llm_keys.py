@@ -406,7 +406,7 @@ class ByokHostedLlmKeyProvider:
         self,
         vault: EnvelopeKeyVault,
         hosted_gemini_key: str = "",
-        hosted_model: str = "gemini-3-flash-preview",
+        hosted_model: str = "gemini-3.5-flash",
         limiter: Optional[HostedTierLimiter] = None,
     ):
         self._vault = vault

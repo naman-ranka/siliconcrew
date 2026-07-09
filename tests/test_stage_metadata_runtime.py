@@ -38,9 +38,9 @@ def _write_file(path: str, content: str) -> None:
         f.write(content)
 
 
-def _wait_for_terminal(job_id: str, workspace: str) -> dict:
+def _wait_for_terminal(run_id: str, workspace: str) -> dict:
     for _ in range(60):
-        status = sm.get_synthesis_job_status(job_id, workspace=workspace)
+        status = sm.get_synthesis_status(run_id, workspace=workspace)
         if status["status"] in {"completed", "failed"}:
             return status
         time.sleep(0.05)
@@ -95,7 +95,7 @@ def test_stage_metadata_runtime_records_completed_stages(monkeypatch):
         top_module="counter",
         platform="sky130hd",
     )
-    final = _wait_for_terminal(started["job_id"], workspace)
+    final = _wait_for_terminal(started["run_id"], workspace)
 
     assert final["status"] == "completed"
     assert final["current_stage"] == "finish"

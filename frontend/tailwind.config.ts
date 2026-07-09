@@ -106,6 +106,7 @@ const config: Config = {
         "slide-in-left": "slideInLeft 0.28s cubic-bezier(0.22,1,0.36,1)",
         "pulse-subtle": "pulseSubtle 2s ease-in-out infinite",
         shimmer: "shimmer 1.4s ease-in-out infinite",
+        flash: "flash 0.6s ease-out",
       },
       keyframes: {
         fadeIn: {
@@ -135,6 +136,10 @@ const config: Config = {
         shimmer: {
           "0%": { backgroundPosition: "-200% 0" },
           "100%": { backgroundPosition: "200% 0" },
+        },
+        flash: {
+          "0%": { backgroundColor: "hsl(var(--primary)/0.18)" },
+          "100%": { backgroundColor: "transparent" },
         },
       },
       boxShadow: {

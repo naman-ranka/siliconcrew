@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { WaveformSignal } from "@/types";
+import type { WaveformData, WaveformSignal } from "@/types";
 
 const NAME_COL = 168; // px
 const LANE_H = 26;
@@ -23,17 +23,30 @@ const BASE_LANE = 800; // px of lane width at 100% zoom
 const MIN_LANE = 600;
 const END_PAD = 28; // breathing room so an end-of-sim cursor isn't flush to the edge
 
-export function WaveformViewer() {
+interface WaveformViewerProps {
+  // v2 tab model: render EXACTLY this waveform (bypasses the store's
+  // selectedWaveform/waveformData plumbing). When absent, behavior is the
+  // original store-driven viewer, unchanged.
+  data?: WaveformData;
+  // v2 tab model: scope the failure cursor / culprit highlight to this run
+  // instead of the globally selected run. Only used alongside `data`.
+  runId?: string;
+}
+
+export function WaveformViewer({ data: dataProp, runId: runIdProp }: WaveformViewerProps = {}) {
   const {
     waveformFiles,
     selectedWaveform,
-    waveformData,
+    waveformData: storeWaveformData,
     loadWaveforms,
     selectWaveform,
     currentSession,
     runs,
     selectedRunId,
   } = useStore();
+  const overridden = dataProp != null;
+  const waveformData = dataProp ?? storeWaveformData;
+  const effectiveRunId = runIdProp ?? selectedRunId;
   const [zoom, setZoom] = useState(1);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [manualCursor, setManualCursor] = useState<number | null>(null); // ticks; user-placed
@@ -56,14 +69,15 @@ export function WaveformViewer() {
   const xToTicksRef = useRef<(clientX: number) => number | null>(() => null);
 
   // reset a user-dropped cursor / hover when the waveform changes
+  // (dataProp is a constant `undefined` in store-driven mode — no-op dep)
   useEffect(() => {
     setManualCursor(null);
     setHoverTicks(null);
-  }, [selectedWaveform]);
+  }, [selectedWaveform, dataProp]);
 
   useEffect(() => {
-    if (currentSession) loadWaveforms();
-  }, [currentSession, loadWaveforms]);
+    if (currentSession && !overridden) loadWaveforms();
+  }, [currentSession, loadWaveforms, overridden]);
 
   // Keep the waveform in sync with the SELECTED sim run. The viewer must follow
   // selectedRunId: when the selected run changes, load THAT run's VCD even if a
@@ -71,6 +85,7 @@ export function WaveformViewer() {
   // while the banner viewed sim_0003). A manual dropdown pick overrides until the
   // selected run changes again, at which point the new run's VCD wins.
   useEffect(() => {
+    if (overridden) return; // v2: the tab owns its data — never touch the store
     const run = runs.find((r) => r.id === selectedRunId);
     if (!(run?.kind === "sim" && run.vcdPath)) return;
     if (selectedRunId !== syncedRunIdRef.current) {
@@ -82,7 +97,7 @@ export function WaveformViewer() {
       // Same run, nothing loaded yet (e.g. after a refresh) → adopt its VCD.
       void selectWaveform(run.vcdPath);
     }
-  }, [selectedRunId, runs, selectedWaveform, selectWaveform]);
+  }, [selectedRunId, runs, selectedWaveform, selectWaveform, overridden]);
 
   // Wrap selectWaveform so a manual dropdown pick records the override; the
   // selected run's VCD will reclaim the view once the run changes again.
@@ -97,13 +112,16 @@ export function WaveformViewer() {
   // The selected sim run pins the failure time → a red cursor in the waveform,
   // so a user can see *when* it went wrong without reading the log.
   const cursorTime = useMemo(() => {
-    const run = runs.find((r) => r.id === selectedRunId);
+    const run = runs.find((r) => r.id === effectiveRunId);
     return run?.kind === "sim" && run.failure?.timeNs != null ? run.failure.timeNs : null;
-  }, [runs, selectedRunId]);
+  }, [runs, effectiveRunId]);
 
   const options = useMemo(
-    () => Array.from(new Set([...(selectedWaveform ? [selectedWaveform] : []), ...waveformFiles])),
-    [selectedWaveform, waveformFiles]
+    () =>
+      overridden
+        ? [dataProp!.filename]
+        : Array.from(new Set([...(selectedWaveform ? [selectedWaveform] : []), ...waveformFiles])),
+    [selectedWaveform, waveformFiles, overridden, dataProp]
   );
 
   // Group signals by scope, preserving the hierarchy-aware order from the API.
@@ -132,12 +150,12 @@ export function WaveformViewer() {
   // offending signal and show expected-vs-actual — the #1 ask of a failure view.
   // (Declared before any early return so hook order stays stable.)
   const failInfo = useMemo(() => {
-    const run = runs.find((r) => r.id === selectedRunId);
+    const run = runs.find((r) => r.id === effectiveRunId);
     const line = run?.kind === "sim" ? run.failure?.firstFailureLine : null;
     if (!line) return null;
     const m = line.match(/([A-Za-z_]\w*)\s*=\s*(\w+)\s+expected\s+(\w+)/i);
     return m ? { signal: m[1], actual: m[2], expected: m[3] } : null;
-  }, [runs, selectedRunId]);
+  }, [runs, effectiveRunId]);
 
   // Dragging the cursor handle: bind window listeners so the drag keeps tracking
   // even when the pointer leaves the lane host. Declared before any early return
@@ -335,6 +353,16 @@ export function WaveformViewer() {
       {/* Header */}
       <div className="flex items-center justify-between p-3 border-b border-border">
         <div className="flex items-center gap-2">
+          {overridden ? (
+            <span className="flex items-center gap-2 h-8 px-2 text-xs font-mono text-muted-foreground bg-surface-1 border border-border rounded-md min-w-0">
+              <Activity className="h-4 w-4 shrink-0" />
+              <span className="truncate max-w-[220px]">
+                {dataProp!.filename.includes("/")
+                  ? dataProp!.filename.split("/").slice(-2).join("/")
+                  : dataProp!.filename}
+              </span>
+            </span>
+          ) : (
           <Select value={selectedWaveform || ""} onValueChange={handlePickWaveform}>
             <SelectTrigger className="h-8 w-[230px]">
               <Activity className="h-4 w-4 mr-2" />
@@ -348,6 +376,7 @@ export function WaveformViewer() {
               ))}
             </SelectContent>
           </Select>
+          )}
           {cursorTime != null && (
             <span className="flex items-center gap-1 text-[11px] text-status-fail font-mono">
               <Crosshair className="h-3.5 w-3.5" /> fail @ {cursorTime}ns
@@ -404,11 +433,13 @@ export function WaveformViewer() {
               <ZoomIn className="h-3.5 w-3.5" />
             </Button>
           </IconTooltip>
-          <IconTooltip label="Refresh waveforms">
-            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Refresh waveforms" onClick={() => loadWaveforms()}>
-              <RefreshCw className="h-3.5 w-3.5" />
-            </Button>
-          </IconTooltip>
+          {!overridden && (
+            <IconTooltip label="Refresh waveforms">
+              <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Refresh waveforms" onClick={() => loadWaveforms()}>
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+            </IconTooltip>
+          )}
         </div>
       </div>
 

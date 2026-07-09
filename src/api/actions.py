@@ -27,11 +27,16 @@ import asyncio
 import json
 import os
 import re
+import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
+from src.api.activity import read_activity
+from src.api import workspace_fs
+from src.api import tool_catalog
+from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.utils.session_context import SessionContext, session_scope
 from src.utils.paths import is_within
 from src.platform_engines import auth as _auth_engine
@@ -49,9 +54,8 @@ from src.tools.synthesis_manager import (
     list_synthesis_runs,
     start_synthesis_job,
     retry_pd_job,
-    get_synthesis_job_status,
+    get_synthesis_status,
     get_synthesis_metrics,
-    get_stage_status,
 )
 
 WorkspaceResolver = Callable[[str], str]
@@ -65,6 +69,8 @@ class ManifestUpdate(BaseModel):
     clockPeriodNs: Optional[float] = None
     platform: Optional[str] = None
     files: Optional[List[Dict[str, Any]]] = None
+    # fnmatch globs (workspace-relative POSIX paths) excluded from the scan.
+    ignore: Optional[List[str]] = None
 
 
 class SimulateRequest(BaseModel):
@@ -82,6 +88,9 @@ class SynthesizeRequest(BaseModel):
     coreMargin: float = 2.0
     runEquiv: bool = False
     constraintsMode: str = "auto"
+    # Last flow stage to execute; "finish" (default) = full RTL->GDS flow,
+    # "synth" = fast synthesis-only PPA estimate. Later stages are "skipped".
+    maxStage: str = "finish"
 
 
 class RetryRequest(BaseModel):
@@ -98,6 +107,15 @@ class CodeSave(BaseModel):
     content: str
 
 
+class InvokeRequest(BaseModel):
+    tool: str
+    arguments: Optional[Dict[str, Any]] = None
+
+
+class LintRequest(BaseModel):
+    engine: str = "auto"  # auto | iverilog | verilator
+
+
 # --- Shared helpers ---------------------------------------------------------
 
 def _ok(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -109,6 +127,40 @@ def _err(code: str, message: str, details: Optional[Dict[str, Any]] = None, stat
         status_code=status,
         detail={"ok": False, "error": {"code": code, "message": message, "details": details or {}}},
     )
+
+
+def _ui_log_call(workspace: str, session_id: str, tool: str, arguments: Dict[str, Any]) -> str:
+    """Record a user-initiated (REST) tool call in the per-session event log.
+
+    Same log the agent (WS) and MCP paths write, so the Activity feed shows
+    every invocation regardless of who drove it. source="ui" → actor "user".
+    Logging must never break the action itself.
+    """
+    call_id = f"ui-{uuid.uuid4().hex[:12]}"
+    try:
+        log_tool_call(workspace, session_id, "ui", tool, arguments, tool_call_id=call_id)
+    except Exception:
+        pass
+    return call_id
+
+
+def _ui_log_result(
+    workspace: str,
+    session_id: str,
+    tool: str,
+    call_id: str,
+    result: Any,
+    ok: bool = True,
+) -> None:
+    try:
+        text = result if isinstance(result, str) else json.dumps(result)
+        log_tool_result(
+            workspace, session_id, "ui", tool, text,
+            status="success" if ok else "error",
+            tool_call_id=call_id,
+        )
+    except Exception:
+        pass
 
 
 _SYNTH_STATUS_MAP = {
@@ -176,33 +228,24 @@ def _synth_to_run(workspace: str, item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _parse_lint_output(stderr: str):
-    """Parse iverilog diagnostics into structured warnings/errors + byFile."""
-    pat = re.compile(
-        r"^(?P<file>[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<sev>error|warning|syntax error)?:?\s*(?P<msg>.*)$"
-    )
+def _split_lint_diagnostics(diagnostics: List[Dict[str, Any]]):
+    """Regroup run_linter's structured diagnostics (the ONE parsing contract —
+    engines are parsed inside src/tools/run_linter.py) into the REST response's
+    warnings/errors/byFile shape."""
     warnings: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
     by_file: Dict[str, List[Dict[str, Any]]] = {}
-    for line in (stderr or "").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        m = pat.match(stripped)
-        if not m:
-            if "error" in stripped.lower():
-                errors.append({"line": None, "severity": "error", "message": stripped})
-            continue
-        sev_raw = (m.group("sev") or "error").lower()
-        severity = "warning" if sev_raw == "warning" else "error"
-        fname = os.path.basename(m.group("file"))
+    for d in diagnostics or []:
         entry = {
-            "line": int(m.group("line")),
-            "severity": severity,
-            "message": m.group("msg").strip() or stripped,
+            "line": d.get("line"),
+            "severity": d.get("severity"),
+            "message": d.get("message"),
+            "code": d.get("code"),
         }
-        by_file.setdefault(fname, []).append(entry)
-        (warnings if severity == "warning" else errors).append({**entry, "file": fname})
+        fname = d.get("file")
+        if fname:
+            by_file.setdefault(fname, []).append(entry)
+        (warnings if d.get("severity") == "warning" else errors).append({**entry, "file": fname})
     return warnings, errors, by_file
 
 
@@ -224,34 +267,45 @@ def _classify_file(name: str) -> str:
     return "unknown"
 
 
-def _snapshot_files(workspace: str, roles: Dict[str, Optional[str]]) -> List[Dict[str, Any]]:
-    """FileInfo[] for the workbench snapshot (same shape as GET /files)."""
+def _snapshot_files(
+    workspace: str,
+    roles: Dict[str, Optional[str]],
+    ignore: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """FileInfo[] for the workbench snapshot (same shape as GET /files).
+
+    Recursive, under the manifest's exclusion policy. ``path`` is the
+    workspace-relative POSIX path (was absolute pre-recursion; no frontend
+    consumer reads FileInfo.path) and ``roles`` is keyed by that same path.
+    """
     import datetime as _dt
 
     out: List[Dict[str, Any]] = []
-    for item in os.listdir(workspace):
-        item_path = os.path.join(workspace, item)
-        if not os.path.isfile(item_path):
+    for rel in manifest_mod.iter_workspace_files(workspace, ignore):
+        full = os.path.join(workspace, rel)
+        try:
+            st = os.stat(full)
+        except OSError:
             continue
-        st = os.stat(item_path)
+        name = os.path.basename(rel)
         out.append({
-            "name": item,
-            "path": item_path,
-            "type": _classify_file(item),
+            "name": name,
+            "path": rel,
+            "type": _classify_file(name),
             "size": st.st_size,
             "modified": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(),
-            "role": roles.get(item),
+            "role": roles.get(rel),
         })
     out.sort(key=lambda f: f["modified"], reverse=True)
     return out
 
 
-def _snapshot_spec(workspace: str) -> Optional[Dict[str, Any]]:
+def _snapshot_spec(workspace: str, ignore: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
     """Latest *_spec.yaml as {filename, content, parsed} — same as GET /spec."""
     import yaml as _yaml
 
     spec_files = sorted(
-        [f for f in os.listdir(workspace) if f.endswith("_spec.yaml")],
+        [f for f in manifest_mod.iter_workspace_files(workspace, ignore) if f.endswith("_spec.yaml")],
         key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
         reverse=True,
     )
@@ -267,19 +321,32 @@ def _snapshot_spec(workspace: str) -> Optional[Dict[str, Any]]:
     return {"filename": spec_files[0], "content": content, "parsed": parsed}
 
 
-def _snapshot_code(workspace: str) -> List[Dict[str, Any]]:
-    """All .v/.sv files as CodeFile[] — same shape as GET /code."""
-    files = sorted(
-        f for f in os.listdir(workspace)
-        if f.endswith((".v", ".sv")) and os.path.isfile(os.path.join(workspace, f))
+def _code_file_rel_paths(workspace: str, manifest: manifest_mod.DesignManifest) -> List[str]:
+    """Relative paths served by GET /code: manifest files with code roles
+    (rtl/tb/include) plus any .v/.sv the exclusion-aware scan found."""
+    rels = {f.path for f in manifest.files if f.role in ("rtl", "tb", "include")}
+    rels.update(
+        rel for rel in manifest_mod.iter_workspace_files(workspace, manifest.ignore)
+        if rel.lower().endswith((".v", ".sv"))
     )
+    return sorted(r for r in rels if os.path.isfile(os.path.join(workspace, r)))
+
+
+def _snapshot_code(workspace: str, manifest: Optional[manifest_mod.DesignManifest] = None) -> List[Dict[str, Any]]:
+    """Code files as CodeFile[] — same shape as GET /code.
+
+    ``filename`` is the workspace-relative POSIX path (equals the basename for
+    root files); the frontend keys code tabs by exactly this value.
+    """
+    if manifest is None:
+        manifest = manifest_mod.read_manifest(workspace)
     out: List[Dict[str, Any]] = []
-    for name in files:
-        with open(os.path.join(workspace, name), "r", errors="ignore") as f:
+    for rel in _code_file_rel_paths(workspace, manifest):
+        with open(os.path.join(workspace, rel), "r", errors="ignore") as f:
             out.append({
-                "filename": name,
+                "filename": rel,
                 "content": f.read(),
-                "language": "systemverilog" if name.endswith(".sv") else "verilog",
+                "language": "systemverilog" if rel.endswith((".sv", ".svh")) else "verilog",
             })
     return out
 
@@ -455,29 +522,49 @@ def build_actions_router(
     # ---- Lint ---------------------------------------------------------------
 
     @router.post("/lint")
-    async def lint_action(session_id: str, identity=Depends(get_identity)):
+    async def lint_action(session_id: str, body: Optional[LintRequest] = None, identity=Depends(get_identity)):
         uid = require_owned(session_id, identity)
         workspace = await require_workspace(session_id)
+        engine = (body.engine if body else "auto") or "auto"
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
             rel_files = manifest_mod.files_for_stage(manifest, "lint")
             if not rel_files:
                 return {"empty": True}
+            call_id = _ui_log_call(workspace, session_id, "linter_tool", {"verilog_files": rel_files, "engine": engine})
             abs_files = [os.path.join(workspace, f) for f in rel_files]
-            return {"empty": False, "result": run_linter(abs_files, cwd=workspace), "files": rel_files}
+            result = run_linter(abs_files, cwd=workspace, engine=engine)
+            warnings, errors, by_file = _split_lint_diagnostics(result.get("diagnostics") or [])
+            passed = bool(result.get("success"))
+            _ui_log_result(
+                workspace, session_id, "linter_tool", call_id,
+                {"status": "passed" if passed else "failed", "engine": result.get("engine"),
+                 "warnings": len(warnings), "errors": len(errors)},
+                ok=passed,
+            )
+            return {
+                "empty": False,
+                "result": result,
+                "files": rel_files,
+                "warnings": warnings,
+                "errors": errors,
+                "byFile": by_file,
+            }
 
-        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        # mutates=True: lint itself is a read, but it now records itself in the
+        # per-session event log (attempt_events.jsonl), which must persist.
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("empty"):
             _err("no_rtl", "No RTL files in the manifest to lint.", status=400)
 
         result = out["result"]
-        warnings, errors, by_file = _parse_lint_output(result.get("stderr", ""))
         return _ok({
             "status": "passed" if result.get("success") else "failed",
-            "warnings": warnings,
-            "errors": errors,
-            "byFile": by_file,
+            "engine": result.get("engine"),
+            "warnings": out["warnings"],
+            "errors": out["errors"],
+            "byFile": out["byFile"],
             "command": result.get("command", ""),
             "files": out["files"],
         })
@@ -497,6 +584,9 @@ def build_actions_router(
             rel_files = manifest_mod.files_for_stage(manifest, "simulate")
             if not rel_files:
                 return {"error": "no_files"}
+            call_id = _ui_log_call(workspace, session_id, "run_isolated_simulation", {
+                "verilog_files": rel_files, "top_module": top, "mode": body.mode,
+            })
             sim_run = run_sim_isolated(
                 workspace=workspace,
                 verilog_files=rel_files,
@@ -504,6 +594,13 @@ def build_actions_router(
                 mode=body.mode,
                 run_id=body.runId,
                 platform=manifest.platform,
+            )
+            passed = sim_run.get("status") == "passed"
+            _ui_log_result(
+                workspace, session_id, "run_isolated_simulation", call_id,
+                {"run_id": sim_run.get("id"), "status": sim_run.get("status"),
+                 "vcdPath": sim_run.get("vcdPath")},
+                ok=passed,
             )
             return {"simRun": sim_run}
 
@@ -531,17 +628,38 @@ def build_actions_router(
             if not src_files:
                 return {"error": "no_files"}
             abs_files = [os.path.join(workspace, f) for f in src_files]
+            resolved = {
+                "verilog_files": src_files,
+                "top_module": top,
+                "platform": body.platform or manifest.platform,
+                "clock_period_ns": body.clockPeriodNs or manifest.clockPeriodNs,
+                "utilization": body.utilization,
+                "aspect_ratio": body.aspectRatio,
+                "core_margin": body.coreMargin,
+                "run_equiv": body.runEquiv,
+                "constraints_mode": body.constraintsMode,
+                "max_stage": body.maxStage,
+            }
+            call_id = _ui_log_call(workspace, session_id, "start_synthesis", resolved)
             result = start_synthesis_job(
                 workspace=workspace,
                 verilog_files=abs_files,
                 top_module=top,
-                platform=body.platform or manifest.platform,
-                clock_period_ns=body.clockPeriodNs or manifest.clockPeriodNs,
+                platform=resolved["platform"],
+                clock_period_ns=resolved["clock_period_ns"],
                 utilization=body.utilization,
                 aspect_ratio=body.aspectRatio,
                 core_margin=body.coreMargin,
                 run_equiv=body.runEquiv,
                 constraints_mode=body.constraintsMode,
+                max_stage=body.maxStage,
+            )
+            dispatched = isinstance(result, dict) and result.get("status") != "rejected"
+            _ui_log_result(
+                workspace, session_id, "start_synthesis", call_id,
+                {"run_id": (result or {}).get("run_id"),
+                 "status": (result or {}).get("status")},
+                ok=dispatched,
             )
             return {"result": result}
 
@@ -556,7 +674,127 @@ def build_actions_router(
             _err((result.get("error") or {}).get("code", "quota_exceeded"),
                  (result.get("error") or {}).get("message", "Quota exceeded."),
                  details=result.get("error"), status=429)
-        return _ok({"jobId": result.get("job_id"), "runId": result.get("run_id"), "raw": result})
+        # Validation errors (e.g. an unsupported maxStage) surface as 400.
+        if isinstance(result, dict) and result.get("status") == "error":
+            _err("invalid_request", result.get("message", "Invalid synthesis request."),
+                 details={"supported_stages": result.get("supported_stages")}, status=400)
+        return _ok({"runId": result.get("run_id"), "pollAfterSec": result.get("poll_after_sec"), "raw": result})
+
+    # ---- Activity feed (unified per-session tool event log) -----------------
+
+    @router.get("/activity")
+    async def get_activity(
+        session_id: str,
+        limit: int = Query(default=100, ge=1, le=500),
+        before: Optional[str] = Query(default=None),
+        identity=Depends(get_identity),
+    ):
+        """Newest-first page of every tool invocation in this session — agent
+        (WS), user (these REST actions), and MCP — paired call+result events
+        from attempt_events.jsonl. ``before`` pages older; ``nextBefore`` is
+        null at the end."""
+        uid = require_owned(session_id, identity)
+        workspace = await require_workspace(session_id)
+        page = await run_scoped(session_id, workspace, read_activity, workspace, limit, before, _uid=uid, _id=identity)
+        return _ok(page)
+
+    # ---- Directory tree (lazy, VS Code-web style) ----------------------------
+
+    @router.get("/dir")
+    async def get_dir(
+        session_id: str,
+        path: str = Query(default=""),
+        recursive: Optional[str] = Query(default=None),
+        identity=Depends(get_identity),
+    ):
+        """Immediate children of one directory (default), or — with
+        ``?recursive=paths`` — the flat file-path index for quick-open."""
+        uid = require_owned(session_id, identity)
+        workspace = await require_workspace(session_id)
+
+        if recursive == "paths":
+            out = await run_scoped(session_id, workspace, workspace_fs.walk_paths, workspace, _uid=uid, _id=identity)
+            return _ok(out)
+
+        def work():
+            return workspace_fs.list_dir(workspace, path)
+
+        try:
+            entries = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
+        except (FileNotFoundError, NotADirectoryError):
+            _err("not_found", f"Directory not found: {path or '.'}", status=404)
+        except ValueError:
+            _err("invalid_path", f"Path escapes the workspace: {path}", status=404)
+        return _ok({"path": path, "entries": entries})
+
+    # ---- Tool platform (the Command Surface) ---------------------------------
+    # The catalog and execution both come from the SAME registry the agent and
+    # MCP clients use (src/api/tool_catalog.py introspects the @tool wrappers),
+    # so schemas can never drift between the UI and the backend.
+
+    @router.get("/tools")
+    async def list_tools(session_id: str, identity=Depends(get_identity)):
+        """Every UI-invocable tool with its real JSON Schema + policy flags."""
+        require_owned(session_id, identity)
+        await require_workspace(session_id)
+        try:
+            catalog = await asyncio.to_thread(tool_catalog.build_catalog)
+        except ImportError:
+            _err("tools_unavailable", "The agent tool stack is not installed on this server.", status=503)
+        return _ok({"tools": catalog})
+
+    @router.post("/invoke")
+    async def invoke_tool(session_id: str, body: InvokeRequest, identity=Depends(get_identity)):
+        """Run one catalogued tool: schema-validated against the tool's own
+        pydantic model, executed via the SAME wrapper function the agent runs,
+        inside this session's scope. Logged to the per-session event log like
+        every other invocation path (source ui)."""
+        uid = require_owned(session_id, identity)
+        workspace = await require_workspace(session_id)
+
+        try:
+            known = await asyncio.to_thread(tool_catalog.is_invocable, body.tool)
+        except ImportError:
+            known = False
+        if not known:
+            _err("unknown_tool", f"'{body.tool}' is not an invocable tool.", status=404)
+        flags = tool_catalog.tool_flags(body.tool)
+        if flags["requiresSignIn"] and getattr(identity, "anonymous", False):
+            _err("signin_required", f"'{body.tool}' requires signing in.", status=401)
+
+        def work():
+            call_id = _ui_log_call(workspace, session_id, body.tool, body.arguments or {})
+            try:
+                result = tool_catalog.validate_and_execute(body.tool, workspace, body.arguments)
+            except tool_catalog.ToolArgumentError as exc:
+                _ui_log_result(workspace, session_id, body.tool, call_id, str(exc), ok=False)
+                return {"argError": exc}
+            except Exception as exc:  # the tool itself failed — an honest error result
+                _ui_log_result(workspace, session_id, body.tool, call_id, str(exc), ok=False)
+                return {"error": str(exc)}
+            # Wrapper tools return strings (often JSON) — parse structured
+            # payloads back out so the UI gets typed results, not double-encoded
+            # text. Failures are signalled via a status field when structured.
+            parsed = result
+            if isinstance(result, str):
+                text = result.strip()
+                if text.startswith("{") or text.startswith("["):
+                    try:
+                        parsed = json.loads(text)
+                    except ValueError:
+                        parsed = result
+            summary = result if isinstance(result, str) else json.dumps(result)
+            ok = not (isinstance(parsed, dict) and str(parsed.get("status", "")).lower() in ("error", "fail", "failed"))
+            _ui_log_result(workspace, session_id, body.tool, call_id, summary[:2000], ok=ok)
+            return {"result": parsed}
+
+        out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=flags["mutates"])
+        if "argError" in out:
+            exc = out["argError"]
+            _err("invalid_arguments", str(exc), details={"fields": exc.details}, status=400)
+        if "error" in out:
+            _err("tool_failed", out["error"], status=502)
+        return _ok({"tool": body.tool, "result": out["result"]})
 
     # ---- Workbench snapshot (F4: one hydration, one response) ---------------
 
@@ -571,18 +809,23 @@ def build_actions_router(
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
-            roles = {f.name: f.role for f in manifest.files}
+            roles = {f.path: f.role for f in manifest.files}
             runs: List[Dict[str, Any]] = list(list_sim_runs(workspace))
             runs.extend(_synth_to_run(workspace, item) for item in list_synthesis_runs(workspace))
             runs.sort(key=lambda r: r.get("createdAt") or "", reverse=True)
             return {
                 "manifest": manifest.model_dump(),
                 "runs": runs,
-                "files": _snapshot_files(workspace, roles),
-                "spec": _snapshot_spec(workspace),
-                "code": _snapshot_code(workspace),
+                "files": _snapshot_files(workspace, roles, manifest.ignore),
+                "spec": _snapshot_spec(workspace, manifest.ignore),
+                "code": _snapshot_code(workspace, manifest),
                 "report": _snapshot_report(workspace),
                 "synthesisRuns": list(list_synthesis_runs(workspace)),
+                # v2 additions — same shapes as GET /activity and GET /dir, so
+                # the first paint of the Activity dock and file tree costs no
+                # extra round trips.
+                "activity": read_activity(workspace, limit=50)["events"],
+                "rootDir": workspace_fs.list_dir(workspace, ""),
             }
 
         snap = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity)
@@ -649,7 +892,9 @@ def build_actions_router(
                 return {"kind": "sim", "run": get_sim_run(workspace, run_id)}
             return {
                 "kind": "synth",
-                "status": get_stage_status(workspace=workspace, run_id=run_id),
+                # Unified self-healing status payload (Wave 9) — the same
+                # answer every other surface gets.
+                "status": get_synthesis_status(run_id, workspace=workspace),
                 "metrics": get_synthesis_metrics(workspace=workspace, run_id=run_id),
             }
 
@@ -661,10 +906,7 @@ def build_actions_router(
 
         status = out["status"] or {}
         metrics_resp = out["metrics"] or {}
-        # get_stage_status returns {"status": "error", ...} when the run is missing
-        # (its "status" key is the CALL status, not the run status — the run's
-        # actual lifecycle state lives in "run_status").
-        if status.get("status") == "error" and not metrics_resp:
+        if status.get("error") == "unknown_run":
             _err("not_found", f"Run {run_id} not found.", status=404)
         # get_synthesis_metrics returns the PPA fields NESTED under "metrics"
         # (the top-level dict is the wrapper: status/run_id/metrics/...). Read the
@@ -681,20 +923,21 @@ def build_actions_router(
         return _ok({"run": {
             "id": run_id,
             "kind": "synth",
-            # Map from run_status (the run's lifecycle), not "status" (the call
-            # status, which is always "ok" on success → would mis-map to running).
-            "status": _SYNTH_STATUS_MAP.get(status.get("run_status") or "", "running"),
+            "status": _SYNTH_STATUS_MAP.get(status.get("status") or "", "running"),
             "top": status.get("top_module"),
             "stages": status.get("stages"),
+            "stageHistory": status.get("stage_history"),
             "currentStage": status.get("current_stage"),
             "ppa": ppa,
         }})
 
-    @router.get("/jobs/{job_id}")
-    async def get_job(session_id: str, job_id: str, identity=Depends(get_identity)):
+    @router.get("/runs/{run_id}/status")
+    async def get_run_status(session_id: str, run_id: str, identity=Depends(get_identity)):
+        """Full self-healing status by run_id — the ONE key (Wave 9). A plain
+        read for callers; reconciliation persists durably on its own."""
         uid = require_owned(session_id, identity)
         workspace = await require_workspace(session_id)
-        status = await run_scoped(session_id, workspace, get_synthesis_job_status, job_id, workspace, _uid=uid, _id=identity)
+        status = await run_scoped(session_id, workspace, get_synthesis_status, run_id, workspace, _uid=uid, _id=identity)
         return _ok({"job": status})
 
     @router.post("/runs/{run_id}/retry")
@@ -704,20 +947,36 @@ def build_actions_router(
         overrides_json = json.dumps(body.overrides) if body.overrides else ""
 
         def work():
-            return retry_pd_job(
+            call_id = _ui_log_call(workspace, session_id, "retry_pd", {
+                "run_id": run_id, "start_stage": body.fromStage, "max_stage": body.maxStage,
+            })
+            result = retry_pd_job(
                 workspace=workspace,
                 source_run_id=run_id,
                 start_stage=body.fromStage,
                 max_stage=body.maxStage,
                 orfs_overrides_json=overrides_json,
             )
+            dispatched = isinstance(result, dict) and result.get("status") != "rejected"
+            _ui_log_result(
+                workspace, session_id, "retry_pd", call_id,
+                {"run_id": (result or {}).get("run_id"),
+                 "status": (result or {}).get("status")},
+                ok=dispatched,
+            )
+            return result
 
         result = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if isinstance(result, dict) and result.get("status") == "rejected":
             _err((result.get("error") or {}).get("code", "quota_exceeded"),
                  (result.get("error") or {}).get("message", "Quota exceeded."),
                  details=result.get("error"), status=429)
-        return _ok({"jobId": result.get("job_id"), "runId": result.get("run_id"), "raw": result})
+        # Validation errors (unsupported stage, missing source run/prereqs)
+        # surface as 400, exactly like /synthesize does.
+        if isinstance(result, dict) and result.get("status") == "error":
+            _err("invalid_request", result.get("message", "Invalid retry request."),
+                 details={"supported_stages": result.get("supported_stages")}, status=400)
+        return _ok({"runId": result.get("run_id"), "pollAfterSec": result.get("poll_after_sec"), "raw": result})
 
     @router.post("/runs/{run_id}/pin")
     async def pin_run(session_id: str, run_id: str, body: PinRequest, identity=Depends(require_signed_in)):

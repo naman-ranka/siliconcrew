@@ -20,20 +20,58 @@ def test_wait_for_synthesis_bounded_loop(monkeypatch):
         try:
             calls = {"n": 0}
 
-            def _fake_status(job_id, workspace=None):
+            def _fake_status(run_id, workspace=None):
                 calls["n"] += 1
                 if calls["n"] < 3:
-                    return {"job_id": job_id, "status": "running", "poll_after_sec": 1, "next_action": "wait/poll"}
-                return {"job_id": job_id, "status": "completed", "poll_after_sec": 0, "next_action": "done"}
+                    return {"run_id": run_id, "status": "running", "poll_after_sec": 1, "next_action": "wait/poll"}
+                return {"run_id": run_id, "status": "completed", "poll_after_sec": 0, "next_action": "done"}
 
-            monkeypatch.setattr(wrappers, "get_synthesis_job_status", _fake_status)
+            monkeypatch.setattr(wrappers, "collect_synthesis_status", _fake_status)
             monkeypatch.setattr(wrappers.time, "sleep", lambda *_: None)
 
-            out = wrappers.wait_for_synthesis.invoke({"job_id": "job_x", "max_wait_sec": 10, "poll_interval_sec": 1})
+            out = wrappers.wait_for_synthesis.invoke({"run_id": "synth_0001", "max_wait_sec": 10, "poll_interval_sec": 1})
             data = json.loads(out)
             assert data["status"] == "completed"
+            assert data["run_id"] == "synth_0001"
             assert data["timed_out"] is False
             assert calls["n"] >= 3
+        finally:
+            if old is None:
+                os.environ.pop("RTL_WORKSPACE", None)
+            else:
+                os.environ["RTL_WORKSPACE"] = old
+
+
+def test_wait_for_synthesis_clamps_max_wait(monkeypatch):
+    """Bounded means bounded: max_wait_sec=999 is clamped server-side to
+    WAIT_MAX_WAIT_SEC (120). Fake clock — no real sleeping, no flakiness."""
+    with tempfile.TemporaryDirectory() as workspace:
+        old = os.environ.get("RTL_WORKSPACE")
+        os.environ["RTL_WORKSPACE"] = workspace
+        try:
+            clock = {"t": 0.0}
+            calls = {"n": 0}
+
+            def _fake_status(run_id, workspace=None):
+                calls["n"] += 1
+                return {"run_id": run_id, "status": "running", "poll_after_sec": 10}
+
+            monkeypatch.setattr(wrappers, "collect_synthesis_status", _fake_status)
+            monkeypatch.setattr(wrappers.time, "time", lambda: clock["t"])
+
+            def _fake_sleep(seconds):
+                clock["t"] += seconds
+
+            monkeypatch.setattr(wrappers.time, "sleep", _fake_sleep)
+
+            out = wrappers.wait_for_synthesis.invoke({"run_id": "synth_0001", "max_wait_sec": 999})
+            data = json.loads(out)
+            assert data["timed_out"] is True
+            assert data["status"] == "running"
+            # The loop stopped at the clamp, not at the requested 999s.
+            assert data["waited_sec"] <= wrappers.WAIT_MAX_WAIT_SEC
+            assert calls["n"] <= (wrappers.WAIT_MAX_WAIT_SEC // 10) + 1
+            assert "wait_for_synthesis" in data["next_action"] or "get_synthesis_status" in data["next_action"]
         finally:
             if old is None:
                 os.environ.pop("RTL_WORKSPACE", None)
@@ -123,35 +161,10 @@ def test_read_stage_report_reads_place_log():
         shutil.rmtree(workspace, ignore_errors=True)
 
 
-def test_run_synthesis_and_wait_combines_start_and_wait(monkeypatch):
-    with tempfile.TemporaryDirectory() as workspace:
-        old = os.environ.get("RTL_WORKSPACE")
-        os.environ["RTL_WORKSPACE"] = workspace
-        try:
-            design = os.path.join(workspace, "counter.v")
-            with open(design, "w", encoding="utf-8") as f:
-                f.write("module counter(input clk, output reg [3:0] q); always @(posedge clk) q<=q+1; endmodule")
-
-            monkeypatch.setattr(
-                wrappers,
-                "start_synthesis_job",
-                lambda **kwargs: {"job_id": "job_abc", "run_id": "synth_0001", "status": "queued", "stage": "unknown"},
-            )
-            monkeypatch.setattr(
-                wrappers,
-                "get_synthesis_job_status",
-                lambda *args, **kwargs: {"job_id": "job_abc", "status": "completed", "poll_after_sec": 0},
-            )
-            monkeypatch.setattr(wrappers.time, "sleep", lambda *_: None)
-
-            out = wrappers.run_synthesis_and_wait.invoke(
-                {"verilog_files": ["counter.v"], "top_module": "counter", "max_wait_sec": 10}
-            )
-            data = json.loads(out)
-            assert data["start"]["job_id"] == "job_abc"
-            assert data["result"]["status"] == "completed"
-        finally:
-            if old is None:
-                os.environ.pop("RTL_WORKSPACE", None)
-            else:
-                os.environ["RTL_WORKSPACE"] = old
+def test_no_start_and_wait_combo_tool_exists():
+    """run_synthesis_and_wait was REMOVED (Wave 9 locked constraint): one
+    async contract — dispatch, then bounded wait_for_synthesis loops."""
+    assert not hasattr(wrappers, "run_synthesis_and_wait")
+    names = {t.name for t in wrappers.mcp_tools}
+    assert "run_synthesis_and_wait" not in names
+    assert "wait_for_synthesis" in names

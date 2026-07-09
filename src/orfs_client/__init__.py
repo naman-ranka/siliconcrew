@@ -51,6 +51,12 @@ class OrfsRequest:
     image: Optional[str] = None  # None → runner's configured image (digest-pinned in cloud)
     cwd: str = "/OpenROAD-flow-scripts/flow"
     workspace_mount: str = "/workspace"
+    # Deterministic object-storage handle for this run ("<session_id>/<run_id>",
+    # set by the dispatching manager). When non-empty the cloud runner stages
+    # the run under it instead of minting a UUID, so ANY instance can later
+    # reconstruct the prefix (durable meta pushes / orphan-output adoption)
+    # from the run alone. Empty → runner-minted key (legacy/local; harmless).
+    run_handle: str = ""
 
 
 @dataclass

@@ -16,19 +16,31 @@ user/agent overridable via :func:`write_manifest`.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
+import logging
 import os
 import re
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterator, List, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = "manifest.json"
 
 FileRole = Literal["rtl", "tb", "sdc", "include", "other"]
 
-# Directories that hold generated run artifacts — never part of the design set.
-_IGNORED_DIRS = {"synth_runs", "sim_runs", "orfs_reports", "orfs_logs", "results", "__pycache__"}
+# Directories that hold generated run artifacts or third-party payloads — never
+# part of the design set. Dot-dirs (".git", ".cache", …) are pruned separately.
+_IGNORED_DIRS = {
+    "synth_runs", "sim_runs", "orfs_reports", "orfs_logs", "results",
+    "__pycache__", "node_modules",
+}
+
+# Runaway guard for the recursive scan: directories nested deeper than this
+# (relative to the workspace root) are never descended into.
+_MAX_SCAN_DEPTH = 6
 
 _RTL_EXTS = {".v", ".sv"}
 _INCLUDE_EXTS = {".vh", ".svh"}
@@ -48,9 +60,9 @@ _NOT_A_MODULE = {
 
 
 class DesignFile(BaseModel):
-    name: str
+    name: str  # basename, for display only — never a key (may collide across dirs)
     role: FileRole
-    path: str  # workspace-relative
+    path: str  # workspace-relative POSIX path — the canonical key for role/top logic
 
 
 class DesignManifest(BaseModel):
@@ -60,31 +72,82 @@ class DesignManifest(BaseModel):
     simTop: str = ""
     clockPeriodNs: float = 10.0
     platform: str = "sky130hd"
+    # User-editable fnmatch globs matched against workspace-relative POSIX paths
+    # (files AND directories), e.g. "vendor/**" or "vendor". Matching files are
+    # excluded from the scan; matching directories are pruned entirely.
+    ignore: List[str] = Field(default_factory=list)
+    # DERIVED, never user-maintained: one entry per role=="tb" file as
+    # {"file": <workspace-relative path>, "module": <TB top module name>}.
+    # Recomputed on every read/reconcile — any user edit is overwritten.
+    # ``simTop`` keeps its meaning as the *default* TB (what one-click Simulate
+    # runs); it is still inferred from the first tb file when unset.
+    testbenches: List[Dict[str, str]] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
 # File scanning + role derivation
 # --------------------------------------------------------------------------- #
 
-def _list_source_files(workspace: str) -> List[str]:
-    """Workspace-relative source files relevant to the design (top level only).
+def _matches_ignore(rel_posix: str, ignore: List[str]) -> bool:
+    """fnmatch the workspace-relative POSIX path against user ignore globs."""
+    return any(fnmatch.fnmatch(rel_posix, pat) for pat in ignore or [] if pat)
 
-    We deliberately stay at the workspace root: nested directories are run
-    artifacts or third-party stdcell models, not the user's design.
+
+def iter_workspace_files(workspace: str, ignore: Optional[List[str]] = None) -> Iterator[str]:
+    """Yield workspace-relative POSIX paths of ALL files under the scan policy.
+
+    The single exclusion policy shared by the manifest scan and every workspace
+    listing endpoint (GET /files, /code, /spec, workbench snapshots):
+      * prune run-artifact dirs (``sim_runs``, ``synth_runs``, …), dot-dirs,
+        ``__pycache__`` and ``node_modules``;
+      * prune dirs / drop files whose relative POSIX path matches a user
+        ``ignore`` glob (fnmatch, e.g. ``vendor/**`` or ``vendor``);
+      * never descend deeper than ``_MAX_SCAN_DEPTH`` directory levels.
+
+    No extension filtering here — callers filter for their own file kinds.
+    """
+    ignore = ignore or []
+    if not os.path.isdir(workspace):
+        return
+    for dirpath, dirnames, filenames in os.walk(workspace):
+        rel_dir = os.path.relpath(dirpath, workspace)
+        rel_dir_posix = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
+        depth = 0 if not rel_dir_posix else rel_dir_posix.count("/") + 1
+        if depth >= _MAX_SCAN_DEPTH:
+            dirnames[:] = []  # runaway guard: do not descend further
+        else:
+            kept = []
+            for d in dirnames:
+                if d in _IGNORED_DIRS or d.startswith("."):
+                    continue
+                child = f"{rel_dir_posix}/{d}" if rel_dir_posix else d
+                if _matches_ignore(child, ignore):
+                    continue
+                kept.append(d)
+            dirnames[:] = sorted(kept)
+        for name in sorted(filenames):
+            rel = f"{rel_dir_posix}/{name}" if rel_dir_posix else name
+            if _matches_ignore(rel, ignore):
+                continue
+            yield rel
+
+
+def _list_source_files(workspace: str, ignore: Optional[List[str]] = None) -> List[str]:
+    """Workspace-relative POSIX paths of design source files (recursive).
+
+    Recursive since the verification-loop work: RTL under ``rtl/``, TBs under
+    ``tb/`` etc. are first-class. The historic fear behind root-only scanning
+    (ingesting run artifacts / vendor models as user RTL) is addressed by
+    :func:`iter_workspace_files`'s exclusion policy instead.
     """
     out: List[str] = []
-    if not os.path.isdir(workspace):
-        return out
-    for name in sorted(os.listdir(workspace)):
-        full = os.path.join(workspace, name)
-        if not os.path.isfile(full):
+    for rel in iter_workspace_files(workspace, ignore):
+        if rel == MANIFEST_FILENAME:
             continue
-        if name == MANIFEST_FILENAME:
-            continue
-        ext = os.path.splitext(name)[1].lower()
+        ext = os.path.splitext(rel)[1].lower()
         if ext in _RTL_EXTS or ext in _INCLUDE_EXTS or ext == ".sdc":
-            out.append(name)
-    return out
+            out.append(rel)
+    return sorted(out)
 
 
 def _read_text(path: str) -> str:
@@ -104,7 +167,8 @@ def _instances_in(text: str) -> List[str]:
 
 
 def _looks_like_tb(name: str, text: str) -> bool:
-    base = os.path.splitext(name)[0].lower()
+    # ``name`` may be a workspace-relative path — heuristics key on the basename.
+    base = os.path.splitext(os.path.basename(name))[0].lower()
     if base.endswith("_tb") or base.startswith("tb_") or base.endswith("testbench") or "_test" in base:
         return True
     # A module with no ports that instantiates another module is a testbench.
@@ -116,7 +180,11 @@ def _looks_like_tb(name: str, text: str) -> bool:
 
 
 def derive_role(name: str, text: str = "") -> FileRole:
-    """Deterministic role derivation (overridable). See data-model.md."""
+    """Deterministic role derivation (overridable). See data-model.md.
+
+    ``name`` may be a bare filename or a workspace-relative path — extension and
+    testbench naming heuristics operate on the basename.
+    """
     ext = os.path.splitext(name)[1].lower()
     if ext == ".sdc":
         return "sdc"
@@ -176,6 +244,23 @@ def _infer_tops(workspace: str, files: List[DesignFile]) -> tuple[str, str]:
     return synth_top, sim_top
 
 
+def _derive_testbenches(workspace: str, files: List[DesignFile]) -> List[Dict[str, str]]:
+    """DERIVED testbench list: {file, module} per role=="tb" file.
+
+    The TB top is the last module declared in the file — the same inference
+    :func:`_infer_tops` uses for ``simTop``. Recomputed on every reconcile;
+    never user-maintained.
+    """
+    out: List[Dict[str, str]] = []
+    for f in files:
+        if f.role != "tb":
+            continue
+        mods = _modules_in(_read_text(os.path.join(workspace, f.path)))
+        if mods:
+            out.append({"file": f.path, "module": mods[-1]})
+    return out
+
+
 def _spec_clock_period(workspace: str) -> Optional[float]:
     """Best-effort clock period from the latest spec file (non-fatal)."""
     try:
@@ -183,10 +268,10 @@ def _spec_clock_period(workspace: str) -> Optional[float]:
     except Exception:
         return None
     specs = sorted(
-        [f for f in os.listdir(workspace) if f.endswith("_spec.yaml")],
+        [f for f in iter_workspace_files(workspace) if f.endswith("_spec.yaml")],
         key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
         reverse=True,
-    ) if os.path.isdir(workspace) else []
+    )
     for s in specs:
         try:
             with open(os.path.join(workspace, s), "r", encoding="utf-8") as fh:
@@ -202,9 +287,9 @@ def _spec_clock_period(workspace: str) -> Optional[float]:
 def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
     """Construct a fresh manifest from the files on disk (no persistence)."""
     files: List[DesignFile] = []
-    for name in _list_source_files(workspace):
-        text = _read_text(os.path.join(workspace, name)) if name.lower().endswith((".v", ".sv")) else ""
-        files.append(DesignFile(name=name, role=derive_role(name, text), path=name))
+    for rel in _list_source_files(workspace):
+        text = _read_text(os.path.join(workspace, rel)) if rel.lower().endswith((".v", ".sv")) else ""
+        files.append(DesignFile(name=os.path.basename(rel), role=derive_role(rel, text), path=rel))
 
     synth_top, sim_top = _infer_tops(workspace, files)
     clock = _spec_clock_period(workspace) or 10.0
@@ -215,6 +300,7 @@ def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
         simTop=sim_top,
         clockPeriodNs=clock,
         platform="sky130hd",
+        testbenches=_derive_testbenches(workspace, files),
     )
 
 
@@ -248,18 +334,21 @@ def _reconcile(workspace: str, stored: DesignManifest) -> DesignManifest:
 
     New files are added (role auto-derived); deleted files are dropped; existing
     files keep their (possibly user-overridden) role. Tops are filled in if they
-    became empty or point at a now-missing module.
+    became empty or point at a now-missing module. Files are keyed by their
+    workspace-relative ``path`` (at the root ``path == name``, so legacy
+    root-only manifests reconcile unchanged). The derived ``testbenches`` list
+    is always recomputed here — user edits to it do not survive.
     """
-    on_disk = _list_source_files(workspace)
-    by_name = {f.name: f for f in stored.files}
+    on_disk = _list_source_files(workspace, stored.ignore)
+    by_path = {f.path: f for f in stored.files}
 
     merged: List[DesignFile] = []
-    for name in on_disk:
-        if name in by_name:
-            merged.append(by_name[name])
+    for rel in on_disk:
+        if rel in by_path:
+            merged.append(by_path[rel])
         else:
-            text = _read_text(os.path.join(workspace, name)) if name.lower().endswith((".v", ".sv")) else ""
-            merged.append(DesignFile(name=name, role=derive_role(name, text), path=name))
+            text = _read_text(os.path.join(workspace, rel)) if rel.lower().endswith((".v", ".sv")) else ""
+            merged.append(DesignFile(name=os.path.basename(rel), role=derive_role(rel, text), path=rel))
 
     stored.files = merged
 
@@ -267,6 +356,7 @@ def _reconcile(workspace: str, stored: DesignManifest) -> DesignManifest:
         synth_top, sim_top = _infer_tops(workspace, merged)
         stored.synthTop = stored.synthTop or synth_top
         stored.simTop = stored.simTop or sim_top
+    stored.testbenches = _derive_testbenches(workspace, merged)
     return stored
 
 
@@ -293,21 +383,41 @@ def read_manifest(workspace: str, session_id: str = "") -> DesignManifest:
 
 
 def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = "") -> DesignManifest:
-    """Upsert manifest fields (roles, tops, clock, platform).
+    """Upsert manifest fields (roles, tops, clock, platform, ignore).
 
     ``updates`` may carry any subset of the manifest fields. A ``files`` entry
-    overrides roles by name (the path/file set is still reconciled with disk).
+    overrides roles keyed by ``path`` (canonical). For backward compatibility a
+    ``name``-only entry is honored when the basename is unambiguous (unique
+    across the manifest); an ambiguous name-only update is a logged no-op —
+    callers that can see nested files must address them by path.
+
+    ``testbenches`` is derived and cannot be set here (silently recomputed).
     """
     current = read_manifest(workspace, session_id=session_id)
 
     if "files" in updates and isinstance(updates["files"], list):
-        role_by_name: Dict[str, str] = {}
-        for entry in updates["files"]:
-            if isinstance(entry, dict) and entry.get("name") and entry.get("role"):
-                role_by_name[entry["name"]] = entry["role"]
+        by_path = {f.path: f for f in current.files}
+        basename_counts: Dict[str, int] = {}
         for f in current.files:
-            if f.name in role_by_name:
-                f.role = role_by_name[f.name]  # type: ignore[assignment]
+            basename_counts[f.name] = basename_counts.get(f.name, 0) + 1
+        by_unique_name = {f.name: f for f in current.files if basename_counts[f.name] == 1}
+
+        for entry in updates["files"]:
+            if not (isinstance(entry, dict) and entry.get("role")):
+                continue
+            target: Optional[DesignFile] = None
+            if entry.get("path"):
+                target = by_path.get(entry["path"])
+            elif entry.get("name"):
+                nm = entry["name"]
+                target = by_path.get(nm) or by_unique_name.get(nm)
+                if target is None and basename_counts.get(nm, 0) > 1:
+                    logger.warning(
+                        "write_manifest: role update for name=%r skipped — basename is "
+                        "ambiguous (%d matches); address the file by its path", nm, basename_counts[nm],
+                    )
+            if target is not None:
+                target.role = entry["role"]  # type: ignore[assignment]
 
     for key in ("synthTop", "simTop", "platform", "sessionId"):
         if key in updates and isinstance(updates[key], str) and updates[key]:
@@ -317,6 +427,13 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
             current.clockPeriodNs = float(updates["clockPeriodNs"])
         except (TypeError, ValueError):
             pass
+    if "ignore" in updates and isinstance(updates["ignore"], list):
+        current.ignore = [str(p) for p in updates["ignore"] if isinstance(p, str) and p]
+        # New exclusions take effect immediately (drops newly-ignored files).
+        current = _reconcile(workspace, current)
+
+    # testbenches is derived — recompute so role edits above are reflected.
+    current.testbenches = _derive_testbenches(workspace, current.files)
 
     _persist(workspace, current)
     return current

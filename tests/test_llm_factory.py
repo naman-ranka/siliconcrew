@@ -54,3 +54,19 @@ def test_openai_non_gpt5_keeps_temperature(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     llm = create_llm(model_name="gpt-4o-mini", temperature=0.2)
     assert getattr(llm, "temperature", None) == 0.2
+
+
+@pytest.mark.parametrize("model_name", ["claude-opus-4-8", "claude-sonnet-5"])
+def test_anthropic_new_models_skip_temperature(monkeypatch, model_name):
+    """Opus 4.7+/Sonnet 5 reject sampling params — sending temperature 400s
+    ('`temperature` is deprecated for this model')."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    with pytest.warns(UserWarning, match="Skipping explicit temperature"):
+        llm = create_llm(model_name=model_name, temperature=0.2)
+    assert getattr(llm, "temperature", None) is None
+
+
+def test_anthropic_older_models_keep_temperature(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    llm = create_llm(model_name="claude-haiku-4-5", temperature=0.2)
+    assert getattr(llm, "temperature", None) == 0.2

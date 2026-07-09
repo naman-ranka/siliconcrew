@@ -50,6 +50,16 @@ function installMocks(page: import("@playwright/test").Page) {
       return json(route, state.threads.find((t) => t.id === patch[1]));
     }
     if (p.endsWith("/history")) return json(route, []);
+    if (p.endsWith("/workbench") && m === "GET")
+      return json(route, {
+        ok: true,
+        manifest: { sessionId: "demo", files: [{ name: "alu.v", role: "rtl", path: "alu.v" }], synthTop: "t", simTop: "tb", clockPeriodNs: 10, platform: "sky130hd" },
+        runs: [], files: [], spec: null, code: [], report: null, synthesisRuns: [], activity: [],
+        rootDir: [{ name: "alu.v", path: "alu.v", kind: "file", size: 22, modified: "2026-07-01T10:00:00" }],
+      });
+    if (p.endsWith("/dir") && m === "GET")
+      return json(route, { ok: true, path: "", entries: [{ name: "alu.v", path: "alu.v", kind: "file", size: 22, modified: "2026-07-01T10:00:00" }] });
+    if (p.endsWith("/activity") && m === "GET") return json(route, { ok: true, events: [], nextBefore: null });
     if (p.endsWith("/manifest") && m === "GET")
       return json(route, { ok: true, manifest: { sessionId: "demo", files: [{ name: "alu.v", role: "rtl", path: "alu.v" }], synthTop: "t", simTop: "tb", clockPeriodNs: 10, platform: "sky130hd" } });
     if (p.endsWith("/runs") && m === "GET") return json(route, { ok: true, runs: [] });
@@ -62,7 +72,7 @@ function installMocks(page: import("@playwright/test").Page) {
 
 test("model picker: grouped popover, unavailable greyed, switch model", async ({ page }) => {
   await installMocks(page);
-  await page.goto("/workbench");
+  await page.goto("/w/demo");
 
   // The picker button shows the current model (the session's default thread model).
   const picker = page.getByRole("button", { name: /Change model/i });

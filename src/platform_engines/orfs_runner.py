@@ -114,7 +114,7 @@ class CloudJobOrfsRunner:
     def __init__(
         self,
         job_client: CloudRunJobClient,
-        stage_in: Callable[[str], str],
+        stage_in: Callable[[str, str], str],
         stage_out: Callable[[str, str], None],
         job: str = "siliconcrew-orfs",
         image: str = "openroad/orfs:latest",
@@ -128,7 +128,10 @@ class CloudJobOrfsRunner:
     def run(self, request: OrfsRequest) -> OrfsResult:
         # Cloud Run Jobs are isolated and parallel by default; volumes are not
         # bind mounts there. We stage the whole self-contained run dir instead.
-        handle = self._stage_in(request.run_dir)
+        # The deterministic run_handle (when the manager set one) keys the
+        # staged objects so any instance can reconstruct the prefix later;
+        # stage_in mints a unique key only when no handle was provided.
+        handle = self._stage_in(request.run_dir, request.run_handle)
         env = {
             "ORFS_RUN_HANDLE": handle,
             "ORFS_COMMAND": request.command,

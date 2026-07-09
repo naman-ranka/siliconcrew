@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { openArtifact } from "@/lib/openArtifact";
 import { useStore } from "@/lib/store";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -72,8 +73,51 @@ function ThinkingContent({ content }: { content: string }) {
   );
 }
 
+function PlanContent({ content }: { content: string }) {
+  const lines = content.split("\n").map((l) => l.trim()).filter(Boolean);
+  return (
+    <div className="rounded-md border border-border/60 bg-surface-2/40 p-2.5 text-sm">
+      <div className="text-xs font-medium text-muted-foreground mb-1.5">Plan</div>
+      <ul className="space-y-1">
+        {lines.map((l, i) => {
+          const m = l.match(/^\[([x~ ])\]\s*(.*)$/);
+          const mark = m?.[1] ?? " ";
+          const text = m?.[2] ?? l;
+          return (
+            <li key={i} className="flex items-start gap-2">
+              <span className={cn("mt-0.5 text-xs", mark === "x" ? "text-emerald-500" : mark === "~" ? "text-violet-500" : "text-muted-foreground/60")}>
+                {mark === "x" ? "✓" : mark === "~" ? "◐" : "○"}
+              </span>
+              <span className={cn(mark === "x" && "text-muted-foreground line-through")}>{text}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/** Renders a single content block — text (with the thinking heuristic),
+ * reasoning ("thinking" stream), plan/todo, or a tool call. Shared by the
+ * committed-message and streaming render paths. */
+function BlockView({ block, idx, blocks, isStreaming = false }: {
+  block: ContentBlock; idx: number; blocks: ContentBlock[]; isStreaming?: boolean;
+}) {
+  if (block.type === "reasoning") return <ThinkingContent content={block.content} />;
+  if (block.type === "plan") return <PlanContent content={block.content} />;
+  if (block.type === "text") {
+    return isThinkingBlock(blocks, idx)
+      ? <ThinkingContent content={block.content} />
+      : <MarkdownContent content={block.content} />;
+  }
+  return <ToolCallCard toolCall={block.toolCall} result={block.result} isRunning={isStreaming && !block.result} />;
+}
+
+function _blockKey(block: ContentBlock, idx: number): string | number {
+  return block.type === "tool" ? block.toolCall.id || idx : idx;
+}
+
 function MarkdownContent({ content }: { content: string }) {
-  const { setArtifactTab, toggleArtifacts } = useStore();
 
   return (
     <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-surface-2 prose-pre:border prose-pre:border-border">
@@ -119,13 +163,36 @@ function MarkdownContent({ content }: { content: string }) {
           },
           a({ href, children }) {
             if (href?.startsWith("#artifact:")) {
+              // Legacy agent links carry a viewer NAME (spec/code/waveform/
+              // report/layout), not an artifact key — resolve to the best real
+              // artifact via the same openArtifact abstraction every surface
+              // uses. Unresolvable (no runs yet, unknown name) => quiet no-op.
               const tab = href.replace("#artifact:", "");
               return (
                 <button
                   className="text-primary hover:underline font-medium"
                   onClick={() => {
-                    setArtifactTab(tab as any);
-                    toggleArtifacts();
+                    const st = useStore.getState();
+                    const sid = st.currentSession?.id;
+                    if (!sid) return;
+                    const latest = (kind: "sim" | "synth") =>
+                      st.runs.find((r) => r.kind === kind)?.id ?? null;
+                    let key: string | null = null;
+                    if (tab === "spec") key = "spec";
+                    else if (tab === "code") {
+                      const first = st.manifest?.files.find((f) => f.role === "rtl");
+                      key = first ? `code:${first.path}` : null;
+                    } else if (tab === "waveform" || tab === "wave") {
+                      const id = latest("sim");
+                      key = id ? `wave:${id}` : null;
+                    } else if (tab === "report") {
+                      const id = latest("synth");
+                      key = id ? `report:${id}` : null;
+                    } else if (tab === "layout") {
+                      const id = latest("synth");
+                      key = id ? `layout:${id}` : null;
+                    }
+                    if (key) openArtifact(sid, key);
                   }}
                 >
                   {children}
@@ -208,21 +275,9 @@ function MarkdownContent({ content }: { content: string }) {
 function MessageContent({ message }: { message: Message }) {
   return (
     <div className="space-y-3">
-      {message.blocks.map((block, idx) =>
-        block.type === "text" ? (
-          isThinkingBlock(message.blocks, idx) ? (
-            <ThinkingContent key={idx} content={block.content} />
-          ) : (
-            <MarkdownContent key={idx} content={block.content} />
-          )
-        ) : (
-          <ToolCallCard
-            key={block.toolCall.id || idx}
-            toolCall={block.toolCall}
-            result={block.result}
-          />
-        )
-      )}
+      {message.blocks.map((block, idx) => (
+        <BlockView key={_blockKey(block, idx)} block={block} idx={idx} blocks={message.blocks} />
+      ))}
     </div>
   );
 }
@@ -271,22 +326,9 @@ function StreamingMessage({ showIcon = true }: { showIcon?: boolean }) {
             <span className="text-sm">Thinking{thinkingSecs > 0 ? ` · ${thinkingSecs}s` : "…"}</span>
           </div>
         ) : (
-          streamingMessage.blocks.map((block, idx) =>
-            block.type === "text" ? (
-              isThinkingBlock(streamingMessage.blocks, idx) ? (
-                <ThinkingContent key={idx} content={block.content} />
-              ) : (
-                <MarkdownContent key={idx} content={block.content} />
-              )
-            ) : (
-              <ToolCallCard
-                key={block.toolCall.id || idx}
-                toolCall={block.toolCall}
-                result={block.result}
-                isRunning={!block.result}
-              />
-            )
-          )
+          streamingMessage.blocks.map((block, idx) => (
+            <BlockView key={_blockKey(block, idx)} block={block} idx={idx} blocks={streamingMessage.blocks} isStreaming />
+          ))
         )}
       </div>
     </div>

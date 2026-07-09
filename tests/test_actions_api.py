@@ -217,7 +217,7 @@ def test_lint_and_simulate_end_to_end(client):
     lint = c.post(f"/api/workspace/{SID}/lint").json()
     assert lint["ok"] is True
     assert lint["status"] == "passed"
-    assert "iverilog" in lint["command"]
+    assert any(e in lint["command"] for e in ("iverilog", "verilator"))  # auto picks the best installed engine
 
     sim = c.post(f"/api/workspace/{SID}/simulate", json={}).json()
     assert sim["ok"] is True

@@ -120,7 +120,7 @@ def test_end_to_end_behind_cloud_job_orfs_runner(tmp_path):
 
     runner = CloudJobOrfsRunner(
         job_client=_client(submit),
-        stage_in=lambda d: (staged["in"].append(d) or f"handle::{os.path.basename(d)}"),
+        stage_in=lambda d, h="": (staged["in"].append(d) or f"handle::{os.path.basename(d)}"),
         stage_out=lambda d, h: staged["out"].append((d, h)),
         job="siliconcrew-orfs",
     )

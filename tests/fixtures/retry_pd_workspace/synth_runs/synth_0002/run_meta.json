@@ -1,7 +1,6 @@
 {
   "run_id": "synth_0002",
-  "job_id": "job_71329f37e8",
-  "created_at": "2026-06-22T23:00:06.879129+00:00",
+  "created_at": "2026-07-02T22:57:02.271516+00:00",
   "status": "completed",
   "mode": "pd_retry",
   "parent_run_id": "synth_0001",
@@ -91,7 +90,7 @@
     "repo_commit": "unknown",
     "orfs_image_digest": null,
     "pdk": "sky130hd",
-    "iverilog_version": null,
+    "iverilog_version": "12.0",
     "num_cores": 4
   },
   "docker_command": "fake",
@@ -102,11 +101,13 @@
   "summary_metrics": {
     "area_um2": null,
     "cell_count": null,
-    "wns_ns": null,
+    "wns_ns": 0.05,
     "tns_ns": null,
-    "power_uw": null
+    "power_uw": null,
+    "power_mw": null,
+    "fmax_mhz": 100.5
   },
   "next_action": "Inspect stage summaries and continue tuning.",
-  "finished_at": "2026-06-22T23:00:06.880136+00:00",
+  "finished_at": "2026-07-02T22:57:02.272564+00:00",
   "elapsed_sec": 0.0
 }

@@ -15,8 +15,23 @@ const API_KEY_NOTICE_DISMISSED = "sc-apikey-notice-dismissed";
 // you can add" — we turn these into an actionable CTA, not a dead error.
 const KEY_ERROR_CODES = new Set(["no_key", "hosted_tier_exhausted"]);
 
-export function ChatArea() {
-  const { currentSession, chatError, chatErrorCode } = useStore();
+export function ChatArea({
+  tailSlot,
+  footerSlot,
+  hideHeader = false,
+}: {
+  /** Rendered between the messages and the composer — the agent shell injects
+   * its inline manual-action cards here (S5-2); the IDE rail passes nothing. */
+  tailSlot?: React.ReactNode;
+  /** Rendered under the composer — the agent shell's context strip (manifest
+   * facts + session totals, Wave 8); the IDE rail passes nothing. */
+  footerSlot?: React.ReactNode;
+  /** Wave 8: the agent shell owns session/thread chrome in ITS header, so it
+   * hides this one. Error banners below always render — they are chat state,
+   * not chrome. */
+  hideHeader?: boolean;
+}) {
+  const { currentSession, chatError, chatErrorCode, agentRuntime } = useStore();
   // The API-key note competes with toasts as a second notification channel, so
   // make its dismissal sticky (localStorage) — once waved off it stays gone.
   const [apiNoticeDismissed, setApiNoticeDismissed] = useState(false);
@@ -29,8 +44,12 @@ export function ChatArea() {
   }, []);
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    // data-runtime scopes the Codex theme accent (see globals.css): all
+    // text-primary / ring-primary inside recolor to violet without touching
+    // component classes — same shared components, a different paint.
+    <div className="flex flex-col h-full bg-background" data-runtime={agentRuntime}>
       {/* Header */}
+      {!hideHeader && (
       <div className="flex items-center justify-between h-14 px-4 border-b border-border bg-surface-0">
         <div className="flex items-center gap-3">
           {currentSession ? (
@@ -74,6 +93,7 @@ export function ChatArea() {
           </div>
         )}
       </div>
+      )}
 
       {/* Error banner. A missing-API-key is a config note, not a failure — the
           lint/sim/synth tools work without the LLM — so render it calmly rather
@@ -92,17 +112,23 @@ export function ChatArea() {
             <p className="text-xs text-info truncate">{chatError}</p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            <Button
-              size="sm"
-              className="h-7 gap-1.5 text-xs"
-              data-testid="chat-add-key"
-              onClick={() => {
-                useStore.setState({ chatError: null, chatErrorCode: null });
-                useStore.getState().setSettingsOpen(true);
-              }}
-            >
-              <KeyRound className="h-3.5 w-3.5" /> Add an API key
-            </Button>
+            {agentRuntime === "codex" ? (
+              // Codex runs on a ChatGPT account (or its own quota) — the remedy
+              // is the "Connect ChatGPT" control, not adding an LLM API key.
+              <span className="text-xs text-info whitespace-nowrap">Use “Connect ChatGPT” above, or check your plan’s quota.</span>
+            ) : (
+              <Button
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
+                data-testid="chat-add-key"
+                onClick={() => {
+                  useStore.setState({ chatError: null, chatErrorCode: null });
+                  useStore.getState().setSettingsOpen(true);
+                }}
+              >
+                <KeyRound className="h-3.5 w-3.5" /> Add an API key
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -160,8 +186,12 @@ export function ChatArea() {
       {/* Messages */}
       <MessageList />
 
+      {tailSlot}
+
       {/* Input */}
       <ChatInput />
+
+      {footerSlot}
     </div>
   );
 }

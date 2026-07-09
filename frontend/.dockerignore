@@ -2,6 +2,7 @@ node_modules
 .next
 out
 build
+public/monaco
 .git
 .gitignore
 Dockerfile

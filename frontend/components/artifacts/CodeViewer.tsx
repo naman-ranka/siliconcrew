@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { Code, RefreshCw, Copy, Check, Download, FileCode, Pencil, Save, X, FilePlus } from "lucide-react";
-import Editor, { loader } from "@monaco-editor/react";
+import Editor from "@monaco-editor/react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "@/lib/store";
 import { useAuth } from "@/lib/auth";
+import { useMonacoLoadState, useMonacoThemeName } from "@/lib/monaco";
 import { Button } from "@/components/ui/button";
 import { IconTooltip } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -36,10 +37,8 @@ export function CodeViewer() {
   // configured but signed-out, prompt sign-in instead of letting it 403.
   const saveLocked = authEnabled && authStatus !== "signed_in";
   const [copied, setCopied] = useState(false);
-  // Monaco loads its worker bundle from a CDN; on restricted networks that is
-  // blocked and the editor hangs forever on "Loading…". Fall back to a
-  // syntax-highlighted view / plain textarea so the code tab always works.
-  const [editorMode, setEditorMode] = useState<"loading" | "monaco" | "fallback">("loading");
+  const editorMode = useMonacoLoadState();
+  const monacoTheme = useMonacoThemeName();
 
   // In-app edit / create — the human "update code → re-run" loop.
   const [editing, setEditing] = useState(false);
@@ -56,24 +55,6 @@ export function CodeViewer() {
   useEffect(() => {
     if (currentSession) loadCodeFiles();
   }, [currentSession, loadCodeFiles]);
-
-  useEffect(() => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (!done) setEditorMode((m) => (m === "loading" ? "fallback" : m));
-    }, 4000);
-    loader
-      .init()
-      .then(() => {
-        done = true;
-        setEditorMode("monaco");
-      })
-      .catch(() => {
-        done = true;
-        setEditorMode("fallback");
-      });
-    return () => clearTimeout(timer);
-  }, []);
 
   const currentFile = codeFiles.find((f) => f.filename === selectedCodeFile);
 
@@ -326,7 +307,7 @@ export function CodeViewer() {
             <Editor
               height="100%"
               language="systemverilog"
-              theme="vs-dark"
+              theme={monacoTheme}
               value={draft}
               onChange={(v) => setDraft(v ?? "")}
               options={{
@@ -336,6 +317,7 @@ export function CodeViewer() {
                 lineNumbers: "on",
                 scrollBeyondLastLine: false,
                 automaticLayout: true,
+                padding: { top: 8 },
               }}
             />
           ) : (
@@ -351,7 +333,7 @@ export function CodeViewer() {
           <Editor
             height="100%"
             language="systemverilog"
-            theme="vs-dark"
+            theme={monacoTheme}
             value={currentFile.content}
             options={{
               readOnly: true,
@@ -362,6 +344,7 @@ export function CodeViewer() {
               scrollBeyondLastLine: false,
               wordWrap: "on",
               automaticLayout: true,
+              padding: { top: 8 },
             }}
           />
         ) : currentFile && editorMode === "fallback" ? (

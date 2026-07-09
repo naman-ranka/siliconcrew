@@ -12,14 +12,13 @@ from src.tools.run_sby import run_sby
 from src.tools.synthesis_manager import (
     start_synthesis_job,
     retry_pd_job,
-    get_synthesis_job_status,
+    get_synthesis_status as collect_synthesis_status,
     get_synthesis_metrics as collect_synthesis_metrics,
     read_stage_report as collect_stage_report,
     get_route_drc_summary as collect_route_drc_summary,
     get_cts_summary as collect_cts_summary,
     get_congestion_summary as collect_congestion_summary,
     compare_pd_runs as collect_pd_run_comparison,
-    get_stage_status as collect_stage_status,
 )
 from src.tools.file_patch import apply_unified_patch
 
@@ -27,7 +26,7 @@ from src.tools.file_patch import apply_unified_patch
 # so the tenancy seam and its concurrency gate test do not require this heavy
 # tool/agent module. Re-exported here for backward compatibility — ~30 call
 # sites in this file resolve the workspace via get_workspace_path().
-from src.utils.workspace import get_workspace_path
+from src.utils.workspace import get_workspace_path, resolve_in_workspace
 
 
 def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
@@ -96,6 +95,7 @@ def write_file(filename: str, content: str | None = None) -> str:
     from src.tools.file_ops import write_file as _write_file
     workspace = get_workspace_path()
     try:
+        resolve_in_workspace(filename, workspace=workspace)  # confine to workspace
         _write_file(workspace, filename, content)
     except ValueError as exc:
         return f"Error: {exc}"
@@ -109,22 +109,28 @@ def read_file(filename: str) -> str:
         filename: Name of the file to read.
     """
     workspace = get_workspace_path()
-    filepath = os.path.join(workspace, filename)
-    
+    try:
+        filepath = resolve_in_workspace(filename, workspace=workspace)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
     if not os.path.exists(filepath):
         return f"Error: File {filename} does not exist."
-        
+
     with open(filepath, "r", encoding="utf-8", errors="replace") as f:
         return f.read()
 
 @tool
-def linter_tool(verilog_files: list[str] | str) -> str:
+def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
     """
-    Checks syntax using iverilog. Supports single-file or multi-file linting.
+    Lints Verilog files. Supports single-file or multi-file linting.
     Args:
         verilog_files: Filename string or list of filenames (e.g., 'design.v' or ['design.v','tb.v']).
         When linting a testbench, include all dependent RTL files in the same call
         (for example ['seq_detector.v', 'seq_detector_tb.v']) so module references resolve.
+        engine: 'auto' (verilator if installed, else iverilog), 'iverilog'
+        (syntax/elaboration only), or 'verilator' (real lint: latches, width
+        mismatches, unsynthesizable constructs — lint RTL only, not testbenches).
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
@@ -136,12 +142,24 @@ def linter_tool(verilog_files: list[str] | str) -> str:
             return f"Error: File {item} does not exist."
         filepaths.append(fp)
 
-    result = run_linter(filepaths, cwd=workspace)
-    
+    result = run_linter(filepaths, cwd=workspace, engine=engine)
+
+    diags = result.get("diagnostics") or []
+    warnings = [d for d in diags if d["severity"] == "warning"]
+    errors = [d for d in diags if d["severity"] == "error"]
+
+    def _fmt(d):
+        loc = f"{d['file']}:{d['line']}" if d.get("file") else "(general)"
+        code = f" [{d['code']}]" if d.get("code") else ""
+        return f"{loc}: {d['severity']}{code}: {d['message']}"
+
+    if result["success"] and not warnings:
+        return f"Syntax OK. (engine: {result.get('engine')})"
     if result["success"]:
-        return "Syntax OK."
-    else:
-        return f"Syntax Error:\n{result['stderr']}"
+        lines = "\n".join(_fmt(d) for d in warnings)
+        return f"Lint passed with {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
+    lines = "\n".join(_fmt(d) for d in (errors + warnings)) or result["stderr"]
+    return f"Lint FAILED — {len(errors)} error(s), {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
 
 @tool
 def simulation_tool(
@@ -278,9 +296,17 @@ def start_synthesis(
     core_margin: float = 2.0,
     run_equiv: bool = False,
     constraints_mode: str = "auto",
+    max_stage: str = "finish",
 ) -> str:
     """
-    Starts synthesis asynchronously and returns quickly with job_id and run_id.
+    Starts synthesis asynchronously and returns quickly with the run_id —
+    the ONE durable handle for this run (poll it with get_synthesis_status).
+    By default (max_stage="finish") this runs the FULL RTL->GDS ORFS flow.
+    Set max_stage="synth" for a fast synthesis-only PPA estimate (area/cell
+    count without place-and-route timing/power), or stop after any stage:
+    constraints|synth|floorplan|place|cts|grt|route|finish. Stages after
+    max_stage are recorded as "skipped". Continue a partial run toward GDS
+    later with retry_pd starting from the next stage.
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
@@ -303,6 +329,7 @@ def start_synthesis(
         core_margin=core_margin,
         run_equiv=run_equiv,
         constraints_mode=constraints_mode,
+        max_stage=max_stage,
     )
     return json.dumps(result, indent=2)
 
@@ -332,29 +359,35 @@ def retry_pd(
     return json.dumps(result, indent=2)
 
 @tool
-def get_synthesis_job(job_id: str) -> str:
+def get_synthesis_status(run_id: str) -> str:
     """
-    Gets synthesis job status including stage, auto-check summaries, and best-effort metrics.
+    Full status for a synthesis run by its run_id: status, current stage,
+    per-stage table + history, last log lines, artifacts found, best-effort
+    metrics, and poll_after_sec guidance. Self-healing: a run whose worker
+    died is reconciled from on-disk evidence (completed from artifacts, or
+    failed once past its timeout ceiling) instead of reading "running" forever.
     """
     workspace = get_workspace_path()
-    result = get_synthesis_job_status(job_id, workspace=workspace)
+    result = collect_synthesis_status(run_id, workspace=workspace)
     return json.dumps(result, indent=2)
+
+
+# Bounded means bounded even for a creative caller (plan round-2 #6).
+WAIT_MAX_WAIT_SEC = 120
 
 
 def _wait_for_synthesis_job(
     workspace: str,
-    job_id: str,
+    run_id: str,
     max_wait_sec: int,
     poll_interval_sec: int,
 ) -> dict[str, Any]:
     start = time.time()
-    max_wait = max(1, int(max_wait_sec))
+    max_wait = max(1, min(int(max_wait_sec), WAIT_MAX_WAIT_SEC))
     poll_interval = max(1, int(poll_interval_sec))
-    last = None
 
     while (time.time() - start) < max_wait:
-        status = get_synthesis_job_status(job_id, workspace=workspace)
-        last = status
+        status = collect_synthesis_status(run_id, workspace=workspace)
         if status.get("status") in {"completed", "failed"}:
             status["waited_sec"] = round(time.time() - start, 2)
             status["timed_out"] = False
@@ -369,72 +402,35 @@ def _wait_for_synthesis_job(
             break
         time.sleep(min(sleep_s, max(1, int(remaining))))
 
-    # timeout path returns latest known status with explicit timeout flag
-    if last is None:
-        last = {"job_id": job_id, "status": "running"}
+    # One final sample after the wait loop: the run may have gone terminal
+    # during the last sleep — report that, not a stale pre-sleep snapshot.
+    last = collect_synthesis_status(run_id, workspace=workspace)
     last["waited_sec"] = round(time.time() - start, 2)
+    if last.get("status") in {"completed", "failed"}:
+        last["timed_out"] = False
+        return last
+
+    # timeout path returns latest known status with explicit timeout flag
     last["timed_out"] = True
-    last["next_action"] = "Call wait_for_synthesis again or poll with get_synthesis_job."
+    last["next_action"] = "Call wait_for_synthesis again or poll with get_synthesis_status."
     return last
 
 
 @tool
-def wait_for_synthesis(job_id: str, max_wait_sec: int = 30, poll_interval_sec: int = 2) -> str:
+def wait_for_synthesis(run_id: str, max_wait_sec: int = 30, poll_interval_sec: int = 2) -> str:
     """
-    MCP-safe bounded wait for synthesis completion.
-    Internally polls synthesis for up to max_wait_sec, then returns either terminal or running status.
+    MCP-safe bounded wait for synthesis completion — the ONE blocking
+    convenience, defined as a bounded poll loop over get_synthesis_status.
     Args:
-        job_id: Synthesis job id from start_synthesis.
-        max_wait_sec: Max seconds to block in this call (default 30).
+        run_id: Synthesis run id from start_synthesis / retry_pd.
+        max_wait_sec: Max seconds to block in this call (default 30, capped 120).
         poll_interval_sec: Fallback poll interval when guidance is absent.
     """
     workspace = get_workspace_path()
-    result = _wait_for_synthesis_job(workspace, job_id, max_wait_sec, poll_interval_sec)
+    result = _wait_for_synthesis_job(workspace, run_id, max_wait_sec, poll_interval_sec)
     return json.dumps(result, indent=2)
 
 
-@tool
-def run_synthesis_and_wait(
-    verilog_files: list[str],
-    top_module: str,
-    platform: str = "sky130hd",
-    clock_period_ns: float = 10.0,
-    utilization: int = 5,
-    aspect_ratio: float = 1.0,
-    core_margin: float = 2.0,
-    run_equiv: bool = False,
-    constraints_mode: str = "auto",
-    max_wait_sec: int = 300,
-    poll_interval_sec: int = 2,
-) -> str:
-    """
-    Starts synthesis and waits (bounded) for completion.
-    Intended for non-MCP agent flows to reduce poll/sleep turn overhead.
-    """
-    started_json = start_synthesis.invoke(
-        {
-            "verilog_files": verilog_files,
-            "top_module": top_module,
-            "platform": platform,
-            "clock_period_ns": clock_period_ns,
-            "utilization": utilization,
-            "aspect_ratio": aspect_ratio,
-            "core_margin": core_margin,
-            "run_equiv": run_equiv,
-            "constraints_mode": constraints_mode,
-        }
-    )
-
-    try:
-        started = json.loads(started_json)
-    except Exception:
-        return started_json
-    if "job_id" not in started:
-        return started_json
-
-    workspace = get_workspace_path()
-    waited = _wait_for_synthesis_job(workspace, started["job_id"], max_wait_sec, poll_interval_sec)
-    return json.dumps({"start": started, "result": waited}, indent=2)
 
 @tool
 def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0, end_time: int = 1000) -> str:
@@ -534,17 +530,6 @@ def compare_pd_runs(child_run_id: str, parent_run_id: str = None) -> str:
     return json.dumps(result, indent=2)
 
 
-@tool
-def get_stage_status(run_id: str = None) -> str:
-    """
-    Returns stage-aware run metadata for a synthesis run.
-    Includes current stage, per-stage statuses, and grouped completed/running/pending stages.
-    """
-    workspace = get_workspace_path()
-    result = collect_stage_status(workspace=workspace, run_id=run_id)
-    return json.dumps(result, indent=2)
-
-
 from src.tools.edit_file import replace_in_file
 
 @tool
@@ -569,8 +554,11 @@ def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> st
         replacement_text: The new text to insert.
     """
     workspace = get_workspace_path()
-    abs_file = os.path.join(workspace, filename)
-    
+    try:
+        abs_file = resolve_in_workspace(filename, workspace=workspace)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
     result = replace_in_file(abs_file, target_text, replacement_text)
     
     if result["success"]:
@@ -1002,7 +990,7 @@ def list_files_tool() -> str:
 def sleep_tool(seconds: int) -> str:
     """
     Blocks briefly before the next action.
-    Use this to honor synthesis polling guidance from get_synthesis_job.
+    Use this to honor synthesis polling guidance from get_synthesis_status.
     Args:
         seconds: Requested sleep time (clamped to 1..30 seconds).
     """
@@ -1182,7 +1170,7 @@ mcp_tools = [
     # Synthesis & Analysis
     start_synthesis,
     retry_pd,
-    get_synthesis_job,
+    get_synthesis_status,
     wait_for_synthesis,
     get_synthesis_metrics,
     read_stage_report,
@@ -1190,7 +1178,6 @@ mcp_tools = [
     get_cts_summary,
     get_congestion_summary,
     compare_pd_runs,
-    get_stage_status,
     search_logs_tool,
     schematic_tool,
     # Reporting & Metrics
@@ -1207,4 +1194,6 @@ mcp_tools = [
 ]
 
 # Tools bound to the in-process architect agent.
-architect_tools = [*mcp_tools, run_synthesis_and_wait, sleep_tool]
+# One async contract everywhere: the architect polls with bounded
+# wait_for_synthesis loops — no start+wait combo tool (Wave 9).
+architect_tools = [*mcp_tools, sleep_tool]

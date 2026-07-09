@@ -27,10 +27,21 @@ from typing import Callable, List, Optional, Protocol, Tuple
 
 
 class ObjectStore(Protocol):
-    """Store/retrieve a directory tree as a single tar blob under a key."""
+    """Store/retrieve a directory tree as a single tar blob under a key.
+
+    ``exists`` is the EXPLICIT presence check (``get_tree`` deliberately keeps
+    its "absent blob → empty dir" behavior, so callers that must distinguish
+    absence — e.g. the reconciler adopting cloud outputs — use ``exists``).
+    ``put_file`` stores one small raw object (no tarring) under a key — the
+    Item-4 durable run_meta push path. ``get_file`` is its read-back (same raw
+    key scheme, no ``.tar.gz`` spelling): False when the object is absent, so
+    a reader can distinguish "no durable meta yet" from an empty pull.
+    """
 
     def exists(self, key: str) -> bool: ...
     def put_tree(self, key: str, local_dir: str) -> None: ...
+    def put_file(self, key: str, local_path: str) -> None: ...
+    def get_file(self, key: str, local_path: str) -> bool: ...
     def get_tree(self, key: str, local_dir: str, subdirs: Optional[List[str]] = None) -> None: ...
     # A version token for the stored object (GCS generation), or None if absent.
     # Used by the workspace provider to skip re-downloading an unchanged object
@@ -86,14 +97,29 @@ class InMemoryObjectStore:
 
     def __init__(self) -> None:
         self._blobs: dict[str, bytes] = {}
+        self._files: dict[str, bytes] = {}
         self._gen: dict[str, int] = {}
 
     def exists(self, key: str) -> bool:
-        return key in self._blobs
+        return key in self._blobs or key in self._files
 
     def put_tree(self, key: str, local_dir: str) -> None:
         self._blobs[key] = _tar_dir_to_bytes(local_dir)
         self._gen[key] = self._gen.get(key, 0) + 1  # bump the version on each write
+
+    def put_file(self, key: str, local_path: str) -> None:
+        with open(local_path, "rb") as f:
+            self._files[key] = f.read()
+
+    def get_file(self, key: str, local_path: str) -> bool:
+        # Mirrors put_file's key scheme exactly (raw objects live in _files,
+        # never in the tar-blob namespace).
+        if key not in self._files:
+            return False
+        os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
+        with open(local_path, "wb") as f:
+            f.write(self._files[key])
+        return True
 
     def get_tree(self, key: str, local_dir: str, subdirs: Optional[List[str]] = None) -> None:
         if key not in self._blobs:
@@ -129,13 +155,33 @@ class GcsObjectStore:
         path = f"{self._prefix}/{key}.tar.gz" if self._prefix else f"{key}.tar.gz"
         return self._bucket().blob(path)
 
+    def _raw_blob(self, key: str):
+        """Blob at the key itself (no ``.tar.gz`` suffix) — put_file objects."""
+        path = f"{self._prefix}/{key}" if self._prefix else key
+        return self._bucket().blob(path)
+
     def exists(self, key: str) -> bool:
-        return self._blob(key).exists()
+        # A key can name a tar blob (put_tree) or a raw object (put_file);
+        # check the tar spelling first (the common stage-in/out case).
+        return self._blob(key).exists() or self._raw_blob(key).exists()
 
     def put_tree(self, key: str, local_dir: str) -> None:
         self._blob(key).upload_from_string(
             _tar_dir_to_bytes(local_dir), content_type="application/gzip"
         )
+
+    def put_file(self, key: str, local_path: str) -> None:
+        self._raw_blob(key).upload_from_filename(local_path)
+
+    def get_file(self, key: str, local_path: str) -> bool:
+        # Mirrors put_file's key scheme exactly: raw blob at the key itself
+        # (no ``.tar.gz`` suffix).
+        blob = self._raw_blob(key)
+        if not blob.exists():
+            return False
+        os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
+        blob.download_to_filename(local_path)
+        return True
 
     def get_tree(self, key: str, local_dir: str, subdirs: Optional[List[str]] = None) -> None:
         blob = self._blob(key)
@@ -297,25 +343,39 @@ class CloudWorkspaceProvider:
 # ---------------------------------------------------------------------------
 
 
-def build_run_stager(settings) -> Tuple[Callable[[str], str], Callable[[str, str], None]]:
+def build_run_store(settings) -> "GcsObjectStore":
+    """The object store holding staged ORFS runs (``orfs-runs/…`` in the bucket).
+
+    Shared by the cloud run stager AND the synthesis manager's durable
+    run_meta push / adoption path, so both address the same key space: a run
+    handle ``<session_id>/<run_id>`` lands at
+    ``orfs-runs/<session_id>/<run_id>`` in the workspace bucket.
+    """
+    return GcsObjectStore(bucket=settings.workspace_bucket, prefix="orfs-runs")
+
+
+def build_run_stager(settings) -> Tuple[Callable[[str, str], str], Callable[[str, str], None]]:
     """Return ``(stage_in, stage_out)`` for the cloud ORFS runner.
 
-    ``stage_in`` tars a self-contained run dir to a unique object key and returns
+    ``stage_in`` tars a self-contained run dir to an object key and returns
     it as the handle the Cloud Run Job pulls. ``stage_out`` fetches the result
     subdirs the Job uploaded back under the same key into the local run dir, so
     the unchanged downstream parsers see the normal on-disk layout.
     """
-    store = GcsObjectStore(bucket=settings.workspace_bucket, prefix="orfs-runs")
-    return make_run_stager(store)
+    return make_run_stager(build_run_store(settings))
 
 
 def make_run_stager(
     store: ObjectStore,
-) -> Tuple[Callable[[str], str], Callable[[str, str], None]]:
+) -> Tuple[Callable[[str, str], str], Callable[[str, str], None]]:
     """Stager bound to an arbitrary object store (injectable for tests)."""
 
-    def stage_in(run_dir: str) -> str:
-        handle = f"{os.path.basename(run_dir.rstrip('/'))}-{uuid.uuid4().hex[:10]}"
+    def stage_in(run_dir: str, handle: str = "") -> str:
+        # Wave 9 (Item 4): the caller supplies the deterministic handle
+        # (<session_id>/<run_id>, computed by the synthesis manager) so any
+        # instance can reconstruct the prefix from the run alone. An empty
+        # handle keeps the legacy unique-key mint as a fallback.
+        handle = handle or f"{os.path.basename(run_dir.rstrip('/'))}-{uuid.uuid4().hex[:10]}"
         store.put_tree(handle, run_dir)
         return handle
 

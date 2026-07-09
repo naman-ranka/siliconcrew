@@ -44,7 +44,7 @@ if [ ! -f .env.docker ]; then
     else
         echo "No .env.example found either. Create .env.docker with your API keys:"
         echo "  GOOGLE_API_KEY=your_key"
-        echo "  DEFAULT_MODEL=gemini-3-flash-preview"
+        echo "  DEFAULT_MODEL=gemini-3.5-flash"
         exit 1
     fi
 fi

@@ -233,7 +233,8 @@ def _write_summary(workspace: str, session_id: str | None) -> None:
         status = str(ev.get("status", "unknown")).lower()
 
         if tool == "linter_tool":
-            l_status = "pass" if "syntax ok" in (result_text or "").lower() else "fail"
+            _lt = (result_text or "").lower()
+            l_status = "pass" if ("syntax ok" in _lt or "lint passed" in _lt) else "fail"
             current["rtl_lint"] = l_status
             current["_has_checkpoint"] = True
             current["_had_failure"] = current["_had_failure"] or l_status == "fail"

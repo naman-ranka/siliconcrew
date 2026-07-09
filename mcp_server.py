@@ -39,6 +39,7 @@ from mcp.types import (
     GetPromptResult,
     Resource,
     ResourceContents,
+    TextResourceContents,
     ReadResourceResult,
 )
 
@@ -59,7 +60,7 @@ from src.tools.wrappers import (
     sby_tool,
     start_synthesis,
     retry_pd,
-    get_synthesis_job,
+    get_synthesis_status,
     wait_for_synthesis,
     get_synthesis_metrics,
     read_stage_report,
@@ -67,7 +68,6 @@ from src.tools.wrappers import (
     get_cts_summary,
     get_congestion_summary,
     compare_pd_runs,
-    get_stage_status,
     search_logs_tool,
     schematic_tool,
     save_metrics_tool,
@@ -125,30 +125,10 @@ def _load_architect_prompt() -> tuple[str, str, str]:
 # TOOL AUTO-DISCOVERY HELPERS
 # =============================================================================
 
-# Tool categorization for filtering
-TOOL_CATEGORIES = {
-    "essential": [
-        "write_spec", "read_spec", "write_file", "read_file", 
-        "linter_tool", "simulation_tool", "list_files_tool"
-    ],
-    "verification": [
-        "waveform_tool", "cocotb_tool", "sby_tool"
-    ],
-    "synthesis": [
-        "start_synthesis", "retry_pd", "get_synthesis_job", "wait_for_synthesis", "get_synthesis_metrics", "read_stage_report", "get_route_drc_summary", "get_cts_summary", "get_congestion_summary", "compare_pd_runs", "get_stage_status", "search_logs_tool", "schematic_tool"
-    ],
-    "editing": [
-        "apply_patch_tool", "edit_file_tool", "load_yaml_spec_file"
-    ],
-    "reporting": [
-        "save_metrics_tool", "generate_report_tool"
-    ],
-    "hls": [
-        "run_xls_flow", "run_dslx_interpreter", "compile_dslx_to_ir",
-        "optimize_xls_ir", "codegen_xls", "benchmark_xls",
-        "experimental_compile_cpp_to_ir"
-    ]
-}
+# Tool categorization for filtering — single source of truth shared with the
+# web UI's tool catalog (src/api/tool_catalog.py), so the Command Surface, the
+# agent, and MCP clients all see one taxonomy and one protection policy.
+from src.api.tool_catalog import TOOL_CATEGORIES, PROTECTED_TOOLS as _SHARED_PROTECTED_TOOLS
 
 # Flatten for easy lookup
 ALL_CATEGORIZED_TOOLS = set()
@@ -187,8 +167,12 @@ def langchain_to_mcp_schema(langchain_tool) -> Tool:
 # =============================================================================
 
 class RTLDesignMCPServer:
-    def __init__(self, codex_tools: bool = False):
+    def __init__(self, codex_tools: bool = False, bound_session: str | None = None):
         self.server = Server("rtl-design-agent")
+        # Bound-session mode (Codex): this server instance is locked to exactly
+        # one session. Session-management + cross-session tool access are refused
+        # so an embedded Codex agent can only ever touch its own workspace.
+        self.bound_session = (bound_session or "").strip() or None
         # Respect mounted workspace path when running in Docker.
         # Falls back to repo-local workspace for non-container/local usage.
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -215,6 +199,14 @@ class RTLDesignMCPServer:
         from src.platform_engines.settings import get_settings
         self._hosted = get_settings().hosted
 
+        # In bound mode, verify ownership and lock the active session up front so
+        # every subsequent tool call operates only within it. (After _hosted is
+        # set — _scoped_user_id resolves identity through it.)
+        if self.bound_session:
+            if not self.session_manager.owns_session(self.bound_session, self._scoped_user_id()):
+                raise RuntimeError(f"Bound session '{self.bound_session}' not found for this MCP identity.")
+            self.current_session = self.bound_session
+
         # Wire cloud engines once (no-op in self-host).
         from src.platform_engines.settings import apply_platform_wiring
         apply_platform_wiring()
@@ -233,10 +225,10 @@ class RTLDesignMCPServer:
             return new_anonymous("mcp")
 
     # Tools that mutate/persist or are compute-heavy require a signed-in user.
-    _PROTECTED_TOOLS = frozenset(TOOL_CATEGORIES["synthesis"]) | {
-        "write_spec", "write_file", "apply_patch_tool", "edit_file_tool",
-        "save_metrics_tool", "generate_report_tool",
-    }
+    # Shared with the web UI's /invoke gate (src/api/tool_catalog.py) — one
+    # policy, enforced identically for MCP clients and the Command Surface.
+    # (Now also covers cocotb/SBY/HLS: containerized compute is sign-in-gated.)
+    _PROTECTED_TOOLS = _SHARED_PROTECTED_TOOLS
 
     def _current_identity(self):
         """The identity to act as for the in-flight call.
@@ -266,7 +258,29 @@ class RTLDesignMCPServer:
 
     def _scoped_user_id(self):
         return auth_engine.scoped_user_id(self._current_identity())
-    
+
+    def _resource_sessions(self) -> list[str]:
+        """Sessions this MCP identity may see through the RESOURCE surface —
+        mirrors the tool path's scoping so resources can't leak past the same
+        boundary tool calls respect: the bound session only (Codex bound mode),
+        the owner's sessions (hosted), or all (self-host / single-tenant)."""
+        if self.bound_session:
+            return [self.bound_session]
+        if self._hosted:
+            return self.session_manager.get_all_sessions(user_id=self._scoped_user_id())
+        return self.session_manager.get_all_sessions()
+
+    def _assert_session_readable(self, session_id: str) -> None:
+        """Deny reading a session's resources outside this identity's scope
+        (bound session in Codex mode; owner in hosted). Defense-in-depth for the
+        resource path, parity with call_tool's bound-session/ownership guards."""
+        if self.bound_session:
+            if session_id != self.bound_session:
+                raise ValueError(f"Access denied; this server is bound to session '{self.bound_session}'.")
+            return
+        if self._hosted and not self.session_manager.owns_session(session_id, self._scoped_user_id()):
+            raise ValueError("Access denied")
+
     def _setup_handlers(self):
         """Setup MCP protocol handlers"""
         @self.server.list_tools()
@@ -306,8 +320,9 @@ class RTLDesignMCPServer:
             )
         ]
         
-        # Add resources for each session
-        sessions = self.session_manager.get_all_sessions()
+        # Add resources for each session THIS identity may see (bound session /
+        # owner-scoped / all) — not every tenant's sessions.
+        sessions = self._resource_sessions()
         for session_id in sessions:
             workspace = self.session_manager.get_workspace_path(session_id)
             encoded_session_id = quote(session_id, safe="")
@@ -341,8 +356,8 @@ class RTLDesignMCPServer:
         import json
         
         if uri == "rtl://sessions":
-            # List all sessions with metadata
-            sessions = self.session_manager.get_all_sessions()
+            # List only the sessions in this identity's scope (see _resource_sessions).
+            sessions = self._resource_sessions()
             session_data = []
             for session_id in sessions:
                 meta = self.session_manager.get_session_metadata(session_id)
@@ -358,11 +373,10 @@ class RTLDesignMCPServer:
             
             return ReadResourceResult(
                 contents=[
-                    TextContent(
-                        type="text",
-                        text=json.dumps(session_data, indent=2),
+                    TextResourceContents(
                         uri=uri,
-                        mimeType="application/json"
+                        mimeType="application/json",
+                        text=json.dumps(session_data, indent=2),
                     )
                 ]
             )
@@ -374,6 +388,7 @@ class RTLDesignMCPServer:
                 encoded_session_id, encoded_filename = remainder.split("/file/", 1)
                 session_id = unquote(encoded_session_id)
                 filename = unquote(encoded_filename)
+                self._assert_session_readable(session_id)  # scope BEFORE touching the workspace
                 workspace = self.session_manager.get_workspace_path(session_id)
                 filepath = os.path.join(workspace, filename)
 
@@ -382,7 +397,9 @@ class RTLDesignMCPServer:
 
                 real_workspace = os.path.realpath(workspace)
                 real_file = os.path.realpath(filepath)
-                if not real_file.startswith(real_workspace):
+                # Exact-or-under (with os.sep) so a sibling like `<ws>_other`
+                # can't slip past a bare prefix match.
+                if not (real_file == real_workspace or real_file.startswith(real_workspace + os.sep)):
                     raise ValueError("Access denied")
 
                 with open(filepath, "r", errors="ignore") as f:
@@ -390,11 +407,10 @@ class RTLDesignMCPServer:
 
                 return ReadResourceResult(
                     contents=[
-                        TextContent(
-                            type="text",
-                            text=content,
+                        TextResourceContents(
                             uri=uri,
-                            mimeType=self._get_mime_type(filename)
+                            mimeType=self._get_mime_type(filename),
+                            text=content,
                         )
                     ]
                 )
@@ -402,6 +418,7 @@ class RTLDesignMCPServer:
             session_id = unquote(remainder)
 
             if session_id:
+                self._assert_session_readable(session_id)  # scope BEFORE reading metadata/files
                 # Session metadata
                 meta = self.session_manager.get_session_metadata(session_id)
                 workspace = self.session_manager.get_workspace_path(session_id)
@@ -419,11 +436,10 @@ class RTLDesignMCPServer:
                 
                 return ReadResourceResult(
                     contents=[
-                        TextContent(
-                            type="text",
-                            text=json.dumps(session_info, indent=2),
+                        TextResourceContents(
                             uri=uri,
-                            mimeType="application/json"
+                            mimeType="application/json",
+                            text=json.dumps(session_info, indent=2, default=str),
                         )
                     ]
                 )
@@ -667,7 +683,20 @@ Ready to design! What would you like to create?"""
         """
         if arguments is None:
             arguments = {}
-        
+
+        # Bound-session isolation (Codex): refuse session management and any tool
+        # aimed at a different session, and pin the active session to the bound
+        # one. Defense-in-depth — config.toml also lists these in disabled_tools.
+        if self.bound_session:
+            if name in {"create_session_tool", "list_sessions_tool", "delete_session_tool", "set_active_session"}:
+                return [TextContent(type="text",
+                    text=f"Session management is disabled; this server is bound to '{self.bound_session}'.")]
+            req_sid = arguments.get("session_id")
+            if req_sid and req_sid != self.bound_session:
+                return [TextContent(type="text",
+                    text=f"Access denied; this server is bound to session '{self.bound_session}'.")]
+            self.current_session = self.bound_session
+
         # Handle session management tools
         if name == "create_session_tool":
             session_name = arguments["session_name"]
@@ -737,7 +766,7 @@ Ready to design! What would you like to create?"""
                 "workspace": workspace,
                 "metadata": meta
             }
-            return [TextContent(type="text", text=json.dumps(info, indent=2))]
+            return [TextContent(type="text", text=json.dumps(info, indent=2, default=str))]
         
         elif name == "delete_session_tool":
             session_id = arguments["session_id"]
@@ -1115,9 +1144,14 @@ async def main():
         action="store_true",
         help="Expose Codex-only helper tools (e.g., inject_architect_prompt)."
     )
+    parser.add_argument(
+        "--bound-session",
+        default=None,
+        help="Lock this server to one session id (Codex): blocks session management + cross-session access."
+    )
     args = parser.parse_args()
 
-    server = RTLDesignMCPServer(codex_tools=args.codex_tools)
+    server = RTLDesignMCPServer(codex_tools=args.codex_tools, bound_session=args.bound_session)
     await server.run(transport=args.transport, host=args.host, port=args.port)
 
 
