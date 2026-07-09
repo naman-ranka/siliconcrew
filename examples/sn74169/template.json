@@ -1,0 +1,13 @@
+{
+  "id": "sn74169",
+  "name": "sn74169 Up/Down Counter",
+  "description": "A 4-bit synchronous up/down counter (TTL 74169 replica) with parallel load, hold, and active-low ripple-carry out, adapted from a Tiny Tapeout Apache-2.0 project, taken spec -> lint -> simulation -> GDS on sky130hd entirely through the platform.",
+  "highlights": [
+    "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
+    "Timing met: WNS 0.0 ns; 26 std cells; 283 um2",
+    "Self-checking TB (golden model of load/count/hold + RCOB terminal pulse) PASSED"
+  ],
+  "top_module": "sn74169",
+  "platform": "sky130hd",
+  "source_note": "RTL core adapted from Tiny Tapeout andychip1/sn74169 (Apache-2.0, commit cdab2c2); original self-checking TB; authored by dogfooding SiliconCrew locally (native iverilog sim + local ORFS synth)."
+}

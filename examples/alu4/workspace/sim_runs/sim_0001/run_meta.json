@@ -1,0 +1,27 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T07:53:03.104854+00:00",
+  "top": "alu4_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "e25207c3ba359e475759c9178d90c4e1e27c0690",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\alu4_tb.vcd",
+  "passMarkerFound": true,
+  "passMarker": "TEST PASSED",
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s alu4_tb -o <workspace>\\sim_runs\\sim_0001\\alu4_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog_kf9snk7r.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\alu4_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile alu4_tb.vcd opened for output.\nTEST PASSED (2304 vectors checked)\n<workspace>/alu4_tb.v:145: $finish called at 23056000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

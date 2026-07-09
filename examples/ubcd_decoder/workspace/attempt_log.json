@@ -1,0 +1,41 @@
+{
+  "session_id": "ubcd_decoder",
+  "attempt_count": 2,
+  "attempts": [
+    {
+      "attempt": 1,
+      "change_type": "unknown",
+      "changes": [],
+      "rtl_lint": "fail",
+      "rtl_sim": "not_run",
+      "synth_status": "not_run",
+      "wns_ns": null,
+      "tns_ns": null,
+      "post_synth_sim": "not_run",
+      "spec_match": "unknown",
+      "started_at": "2026-07-07T07:58:31.161216+00:00",
+      "ended_at": "2026-07-07T07:58:31.424873+00:00"
+    },
+    {
+      "attempt": 2,
+      "change_type": "synth",
+      "changes": [
+        "start_synthesis"
+      ],
+      "rtl_lint": "not_run",
+      "rtl_sim": "not_run",
+      "synth_status": "running",
+      "wns_ns": null,
+      "tns_ns": null,
+      "post_synth_sim": "not_run",
+      "spec_match": "unknown",
+      "started_at": "2026-07-07T07:58:31.424873+00:00",
+      "ended_at": "2026-07-07T07:59:58.812206+00:00"
+    }
+  ],
+  "final": {
+    "success": false,
+    "best_attempt": null
+  },
+  "updated_at": "2026-07-07T07:59:58.824053+00:00"
+}

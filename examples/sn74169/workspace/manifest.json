@@ -1,0 +1,26 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "sn74169.v",
+      "role": "rtl",
+      "path": "sn74169.v"
+    },
+    {
+      "name": "sn74169_tb.v",
+      "role": "tb",
+      "path": "sn74169_tb.v"
+    }
+  ],
+  "synthTop": "sn74169",
+  "simTop": "sn74169_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "sn74169_tb.v",
+      "module": "sn74169_tb"
+    }
+  ]
+}

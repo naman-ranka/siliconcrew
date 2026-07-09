@@ -1,0 +1,14 @@
+{
+  "runs": [
+    {
+      "run_id": "sim_0001",
+      "status": "passed",
+      "created_at": "2026-07-07T07:58:19.046495+00:00",
+      "updated_at": "2026-07-07T07:58:19.216541+00:00",
+      "top": "pwm_generator_tb",
+      "mode": "rtl",
+      "pinned": false,
+      "parentRunId": null
+    }
+  ]
+}

@@ -1,0 +1,324 @@
+
+==========================================================================
+resizer report_tns
+--------------------------------------------------------------------------
+tns max 0.00
+
+==========================================================================
+resizer report_wns
+--------------------------------------------------------------------------
+wns max 0.00
+
+==========================================================================
+resizer report_worst_slack
+--------------------------------------------------------------------------
+worst slack max 9.19
+
+==========================================================================
+resizer report_clock_min_period
+--------------------------------------------------------------------------
+clk period_min = 0.81 fmax = 1229.80
+
+==========================================================================
+resizer report_checks -path_delay min
+--------------------------------------------------------------------------
+Startpoint: overflow_r$_DFFE_PN0N_
+            (rising edge-triggered flip-flop clocked by clk)
+Endpoint: overflow_r$_DFFE_PN0N_
+          (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: min
+
+Fanout     Cap    Slew   Delay    Time   Description
+-----------------------------------------------------------------------------
+                  0.00    0.00    0.00   clock clk (rise edge)
+                          0.00    0.00   clock network delay (ideal)
+                  0.00    0.00    0.00 ^ overflow_r$_DFFE_PN0N_/CLK (sky130_fd_sc_hd__dfrtp_1)
+     2    0.01    0.07    0.32    0.32 ^ overflow_r$_DFFE_PN0N_/Q (sky130_fd_sc_hd__dfrtp_1)
+                                         net15 (net)
+                  0.07    0.00    0.32 ^ _452_/A (sky130_fd_sc_hd__nand2_1)
+     1    0.00    0.04    0.05    0.37 v _452_/Y (sky130_fd_sc_hd__nand2_1)
+                                         _235_ (net)
+                  0.04    0.00    0.37 v _453_/C1 (sky130_fd_sc_hd__o211ai_1)
+     1    0.00    0.07    0.07    0.44 ^ _453_/Y (sky130_fd_sc_hd__o211ai_1)
+                                         _094_ (net)
+                  0.07    0.00    0.44 ^ overflow_r$_DFFE_PN0N_/D (sky130_fd_sc_hd__dfrtp_1)
+                                  0.44   data arrival time
+
+                  0.00    0.00    0.00   clock clk (rise edge)
+                          0.00    0.00   clock network delay (ideal)
+                          0.00    0.00   clock reconvergence pessimism
+                                  0.00 ^ overflow_r$_DFFE_PN0N_/CLK (sky130_fd_sc_hd__dfrtp_1)
+                         -0.05   -0.05   library hold time
+                                 -0.05   data required time
+-----------------------------------------------------------------------------
+                                 -0.05   data required time
+                                 -0.44   data arrival time
+-----------------------------------------------------------------------------
+                                  0.49   slack (MET)
+
+
+
+==========================================================================
+resizer report_checks -path_delay max
+--------------------------------------------------------------------------
+Startpoint: carry_out_r$_DFFE_PN0N_
+            (rising edge-triggered flip-flop clocked by clk)
+Endpoint: carry_out_r$_DFFE_PN0N_
+          (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+
+Fanout     Cap    Slew   Delay    Time   Description
+-----------------------------------------------------------------------------
+                  0.00    0.00    0.00   clock clk (rise edge)
+                          0.00    0.00   clock network delay (ideal)
+                  0.00    0.00    0.00 ^ carry_out_r$_DFFE_PN0N_/CLK (sky130_fd_sc_hd__dfrtp_1)
+     3    0.01    0.06    0.37    0.37 v carry_out_r$_DFFE_PN0N_/Q (sky130_fd_sc_hd__dfrtp_1)
+                                         net14 (net)
+                  0.06    0.00    0.37 v _443_/A2 (sky130_fd_sc_hd__o211ai_1)
+     1    0.00    0.17    0.18    0.54 ^ _443_/Y (sky130_fd_sc_hd__o211ai_1)
+                                         _227_ (net)
+                  0.17    0.00    0.54 ^ _445_/A3 (sky130_fd_sc_hd__a31oi_1)
+     1    0.00    0.14    0.11    0.65 v _445_/Y (sky130_fd_sc_hd__a31oi_1)
+                                         _093_ (net)
+                  0.14    0.00    0.65 v carry_out_r$_DFFE_PN0N_/D (sky130_fd_sc_hd__dfrtp_1)
+                                  0.65   data arrival time
+
+                  0.00   10.00   10.00   clock clk (rise edge)
+                          0.00   10.00   clock network delay (ideal)
+                          0.00   10.00   clock reconvergence pessimism
+                                 10.00 ^ carry_out_r$_DFFE_PN0N_/CLK (sky130_fd_sc_hd__dfrtp_1)
+                         -0.16    9.84   library setup time
+                                  9.84   data required time
+-----------------------------------------------------------------------------
+                                  9.84   data required time
+                                 -0.65   data arrival time
+-----------------------------------------------------------------------------
+                                  9.19   slack (MET)
+
+
+
+==========================================================================
+resizer report_checks -unconstrained
+--------------------------------------------------------------------------
+Startpoint: carry_out_r$_DFFE_PN0N_
+            (rising edge-triggered flip-flop clocked by clk)
+Endpoint: carry_out_r$_DFFE_PN0N_
+          (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+
+Fanout     Cap    Slew   Delay    Time   Description
+-----------------------------------------------------------------------------
+                  0.00    0.00    0.00   clock clk (rise edge)
+                          0.00    0.00   clock network delay (ideal)
+                  0.00    0.00    0.00 ^ carry_out_r$_DFFE_PN0N_/CLK (sky130_fd_sc_hd__dfrtp_1)
+     3    0.01    0.06    0.37    0.37 v carry_out_r$_DFFE_PN0N_/Q (sky130_fd_sc_hd__dfrtp_1)
+                                         net14 (net)
+                  0.06    0.00    0.37 v _443_/A2 (sky130_fd_sc_hd__o211ai_1)
+     1    0.00    0.17    0.18    0.54 ^ _443_/Y (sky130_fd_sc_hd__o211ai_1)
+                                         _227_ (net)
+                  0.17    0.00    0.54 ^ _445_/A3 (sky130_fd_sc_hd__a31oi_1)
+     1    0.00    0.14    0.11    0.65 v _445_/Y (sky130_fd_sc_hd__a31oi_1)
+                                         _093_ (net)
+                  0.14    0.00    0.65 v carry_out_r$_DFFE_PN0N_/D (sky130_fd_sc_hd__dfrtp_1)
+                                  0.65   data arrival time
+
+                  0.00   10.00   10.00   clock clk (rise edge)
+                          0.00   10.00   clock network delay (ideal)
+                          0.00   10.00   clock reconvergence pessimism
+                                 10.00 ^ carry_out_r$_DFFE_PN0N_/CLK (sky130_fd_sc_hd__dfrtp_1)
+                         -0.16    9.84   library setup time
+                                  9.84   data required time
+-----------------------------------------------------------------------------
+                                  9.84   data required time
+                                 -0.65   data arrival time
+-----------------------------------------------------------------------------
+                                  9.19   slack (MET)
+
+
+
+==========================================================================
+resizer report_check_types -max_slew -max_cap -max_fanout -violators
+--------------------------------------------------------------------------
+
+==========================================================================
+resizer max_slew_check_slack
+--------------------------------------------------------------------------
+0.8701236248016357
+
+==========================================================================
+resizer max_slew_check_limit
+--------------------------------------------------------------------------
+1.4944789409637451
+
+==========================================================================
+resizer max_slew_check_slack_limit
+--------------------------------------------------------------------------
+0.5822
+
+==========================================================================
+resizer max_fanout_check_slack
+--------------------------------------------------------------------------
+1.0000000150474662e+30
+
+==========================================================================
+resizer max_fanout_check_limit
+--------------------------------------------------------------------------
+1.0000000150474662e+30
+
+==========================================================================
+resizer max_capacitance_check_slack
+--------------------------------------------------------------------------
+0.025129735469818115
+
+==========================================================================
+resizer max_capacitance_check_limit
+--------------------------------------------------------------------------
+0.02930700220167637
+
+==========================================================================
+resizer max_capacitance_check_slack_limit
+--------------------------------------------------------------------------
+0.8575
+
+==========================================================================
+resizer max_slew_violation_count
+--------------------------------------------------------------------------
+max slew violation count 0
+
+==========================================================================
+resizer max_fanout_violation_count
+--------------------------------------------------------------------------
+max fanout violation count 0
+
+==========================================================================
+resizer max_cap_violation_count
+--------------------------------------------------------------------------
+max cap violation count 0
+
+==========================================================================
+resizer setup_violation_count
+--------------------------------------------------------------------------
+setup violation count 0
+
+==========================================================================
+resizer hold_violation_count
+--------------------------------------------------------------------------
+hold violation count 0
+
+==========================================================================
+resizer report_checks -path_delay max reg to reg
+--------------------------------------------------------------------------
+Startpoint: carry_out_r$_DFFE_PN0N_
+            (rising edge-triggered flip-flop clocked by clk)
+Endpoint: carry_out_r$_DFFE_PN0N_
+          (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+
+  Delay    Time   Description
+---------------------------------------------------------
+   0.00    0.00   clock clk (rise edge)
+   0.00    0.00   clock network delay (ideal)
+   0.00    0.00 ^ carry_out_r$_DFFE_PN0N_/CLK (sky130_fd_sc_hd__dfrtp_1)
+   0.37    0.37 v carry_out_r$_DFFE_PN0N_/Q (sky130_fd_sc_hd__dfrtp_1)
+   0.18    0.54 ^ _443_/Y (sky130_fd_sc_hd__o211ai_1)
+   0.11    0.65 v _445_/Y (sky130_fd_sc_hd__a31oi_1)
+   0.00    0.65 v carry_out_r$_DFFE_PN0N_/D (sky130_fd_sc_hd__dfrtp_1)
+           0.65   data arrival time
+
+  10.00   10.00   clock clk (rise edge)
+   0.00   10.00   clock network delay (ideal)
+   0.00   10.00   clock reconvergence pessimism
+          10.00 ^ carry_out_r$_DFFE_PN0N_/CLK (sky130_fd_sc_hd__dfrtp_1)
+  -0.16    9.84   library setup time
+           9.84   data required time
+---------------------------------------------------------
+           9.84   data required time
+          -0.65   data arrival time
+---------------------------------------------------------
+           9.19   slack (MET)
+
+
+
+==========================================================================
+resizer report_checks -path_delay min reg to reg
+--------------------------------------------------------------------------
+Startpoint: overflow_r$_DFFE_PN0N_
+            (rising edge-triggered flip-flop clocked by clk)
+Endpoint: overflow_r$_DFFE_PN0N_
+          (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: min
+
+  Delay    Time   Description
+---------------------------------------------------------
+   0.00    0.00   clock clk (rise edge)
+   0.00    0.00   clock network delay (ideal)
+   0.00    0.00 ^ overflow_r$_DFFE_PN0N_/CLK (sky130_fd_sc_hd__dfrtp_1)
+   0.32    0.32 ^ overflow_r$_DFFE_PN0N_/Q (sky130_fd_sc_hd__dfrtp_1)
+   0.05    0.37 v _452_/Y (sky130_fd_sc_hd__nand2_1)
+   0.07    0.44 ^ _453_/Y (sky130_fd_sc_hd__o211ai_1)
+   0.00    0.44 ^ overflow_r$_DFFE_PN0N_/D (sky130_fd_sc_hd__dfrtp_1)
+           0.44   data arrival time
+
+   0.00    0.00   clock clk (rise edge)
+   0.00    0.00   clock network delay (ideal)
+   0.00    0.00   clock reconvergence pessimism
+           0.00 ^ overflow_r$_DFFE_PN0N_/CLK (sky130_fd_sc_hd__dfrtp_1)
+  -0.05   -0.05   library hold time
+          -0.05   data required time
+---------------------------------------------------------
+          -0.05   data required time
+          -0.44   data arrival time
+---------------------------------------------------------
+           0.49   slack (MET)
+
+
+
+==========================================================================
+resizer critical path target clock latency max path
+--------------------------------------------------------------------------
+0
+
+==========================================================================
+resizer critical path target clock latency min path
+--------------------------------------------------------------------------
+0
+
+==========================================================================
+resizer critical path source clock latency min path
+--------------------------------------------------------------------------
+0
+
+==========================================================================
+resizer critical path delay
+--------------------------------------------------------------------------
+0.6482
+
+==========================================================================
+resizer critical path slack
+--------------------------------------------------------------------------
+9.1869
+
+==========================================================================
+resizer slack div critical path delay
+--------------------------------------------------------------------------
+1417.294045
+
+==========================================================================
+resizer report_power
+--------------------------------------------------------------------------
+Group                  Internal  Switching    Leakage      Total
+                          Power      Power      Power      Power (Watts)
+----------------------------------------------------------------
+Sequential             4.48e-05   1.06e-06   1.32e-10   4.59e-05  30.1%
+Combinational          4.94e-05   5.71e-05   9.21e-10   1.06e-04  69.9%
+Clock                  0.00e+00   0.00e+00   0.00e+00   0.00e+00   0.0%
+Macro                  0.00e+00   0.00e+00   0.00e+00   0.00e+00   0.0%
+Pad                    0.00e+00   0.00e+00   0.00e+00   0.00e+00   0.0%
+----------------------------------------------------------------
+Total                  9.42e-05   5.82e-05   1.05e-09   1.52e-04 100.0%
+                          61.8%      38.2%       0.0%

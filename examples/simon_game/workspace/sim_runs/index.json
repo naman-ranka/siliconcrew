@@ -1,0 +1,14 @@
+{
+  "runs": [
+    {
+      "run_id": "sim_0001",
+      "status": "passed",
+      "created_at": "2026-07-07T08:02:01.232634+00:00",
+      "updated_at": "2026-07-07T08:02:01.486721+00:00",
+      "top": "simon_game_tb",
+      "mode": "rtl",
+      "pinned": false,
+      "parentRunId": null
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+
+20. Printing statistics.
+
+=== simon128_cipher ===
+
+        +----------Local Count, excluding submodules.
+        |        +-Local Area, excluding submodules.
+        |        | 
+     1040        - wires
+     1041        - wire bits
+      287        - public wires
+      288        - public wire bits
+        6        - ports
+        7        - port bits
+     1027 1.06E+04 cells
+        1   11.261   sky130_fd_sc_hd__a2111o_1
+        1   15.014   sky130_fd_sc_hd__a2111oi_2
+        3   22.522   sky130_fd_sc_hd__a211oi_1
+        1    7.507   sky130_fd_sc_hd__a21o_1
+       10   50.048   sky130_fd_sc_hd__a21oi_1
+        1    7.507   sky130_fd_sc_hd__a22oi_1
+        1    8.758   sky130_fd_sc_hd__a2bb2oi_1
+        1    8.758   sky130_fd_sc_hd__a311oi_1
+        1    8.758   sky130_fd_sc_hd__a31o_2
+        2   12.512   sky130_fd_sc_hd__a31oi_1
+        1    8.758   sky130_fd_sc_hd__a32oi_1
+        9   56.304   sky130_fd_sc_hd__and2_1
+        4   25.024   sky130_fd_sc_hd__and3_1
+        1    8.758   sky130_fd_sc_hd__and4_1
+        1    3.754   sky130_fd_sc_hd__buf_1
+       29  145.139   sky130_fd_sc_hd__buf_2
+        5   37.536   sky130_fd_sc_hd__buf_4
+        2   22.522   sky130_fd_sc_hd__buf_6
+       37  138.883   sky130_fd_sc_hd__clkbuf_1
+        1    3.754   sky130_fd_sc_hd__clkinv_1
+        1    3.754   sky130_fd_sc_hd__conb_1
+      281 5.63E+03   sky130_fd_sc_hd__dfxtp_1
+        9  112.608   sky130_fd_sc_hd__ha_1
+        8   30.029   sky130_fd_sc_hd__inv_1
+        1    10.01   sky130_fd_sc_hd__maj3_1
+        1   11.261   sky130_fd_sc_hd__mux2_1
+        1   11.261   sky130_fd_sc_hd__mux2_2
+      262 2.62E+03   sky130_fd_sc_hd__mux2i_1
+       13   48.797   sky130_fd_sc_hd__nand2_1
+        1    6.256   sky130_fd_sc_hd__nand2b_1
+        8   40.038   sky130_fd_sc_hd__nand3_1
+      272 1.02E+03   sky130_fd_sc_hd__nor2_1
+        2   12.512   sky130_fd_sc_hd__nor2b_1
+        5   25.024   sky130_fd_sc_hd__nor3_1
+        1    7.507   sky130_fd_sc_hd__nor3b_1
+        2   25.024   sky130_fd_sc_hd__nor3b_2
+        2   12.512   sky130_fd_sc_hd__nor4_1
+        1    21.27   sky130_fd_sc_hd__nor4_4
+        1    8.758   sky130_fd_sc_hd__nor4b_1
+        2   15.014   sky130_fd_sc_hd__o211ai_1
+        1   12.512   sky130_fd_sc_hd__o211ai_2
+        2   15.014   sky130_fd_sc_hd__o21a_1
+       11   55.053   sky130_fd_sc_hd__o21ai_0
+        1    10.01   sky130_fd_sc_hd__o21ba_2
+        1    6.256   sky130_fd_sc_hd__o22ai_1
+        1    8.758   sky130_fd_sc_hd__o311ai_0
+        1    8.758   sky130_fd_sc_hd__o31a_1
+        1    7.507   sky130_fd_sc_hd__o31ai_1
+        1    8.758   sky130_fd_sc_hd__o41ai_1
+        2   22.522   sky130_fd_sc_hd__or3_4
+        1    8.758   sky130_fd_sc_hd__or3b_2
+       11   96.342   sky130_fd_sc_hd__xnor2_1
+        6    52.55   sky130_fd_sc_hd__xor2_1
+        1   16.266   sky130_fd_sc_hd__xor2_2
+
+   Chip area for module '\simon128_cipher': 10602.668800
+     of which used for sequential elements: 5625.395200 (53.06%)
+

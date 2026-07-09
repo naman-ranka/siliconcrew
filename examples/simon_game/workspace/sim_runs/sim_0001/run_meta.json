@@ -1,0 +1,27 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T08:02:01.232634+00:00",
+  "top": "simon_game_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "38d5765ec507dea78065e25961f2a2d8507ea389",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": null,
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\simon_game_tb.vcd",
+  "passMarkerFound": true,
+  "passMarker": "TEST PASSED",
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s simon_game_tb -o <workspace>\\sim_runs\\sim_0001\\simon_game_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog_rlclgs45.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\simon_game_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile simon_game_tb.vcd opened for output.\nTEST PASSED\n<workspace>/simon_game_tb.v:180: $finish called at 70375000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

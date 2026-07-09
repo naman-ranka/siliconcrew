@@ -1,0 +1,126 @@
+{
+  "run_id": "synth_0001",
+  "dispatched_at": "2026-07-07T08:02:01.509726+00:00",
+  "timeout_sec": 1200,
+  "created_at": "2026-07-07T08:02:01.526415+00:00",
+  "backend": "local_docker",
+  "status": "completed",
+  "current_stage": "finish",
+  "max_stage": "finish",
+  "platform": "sky130hd",
+  "top_module": "simon_game",
+  "input_files": [
+    "simon.v",
+    "simon_game.v"
+  ],
+  "spec_file": null,
+  "requested_clock_period_ns": 10.0,
+  "effective_clock_period_ns": 10.0,
+  "clock_period_ns": 10.0,
+  "clock_source": "requested",
+  "constraints_mode": "auto",
+  "utilization": 5,
+  "aspect_ratio": 1.0,
+  "core_margin": 2.0,
+  "pd_parameters": {
+    "utilization": 5,
+    "aspect_ratio": 1.0,
+    "core_margin": 2.0
+  },
+  "auto_checks": {
+    "constraints": "pass",
+    "signoff": "pass",
+    "equiv": "skip"
+  },
+  "check_notes": "All guardrails passed",
+  "stages": {
+    "constraints": {
+      "status": "completed",
+      "artifacts": {}
+    },
+    "synth": {
+      "status": "completed",
+      "artifacts": {
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\1_synth.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\1_synth.sdc",
+        "stat_report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\simon_game\\base\\synth_stat.txt"
+      }
+    },
+    "floorplan": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\simon_game\\base\\2_floorplan_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\2_floorplan.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\2_floorplan.sdc"
+      }
+    },
+    "place": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\simon_game\\base\\3_3_place_gp.json",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\3_place.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\3_place.sdc"
+      }
+    },
+    "cts": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\simon_game\\base\\4_cts_final.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\4_cts.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\4_cts.sdc"
+      }
+    },
+    "grt": {
+      "status": "completed",
+      "artifacts": {
+        "log": "<workspace>\\synth_runs\\synth_0001\\orfs_logs\\sky130hd\\simon_game\\base\\5_1_grt.log",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\5_1_grt.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\5_1_grt.sdc"
+      }
+    },
+    "route": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\simon_game\\base\\5_route_drc.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\5_route.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\5_route.sdc"
+      }
+    },
+    "finish": {
+      "status": "completed",
+      "artifacts": {
+        "report": "<workspace>\\synth_runs\\synth_0001\\orfs_reports\\sky130hd\\simon_game\\base\\6_finish.rpt",
+        "odb": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\6_final.odb",
+        "sdc": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\6_final.sdc",
+        "netlist": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\6_final.v",
+        "gds": "<workspace>\\synth_runs\\synth_0001\\orfs_results\\sky130hd\\simon_game\\base\\6_final.gds"
+      }
+    }
+  },
+  "provenance": {
+    "repo_commit": "38d5765ec507dea78065e25961f2a2d8507ea389",
+    "orfs_image_digest": null,
+    "pdk": "sky130hd",
+    "iverilog_version": "12.0",
+    "num_cores": 4
+  },
+  "docker_command": "docker run --rm -v <workspace>\\synth_runs\\synth_0001:/workspace -v <workspace>\\synth_runs\\synth_0001\\orfs_results:/OpenROAD-flow-scripts/flow/results -v <workspace>\\synth_runs\\synth_0001\\orfs_logs:/OpenROAD-flow-scripts/flow/logs -v <workspace>\\synth_runs\\synth_0001\\orfs_reports:/OpenROAD-flow-scripts/flow/reports -w /OpenROAD-flow-scripts/flow openroad/orfs:latest bash -c make -B DESIGN_CONFIG=/workspace/config.mk",
+  "docker_success": true,
+  "docker_stdout_tail": "       137 f0fdb743c6e9c8cf552b\n2_2_floorplan_macro                0            113 f0fdb743c6e9c8cf552b\n2_3_floorplan_tapcell              0            113 d007008bf48a8e1e0b6b\n2_4_floorplan_pdn                  0            125 53146a44d6851d968f9d\n3_1_place_gp_skip_io               1            120 17e39308b1f46442983f\n3_2_place_iop                      0            117 52a3e1930d79d9157509\n3_3_place_gp                       3            237 729c299d6240eca43524\n3_4_place_resized                  2            137 729c299d6240eca43524\n3_5_place_dp                       2            131 1070931d0ec4d8e27b1e\n4_1_cts                            4            159 b87bc4669070b5316e44\n5_1_grt                           20            260 6297b081703f81714033\n5_2_route                         70            814 7c4deaf793c6f6d15269\n5_3_fillcell                       0            141 4dcc642b1f278026a054\n6_1_fill                           0            129 4dcc642b1f278026a054\n6_1_merge                          2            449                  N/A\n6_report                           5            260                  N/A\nTotal                            113            814                     \n",
+  "docker_stderr_tail": "make[1]: Warning: File 'results/sky130hd/simon_game/base/clock_period.txt' has modification time 0.038 s in the future\nmake[1]: warning:  Clock skew detected.  Your build may be incomplete.\nmake: Warning: File 'results/sky130hd/simon_game/base/1_2_yosys.sdc' has modification time 0.31 s in the future\nmake: warning:  Clock skew detected.  Your build may be incomplete.\n",
+  "netlist_path": null,
+  "stdcell_manifest_version": null,
+  "stdcell_files_used": [],
+  "summary_metrics": {
+    "area_um2": 10374.9504,
+    "cell_count": 1125,
+    "wns_ns": 0.0,
+    "tns_ns": 0.0,
+    "power_uw": 2910.0,
+    "power_mw": 2.91,
+    "fmax_mhz": 100.0
+  },
+  "next_action": "Use search_logs_tool for detailed PPA/error verification.",
+  "finished_at": "2026-07-07T08:04:24.577603+00:00",
+  "elapsed_sec": 143.06
+}

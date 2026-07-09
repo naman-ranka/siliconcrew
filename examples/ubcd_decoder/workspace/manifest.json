@@ -1,0 +1,26 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "ubcd.v",
+      "role": "rtl",
+      "path": "ubcd.v"
+    },
+    {
+      "name": "ubcd_tb.v",
+      "role": "tb",
+      "path": "ubcd_tb.v"
+    }
+  ],
+  "synthTop": "universal_bcd_decoder",
+  "simTop": "ubcd_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "ubcd_tb.v",
+      "module": "ubcd_tb"
+    }
+  ]
+}

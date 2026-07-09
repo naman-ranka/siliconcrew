@@ -1,0 +1,26 @@
+
+20. Printing statistics.
+
+=== lfsr8 ===
+
+        +----------Local Count, excluding submodules.
+        |        +-Local Area, excluding submodules.
+        |        | 
+       17        - wires
+       24        - wire bits
+        4        - public wires
+       11        - public wire bits
+        4        - ports
+       11        - port bits
+       21  335.322 cells
+        1    5.005   sky130_fd_sc_hd__a21oi_1
+        1   11.261   sky130_fd_sc_hd__buf_6
+        8  210.202   sky130_fd_sc_hd__dfstp_2
+        3   33.782   sky130_fd_sc_hd__mux2_1
+        4   45.043   sky130_fd_sc_hd__mux2_2
+        1    3.754   sky130_fd_sc_hd__nor2_1
+        3   26.275   sky130_fd_sc_hd__xnor2_1
+
+   Chip area for module '\lfsr8': 335.321600
+     of which used for sequential elements: 210.201600 (62.69%)
+

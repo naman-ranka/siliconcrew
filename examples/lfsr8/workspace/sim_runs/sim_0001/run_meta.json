@@ -1,0 +1,26 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T06:35:38.862688+00:00",
+  "top": "lfsr8_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "441342b4a0ccb68fe822d09cad78792793d011e2",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\lfsr8_tb.vcd",
+  "passMarkerFound": true,
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s lfsr8_tb -o <workspace>\\sim_runs\\sim_0001\\lfsr8_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog_kyvrxltz.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\lfsr8_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile lfsr8_tb.vcd opened for output.\nTEST PASSED\n<workspace>/lfsr8_tb.v:43: $finish called at 2566000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

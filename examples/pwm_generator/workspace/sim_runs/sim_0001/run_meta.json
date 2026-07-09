@@ -1,0 +1,27 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T07:58:19.046495+00:00",
+  "top": "pwm_generator_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "ba33e4a0f75fde01c2358eb8030d4a7cbaa8e18f",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\pwm_generator_tb.vcd",
+  "passMarkerFound": true,
+  "passMarker": "TEST PASSED",
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s pwm_generator_tb -o <workspace>\\sim_runs\\sim_0001\\pwm_generator_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog_cll6ocw0.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\pwm_generator_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile pwm_generator_tb.vcd opened for output.\nok: period=100 duty=25% -> 75 highs / 300 cycles (t_on=25)\nok: period=100 duty=50% -> 150 highs / 300 cycles (t_on=50)\nok: period=100 duty=75% -> 225 highs / 300 cycles (t_on=75)\nok: period=100 duty=10% -> 30 highs / 300 cycles (t_on=10)\nok: period=60 duty=50% -> 90 highs / 180 cycles (t_on=30)\nTEST PASSED\n<workspace>/pwm_generator_tb.v:106: $finish called at 56311000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

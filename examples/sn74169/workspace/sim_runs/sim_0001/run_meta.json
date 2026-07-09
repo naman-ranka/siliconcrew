@@ -1,0 +1,27 @@
+{
+  "id": "sim_0001",
+  "kind": "sim",
+  "status": "passed",
+  "createdAt": "2026-07-07T08:01:57.626938+00:00",
+  "top": "sn74169_tb",
+  "pinned": false,
+  "parentRunId": null,
+  "provenance": {
+    "repoCommit": "38d5765ec507dea78065e25961f2a2d8507ea389",
+    "iverilogVersion": "12.0",
+    "orfsImageDigest": null,
+    "pdk": "sky130hd",
+    "numCores": null
+  },
+  "mode": "rtl",
+  "vcdPath": "sim_runs\\sim_0001\\sn74169_tb.vcd",
+  "passMarkerFound": true,
+  "passMarker": "TEST PASSED",
+  "failure": null,
+  "compileCommand": "iverilog -g2012 -I <workspace> -s sn74169_tb -o <workspace>\\sim_runs\\sim_0001\\sn74169_tb.out -f <workspace>\\sim_runs\\sim_0001\\iverilog__3roq7ch.f",
+  "simCommand": "vvp <workspace>\\sim_runs\\sim_0001\\sn74169_tb.out",
+  "simStatus": "test_passed",
+  "stdoutTail": "VCD info: dumpfile sn74169_tb.vcd opened for output.\nTEST PASSED\n<workspace>/sn74169_tb.v:101: $finish called at 546000 (1ps)",
+  "stderrTail": "",
+  "logTruncated": false
+}

@@ -1,0 +1,14 @@
+{
+  "runs": [
+    {
+      "run_id": "sim_0001",
+      "status": "passed",
+      "created_at": "2026-07-07T08:13:04.803727+00:00",
+      "updated_at": "2026-07-07T08:13:05.217314+00:00",
+      "top": "simon128_cipher_tb",
+      "mode": "rtl",
+      "pinned": false,
+      "parentRunId": null
+    }
+  ]
+}
