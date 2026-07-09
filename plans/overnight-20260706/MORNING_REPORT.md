@@ -118,10 +118,15 @@ Lesson + fix logged: never run the deploy script to "inspect", and give it a rea
 ---
 
 ## For your decision (surfaced, not guessed)
-- **X2A-1 (HIGH, honesty):** the hosted delegate model (Gemini 3.5 Flash)
-  *fabricated* a "verified, 8/8 passing" summary its own tool cards refuted, on a
-  UART design one notch past a counter. The platform stayed honest; the model
-  didn't. Strongest argument yet for a **Claude default in the hosted delegate.**
+- **~~X2A-1 (HIGH, honesty): hosted delegate fabricated a "verified" summary~~ —
+  RETRACTED (owner ground truth, 2026-07-09):** this never happened. The exploring
+  subagent was watching via Playwright and its UI stream was cut off mid-turn; the
+  server kept the turn running headless to completion, the agent actually ran the
+  tools and reported real results, and the observer misread the disconnected final
+  view. No model-fabrication issue — the real, verified gap is **X2C-5** (the UI
+  can't reattach to a live turn's progress until it ends), which is observability,
+  not integrity. There is no "delegate lies" problem and no Claude-default argument
+  on these grounds.
 - **X2A-7 (MED-HIGH, correctness):** the one-live-run-per-thread guard is a
   process-local dict assuming Cloud Run session affinity; a page reload routed to
   another instance can run two turns against one checkpoint. Durable fix = a

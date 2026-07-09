@@ -145,10 +145,21 @@ connector surviving the roll (F15/stateless).
 ## Explore round 2 — agent/delegate posture (reports/explore2-agent.md, session x2_uart_agent_20260707)
 
 Delegated a UART TX (8N1, self-checking TB) to the in-app agent (Gemini 3.5 Flash on
-hosted). Verdict: platform honest-state machinery + synth engine strong; the delegating
-MODEL is the weak point and produced a dishonest ending. Contract honored (⌘K no palette,
-read-only file viewer, no file-creation UI, Runs/Files Index home tab, "Artifacts · 1 new"
-unread marker, expandable cards with real result JSON incl. F11/F12 timeout detail).
+hosted). Contract honored (⌘K no palette, read-only file viewer, no file-creation UI,
+Runs/Files Index home tab, "Artifacts · 1 new" unread marker, expandable cards with real
+result JSON incl. F11/F12 timeout detail).
+
+**⚠️ CORRECTION (owner ground truth, 2026-07-09):** the original "the delegating MODEL
+produced a dishonest ending / fabricated verified results" verdict was WRONG — a
+misdiagnosis by the exploring subagent, which was observing via Playwright and got its
+UI stream CUT OFF mid-turn. What actually happened: the socket dropped, the server kept
+the turn running HEADLESS to completion (the documented api.py:1636-1639/1771-1776
+behavior), the agent ACTUALLY RAN THE TOOLS and reported the real results at the end.
+The agent was honest; the observer, watching a disconnected UI, misread the final
+summary. There is NO model-fabrication issue. The real, verified gap is X2C-5 (the UI
+cannot reattach to a live turn's progress until it ends) — observability, not integrity.
+X2A-1/X2A-3/X2A-6 below are all sourced from that same cut-off observation and are
+therefore retracted/unreliable (see each).
 
 **Backend root-cause (code-verified — answers the owner's "the turn kept going in the
 backend"):** (1) synthesis is a DETACHED job — `start_synthesis` dispatches an independent
@@ -181,12 +192,12 @@ in agent-shell cards (POSITIVE); F9 GDS dependable (POSITIVE).
 | ID | Severity | Triage |
 |----|----------|--------|
 | X2A-7 (cross-instance supersede hazard: `_ACTIVE_TURNS` is process-local; reload can route a new WS to another instance → two turns write one checkpoint) | MED-HIGH (correctness under multi-instance) | OPEN — owner-visible: durable fix is a DB-layer thread lock/run token (P0 #1 family). Not fixed tonight (architectural); decisive log check queued post-deploy. |
-| X2A-1 (delegate fabricates verification success in closing prose) | HIGH (model layer) | OWNER DECISION: model-quality, not platform code — strongest argument yet for a Claude default in the hosted delegate. Platform state machinery stayed honest throughout. |
+| ~~X2A-1 (delegate fabricates verification success in closing prose)~~ | RETRACTED — NOT A BUG | Owner ground truth: never happened. The turn completed headless after the observer's UI was cut off; the agent actually ran the tools and reported real results. The subagent (watching a disconnected Playwright UI) misread the final summary. No model-fabrication issue. The real gap is X2C-5 (UI can't reattach to a live turn). |
 | X2A-2 (design_report.md marked "Simulation ✅ Pass" with zero passing sims) | MED-HIGH | RESOLVED at HEAD: e3f3844 makes the report read sim_runs truth; 9fde1da hardens the legacy fallback to fail-dominant ('0 passed, 3 failed' can no longer read Pass). Agent-session case (ephemeral sims, no runs) now honestly reads "Not Run". Deploys tonight. |
-| X2A-3 (model can't close verification loop on a UART TB) | MED | Same owner decision as X2A-1 (model capability). |
+| ~~X2A-3 (model can't close verification loop on a UART TB)~~ | RETRACTED / UNRELIABLE | Sourced from the same cut-off observation as X2A-1; owner ground truth (the agent ran the tools and reported real results) contradicts "couldn't close the loop." Do not treat as a finding. |
 | X2A-4 (Runs/Files Index home tab doesn't reflect live/finished work until full page reload, while inline cards stream fine) | MED (invariant 3/6) | FIXED (e25207c): WS tool frames now schedule debounced loadManifest/loadRuns per a tool→slice map mirroring TOOL_DIR_INVALIDATION, + full refresh at turn "done". Same event flow as the cards, no poller. ADVERSARIAL-REVIEW NOTE (author self-flagged, load-bearing): the debounced loadManifest/loadRuns fire ~1200ms after a tool frame. `loadRuns` HAS the stale guard (singleFlight + currentSession check + detectRunTransitions bails on sid mismatch), but `loadManifest` sets `manifest` UNCONDITIONALLY on resolve — so a session switch DURING the debounce window could write the old session's manifest into the new session (invariant 7 "populated data never blanks"/cross-session guard). VERIFY in the endgame review; if real, add a sid check before the manifest set. |
 | X2A-5 ("connection lost" hint points to Runs panel, but agent sims are ephemeral /tmp isolated runs that create no run record) | LOW-MED | FIXED (d0e1ba5): reconnect hint is tool-aware — synth dispatches → Runs panel; sims → "ephemeral, streams inline only"; else → plain continue hint. |
-| X2A-6 (raw LangGraph recursion_limit error shown verbatim; no Continue affordance) | LOW | DEFERRED, documented — friendly mapping + resume affordance is a small future item. |
+| X2A-6 (raw LangGraph recursion_limit error shown verbatim; no Continue affordance) | LOW — UNVERIFIED | From the same cut-off observation session; treat as unverified until seen with a live/attached UI. If real, a friendly mapping + resume affordance is a small future item. |
 
 ## Session-2 adversarial review of tonight's code diff (reports/adversarial-review.md, c75a8df)
 
