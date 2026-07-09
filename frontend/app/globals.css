@@ -236,6 +236,14 @@
   --tw-prose-td-borders: hsl(var(--border));
 }
 
+/* Long unbreakable tokens — workspace paths, URLs, long inline code — must wrap
+   instead of establishing a min-content width that overflows a narrow chat rail.
+   `anywhere` (not `break-word`) is required: only it lets the element shrink
+   below its longest word, so the flex row can cap to the pane width. */
+.prose {
+  overflow-wrap: anywhere;
+}
+
 .prose code:not([class*="language-"]) {
   background: hsl(var(--surface-2));
   padding: 0.125rem 0.375rem;
@@ -243,6 +251,7 @@
   font-size: 0.875em;
   font-weight: 500;
   color: hsl(var(--primary));
+  overflow-wrap: anywhere;
 }
 
 .prose code::before,
