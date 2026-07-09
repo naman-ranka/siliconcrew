@@ -7,7 +7,7 @@ project = 'siliconcrew'
 region = 'us-central1'
 updates = {
     'siliconcrew-backend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/backend@sha256:863ad210e3b598c956d3d71646c9620619ae89fd396898f31b7826bc9bfe79b7',
-    'siliconcrew-frontend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/frontend@sha256:1f844f611327c4496797386f59fbc686abdf1ddb046aa246ef3743e0219ce319',
+    'siliconcrew-frontend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/frontend@sha256:6bc89bd75a2723cea90085f36b8baa313dfc7c9a75ba8892c7c149a974ebd3f3',
 }
 
 # Env vars to ensure-present on a service's first container (merged, not
