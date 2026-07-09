@@ -10,6 +10,30 @@ updates = {
     'siliconcrew-frontend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/frontend@sha256:17ee683acd802b2e248a7656e39a589bb5581df734f0fdb0acb1f292bbf5bced',
 }
 
+# Env vars to ensure-present on a service's first container (merged, not
+# replaced — existing keys keep their values unless named here). TEMPLATES_BUCKET
+# flips the backend's gallery/fork onto the GCS TemplateSource engine so the
+# hosted gallery reads the published index and forks pull bundle archives from
+# the bucket (self-host + unset stays on the baked-in local source).
+env_updates = {
+    'siliconcrew-backend': {
+        'TEMPLATES_BUCKET': 'siliconcrew-siliconcrew-templates',
+    },
+}
+
+
+def _apply_env(containers, svc):
+    wanted = env_updates.get(svc)
+    if not wanted:
+        return
+    env = containers[0].setdefault('env', [])
+    by_name = {e.get('name'): e for e in env}
+    for k, v in wanted.items():
+        if k in by_name:
+            by_name[k]['value'] = v
+        else:
+            env.append({'name': k, 'value': v})
+
 def main():
     creds = service_account.Credentials.from_service_account_file('gcp-key.json', scopes=['https://www.googleapis.com/auth/cloud-platform'])
     sess = AuthorizedSession(creds)
@@ -30,8 +54,9 @@ def main():
         containers = service['template']['containers']
         old_image = containers[0].get('image')
         
-        # Update image
+        # Update image + ensure env
         containers[0]['image'] = new_image
+        _apply_env(containers, svc)
         body = {
             'name': name,
             'template': {
