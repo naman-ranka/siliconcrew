@@ -42,6 +42,9 @@ export interface TemplateSummary {
   source_note?: string | null;
   file_count: number;
   run_count: number;
+  // Present on the hosted (gcs) gallery index; "official" today (schema room for
+  // a future community tier). Absent on the self-host local gallery.
+  tier?: string;
 }
 
 // Preview shape (GET /api/templates/{id}) — summary + a shallow peek inside.
