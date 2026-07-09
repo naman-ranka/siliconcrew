@@ -82,7 +82,6 @@ from src.tools.wrappers import (
     get_workspace_path,
     mcp_tools,
 )
-from src.agents.architect import SYSTEM_PROMPT
 from src.utils.session_manager import SessionManager
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.platform_engines.request_scope import run_in_session
@@ -119,6 +118,12 @@ def _load_architect_prompt() -> tuple[str, str, str]:
             # Fall through to SYSTEM_PROMPT fallback.
             pass
 
+    # Lazy: the LangGraph agent stack behind SYSTEM_PROMPT is only needed on
+    # this fallback (prompt file missing/unreadable) — importing it at module
+    # load taxed every Codex MCP subprocess spawn for a constant that is
+    # almost never used (4C, hosted-latency plan).
+    from src.agents.architect import SYSTEM_PROMPT
+
     return SYSTEM_PROMPT, "src.agents.architect.SYSTEM_PROMPT", "legacy"
 
 # =============================================================================
@@ -128,7 +133,11 @@ def _load_architect_prompt() -> tuple[str, str, str]:
 # Tool categorization for filtering — single source of truth shared with the
 # web UI's tool catalog (src/api/tool_catalog.py), so the Command Surface, the
 # agent, and MCP clients all see one taxonomy and one protection policy.
-from src.api.tool_catalog import TOOL_CATEGORIES, PROTECTED_TOOLS as _SHARED_PROTECTED_TOOLS
+from src.api.tool_catalog import (
+    TOOL_CATEGORIES,
+    PROTECTED_TOOLS as _SHARED_PROTECTED_TOOLS,
+    MUTATING_TOOLS as _SHARED_MUTATING_TOOLS,
+)
 
 # Flatten for easy lookup
 ALL_CATEGORIZED_TOOLS = set()
@@ -187,6 +196,17 @@ class RTLDesignMCPServer:
         self.tool_filter_mode = "all"  # Options: "all", "essential", "custom"
         self.custom_tool_filter = None  # List of tool names or categories
         self.codex_tools = codex_tools  # Expose Codex-only MCP helpers when enabled
+        # 4B (hosted-latency plan): when the parent process owns the once-per-
+        # turn workspace sync (the Codex engine sets this env key for the bound
+        # subprocess it spawns), skip the per-tool blocking upload here — a
+        # mutating tool result must not wait on a full-workspace GCS PUT. The
+        # parent's turn-end background sync tars the SAME scratch dir this
+        # subprocess writes into (shared WORKSPACE_SCRATCH_DIR), so nothing is
+        # lost — same crash exposure as the native agent's proven cadence.
+        self.defer_workspace_sync = (
+            os.environ.get("SILICONCREW_MCP_DEFER_WORKSPACE_SYNC", "").strip().lower()
+            in ("1", "true", "yes")
+        )
 
         # Identity for capability gating. MCP itself is a signed-in feature;
         # stdio/self-host is the trusted local user (full access). Hosted/remote
@@ -720,14 +740,18 @@ Ready to design! What would you like to create?"""
                 return [TextContent(type="text", text=f"❌ Error creating session: {str(e)}")]
         
         elif name == "list_sessions_tool":
-            sessions = self.session_manager.get_all_sessions()
+            # Tenant scope (F1): pass the caller's scoped uid so hosted users see
+            # ONLY their own sessions. Self-host uid is None → full list (parity
+            # with the resource path and set_active_session's ownership check).
+            uid = self._scoped_user_id()
+            sessions = self.session_manager.get_all_sessions(user_id=uid)
             if not sessions:
                 return [TextContent(type="text", text="No sessions found. Create one with create_session_tool.")]
-            
+
             import json
             session_list = []
             for session_id in sessions:
-                meta = self.session_manager.get_session_metadata(session_id)
+                meta = self.session_manager.get_session_metadata(session_id, user_id=uid)
                 is_current = "← ACTIVE" if session_id == self.current_session else ""
                 session_list.append({
                     "id": session_id,
@@ -774,8 +798,14 @@ Ready to design! What would you like to create?"""
                 return [TextContent(type="text", text=f"❌ Cannot delete active session. Switch to another session first.")]
             
             try:
-                self.session_manager.delete_session(session_id)
+                # Tenant scope (F1): pass the caller's scoped uid so the
+                # ownership guard in delete_session fires. Without it a hosted
+                # user could rmtree ANY tenant's workspace/chats/checkpoints by id.
+                self.session_manager.delete_session(session_id, user_id=self._scoped_user_id())
                 return [TextContent(type="text", text=f"✅ Deleted session '{session_id}' and all its files.")]
+            except PermissionError:
+                # Do not leak the existence of another tenant's session.
+                return [TextContent(type="text", text=f"❌ Session '{session_id}' not found.")]
             except Exception as e:
                 return [TextContent(type="text", text=f"❌ Error deleting session: {str(e)}")]
         
@@ -844,6 +874,20 @@ Ready to design! What would you like to create?"""
         if not self.current_session:
             return [TextContent(type="text", text="❌ No active session. Create or select one first.")]
 
+        # Defense in depth (F1 root cause 3): current_session is a process-global
+        # field on the single hosted server that multiplexes all users, so a
+        # concurrent request from another tenant can flip it underneath this
+        # caller between their set_active_session and this dispatch. Re-verify
+        # ownership before touching any workspace. Bound (Codex) mode is already
+        # constrained to one owner-validated session, so it is exempt. The
+        # durable fix is to request-scope current_session (REVIEW_FINDINGS P0 #1).
+        if (
+            self._hosted
+            and not self.bound_session
+            and not self.session_manager.owns_session(self.current_session, self._scoped_user_id())
+        ):
+            return [TextContent(type="text", text="❌ No active session for this user. Select one with set_active_session.")]
+
         # Capability gating: protected (synth/save) tools require a signed-in
         # identity. Self-host's local identity is non-anonymous → always allowed.
         if name in self._PROTECTED_TOOLS:
@@ -879,12 +923,32 @@ Ready to design! What would you like to create?"""
             # the worker thread, so the workspace resolves task-locally and
             # concurrent MCP clients are isolated (replaces the RTL_WORKSPACE
             # env mutation). user_id/tier flow to tenancy + quota enforcement.
+            #
+            # F2 latency: only a MUTATING tool re-tars+uploads the workspace to
+            # object storage on exit. A read-only tool (read_file/get_manifest/
+            # get_synthesis_status/…) does NOT — a design loop is mostly reads,
+            # and each was paying a full-workspace GCS PUT for nothing. Mirrors
+            # the REST action router (actions.py run_scoped(mutates=…)). Two
+            # caveats we accept by design: (1) the synth run-state that a status
+            # read reconciles is persisted through its OWN durable push
+            # (_persist_run_meta_durable → the run store), independent of this
+            # workspace sync, so gating it off loses no run-state; (2) the
+            # activity log a read appends (attempt_events.jsonl) rides the next
+            # mutating call's sync (flush-on-next-mutation) — the only exposure
+            # is a tail of pure-read calls before an instance recycle with no
+            # following write, which is bounded and honest, not silent.
+            # 4B: when the parent process syncs once per turn (Codex bound
+            # mode, defer_workspace_sync), even a mutating call skips the
+            # blocking per-tool upload — the write is persisted by the parent's
+            # turn-end background sync instead.
+            mutates = name in _SHARED_MUTATING_TOOLS
             result = await run_in_session(
                 active_session,
                 tool_func.invoke,
                 arguments,
                 user_id=uid,
                 tier=identity.tier,
+                sync=mutates and not self.defer_workspace_sync,
             )
             log_tool_result(
                 workspace=active_workspace,
@@ -1097,12 +1161,25 @@ Ready to design! What would you like to create?"""
 
             # Streamable HTTP transport needs an active connect() context before
             # handling requests.
+            #
+            # stateless=True MUST match the session-less transport above
+            # (mcp_session_id=None). The default (stateless=False) leaves the
+            # single long-lived ServerSession in NotInitialized until an
+            # `initialize` handshake, so any request arriving before that — e.g.
+            # a client reconnecting after a server restart WITHOUT re-handshaking
+            # — makes ServerSession._received_request raise "Received request
+            # before initialization was complete", which the SDK receive loop
+            # blanket-maps to JSON-RPC -32602 "Invalid request parameters" (a
+            # bad-argument lie). Pairing stateless transport with a stateless
+            # session (as the SDK's own StreamableHTTPSessionManager does) treats
+            # every request as post-init, so a reconnect just works. (F9c)
             async with session_transport.connect() as streams:
                 mcp_task = asyncio.create_task(
                     self.server.run(
                         streams[0],
                         streams[1],
-                        self.server.create_initialization_options()
+                        self.server.create_initialization_options(),
+                        stateless=True,
                     )
                 )
                 try:
