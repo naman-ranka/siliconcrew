@@ -18,6 +18,8 @@ import type {
   DirEntry,
   SmartFile,
   ToolCatalogEntry,
+  TemplateSummary,
+  TemplateDetail,
 } from "@/types";
 import { authHeader, getAuthToken, recoverAuthExpired } from "./authToken";
 
@@ -115,9 +117,32 @@ export const sessionsApi = {
     }),
 };
 
-// Models API — the registry for the picker (availability per request).
+// Templates API (Wave 11) — repo-owned example bundles you can FORK into a
+// session. list/get are PUBLIC (no sign-in); fork requires a signed-in/self-host
+// identity (it owns the resulting session).
+export const templatesApi = {
+  list: () => apiFetch<{ templates: TemplateSummary[] }>("/api/templates").then((r) => r.templates),
+
+  get: (templateId: string) =>
+    apiFetch<TemplateDetail>(`/api/templates/${encodeURIComponent(templateId)}`),
+
+  fork: (templateId: string) =>
+    apiFetch<{ sessionId: string }>(`/api/templates/${encodeURIComponent(templateId)}/fork`, {
+      method: "POST",
+    }),
+};
+
+// Models API — the registry for the pickers (availability per request).
+// `models`/`default` feed the native picker; `codex_models`/`codex_default`
+// feed the separately curated Codex picker.
 export const modelsApi = {
-  list: () => apiFetch<{ models: ModelInfo[]; default: string }>("/api/models"),
+  list: () =>
+    apiFetch<{
+      models: ModelInfo[];
+      default: string;
+      codex_models?: ModelInfo[];
+      codex_default?: string;
+    }>("/api/models"),
 };
 
 // BYOK API keys (hosted, signed-in). The server NEVER returns a stored key —
@@ -166,6 +191,20 @@ export const threadsApi = {
     apiFetch<{ status: string }>(
       `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}`,
       { method: "DELETE" }
+    ),
+
+  // TTFT (Codex warm-keep): start the thread's runtime worker before the first
+  // message, and read its HONEST readiness. States: ready | starting | cold |
+  // unavailable ("unavailable" = the runtime has no warm capability — show
+  // nothing). See plans/codex-ttft-remediation.md 3B/3C.
+  prewarmRuntime: (sessionId: string, threadId: string) =>
+    apiFetch<{ state: string }>(
+      `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}/runtime/prewarm`,
+      { method: "POST" }
+    ),
+  runtimeStatus: (sessionId: string, threadId: string) =>
+    apiFetch<{ state: string }>(
+      `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}/runtime/status`
     ),
 };
 
@@ -250,7 +289,9 @@ export const workspaceApi = {
     ),
 
   listLayouts: (sessionId: string) =>
-    apiFetch<string[]>(`/api/workspace/${encodeSessionId(sessionId)}/layouts`),
+    apiFetch<{ layouts: string[]; missing_binaries: string[] }>(
+      `/api/workspace/${encodeSessionId(sessionId)}/layouts`
+    ),
 
   getLayout: (sessionId: string, filename: string) =>
     apiFetch<{ svg: string; cell_name: string; cached?: boolean; error?: string; message?: string }>(
@@ -307,6 +348,23 @@ export const workspaceApi = {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  },
+
+  // Raw bytes as an in-app object URL (for <img> rendering). `/file?raw=1`
+  // requires a Bearer HEADER, so a bare `<img src=…?raw=1>` would 401 and the
+  // download helper above force-downloads — neither is renderable. Fetch with
+  // the auth header → blob → object URL. The CALLER owns the URL and MUST
+  // `URL.revokeObjectURL` it on unmount/path change.
+  fetchRawObjectUrl: async (sessionId: string, path: string): Promise<string> => {
+    const response = await fetchWithAuthRecovery(() =>
+      fetch(
+        `${getApiBase()}/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(path)}?raw=1`,
+        { headers: { ...authHeader() } }
+      )
+    );
+    if (!response.ok) throw new Error(`Load failed (HTTP ${response.status})`);
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
   },
 };
 

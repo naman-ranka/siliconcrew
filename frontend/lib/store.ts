@@ -26,8 +26,9 @@ import type {
   DirEntry,
   SmartFile,
   ToolCatalogEntry,
+  TemplateSummary,
 } from "@/types";
-import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi, codexApi } from "./api";
+import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi, workbenchApi, codexApi, templatesApi } from "./api";
 import { generateId } from "./utils";
 import { makeArtifactKey, type ArtifactKey } from "./artifactKeys";
 import { isDuplicateOfServer, mergeActivity, upsertActivityEvent } from "./activityMerge";
@@ -254,6 +255,52 @@ function scheduleActivityRefresh(get: () => AppState): void {
   }, 1200);
 }
 
+// X2A-4: the agent-shell artifact Index renders `manifest.files` and `runs` —
+// slices the dir-tree invalidation above does NOT touch — so during a live
+// agent turn its home panel stayed empty while the inline cards streamed the
+// same work. These schedulers reload those two slices off the SAME WS tool
+// frames the cards render from (debounced, one refetch per burst) — an
+// activity-event-driven update, never a poller (invariant 6). Which tools move
+// which slice mirrors TOOL_DIR_INVALIDATION.
+const MANIFEST_REFRESH_TOOLS = new Set([
+  "write_spec",
+  "write_file",
+  "edit_file_tool",
+  "apply_patch_tool",
+  "update_manifest",
+]);
+const RUNS_REFRESH_TOOLS = new Set(["simulation_tool", "start_synthesis", "retry_pd"]);
+
+// X2A-5: which trailing tool a dropped turn ended on decides the reconnect
+// hint. Only synthesis dispatches leave a durable Runs record; agent sims are
+// ephemeral (/tmp, no run row) and report inline only.
+const SYNTH_DISPATCH_TOOLS = new Set(["start_synthesis", "retry_pd", "wait_for_synthesis"]);
+const SIM_TOOLS = new Set(["simulation_tool", "run_isolated_simulation"]);
+
+let _manifestRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleManifestRefresh(get: () => AppState): void {
+  if (_manifestRefreshTimer) return;
+  _manifestRefreshTimer = setTimeout(() => {
+    _manifestRefreshTimer = null;
+    void get().loadManifest();
+  }, 1200);
+}
+
+// TTFT 3C: the Codex setup watch (prewarm → bounded status poll). A token
+// supersedes stale watches on thread/session/runtime changes; the timer only
+// runs while the worker reports "starting".
+let codexSetupPollTimer: ReturnType<typeof setTimeout> | null = null;
+let codexSetupToken = 0;
+
+let _runsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleRunsRefresh(get: () => AppState): void {
+  if (_runsRefreshTimer) return;
+  _runsRefreshTimer = setTimeout(() => {
+    _runsRefreshTimer = null;
+    void get().loadRuns();
+  }, 1200);
+}
+
 interface AppState {
   // Project state
   projects: Project[];
@@ -269,6 +316,16 @@ interface AppState {
   currentSession: Session | null;
   sessionsLoading: boolean;
   sessionsError: string | null;
+
+  // Template gallery (Wave 11) — read-only example bundles you can fork. List
+  // data only; no heavy per-template state (the preview fetches on demand).
+  templates: TemplateSummary[];
+  templatesLoading: boolean;
+  templatesError: string | null;
+  loadTemplates: () => Promise<void>;
+  /** Fork a bundle → new user-owned session id (added to the sessions list).
+   * Throws on failure so the caller can surface it (e.g. hosted 400). */
+  forkTemplate: (templateId: string) => Promise<string>;
 
   // Chat state
   messages: Message[];
@@ -306,6 +363,11 @@ interface AppState {
   // the Codex agent — codex_runtime.py skips key resolution entirely once an
   // account is connected, so the picker's usual key-based gate doesn't apply.
   codexAccountConnected: boolean;
+  // TTFT 3C (plans/codex-ttft-remediation.md): the active Codex thread's
+  // worker readiness, shown honestly in the chat surface. null = nothing to
+  // show (native runtime, warm-keep unavailable, or state unknown). Never a
+  // fake "ready": the value only ever mirrors the backend status endpoint.
+  codexSetup: { threadId: string; state: "starting" | "ready" } | null;
 
   // Model registry (the picker). The active thread's model is what the WS uses.
   models: ModelInfo[];
@@ -313,6 +375,10 @@ interface AppState {
   // The registry's declared default model id — the launcher's create modal
   // uses it (a new workspace has no model picker; model is a per-chat choice).
   defaultModel: string | null;
+  // Codex model registry — curated separately from `models` (the Codex agent
+  // runs on its own model set, not a provider filter of the native catalog).
+  codexModels: ModelInfo[];
+  codexDefaultModel: string | null;
 
   // WebSocket
   ws: WebSocket | null;
@@ -372,6 +438,9 @@ interface AppState {
   setAgentRuntime: (runtime: "langchain" | "codex") => Promise<void>;
   loadCodexCapability: () => Promise<void>;
   setCodexAccountConnected: (connected: boolean) => void;
+  /** TTFT 3B/3C: kick the active Codex thread's worker spawn (pre-warm) and
+   * follow its honest setup state with a bounded poll (only while starting). */
+  prewarmAgentRuntime: () => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   deleteThread: (threadId: string) => Promise<void>;
   renameThread: (threadId: string, title: string) => Promise<void>;
@@ -455,6 +524,7 @@ interface AppState {
     opts: { terminal: boolean }
   ) => Promise<void>;
   loadWaveformArtifact: (runId: string, vcdPath: string) => Promise<void>;
+  loadWaveformFileArtifact: (path: string) => Promise<void>;
   loadReportArtifact: (runId: string) => Promise<void>;
 
   // Unified activity feed (server pages + live WS events; see selectActivity).
@@ -494,6 +564,9 @@ export const useStore = create<AppState>((set, get) => ({
   currentSession: null,
   sessionsLoading: false,
   sessionsError: null,
+  templates: [],
+  templatesLoading: false,
+  templatesError: null,
 
   messages: [],
   isStreaming: false,
@@ -510,10 +583,13 @@ export const useStore = create<AppState>((set, get) => ({
   agentRuntime: "langchain",
   codexEnabled: false,
   codexAccountConnected: false,
+  codexSetup: null,
 
   models: [],
   modelsLoaded: false,
   defaultModel: null,
+  codexModels: [],
+  codexDefaultModel: null,
 
   ws: null,
   wsSessionId: null,
@@ -639,6 +715,38 @@ export const useStore = create<AppState>((set, get) => ({
         sessionsLoading: false,
       });
     }
+  },
+
+  // Template gallery (Wave 11). SWR iron rule: a populated list never blanks on
+  // a failed refresh — keep the last-good templates and surface the error.
+  loadTemplates: async () => {
+    set({ templatesLoading: true, templatesError: null });
+    try {
+      const templates = await templatesApi.list();
+      // Defensive: a malformed/absent payload must never make `templates`
+      // non-array (the Launcher reads `templates.length`).
+      set({ templates: Array.isArray(templates) ? templates : [], templatesLoading: false });
+    } catch (error) {
+      set({
+        templatesError: error instanceof Error ? error.message : "Failed to load examples",
+        templatesLoading: false,
+      });
+    }
+  },
+
+  forkTemplate: async (templateId: string) => {
+    const { sessionId } = await templatesApi.fork(templateId);
+    // Best-effort: pull the fresh session into the list so a return to the
+    // launcher shows it immediately (the caller routes into /w/{id} regardless).
+    try {
+      const session = await sessionsApi.get(sessionId);
+      set((state) => ({
+        sessions: [session, ...state.sessions.filter((s) => s.id !== sessionId)],
+      }));
+    } catch {
+      // The fork succeeded server-side; a failed refresh must not fail the fork.
+    }
+    return sessionId;
   },
 
   createSession: async (name: string, model: string, projectId?: string | null) => {
@@ -819,11 +927,21 @@ export const useStore = create<AppState>((set, get) => ({
       const last = messages[messages.length - 1];
       if (last && last.role === "assistant") {
         const b = last.blocks ?? [];
-        if (b.length > 0 && b[b.length - 1].type === "tool") {
-          last.blocks = [
-            ...b,
-            { type: "text", content: "_The connection was lost during this step — it may still be running. Check the Runs / Signoff panel for live status, or send a message to continue._" },
-          ];
+        const tail = b[b.length - 1];
+        if (tail && tail.type === "tool") {
+          // X2A-5: only synthesis dispatches leave a durable Runs record — a
+          // dropped sim ran ephemerally (/tmp, no run row), so pointing at the
+          // Runs panel would send the user to an empty list. Tailor the hint to
+          // what actually happened.
+          const toolName = tail.toolCall?.name ?? "";
+          const isSynth = SYNTH_DISPATCH_TOOLS.has(toolName);
+          const isSim = SIM_TOOLS.has(toolName);
+          const content = isSynth
+            ? "_The connection was lost during this step — synthesis may still be running. Check the Runs panel for live status, or send a message to continue._"
+            : isSim
+              ? "_The connection was lost during this step — it may still be running. Simulation results are ephemeral and stream inline only (no Runs entry), so send a message to continue._"
+              : "_The connection was lost during this step — it may still be running. Send a message to continue._";
+          last.blocks = [...b, { type: "text", content }];
         }
       }
       set({ messages, chatError: null });
@@ -1060,6 +1178,10 @@ export const useStore = create<AppState>((set, get) => ({
           if (toolCall) {
             const dirPrefixes = TOOL_DIR_INVALIDATION[toolCall.name];
             if (dirPrefixes) get().invalidateDirs(dirPrefixes);
+            // Keep the agent-shell Index (manifest.files + runs) live with the
+            // inline cards — refresh those slices off this same tool frame.
+            if (MANIFEST_REFRESH_TOOLS.has(toolCall.name)) scheduleManifestRefresh(get);
+            if (RUNS_REFRESH_TOOLS.has(toolCall.name)) scheduleRunsRefresh(get);
           }
           break;
         }
@@ -1084,6 +1206,10 @@ export const useStore = create<AppState>((set, get) => ({
           }
           // Final workspace refresh after completion
           get().refreshWorkspace();
+          // X2A-4: reconcile the Index's slices with the turn's end state (a
+          // final guarantee beyond the debounced per-frame refreshes above).
+          get().loadManifest();
+          get().loadRuns();
           // Reflect server-side auto-title / last-active reordering in the switcher.
           get().loadThreads();
           // A follow-up typed during the turn goes out now, in order.
@@ -1302,12 +1428,71 @@ export const useStore = create<AppState>((set, get) => ({
 
   setCodexAccountConnected: (connected) => set({ codexAccountConnected: connected }),
 
+  prewarmAgentRuntime: async () => {
+    const { currentSession, activeThreadId, agentRuntime } = get();
+    // Any change of thread/session/runtime supersedes the previous setup watch
+    // (the token guard below drops stale responses — SWR iron rule).
+    const token = ++codexSetupToken;
+    if (codexSetupPollTimer) {
+      clearTimeout(codexSetupPollTimer);
+      codexSetupPollTimer = null;
+    }
+    if (!currentSession || !activeThreadId || agentRuntime !== "codex") {
+      set({ codexSetup: null });
+      return;
+    }
+    const sid = currentSession.id;
+    const tid = activeThreadId;
+    // Apply an honest backend state; returns true while we should keep watching.
+    const apply = (state: string): boolean => {
+      if (token !== codexSetupToken || get().activeThreadId !== tid) return false;
+      if (state === "starting" || state === "ready") {
+        set({ codexSetup: { threadId: tid, state } });
+        return state === "starting";
+      }
+      set({ codexSetup: null }); // unavailable/cold/unknown → show nothing
+      return false;
+    };
+    let watching: boolean;
+    try {
+      watching = apply((await threadsApi.prewarmRuntime(sid, tid)).state);
+    } catch {
+      if (token === codexSetupToken) set({ codexSetup: null });
+      return;
+    }
+    // Bounded poll ONLY while the worker is starting (setup is a short,
+    // explicit window — this is not run-status polling); stops at ready/cold,
+    // on thread switch, or after 2 minutes (an honest give-up: chip clears).
+    const startedAt = Date.now();
+    const pollOnce = async () => {
+      if (!watching || token !== codexSetupToken) return;
+      if (Date.now() - startedAt > 120_000) {
+        apply("cold");
+        return;
+      }
+      try {
+        watching = apply((await threadsApi.runtimeStatus(sid, tid)).state);
+      } catch {
+        watching = apply("cold");
+      }
+      if (watching) codexSetupPollTimer = setTimeout(pollOnce, 1200);
+    };
+    if (watching) codexSetupPollTimer = setTimeout(pollOnce, 1200);
+  },
+
   selectThread: async (threadId: string) => {
-    const { currentSession, activeThreadId, ws } = get();
+    const { currentSession, activeThreadId, ws, threads, agentRuntime } = get();
     if (!currentSession || threadId === activeThreadId) return;
     if (ws) ws.close();
+    // The runtime FOLLOWS the active thread, always — a Codex thread selected
+    // via URL (?chat=) or any future cross-runtime path must flip the panel to
+    // Codex mode (violet theme + Codex picker), never leave it showing the
+    // native model list against a Codex conversation.
+    const target = threads.find((t) => t.id === threadId);
+    const runtime = target ? (target.runtime === "codex" ? "codex" : "langchain") : agentRuntime;
     set({
       activeThreadId: threadId, messages: [], queuedMessages: [],
+      agentRuntime: runtime,
       ws: null, wsSessionId: null, wsThreadId: null,
       ...chatTurnResetFields(),
     });
@@ -1353,10 +1538,12 @@ export const useStore = create<AppState>((set, get) => ({
       set({
         models: Array.isArray(data?.models) ? data.models : [],
         defaultModel: typeof data?.default === "string" ? data.default : null,
+        codexModels: Array.isArray(data?.codex_models) ? data.codex_models : [],
+        codexDefaultModel: typeof data?.codex_default === "string" ? data.codex_default : null,
         modelsLoaded: true,
       });
     } catch {
-      set({ models: [], modelsLoaded: true });
+      set({ models: [], codexModels: [], modelsLoaded: true });
     }
   },
 
@@ -1454,7 +1641,7 @@ export const useStore = create<AppState>((set, get) => ({
           return [];
         }),
         workspaceApi.listWaveforms(currentSession.id).catch(() => []),
-        workspaceApi.listLayouts(currentSession.id).catch(() => []),
+        workspaceApi.listLayouts(currentSession.id).then((r) => r.layouts).catch(() => []),
         workspaceApi.listSchematics(currentSession.id).catch(() => []),
         workspaceApi.listSynthesisRuns(currentSession.id).catch(() => []),
       ]);
@@ -1760,13 +1947,20 @@ export const useStore = create<AppState>((set, get) => ({
   loadManifest: async () => {
     const { currentSession } = get();
     if (!currentSession) return;
+    const sid = currentSession.id;
     set({ manifestLoading: true });
     try {
-      const manifest = await workbenchApi.getManifest(currentSession.id);
-      set({ manifest });
+      const manifest = await workbenchApi.getManifest(sid);
+      // Session switched mid-flight (X2A-4 fires this off live WS frames now):
+      // dropping the stale result is the only honest move, or A's manifest
+      // cross-writes into B. Same guard loadThreads uses; B's own load owns
+      // its slice and its loading flag.
+      if (get().currentSession?.id !== sid) return;
+      set({ manifest, manifestLoading: false });
     } catch {
-      set({ manifest: null });
-    } finally {
+      if (get().currentSession?.id !== sid) return;
+      // Populated data never blanks (invariant 4/7): a transient 500 mid-turn
+      // keeps the last-known manifest rather than flashing the Index empty.
       set({ manifestLoading: false });
     }
   },
@@ -1816,6 +2010,10 @@ export const useStore = create<AppState>((set, get) => ({
       set({ runsLoading: true });
       try {
         const runs = await workbenchApi.listRuns(sid, runKindFilter);
+        // Session switched mid-flight (X2A-4 fires this off live WS frames now):
+        // discard, or A's runs cross-write into B and detectRunTransitions
+        // announces A's transitions against B. Same guard loadThreads uses.
+        if (get().currentSession?.id !== sid) return;
         // Prev captured AFTER the fetch: a Refresh applied mid-flight already
         // ran the detector — don't re-announce the same transition.
         const prevRuns = get().runs;
@@ -1823,11 +2021,13 @@ export const useStore = create<AppState>((set, get) => ({
           runs,
           selectedRunId:
             runs.find((r) => r.id === state.selectedRunId)?.id ?? runs[0]?.id ?? null,
+          runsLoading: false,
         }));
         detectRunTransitions(sid, prevRuns, runs);
       } catch {
-        set({ runs: [] });
-      } finally {
+        if (get().currentSession?.id !== sid) return;
+        // Populated data never blanks (invariant 4/7): keep the prior runs on a
+        // transient error rather than flashing the Index empty mid-turn.
         set({ runsLoading: false });
       }
     });
@@ -1875,7 +2075,7 @@ export const useStore = create<AppState>((set, get) => ({
     const targetRunId = runId ?? get().selectedSynthesisRunId ?? null;
     try {
       const [layoutFiles, schematicFiles] = await Promise.all([
-        workspaceApi.listLayouts(sid).catch(() => get().layoutFiles),
+        workspaceApi.listLayouts(sid).then((r) => r.layouts).catch(() => get().layoutFiles),
         workspaceApi.listSchematics(sid).catch(() => get().schematicFiles),
       ]);
       set({ layoutFiles, schematicFiles });
@@ -2128,6 +2328,18 @@ export const useStore = create<AppState>((set, get) => ({
       makeArtifactKey("wave", runId),
       () => workspaceApi.getWaveform(sid, vcdPath),
       { terminal }
+    );
+  },
+
+  loadWaveformFileArtifact: async (path) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    // A loose VCD has no run to declare it terminal — always revalidate.
+    await get().loadArtifact(
+      makeArtifactKey("wavefile", path),
+      () => workspaceApi.getWaveform(sid, path),
+      { terminal: false }
     );
   },
 

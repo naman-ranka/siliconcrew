@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronDown,
-  CircuitBoard,
+  CircleDot,
   Clock,
   Columns2,
   FolderPlus,
   Folder,
+  Github,
   Hash,
   Layers,
   MessageSquare,
@@ -17,6 +18,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
@@ -37,13 +39,19 @@ import {
 } from "@/components/ui/dialog";
 import { AccountChip } from "@/components/auth/AccountChip";
 import { ThemeToggle } from "@/components/workbench/ThemeToggle";
+import { Logo } from "@/components/branding/Logo";
+import { Hero } from "@/components/branding/Hero";
+import { LandingFooter } from "@/components/branding/LandingFooter";
+import { REPO_URL, ISSUES_URL } from "@/components/branding/links";
 import { SessionCard } from "./SessionCard";
 import { ThreadDrawer } from "./ThreadDrawer";
+import { ExampleCard } from "./ExampleCard";
+import { TemplatePreview } from "./TemplatePreview";
 import { CreateSessionModal } from "./CreateSessionModal";
 import { NamePrompt, type NamePromptProps } from "./NamePrompt";
 import { LauncherContextMenu, type MenuItem } from "./LauncherContextMenu";
 import { groupSwatch } from "./util";
-import type { Project, Session } from "@/types";
+import type { Project, Session, TemplateSummary } from "@/types";
 
 type SortMode = "recent" | "grouped";
 
@@ -67,12 +75,17 @@ export function Launcher() {
     renameProject,
     createProject,
     moveSession,
+    templates,
+    templatesError,
+    loadTemplates,
+    forkTemplate,
   } = useStore();
   const { status: authStatus } = useAuth();
 
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortMode>("recent");
   const [selId, setSelId] = useState<string | null>(null);
+  const [selTemplate, setSelTemplate] = useState<TemplateSummary | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [prompt, setPrompt] = useState<Omit<NamePromptProps, "onCancel"> | null>(null);
@@ -89,6 +102,12 @@ export function Launcher() {
     loadSessions();
     loadProjects();
   }, [loadSessions, loadProjects, authStatus]);
+
+  // Templates are PUBLIC (no auth gate) — load once on mount so a brand-new user
+  // with no sessions still sees examples to fork.
+  useEffect(() => {
+    loadTemplates();
+  }, [loadTemplates]);
 
   const groupColor = (projectId: string) =>
     groupSwatch(projects.findIndex((p) => p.id === projectId));
@@ -139,6 +158,24 @@ export function Launcher() {
       // Creation failed (offline / stale session) — still land in the workspace.
       open(sessionId);
     }
+  };
+
+  // Session and template selection share the ONE right-hand slide-over, so
+  // selecting one dismisses the other.
+  const selectSessionCard = (id: string) => {
+    setSelTemplate(null);
+    setSelId(id);
+  };
+  const selectExample = (t: TemplateSummary) => {
+    setSelId(null);
+    setSelTemplate(t);
+  };
+
+  // Fork → new user-owned session, then route straight into it. Errors bubble
+  // to the preview (e.g. a hosted deployment returns 400).
+  const forkExample = async (templateId: string) => {
+    const sessionId = await forkTemplate(templateId);
+    open(sessionId);
   };
 
   // Drag-to-group: optimistic move, reverted on server failure.
@@ -306,7 +343,7 @@ export function Launcher() {
       selected={s.id === selId}
       groupName={showTag ? groupNameOf(s.project_id) : null}
       groupColor={showTag && s.project_id ? groupColor(s.project_id) : null}
-      onSelect={() => setSelId(s.id)}
+      onSelect={() => selectSessionCard(s.id)}
       onOpen={() => open(s.id)}
       onMenu={(e) => openSessionMenu(e, s)}
       dragging={dragId === s.id}
@@ -321,14 +358,76 @@ export function Launcher() {
   const isEmpty = !sessionsLoading && sessions.length === 0 && !sessionsError;
   const isBooting = sessionsLoading && sessions.length === 0;
 
+  // Examples gallery — shown above the sessions grid whenever bundles exist
+  // (including for a brand-new user with no sessions). SWR iron rule: the list
+  // is populated from the store and never blanks on a refresh error.
+  const examplesBlock =
+    templates.length > 0 ? (
+      <section data-testid="examples-section" className="mb-8">
+        <div className="flex items-center gap-2 mb-3">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
+          <span className="text-[12.5px] font-semibold text-foreground/90">Examples</span>
+          <span className="text-[11px] text-muted-foreground/50 tabular-nums">
+            {templates.length}
+          </span>
+          <span className="text-[11px] text-muted-foreground/60">
+            — fork a finished design into your own workspace
+          </span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {templates.map((t) => (
+            <ExampleCard
+              key={t.id}
+              template={t}
+              selected={selTemplate?.id === t.id}
+              onSelect={() => selectExample(t)}
+              onOpen={() => selectExample(t)}
+            />
+          ))}
+        </div>
+      </section>
+    ) : null;
+
+  // Honest offline (invariant 4 / §3D): an unreachable gallery reads as "unable
+  // to connect" with a Retry, NEVER a silent empty section. Cached templates
+  // always win (the store keeps last-good), so this shows ONLY when the error
+  // left us with nothing to display.
+  const examplesUnavailableBlock =
+    templatesError && templates.length === 0 ? (
+      <section data-testid="examples-unavailable" className="mb-8">
+        <div className="flex items-center gap-2 mb-3">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
+          <span className="text-[12.5px] font-semibold text-foreground/90">Examples</span>
+        </div>
+        <div className="rounded-lg border border-dashed border-border/70 py-6 px-4 text-center">
+          <p className="text-[12.5px] text-muted-foreground">
+            Couldn&rsquo;t reach the examples gallery.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-3"
+            data-testid="retry-templates"
+            onClick={() => loadTemplates()}
+          >
+            Retry
+          </Button>
+        </div>
+      </section>
+    ) : null;
+
+  // One gallery slot: the populated list wins; otherwise the honest-offline
+  // panel (or nothing when simply empty/loading). Used in BOTH placements.
+  const galleryBlock = examplesBlock ?? examplesUnavailableBlock;
+
   return (
     <div data-testid="launcher" className="h-full flex bg-surface-0">
       <div className="flex-1 min-w-0 flex flex-col">
         {/* Toolbar */}
         <header className="h-14 px-6 flex items-center gap-3 border-b border-border shrink-0">
           <div className="flex items-center gap-2 shrink-0">
-            <div className="w-6 h-6 rounded-md bg-primary/15 grid place-items-center">
-              <CircuitBoard className="h-3.5 w-3.5 text-primary" />
+            <div className="w-6 h-6 rounded-md bg-primary/15 grid place-items-center text-primary">
+              <Logo className="h-3.5 w-3.5" />
             </div>
             <span className="text-[13px] font-semibold tracking-tight hidden md:block">
               SiliconCrew
@@ -373,6 +472,29 @@ export function Launcher() {
             <Button size="sm" className="h-9 px-3.5" onClick={() => startCreate(null)}>
               <Plus className="h-4 w-4 mr-1.5" /> New session
             </Button>
+            {/* Open-source chrome: repo + issues, always visible. */}
+            <div className="flex items-center gap-0.5 pl-1 ml-0.5 border-l border-border">
+              <a
+                href={REPO_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                aria-label="GitHub repository"
+                title="GitHub repository"
+                className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground hover:text-foreground hover:bg-surface-2"
+              >
+                <Github className="h-4 w-4" />
+              </a>
+              <a
+                href={ISSUES_URL}
+                target="_blank"
+                rel="noreferrer noopener"
+                aria-label="Issues"
+                title="Issues"
+                className="h-8 w-8 grid place-items-center rounded-md text-muted-foreground hover:text-foreground hover:bg-surface-2"
+              >
+                <CircleDot className="h-4 w-4" />
+              </a>
+            </div>
             <AccountChip />
             <ThemeToggle />
             <Button
@@ -407,10 +529,22 @@ export function Launcher() {
             </div>
           </div>
         ) : isEmpty ? (
-          <EmptyLauncher onCreate={() => startCreate(null)} />
+          // Signed-out / empty account: sell the project first — identity + what
+          // it is + forkable examples — with the create CTA below, so an empty
+          // account is never a dead end.
+          <div className="flex-1 overflow-y-auto px-6 py-6" onContextMenu={openBgMenu}>
+            <div className="max-w-[860px] w-full mx-auto">
+              <Hero />
+              {galleryBlock}
+              <EmptyLauncher onCreate={() => startCreate(null)} inline />
+              <LandingFooter />
+            </div>
+          </div>
         ) : (
           <div className="flex-1 overflow-y-auto px-6 py-6" onContextMenu={openBgMenu}>
             <div className="max-w-[860px] w-full mx-auto">
+              {/* Signed-in with work: their workspaces come first; the examples
+                  gallery stays available below, and the OSS footer anchors it. */}
               {filtered.length === 0 ? (
                 <div className="grid place-items-center py-24 text-center">
                   <div className="w-11 h-11 rounded-xl bg-surface-2 grid place-items-center mb-3">
@@ -540,13 +674,22 @@ export function Launcher() {
                   </button>
                 </div>
               )}
+              {galleryBlock && <div className="mt-10">{galleryBlock}</div>}
+              <LandingFooter />
             </div>
           </div>
         )}
       </div>
 
-      {/* Thread drawer — one lazy hydration for the selected session only. */}
-      {selected && (
+      {/* Right-hand slide-over — a template preview OR the session thread drawer
+          (mutually exclusive; one lazy hydration for the selected item only). */}
+      {selTemplate ? (
+        <TemplatePreview
+          template={selTemplate}
+          onClose={() => setSelTemplate(null)}
+          onFork={forkExample}
+        />
+      ) : selected ? (
         <ThreadDrawer
           session={selected}
           groupName={groupNameOf(selected.project_id)}
@@ -555,7 +698,7 @@ export function Launcher() {
           onOpen={(opts) => open(selected.id, opts)}
           onNewChat={() => void newChat(selected.id)}
         />
-      )}
+      ) : null}
 
       {/* Overlays */}
       {menu && <LauncherContextMenu {...menu} onClose={() => setMenu(null)} />}
@@ -588,9 +731,9 @@ export function Launcher() {
   );
 }
 
-function EmptyLauncher({ onCreate }: { onCreate: () => void }) {
+function EmptyLauncher({ onCreate, inline = false }: { onCreate: () => void; inline?: boolean }) {
   return (
-    <div className="flex-1 grid place-items-center px-6">
+    <div className={cn(inline ? "py-10 grid place-items-center" : "flex-1 grid place-items-center px-6")}>
       <div className="max-w-[380px] text-center">
         <div className="mx-auto w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 grid place-items-center mb-5 relative">
           <Folder className="h-7 w-7 text-primary" />

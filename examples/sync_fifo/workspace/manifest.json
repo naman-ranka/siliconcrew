@@ -1,0 +1,26 @@
+{
+  "sessionId": "",
+  "files": [
+    {
+      "name": "sync_fifo.v",
+      "role": "rtl",
+      "path": "sync_fifo.v"
+    },
+    {
+      "name": "sync_fifo_tb.v",
+      "role": "tb",
+      "path": "sync_fifo_tb.v"
+    }
+  ],
+  "synthTop": "sync_fifo",
+  "simTop": "sync_fifo_tb",
+  "clockPeriodNs": 10.0,
+  "platform": "sky130hd",
+  "ignore": [],
+  "testbenches": [
+    {
+      "file": "sync_fifo_tb.v",
+      "module": "sync_fifo_tb"
+    }
+  ]
+}

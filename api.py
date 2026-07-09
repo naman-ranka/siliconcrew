@@ -6,6 +6,8 @@ Provides REST endpoints and WebSocket streaming for the Next.js frontend.
 """
 
 import os
+import sys
+import time
 import json
 import uuid
 import asyncio
@@ -26,7 +28,14 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, Tool
 
 from src.agents.architect import create_architect_agent, load_system_prompt
 from src.agents import runtime_registry
-from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name, model_catalog_entries
+from src.model_catalog import (
+    CODEX_DEFAULT_MODEL,
+    DEFAULT_MODEL,
+    PRICING,
+    codex_catalog_entries,
+    normalize_model_name,
+    model_catalog_entries,
+)
 from src.utils.session_manager import SessionManager
 from src.utils.session_context import SessionContext, set_current_session, session_scope
 from src.utils.paths import is_within
@@ -46,6 +55,8 @@ from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
 from src.tools import manifest as manifest_mod
 from src.api.actions import build_actions_router
 from src.api import workspace_fs
+from src.utils import templates as templates_mod
+from src.platform_engines import template_source as template_source_mod
 
 # Load environment
 load_dotenv()
@@ -125,7 +136,10 @@ if get_settings().codex_enabled:
             llm_key_resolve=lambda uid, model: _LLM_KEY_PROVIDER.resolve(uid, model),
             account_home_for=_codex_account_home_for,
             system_prompt_loader=load_system_prompt,
-            default_model=DEFAULT_MODEL,
+            # Codex is an OpenAI runtime: a thread with no model pinned must
+            # fall back to a Codex model, never the app-wide (Gemini) default —
+            # that default would resolve a Gemini key and hand it to Codex.
+            default_model=CODEX_DEFAULT_MODEL,
             normalize_model=normalize_model_name,
             enabled=True,
             persist_credential=lambda uid: _CODEX_AUTH_MANAGER.persist(uid),
@@ -186,6 +200,31 @@ class SessionResponse(BaseModel):
     # 0 until its default "Chat 1" row is created (first thread list / connect);
     # the UI treats 0 as "no chats yet". Never triggers workspace hydration.
     thread_count: int = 0
+    # Provenance for a session forked from a template bundle (Wave 11):
+    # {id, name, forked_at}. Resolved store-first (the durable session-row copy,
+    # the only source reachable on hosted list endpoints) then the workspace
+    # ``.source_template.json`` file. None for a normal session.
+    source_template: Optional[Dict[str, Any]] = None
+
+
+def _source_template(meta: Optional[Dict[str, Any]], workspace_path: str) -> Optional[Dict[str, Any]]:
+    """Resolve a fork's provenance for the "forked from" chip (D8).
+
+    The metadata-store row first — its durable copy is the ONLY source reachable
+    from a list endpoint on hosted (no workspace hydration there) — then the
+    workspace ``.source_template.json`` file, which covers pre-existing self-host
+    forks that predate the store column. A null/malformed stored value falls
+    through to the file. Read-only: never hydrates or mutates a workspace.
+    """
+    raw = (meta or {}).get("source_template")
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except (TypeError, ValueError):
+            pass
+    return templates_mod.read_provenance(workspace_path)
 
 
 class MessageResponse(BaseModel):
@@ -264,6 +303,8 @@ class SynthesisRunResponse(BaseModel):
     elapsed_sec: Optional[float] = None
     summary_metrics: Optional[Dict[str, Any]] = None
     auto_checks: Optional[Dict[str, Any]] = None
+    current_stage: Optional[str] = None
+    check_notes: Optional[str] = None
     report_available: bool = False
     report_filename: Optional[str] = None
 
@@ -414,12 +455,21 @@ async def lifespan(app: FastAPI):
         mcp_conn_context = mcp_transport.connect()
         streams = await mcp_conn_context.__aenter__()
 
-        # Start the MCP server processing task
+        # Start the MCP server processing task.
+        # stateless=True MUST match get_http_app()'s session-less transport
+        # (mcp_session_id=None): the default leaves the long-lived ServerSession
+        # NotInitialized, so a client reusing its connection after a Cloud Run
+        # revision swap (no re-handshake) hits the SDK's pre-init guard, which
+        # its receive loop blanket-maps to -32602 "Invalid request parameters"
+        # — the bad-argument lie of F9c, and the reason every deploy broke the
+        # claude.ai connector until a manual reconnect (F15). See
+        # tests/test_mcp_preinit_error_mapping.py for the mechanism.
         mcp_task = asyncio.create_task(
             mcp_server.server.run(
                 streams[0],
                 streams[1],
-                mcp_server.server.create_initialization_options()
+                mcp_server.server.create_initialization_options(),
+                stateless=True,
             )
         )
         app.state.mcp_task = mcp_task
@@ -687,6 +737,13 @@ async def list_sessions(identity: Identity = Depends(get_identity)):
             total_tokens=meta.get("total_tokens", 0) if meta else 0,
             total_cost=meta.get("total_cost", 0.0) if meta else 0.0,
             thread_count=thread_counts.get(session_id, 0),
+            # Store-first provenance (durable row copy; file fallback) so the
+            # "forked from" chip survives a reload on hosted too — no workspace
+            # hydration, no row materialization. The store selects currentSession
+            # from this list.
+            source_template=_source_template(
+                meta, session_manager.get_workspace_path(session_id)
+            ),
         ))
 
     return result
@@ -752,6 +809,73 @@ async def create_trial_session(data: SessionCreate, identity: Identity = Depends
         raise HTTPException(status_code=400, detail=str(e))
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+
+# =============================================================================
+# TEMPLATE ENDPOINTS (Wave 11 — read-only bundles you can FORK into a session)
+# =============================================================================
+#
+# Templates are repo-owned bundles under ``examples/<id>/`` (a workspace snapshot
+# + a small manifest), not sessions. Listing/preview is PUBLIC (they are example
+# content); forking requires a signed-in/self-host identity (it owns the fork).
+# The routes use a SINGLE-segment ``{template_id}`` (no ``:path``), so they never
+# collide with the greedy ``/api/sessions/{session_id:path}`` catch-all.
+
+
+class ForkResponse(BaseModel):
+    sessionId: str
+
+
+@app.get("/api/templates")
+async def list_templates(identity: Identity = Depends(get_identity)):
+    """List curated example bundles (public — no sign-in required).
+
+    Routes through the template-source engine (local ``examples/`` vs a GCS
+    index). An unreachable store is an honest 503 — NEVER an empty 200 that would
+    read as "no templates" (invariant 4). READ-ONLY: no rows are materialized.
+    """
+    try:
+        return {"templates": template_source_mod.get_template_source().list()}
+    except template_source_mod.TemplateStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Template gallery is unreachable")
+
+
+@app.get("/api/templates/{template_id}")
+async def get_template(template_id: str, identity: Identity = Depends(get_identity)):
+    """One bundle's manifest + a shallow file/conversation preview (public)."""
+    try:
+        return template_source_mod.get_template_source().get(template_id)
+    except templates_mod.TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except template_source_mod.TemplateStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Template gallery is unreachable")
+
+
+@app.post("/api/templates/{template_id}/fork", response_model=ForkResponse)
+async def fork_template(template_id: str, identity: Identity = Depends(require_signed_in)):
+    """Fork a bundle into a new user-owned session; returns the new session id.
+
+    Self-host and hosted both fork here (Item 3). The fork does real, blocking
+    work — a workspace copy/materialize + rewrites + (on cloud) an object-storage
+    sync — so it runs off the event loop via ``asyncio.to_thread`` (A2). It is
+    owned by the TRUE forking user by construction (``user_id=_uid(identity)``).
+    """
+    uid = _uid(identity)
+    try:
+        session_id = await asyncio.to_thread(
+            templates_mod.fork_from_template, session_manager, template_id, user_id=uid
+        )
+    except templates_mod.TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except template_source_mod.TemplateStoreUnavailable:
+        # An unreachable gallery, or a gcs bundle that promised binaries it can't
+        # deliver (all-or-nothing, A6). Rollback already ran inside the fork.
+        raise HTTPException(status_code=503, detail="Template gallery is unreachable")
+    except Exception:
+        # Guard-ceiling / materialize / sync failure — the fork rolled itself
+        # back; report honestly rather than leaking a stack.
+        raise HTTPException(status_code=500, detail="Fork failed — please try again")
+    return ForkResponse(sessionId=session_id)
 
 
 # NOTE: the catch-all ``GET /api/sessions/{session_id:path}`` is defined LOWER in
@@ -945,13 +1069,29 @@ def _usable_providers(identity: Identity) -> set:
 
 @app.get("/api/models")
 async def list_models(identity: Identity = Depends(get_identity)):
-    """Model registry for the picker, with per-request availability."""
+    """Model registry for the pickers, with per-request availability.
+
+    ``models``/``default`` feed the native (LangChain) picker; ``codex_models``/
+    ``codex_default`` feed the separately curated Codex picker. Codex entries'
+    ``available`` reflects BYOK/env OpenAI keys only — a connected ChatGPT
+    account bypasses key resolution entirely, which the frontend layers on top
+    (the account state lives in the Codex auth endpoints, not here).
+    """
     usable = _usable_providers(identity)
     models = [
         {**e, "available": e["provider"] in usable}
         for e in model_catalog_entries()
     ]
-    return {"models": models, "default": DEFAULT_MODEL}
+    codex_models = [
+        {**e, "available": e["provider"] in usable}
+        for e in codex_catalog_entries()
+    ]
+    return {
+        "models": models,
+        "default": DEFAULT_MODEL,
+        "codex_models": codex_models,
+        "codex_default": CODEX_DEFAULT_MODEL,
+    }
 
 
 # =============================================================================
@@ -1114,6 +1254,59 @@ async def get_thread_history(session_id: str, tid: str, identity: Identity = Dep
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/sessions/{session_id:path}/threads/{tid}/runtime/status")
+async def thread_runtime_status(session_id: str, tid: str, identity: Identity = Depends(get_identity)):
+    """Honest runtime-worker readiness for one thread (TTFT 3C).
+
+    Generic seam: the shell asks the thread's registered runtime IF it exposes
+    ``worker_state`` (Codex warm-keep does); native / plain runtimes report
+    "unavailable" and the UI shows nothing. States: ready | starting | cold |
+    unavailable — never a fake "ready".
+    """
+    uid = _require_owned(session_id, identity)
+    if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    row = session_manager.get_thread(tid, user_id=uid)
+    handler = runtime_registry.handler_for(runtime_registry.resolve_runtime(row))
+    fn = getattr(handler, "worker_state", None) if handler is not None else None
+    if fn is None:
+        return {"state": "unavailable"}
+    return {"state": fn(session_id=session_id, thread_id=tid, user_id=uid)}
+
+
+@app.post("/api/sessions/{session_id:path}/threads/{tid}/runtime/prewarm")
+async def prewarm_thread_runtime(
+    session_id: str, tid: str,
+    identity: Identity = Depends(get_identity),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Start the thread's runtime worker before the first message (TTFT 3B).
+
+    Fire-and-forget: kicks the spawn and returns the current state immediately
+    ("starting"), so the cold start overlaps the user's read-and-type time. An
+    early send coalesces onto the same spawn server-side (the turn waits for
+    the worker it pre-warmed, never double-spawns). Owner-scoped exactly like
+    every other thread route; the caller's bearer is what the worker's bound
+    MCP child authenticates with.
+    """
+    uid = _require_owned(session_id, identity)
+    if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    row = session_manager.get_thread(tid, user_id=uid)
+    handler = runtime_registry.handler_for(runtime_registry.resolve_runtime(row))
+    fn = getattr(handler, "prewarm", None) if handler is not None else None
+    if fn is None:
+        return {"state": "unavailable"}
+    # Same workspace resolution as a real turn (hydrates in hosted; off-loop).
+    workspace = await asyncio.to_thread(get_workspace_provider().workspace_for, session_id)
+    state = await fn(
+        session_id=session_id, thread_id=tid, user_id=uid, workspace=workspace,
+        tier=identity.tier, auth_token=auth_engine.parse_bearer(authorization),
+        thread_row=row,
+    )
+    return {"state": state}
+
+
 # Catch-all single-session GET. MUST stay below the specific /threads GET routes
 # above: ``session_id`` is greedy (``:path``), so this would otherwise shadow
 # ``GET …/threads`` and ``GET …/threads/{tid}/history`` (binding session_id to
@@ -1136,7 +1329,25 @@ async def get_session(session_id: str, identity: Identity = Depends(get_identity
         total_tokens=meta.get("total_tokens", 0),
         total_cost=meta.get("total_cost", 0.0),
         thread_count=session_manager.count_threads(session_id, user_id=uid),
+        # Store-first (durable row copy; workspace-file fallback) for the
+        # forked-from chip. None for a normal session; never hydrates the workspace.
+        source_template=_source_template(
+            meta, session_manager.get_workspace_path(session_id)
+        ),
     )
+
+
+# Known model ids for PATCH-time validation: every id either picker offers
+# (native CATALOG + Codex CODEX_CATALOG) plus every id we still price —
+# previous-generation ids stay pinnable. A PATCH carrying an id outside this
+# set is a typo or stale pick, so we 422 at PICK time rather than letting it
+# fail silently when the user later SENDS a message. Aliases are normalized
+# first, so their canonical targets (all present here) validate cleanly.
+_KNOWN_MODEL_IDS = frozenset(
+    {e["id"] for e in model_catalog_entries()}
+    | {e["id"] for e in codex_catalog_entries()}
+    | set(PRICING)
+)
 
 
 @app.patch("/api/sessions/{session_id:path}/threads/{tid}", response_model=ThreadResponse)
@@ -1154,7 +1365,10 @@ async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: I
     if data.title is not None:
         session_manager.rename_thread(tid, data.title, user_id=uid)
     if data.model is not None:
-        session_manager.set_thread_model(tid, normalize_model_name(data.model), user_id=uid)
+        normalized = normalize_model_name(data.model)
+        if normalized not in _KNOWN_MODEL_IDS:
+            raise HTTPException(status_code=422, detail=f"Unknown model id: {data.model!r}")
+        session_manager.set_thread_model(tid, normalized, user_id=uid)
     return _thread_to_response(session_manager.get_thread(tid, user_id=uid))
 
 
@@ -1216,6 +1430,13 @@ async def patch_session(session_id: str, data: SessionPatch, identity: Identity 
         total_tokens=meta.get("total_tokens", 0),
         total_cost=meta.get("total_cost", 0.0),
         thread_count=session_manager.count_threads(session_id, user_id=uid),
+        # Rename/move must NOT blank the "forked from" chip (invariant 7:
+        # populated data never blanks). The store replaces the session in the
+        # list + currentSession with this response, so it carries provenance
+        # exactly like the single GET / list do (store-first, file fallback).
+        source_template=_source_template(
+            meta, session_manager.get_workspace_path(session_id)
+        ),
     )
 
 
@@ -1280,6 +1501,26 @@ def _pending_tool_call_ids(messages) -> list:
             pending.discard(msg.tool_call_id)
     pending.discard(None)
     return sorted(pending)
+
+
+def _log_chat_timing(thread_id: str, turn_id: str, event: str, **fields: object) -> None:
+    """Emit a `[CHAT-TIMING]` line for the native (LangChain/LangGraph) chat
+    turn path, mirroring the `[CODEX-TIMING]` format so Cloud Run logs expose
+    where a native turn spends its time — most importantly send->first-token.
+
+    Log-only and defensive: any failure here must NEVER break or delay a turn,
+    so the whole body is wrapped and swallowed. Every line carries thread +
+    turn so turns 1 vs 2+ in the same conversation can be correlated (the
+    implicit-prompt-caching signal). Durations use time.monotonic().
+    """
+    try:
+        extra = "".join(f" {k}={v}" for k, v in fields.items())
+        print(
+            f"[CHAT-TIMING] thread={thread_id} turn={turn_id} event={event}{extra}",
+            file=sys.stderr,
+        )
+    except Exception:
+        pass
 
 
 @app.websocket("/api/chat/{session_id:path}")
@@ -1459,6 +1700,23 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
                 if _ext_stopped:
                     await _ext_send({"type": "stopped", "tokens": {"input": 0, "output": 0}})
+
+                # Persist workspace changes once per turn, in the background —
+                # the SAME cadence and mechanism as the native path below. The
+                # Codex MCP subprocess defers its per-tool workspace sync to
+                # this turn-level sync (SILICONCREW_MCP_DEFER_WORKSPACE_SYNC),
+                # so a mutating tool result no longer blocks on a full-tree
+                # upload. Fires for completed, stopped, and headless turns
+                # alike, so whatever was written so far is persisted.
+                _ext_sync = getattr(_ws_provider, "sync", None)
+                if callable(_ext_sync):
+                    async def _ext_background_sync() -> None:
+                        try:
+                            await asyncio.to_thread(_ext_sync, session_id)
+                        except Exception as exc:
+                            print(f"[WARN] workspace sync failed: {exc}")
+
+                    _run_in_background(_ext_background_sync())
                 continue
             # --- native LangChain turn (unchanged) ----------------------------
 
@@ -1563,6 +1821,17 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         client_gone = True
 
                 await _send({"type": "start"})
+
+                # --- server-side timing instrumentation (additive; log-only) ---
+                # The native turn had no first-token / LLM-latency signal; these
+                # `[CHAT-TIMING]` lines (mirror of `[CODEX-TIMING]`) make the
+                # send->first-token split fall out of Cloud Run logs. Monotonic
+                # reads only; never awaits on the hot path. first_token / first
+                # model response fire exactly once per turn via these flags.
+                _chat_turn_start = time.monotonic()
+                _first_token_logged = False
+                _first_response_logged = False
+                _log_chat_timing(thread_id, turn_id, "turn_start")
 
                 # Bounded: a slow client backpressures the drain task instead
                 # of building unbounded memory.
@@ -1698,6 +1967,15 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             continue
 
                         mode, data = payload
+                        # First LLM round-trip: the first astream event of the
+                        # turn, before any token is forwarded — isolates model
+                        # latency from queue/forward overhead. Fires once.
+                        if not _first_response_logged:
+                            _first_response_logged = True
+                            _log_chat_timing(
+                                thread_id, turn_id, "first_model_response",
+                                elapsed=f"{time.monotonic() - _chat_turn_start:.3f}",
+                            )
                         if mode == "messages":
                             chunk, meta = data
                             if (meta or {}).get("langgraph_node") == "agent":
@@ -1708,6 +1986,15 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                                         segment_id, segment_text = chunk_id, ""
                                         delta_gate = 0.0  # new segment: emit at once
                                     segment_text += piece
+                                    # THE number: send->first streamed model text
+                                    # token. Fires once; compare turn 1 vs 2+ to
+                                    # see implicit prompt caching working.
+                                    if not _first_token_logged:
+                                        _first_token_logged = True
+                                        _log_chat_timing(
+                                            thread_id, turn_id, "first_token",
+                                            elapsed_since_start=f"{time.monotonic() - _chat_turn_start:.3f}",
+                                        )
                                     now = asyncio.get_running_loop().time()
                                     if now - delta_gate >= _WS_DELTA_INTERVAL_SEC:
                                         delta_gate = now
@@ -1795,6 +2082,13 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     })
                 else:
                     await _send({"type": "done", "tokens": tokens})
+
+                _log_chat_timing(
+                    thread_id, turn_id, "turn_end",
+                    elapsed=f"{time.monotonic() - _chat_turn_start:.3f}",
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                )
 
                 # Persist workspace changes to durable storage in hosted mode
                 # (no-op locally) as a background task — this is the ONE slow,
@@ -1997,13 +2291,32 @@ async def get_code_file(session_id: str, filename: str, _acl: Optional[str] = De
 
 @app.get("/api/workspace/{session_id:path}/waveforms")
 async def list_waveform_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
-    """List VCD files in the workspace."""
-    def work() -> List[str]:  # F6: hydration + listdir off-thread
+    """List every VCD file in the workspace, recursively.
+
+    Returns workspace-relative POSIX paths (not bare names) so a nested dump
+    under ``sim_runs/<id>/`` is both listed AND fetchable via the sibling
+    ``/waveform/{filename:path}`` route. A non-recursive ``os.listdir`` used to
+    hide every sim-run VCD. Read-only: a plain walk, no row materialization.
+    ``iter_workspace_files`` is deliberately NOT used here — it prunes
+    ``sim_runs``/``synth_runs``, which is exactly where these VCDs live.
+    """
+    def work() -> List[str]:  # F6: hydration + walk off-thread
         workspace = _resolve_workspace(session_id)
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        return [f for f in os.listdir(workspace) if f.endswith(".vcd")]
+        vcds: List[str] = []
+        for dirpath, dirnames, filenames in os.walk(workspace):
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in ("__pycache__", "node_modules") and not d.startswith(".")
+            ]
+            for name in filenames:
+                if name.endswith(".vcd"):
+                    rel = os.path.relpath(os.path.join(dirpath, name), workspace)
+                    vcds.append(rel.replace(os.sep, "/"))
+        vcds.sort()
+        return vcds
 
     return await asyncio.to_thread(work)
 
@@ -2028,8 +2341,34 @@ async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] 
     return JSONResponse(parsed, headers={"Cache-Control": cache_control})
 
 
+# VCDVCD loads the ENTIRE dump into memory and we serialize per-signal
+# transitions to JSON, so an oversized VCD stalls the request thread and blows
+# up the response. Cap BEFORE parsing and return an honest "too large" signal
+# (mirroring workspace_fs.read_smart_file's text cap) — the viewer offers the
+# raw download instead. Sim-tool VCDs are KB-MB; the "open any workspace VCD"
+# feature is what makes a hundreds-of-MB dump reachable.
+VCD_PARSE_CAP = 25_000_000  # 25 MB
+
+
 def _parse_vcd_file(vcd_path: str, filename: str) -> dict:
     """Parse a VCD into the viewer payload (blocking; run via asyncio.to_thread)."""
+    try:
+        size = os.path.getsize(vcd_path)
+    except OSError:
+        size = 0
+    if size > VCD_PARSE_CAP:
+        # Honest too-large payload: same key shape as the success path so the
+        # viewer can branch on ``tooLarge`` without crashing on missing fields.
+        return {
+            "filename": filename,
+            "tooLarge": True,
+            "size": size,
+            "endtime": None,
+            "timescale": None,
+            "unitSeconds": None,
+            "signalCount": 0,
+            "signals": [],
+        }
     try:
         from vcdvcd import VCDVCD
 
@@ -2108,6 +2447,8 @@ def _parse_vcd_file(vcd_path: str, filename: str) -> dict:
 
         return {
             "filename": filename,
+            "tooLarge": False,
+            "size": size,
             "endtime": endtime,
             "timescale": timescale,
             "unitSeconds": unit_seconds,  # seconds per VCD tick (None/1.0 = unknown)
@@ -2189,9 +2530,15 @@ async def generate_report(session_id: str, run_id: Optional[str] = Query(default
 
 
 @app.get("/api/workspace/{session_id:path}/layouts")
-async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
-    """List GDS files in the workspace."""
-    def work() -> List[str]:  # F6: hydration + os.walk off-thread
+async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> Dict[str, List[str]]:
+    """GDS files on disk, plus any GDS the split manifest lists but that is absent.
+
+    ``missing_binaries`` distinguishes "this run never produced a GDS" (empty
+    layouts AND empty missing) from "the split-out GDS was never fetched" (empty
+    layouts but a non-empty missing list from ``.sc_binaries.json``), so the
+    viewer can say the honest thing (§3D). Paths are workspace-relative.
+    """
+    def work() -> Dict[str, List[str]]:  # F6: hydration + os.walk off-thread
         workspace = _resolve_workspace(session_id)
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
@@ -2203,7 +2550,23 @@ async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verif
                     rel_path = os.path.relpath(os.path.join(root, f), workspace)
                     gds_files.append(rel_path)
 
-        return gds_files
+        # GDS entries recorded in the split manifest but not present on disk.
+        missing_binaries: List[str] = []
+        manifest_path = os.path.join(workspace, ".sc_binaries.json")
+        if os.path.isfile(manifest_path):
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as mf:
+                    manifest = json.load(mf)
+                for entry in (manifest.get("files") or []):
+                    rel = entry.get("path") or ""
+                    if not rel.lower().endswith(".gds"):
+                        continue
+                    if not os.path.isfile(os.path.join(workspace, rel.replace("/", os.sep))):
+                        missing_binaries.append(rel)
+            except (OSError, json.JSONDecodeError, AttributeError):
+                pass
+
+        return {"layouts": gds_files, "missing_binaries": missing_binaries}
 
     return await asyncio.to_thread(work)
 
