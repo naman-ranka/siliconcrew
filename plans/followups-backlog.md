@@ -96,3 +96,35 @@ logs can't distinguish "picked model applied" from "omitted → account default"
 (both are correct behavior for #1, but not provable from logs). Fix: one
 `[CODEX-TIMING] … model=<effective_model or 'account-default'>` line if we ever
 want the applied-model provable post-hoc.
+
+---
+
+## Codex auth security (from the defensive review — reports/codex-auth-review.md)
+
+At-rest storage is MATURE (not a concern): BYOK keys AND the reused ChatGPT
+auth.json are both envelope-encrypted (per-secret random DEK, DEK wrapped by a
+Cloud-KMS KEK), owner-scoped, nothing plaintext persisted, no secrets in logs.
+Browser-side storage was evaluated and rejected (SDK is a server-side subprocess
++ prewarm needs the token before the user acts; browser-per-turn is net worse —
+XSS/transit + token still hits the server). The gaps are the working copy +
+multi-instance lifecycle:
+
+### 10. Refresh-token rotation race (HIGH) — fix before real concurrency
+auth.json is a ROTATING refresh token OpenAI says never to share across
+concurrent machines, but we share one durable blob across all instances with
+last-writer-wins persist (codex_auth.py:217-232). Two instances serving the SAME
+user can rotate-and-clobber → invalidate/lock the user out of their own ChatGPT
+account. Same multi-instance theme as X2A-7. Fix: per-uid single-flight/lease
+around read-rotate-persist. Low probability with a few distinct test users (needs
+same user on two instances at once); becomes real under concurrency.
+
+### 11. Plaintext live auth.json on instance disk (HIGH) — needs instance-disk compromise
+The encrypted blob is decrypted to a plaintext working file on the instance for
+the SDK to read (codex_auth.py:206, codex_engine.py:566/649), bypassing at-rest
+encryption for the LIVE set. Transient; only exposed if an instance disk is
+compromised. Fix: stage on tmpfs + wipe after the turn.
+
+### 12. Single KEK wraps every tenant's DEK (MED) — defense-in-depth
+One KEK/master compromise = total blast radius, and no rotation path (the "v":1
+version field is unused). Fix: KEK rotation; harden the self-host SHA-256(master)
+path. Only matters on KEK/master compromise.
