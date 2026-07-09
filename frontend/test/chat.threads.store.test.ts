@@ -131,7 +131,9 @@ describe("chat threads store", () => {
   it("sendMessage falls back to session id as the default thread (Chat 1)", () => {
     const fakeSocket: any = { readyState: 0, send: vi.fn(), close: vi.fn(), onopen: null };
     (chatApi.createConnection as any).mockReturnValue(fakeSocket);
-    useStore.setState({ threads: [], activeThreadId: null } as any);
+    // Reset the streaming state the previous test's un-terminated turn left
+    // behind — a message sent mid-stream now queues instead of connecting.
+    useStore.setState({ threads: [], activeThreadId: null, isStreaming: false, streamingMessage: null, ws: null } as any);
     useStore.getState().sendMessage("hello");
     expect(chatApi.createConnection).toHaveBeenCalledWith("s1", "s1");
   });

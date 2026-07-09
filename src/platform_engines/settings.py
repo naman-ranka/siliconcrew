@@ -101,6 +101,11 @@ class PlatformSettings:
     # Empty (default) = feature off. NEVER set in production.
     test_bearer_token: str = ""
 
+    # Codex runtime extension — OFF by default. When enabled, the Codex agent
+    # runtime registers as a selectable extension (see src/agents/codex/). Off
+    # means the app is exactly the native-only workbench.
+    codex_enabled: bool = False
+
     @property
     def workos_configured(self) -> bool:
         """True when WorkOS token validation can run (hosted web + MCP auth).
@@ -202,7 +207,7 @@ def get_settings() -> PlatformSettings:
         database_url=_env("DATABASE_URL"),
         llm_key_engine=llm_key_engine,
         kms_key_uri=_env("KMS_KEY_URI"),
-        hosted_gemini_model=_env("HOSTED_GEMINI_MODEL", "gemini-3-flash-preview"),
+        hosted_gemini_model=_env("HOSTED_GEMINI_MODEL", "gemini-3.5-flash"),
         hosted_gemini_key=_env("HOSTED_GEMINI_KEY"),
         synth_runs_per_day=_int_env("SYNTH_RUNS_PER_DAY", 20),
         synth_compute_minutes_per_month=_int_env("SYNTH_COMPUTE_MINUTES_PER_MONTH", 600),
@@ -211,6 +216,8 @@ def get_settings() -> PlatformSettings:
         num_cores=_int_env("ORFS_NUM_CORES", 4),
         dev_insecure_auth=_flag("SILICONCREW_DEV_INSECURE_AUTH", default=False),
         test_bearer_token=_env("SILICONCREW_TEST_BEARER_TOKEN"),
+        # Accept either the new flag or the reference's ENABLE_CODEX_RUNTIME.
+        codex_enabled=_flag("CODEX_ENABLED", default=False) or _flag("ENABLE_CODEX_RUNTIME", default=False),
     )
 
 
