@@ -475,3 +475,22 @@ full) is accepted and documented.
 **A14 [MINOR] — Index TTL cache is last-good/SWR by declaration**: store
 outage serves cached entries up to TTL then 503s; that staleness contract is
 intended, not accidental.
+
+**A15 [MAJOR, discovered during Item 1] — netlist_path re-derivation can land
+on RTL source in a binary-less fork.** Real bundles keep
+`synth_runs/*/inputs/*.v` in git, and `_find_netlist`
+(synthesis_manager.py:1020) scans BOTH `orfs_results` AND `inputs` — so
+forking a split bundle WITHOUT fetched binaries re-derives `netlist_path` to
+the RTL input, not None. That run_meta would then claim a "netlist" that is
+actually pre-synthesis RTL — dishonest for gate-level sim. Item 3 rule: in
+`_rewrite_run_meta_netlists`, when the run's `.sc_binaries.json` lists any
+`orfs_results/**/*.v` that is absent on disk, set `netlist_path = None`
+(gate netlist is split-out, not merely never-produced). Do NOT change
+`_find_netlist` itself (shared with live synthesis).
+
+**A16 [MINOR, applied post-Item-1] — Split filter tightened**: also move
+`orfs_results/**/mem.json` (unread yosys memory dump, 1.7 MB worst case) and
+`orfs_results/**/*.guide` (route guides, no consumer). A1's blanket
+"keep .json/.guide" was overbroad; the principle is keep-what-a-reader-
+consumes, and no reader touches these. `design_metrics.json` and all stage
+`.sdc`/`.rpt`/logs remain in git.
