@@ -6,8 +6,8 @@ from google.auth.transport.requests import AuthorizedSession
 project = 'siliconcrew'
 region = 'us-central1'
 updates = {
-    'siliconcrew-backend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/backend@sha256:dddabfd38117f97ab2b93b0e58ce7e807b6d35c2b29c4273c054d05563c3c25b',
-    'siliconcrew-frontend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/frontend@sha256:17ee683acd802b2e248a7656e39a589bb5581df734f0fdb0acb1f292bbf5bced',
+    'siliconcrew-backend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/backend@sha256:863ad210e3b598c956d3d71646c9620619ae89fd396898f31b7826bc9bfe79b7',
+    'siliconcrew-frontend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/frontend@sha256:1f844f611327c4496797386f59fbc686abdf1ddb046aa246ef3743e0219ce319',
 }
 
 # Env vars to ensure-present on a service's first container (merged, not
