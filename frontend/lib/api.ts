@@ -289,7 +289,9 @@ export const workspaceApi = {
     ),
 
   listLayouts: (sessionId: string) =>
-    apiFetch<string[]>(`/api/workspace/${encodeSessionId(sessionId)}/layouts`),
+    apiFetch<{ layouts: string[]; missing_binaries: string[] }>(
+      `/api/workspace/${encodeSessionId(sessionId)}/layouts`
+    ),
 
   getLayout: (sessionId: string, filename: string) =>
     apiFetch<{ svg: string; cell_name: string; cached?: boolean; error?: string; message?: string }>(

@@ -109,7 +109,8 @@ function installMocks(page: Page) {
       return json(route, { ok: true, path: "", entries: ROOT_DIR });
     }
     if (p.endsWith("/tools") && m === "GET") return json(route, { ok: true, tools: [] });
-    if (p.endsWith("/layouts") || p.endsWith("/schematics")) return json(route, []);
+    if (p.endsWith("/layouts")) return json(route, { layouts: [], missing_binaries: [] });
+    if (p.endsWith("/schematics")) return json(route, []);
     if (p.endsWith("/spec")) return json(route, { detail: "No spec" }, 404);
 
     return json(route, []);
@@ -152,4 +153,27 @@ test("examples → preview → fork → lands in the forked workbench with the t
   // …and the breadcrumb carries the "forked from" provenance chip.
   await expect(page.getByTestId("forked-from-chip")).toContainText("forked from Synchronous FIFO");
   await page.screenshot({ path: "e2e-artifacts/templates-fork.png", fullPage: true });
+});
+
+test("gallery unreachable → honest 'unable to connect' panel with Retry", async ({ page }) => {
+  // A 503 from the templates endpoint (store outage) must read as "unable to
+  // connect", never a silent empty gallery (§3D / invariant 4).
+  const json = (route: Route, body: unknown, status = 200) =>
+    route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/**", async (route) => {
+    const p = new URL(route.request().url()).pathname;
+    const m = route.request().method();
+    if (p === "/api/sessions" && m === "GET") return json(route, []);
+    if (p === "/api/projects" && m === "GET") return json(route, []);
+    if (p === "/api/templates" && m === "GET")
+      return json(route, { detail: "Template gallery is unreachable" }, 503);
+    return json(route, []);
+  });
+
+  await page.goto("/");
+  const panel = page.getByTestId("examples-unavailable");
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId("retry-templates")).toBeVisible();
+  // The populated gallery is NOT shown in its place.
+  await expect(page.getByTestId("examples-section")).toHaveCount(0);
 });

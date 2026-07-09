@@ -78,6 +78,66 @@ def test_delete_session(store):
     assert store.get_session("gone") is None
 
 
+def test_set_source_template_persists_and_reads_via_select_star(store):
+    """A fork's provenance JSON round-trips on the session row (SELECT *)."""
+    now = datetime.datetime.now()
+    store.upsert_session("fork1", "alice", "Fork 1", "m", None, now)
+    # Absent by default (a normal session carries no provenance).
+    assert store.get_session("fork1").get("source_template") is None
+    payload = '{"id": "sync_fifo", "name": "Synchronous FIFO", "forked_at": "2026-07-08T00:00:00+00:00"}'
+    store.set_source_template("fork1", payload, user_id="alice")
+    assert store.get_session("fork1", user_id="alice")["source_template"] == payload
+
+
+def test_set_source_template_is_owner_scoped(store):
+    """A non-owner's write is a no-op (owner clause) — no cross-tenant scribble."""
+    now = datetime.datetime.now()
+    store.upsert_session("fork2", "alice", "Fork 2", "m", None, now)
+    store.set_source_template("fork2", '{"id": "x"}', user_id="bob")  # wrong tenant
+    assert store.get_session("fork2", user_id="alice").get("source_template") is None
+
+
+def test_postgres_set_source_template_emits_owner_scoped_update():
+    """Postgres parity: owner-scoped UPDATE with %s placeholders."""
+
+    class FakeCursor:
+        def __init__(self, sink):
+            self.sink = sink
+
+        def execute(self, sql, params=()):
+            self.sink.append((sql, params))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class FakeConn:
+        def __init__(self, sink):
+            self.sink = sink
+
+        def cursor(self):
+            return FakeCursor(self.sink)
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    sink = []
+    store = PostgresMetadataStore("postgres://x", connect=lambda dsn: FakeConn(sink))
+    store.set_source_template("s1", '{"id":"x"}', user_id="alice")
+    sql, params = sink[-1]
+    assert "UPDATE session_metadata SET source_template = %s" in sql
+    assert "WHERE session_id = %s AND user_id = %s" in sql
+    assert params == ('{"id":"x"}', "s1", "alice")
+
+
 def test_legacy_group_migration(tmp_path):
     """A pre-existing 'project/session' row gets promoted to a project_id FK."""
     import sqlite3

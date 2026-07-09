@@ -72,6 +72,16 @@ class PlatformSettings:
     workspace_bucket: str     # GCS bucket (cloud only)
     workspace_scratch_dir: str
 
+    # Template gallery source: "local" (repo-owned ``examples/`` bundles) |
+    # "gcs" (a public bucket index + per-bundle archives). Chosen by
+    # explicit-config-presence, not by ``hosted`` — a freshly-deployed hosted
+    # image must keep serving its baked-in gallery UNTIL the one-time migration
+    # publishes the bucket; defaulting hosted to ``gcs`` before ``index.json``
+    # exists would take the gallery down on deploy. So: bucket set → gcs, else
+    # local, overridable via TEMPLATES_ENGINE.
+    templates_engine: str     # "local" | "gcs"
+    templates_bucket: str     # GCS bucket for the official gallery (gcs only)
+
     # Persistence
     persistence_engine: str   # "sqlite" | "postgres"
     database_url: str
@@ -185,6 +195,11 @@ def get_settings() -> PlatformSettings:
     persistence_engine = _env("PERSISTENCE_ENGINE", "postgres" if hosted else "sqlite")
     llm_key_engine = _env("LLM_KEY_ENGINE", "byok" if hosted else "env")
 
+    # Explicit-config-wins: a configured TEMPLATES_BUCKET selects the gcs gallery
+    # (else local), overridable by TEMPLATES_ENGINE regardless of ``hosted``.
+    templates_bucket = _env("TEMPLATES_BUCKET")
+    templates_engine = _env("TEMPLATES_ENGINE") or ("gcs" if templates_bucket else "local")
+
     return PlatformSettings(
         hosted=hosted,
         orfs_engine=orfs_engine,
@@ -210,6 +225,8 @@ def get_settings() -> PlatformSettings:
         workspace_engine=workspace_engine,
         workspace_bucket=_env("WORKSPACE_BUCKET"),
         workspace_scratch_dir=_env("WORKSPACE_SCRATCH_DIR", "/tmp/siliconcrew-scratch"),
+        templates_engine=templates_engine,
+        templates_bucket=templates_bucket,
         persistence_engine=persistence_engine,
         database_url=_env("DATABASE_URL"),
         llm_key_engine=llm_key_engine,

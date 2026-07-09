@@ -56,6 +56,7 @@ from src.tools import manifest as manifest_mod
 from src.api.actions import build_actions_router
 from src.api import workspace_fs
 from src.utils import templates as templates_mod
+from src.platform_engines import template_source as template_source_mod
 
 # Load environment
 load_dotenv()
@@ -200,10 +201,30 @@ class SessionResponse(BaseModel):
     # the UI treats 0 as "no chats yet". Never triggers workspace hydration.
     thread_count: int = 0
     # Provenance for a session forked from a template bundle (Wave 11):
-    # {id, name, forked_at} read from the workspace ``.source_template.json``.
-    # None for a normal session. Populated only on the single-session GET (the
-    # provenance chip's source), never on the hot list endpoint.
+    # {id, name, forked_at}. Resolved store-first (the durable session-row copy,
+    # the only source reachable on hosted list endpoints) then the workspace
+    # ``.source_template.json`` file. None for a normal session.
     source_template: Optional[Dict[str, Any]] = None
+
+
+def _source_template(meta: Optional[Dict[str, Any]], workspace_path: str) -> Optional[Dict[str, Any]]:
+    """Resolve a fork's provenance for the "forked from" chip (D8).
+
+    The metadata-store row first — its durable copy is the ONLY source reachable
+    from a list endpoint on hosted (no workspace hydration there) — then the
+    workspace ``.source_template.json`` file, which covers pre-existing self-host
+    forks that predate the store column. A null/malformed stored value falls
+    through to the file. Read-only: never hydrates or mutates a workspace.
+    """
+    raw = (meta or {}).get("source_template")
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except (TypeError, ValueError):
+            pass
+    return templates_mod.read_provenance(workspace_path)
 
 
 class MessageResponse(BaseModel):
@@ -716,11 +737,12 @@ async def list_sessions(identity: Identity = Depends(get_identity)):
             total_tokens=meta.get("total_tokens", 0) if meta else 0,
             total_cost=meta.get("total_cost", 0.0) if meta else 0.0,
             thread_count=thread_counts.get(session_id, 0),
-            # Cheap read-only provenance-file stat (no workspace hydration, no row
-            # materialization) so the "forked from" chip survives a reload — the
-            # store selects currentSession from this list.
-            source_template=templates_mod.read_provenance(
-                session_manager.get_workspace_path(session_id)
+            # Store-first provenance (durable row copy; file fallback) so the
+            # "forked from" chip survives a reload on hosted too — no workspace
+            # hydration, no row materialization. The store selects currentSession
+            # from this list.
+            source_template=_source_template(
+                meta, session_manager.get_workspace_path(session_id)
             ),
         ))
 
@@ -806,35 +828,53 @@ class ForkResponse(BaseModel):
 
 @app.get("/api/templates")
 async def list_templates(identity: Identity = Depends(get_identity)):
-    """List curated example bundles (public — no sign-in required)."""
-    return {"templates": templates_mod.list_templates()}
+    """List curated example bundles (public — no sign-in required).
+
+    Routes through the template-source engine (local ``examples/`` vs a GCS
+    index). An unreachable store is an honest 503 — NEVER an empty 200 that would
+    read as "no templates" (invariant 4). READ-ONLY: no rows are materialized.
+    """
+    try:
+        return {"templates": template_source_mod.get_template_source().list()}
+    except template_source_mod.TemplateStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Template gallery is unreachable")
 
 
 @app.get("/api/templates/{template_id}")
 async def get_template(template_id: str, identity: Identity = Depends(get_identity)):
     """One bundle's manifest + a shallow file/conversation preview (public)."""
     try:
-        return templates_mod.get_template(template_id)
+        return template_source_mod.get_template_source().get(template_id)
     except templates_mod.TemplateNotFound:
         raise HTTPException(status_code=404, detail="Template not found")
+    except template_source_mod.TemplateStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Template gallery is unreachable")
 
 
 @app.post("/api/templates/{template_id}/fork", response_model=ForkResponse)
 async def fork_template(template_id: str, identity: Identity = Depends(require_signed_in)):
     """Fork a bundle into a new user-owned session; returns the new session id.
 
-    Level 1 is self-host only — a cloud/hosted deployment gets a clear 400
-    (the hosted gallery is a later wave).
+    Self-host and hosted both fork here (Item 3). The fork does real, blocking
+    work — a workspace copy/materialize + rewrites + (on cloud) an object-storage
+    sync — so it runs off the event loop via ``asyncio.to_thread`` (A2). It is
+    owned by the TRUE forking user by construction (``user_id=_uid(identity)``).
     """
     uid = _uid(identity)
     try:
-        session_id = templates_mod.fork_from_template(
-            session_manager, template_id, user_id=uid
+        session_id = await asyncio.to_thread(
+            templates_mod.fork_from_template, session_manager, template_id, user_id=uid
         )
     except templates_mod.TemplateNotFound:
         raise HTTPException(status_code=404, detail="Template not found")
-    except templates_mod.TemplatesUnavailable as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except template_source_mod.TemplateStoreUnavailable:
+        # An unreachable gallery, or a gcs bundle that promised binaries it can't
+        # deliver (all-or-nothing, A6). Rollback already ran inside the fork.
+        raise HTTPException(status_code=503, detail="Template gallery is unreachable")
+    except Exception:
+        # Guard-ceiling / materialize / sync failure — the fork rolled itself
+        # back; report honestly rather than leaking a stack.
+        raise HTTPException(status_code=500, detail="Fork failed — please try again")
     return ForkResponse(sessionId=session_id)
 
 
@@ -1289,10 +1329,10 @@ async def get_session(session_id: str, identity: Identity = Depends(get_identity
         total_tokens=meta.get("total_tokens", 0),
         total_cost=meta.get("total_cost", 0.0),
         thread_count=session_manager.count_threads(session_id, user_id=uid),
-        # Read-only workspace-file peek for the forked-from chip. Missing file
-        # (a normal session) → None; never hydrates or mutates the workspace.
-        source_template=templates_mod.read_provenance(
-            session_manager.get_workspace_path(session_id)
+        # Store-first (durable row copy; workspace-file fallback) for the
+        # forked-from chip. None for a normal session; never hydrates the workspace.
+        source_template=_source_template(
+            meta, session_manager.get_workspace_path(session_id)
         ),
     )
 
@@ -1392,10 +1432,10 @@ async def patch_session(session_id: str, data: SessionPatch, identity: Identity 
         thread_count=session_manager.count_threads(session_id, user_id=uid),
         # Rename/move must NOT blank the "forked from" chip (invariant 7:
         # populated data never blanks). The store replaces the session in the
-        # list + currentSession with this response, so it has to carry provenance
-        # exactly like the single GET / list do.
-        source_template=templates_mod.read_provenance(
-            session_manager.get_workspace_path(session_id)
+        # list + currentSession with this response, so it carries provenance
+        # exactly like the single GET / list do (store-first, file fallback).
+        source_template=_source_template(
+            meta, session_manager.get_workspace_path(session_id)
         ),
     )
 
@@ -2490,9 +2530,15 @@ async def generate_report(session_id: str, run_id: Optional[str] = Query(default
 
 
 @app.get("/api/workspace/{session_id:path}/layouts")
-async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> List[str]:
-    """List GDS files in the workspace."""
-    def work() -> List[str]:  # F6: hydration + os.walk off-thread
+async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verify_session_access)) -> Dict[str, List[str]]:
+    """GDS files on disk, plus any GDS the split manifest lists but that is absent.
+
+    ``missing_binaries`` distinguishes "this run never produced a GDS" (empty
+    layouts AND empty missing) from "the split-out GDS was never fetched" (empty
+    layouts but a non-empty missing list from ``.sc_binaries.json``), so the
+    viewer can say the honest thing (§3D). Paths are workspace-relative.
+    """
+    def work() -> Dict[str, List[str]]:  # F6: hydration + os.walk off-thread
         workspace = _resolve_workspace(session_id)
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
@@ -2504,7 +2550,23 @@ async def list_layout_files(session_id: str, _acl: Optional[str] = Depends(verif
                     rel_path = os.path.relpath(os.path.join(root, f), workspace)
                     gds_files.append(rel_path)
 
-        return gds_files
+        # GDS entries recorded in the split manifest but not present on disk.
+        missing_binaries: List[str] = []
+        manifest_path = os.path.join(workspace, ".sc_binaries.json")
+        if os.path.isfile(manifest_path):
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as mf:
+                    manifest = json.load(mf)
+                for entry in (manifest.get("files") or []):
+                    rel = entry.get("path") or ""
+                    if not rel.lower().endswith(".gds"):
+                        continue
+                    if not os.path.isfile(os.path.join(workspace, rel.replace("/", os.sep))):
+                        missing_binaries.append(rel)
+            except (OSError, json.JSONDecodeError, AttributeError):
+                pass
+
+        return {"layouts": gds_files, "missing_binaries": missing_binaries}
 
     return await asyncio.to_thread(work)
 

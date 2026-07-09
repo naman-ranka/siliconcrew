@@ -6,9 +6,33 @@ from google.auth.transport.requests import AuthorizedSession
 project = 'siliconcrew'
 region = 'us-central1'
 updates = {
-    'siliconcrew-backend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/backend@sha256:dddabfd38117f97ab2b93b0e58ce7e807b6d35c2b29c4273c054d05563c3c25b',
-    'siliconcrew-frontend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/frontend@sha256:17ee683acd802b2e248a7656e39a589bb5581df734f0fdb0acb1f292bbf5bced',
+    'siliconcrew-backend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/backend@sha256:863ad210e3b598c956d3d71646c9620619ae89fd396898f31b7826bc9bfe79b7',
+    'siliconcrew-frontend': 'us-central1-docker.pkg.dev/siliconcrew/siliconcrew/frontend@sha256:1f844f611327c4496797386f59fbc686abdf1ddb046aa246ef3743e0219ce319',
 }
+
+# Env vars to ensure-present on a service's first container (merged, not
+# replaced — existing keys keep their values unless named here). TEMPLATES_BUCKET
+# flips the backend's gallery/fork onto the GCS TemplateSource engine so the
+# hosted gallery reads the published index and forks pull bundle archives from
+# the bucket (self-host + unset stays on the baked-in local source).
+env_updates = {
+    'siliconcrew-backend': {
+        'TEMPLATES_BUCKET': 'siliconcrew-siliconcrew-templates',
+    },
+}
+
+
+def _apply_env(containers, svc):
+    wanted = env_updates.get(svc)
+    if not wanted:
+        return
+    env = containers[0].setdefault('env', [])
+    by_name = {e.get('name'): e for e in env}
+    for k, v in wanted.items():
+        if k in by_name:
+            by_name[k]['value'] = v
+        else:
+            env.append({'name': k, 'value': v})
 
 def main():
     creds = service_account.Credentials.from_service_account_file('gcp-key.json', scopes=['https://www.googleapis.com/auth/cloud-platform'])
@@ -30,8 +54,9 @@ def main():
         containers = service['template']['containers']
         old_image = containers[0].get('image')
         
-        # Update image
+        # Update image + ensure env
         containers[0]['image'] = new_image
+        _apply_env(containers, svc)
         body = {
             'name': name,
             'template': {

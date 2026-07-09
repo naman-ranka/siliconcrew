@@ -1641,7 +1641,7 @@ export const useStore = create<AppState>((set, get) => ({
           return [];
         }),
         workspaceApi.listWaveforms(currentSession.id).catch(() => []),
-        workspaceApi.listLayouts(currentSession.id).catch(() => []),
+        workspaceApi.listLayouts(currentSession.id).then((r) => r.layouts).catch(() => []),
         workspaceApi.listSchematics(currentSession.id).catch(() => []),
         workspaceApi.listSynthesisRuns(currentSession.id).catch(() => []),
       ]);
@@ -2075,7 +2075,7 @@ export const useStore = create<AppState>((set, get) => ({
     const targetRunId = runId ?? get().selectedSynthesisRunId ?? null;
     try {
       const [layoutFiles, schematicFiles] = await Promise.all([
-        workspaceApi.listLayouts(sid).catch(() => get().layoutFiles),
+        workspaceApi.listLayouts(sid).then((r) => r.layouts).catch(() => get().layoutFiles),
         workspaceApi.listSchematics(sid).catch(() => get().schematicFiles),
       ]);
       set({ layoutFiles, schematicFiles });

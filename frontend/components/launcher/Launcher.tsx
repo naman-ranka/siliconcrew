@@ -76,6 +76,7 @@ export function Launcher() {
     createProject,
     moveSession,
     templates,
+    templatesError,
     loadTemplates,
     forkTemplate,
   } = useStore();
@@ -387,6 +388,38 @@ export function Launcher() {
       </section>
     ) : null;
 
+  // Honest offline (invariant 4 / §3D): an unreachable gallery reads as "unable
+  // to connect" with a Retry, NEVER a silent empty section. Cached templates
+  // always win (the store keeps last-good), so this shows ONLY when the error
+  // left us with nothing to display.
+  const examplesUnavailableBlock =
+    templatesError && templates.length === 0 ? (
+      <section data-testid="examples-unavailable" className="mb-8">
+        <div className="flex items-center gap-2 mb-3">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
+          <span className="text-[12.5px] font-semibold text-foreground/90">Examples</span>
+        </div>
+        <div className="rounded-lg border border-dashed border-border/70 py-6 px-4 text-center">
+          <p className="text-[12.5px] text-muted-foreground">
+            Couldn&rsquo;t reach the examples gallery.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-3"
+            data-testid="retry-templates"
+            onClick={() => loadTemplates()}
+          >
+            Retry
+          </Button>
+        </div>
+      </section>
+    ) : null;
+
+  // One gallery slot: the populated list wins; otherwise the honest-offline
+  // panel (or nothing when simply empty/loading). Used in BOTH placements.
+  const galleryBlock = examplesBlock ?? examplesUnavailableBlock;
+
   return (
     <div data-testid="launcher" className="h-full flex bg-surface-0">
       <div className="flex-1 min-w-0 flex flex-col">
@@ -502,7 +535,7 @@ export function Launcher() {
           <div className="flex-1 overflow-y-auto px-6 py-6" onContextMenu={openBgMenu}>
             <div className="max-w-[860px] w-full mx-auto">
               <Hero />
-              {examplesBlock}
+              {galleryBlock}
               <EmptyLauncher onCreate={() => startCreate(null)} inline />
               <LandingFooter />
             </div>
@@ -641,7 +674,7 @@ export function Launcher() {
                   </button>
                 </div>
               )}
-              {examplesBlock && <div className="mt-10">{examplesBlock}</div>}
+              {galleryBlock && <div className="mt-10">{galleryBlock}</div>}
               <LandingFooter />
             </div>
           </div>

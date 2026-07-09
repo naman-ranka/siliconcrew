@@ -24,7 +24,7 @@ vi.mock("@/lib/api", () => ({
   workspaceApi: {
     listFiles: vi.fn().mockResolvedValue([]),
     listWaveforms: vi.fn().mockResolvedValue([]),
-    listLayouts: vi.fn().mockResolvedValue([]),
+    listLayouts: vi.fn().mockResolvedValue({ layouts: [], missing_binaries: [] }),
     listSchematics: vi.fn().mockResolvedValue([]),
     listSynthesisRuns: vi.fn().mockResolvedValue([]),
   },

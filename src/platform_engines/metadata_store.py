@@ -43,11 +43,22 @@ class MetadataStore(Protocol):
     # sessions
     def upsert_session(self, session_id: str, user_id: Optional[str], session_name: str,
                        model_name: str, project_id: Optional[str], now: Any) -> None: ...
+    # Atomic create: INSERT only, raising DuplicateSession on a primary-key
+    # conflict (never DO UPDATE). The DB primary key is the cross-instance
+    # arbiter for a NEW session — unlike upsert_session, a losing racer cannot
+    # be handed a foreign-owned id nor mutate the winner's row.
+    def insert_session(self, session_id: str, user_id: Optional[str], session_name: str,
+                       model_name: str, project_id: Optional[str], now: Any) -> None: ...
     def get_session(self, session_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
     def get_all_session_rows(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
     def move_session(self, session_id: str, project_id: Optional[str], user_id: Optional[str] = None) -> None: ...
     # Display-only rename: session_id (the primary key = workspace dir) never changes.
     def rename_session(self, session_id: str, name: str, user_id: Optional[str] = None) -> None: ...
+    # Persist a fork's provenance ({id,name,forked_at} JSON) on the session row.
+    # Owner-scoped; the durable source for the "forked from" chip on hosted,
+    # where the workspace .source_template.json file isn't reachable from a list
+    # endpoint (no workspace hydration there).
+    def set_source_template(self, session_id: str, value: str, user_id: Optional[str] = None) -> None: ...
     def update_stats(self, session_id: str, input_t: int, output_t: int, cached_t: int,
                      total_t: int, cost: float, now: Any, user_id: Optional[str] = None) -> None: ...
     # Returns the ids of the chat-thread rows cascaded away (the caller may
@@ -76,6 +87,13 @@ class MetadataStore(Protocol):
 
 
 class DuplicateProject(Exception):
+    pass
+
+
+class DuplicateSession(Exception):
+    """A session_id already exists — raised by the atomic insert_session so a
+    losing fork-allocation race retries a fresh id instead of adopting/mutating
+    the winner's row."""
     pass
 
 
@@ -166,6 +184,10 @@ class SqliteMetadataStore:
         # to unscoped (self-host) queries, never to a real tenant.
         if "user_id" not in existing:
             cur.execute("ALTER TABLE session_metadata ADD COLUMN user_id TEXT")
+        # Fork provenance ({id,name,forked_at} JSON). Nullable — a normal session
+        # has none. Durable store for the "forked from" chip (read via SELECT *).
+        if "source_template" not in existing:
+            cur.execute("ALTER TABLE session_metadata ADD COLUMN source_template TEXT")
         proj_cols = {row[1] for row in cur.execute("PRAGMA table_info(projects)")}
         if "user_id" not in proj_cols:
             cur.execute("ALTER TABLE projects ADD COLUMN user_id TEXT")
@@ -265,6 +287,20 @@ class SqliteMetadataStore:
             )
             conn.commit()
 
+    def insert_session(self, session_id, user_id, session_name, model_name, project_id, now):
+        with self._connect() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO session_metadata (session_id, user_id, session_name, model_name, project_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (session_id, user_id, session_name, model_name, project_id, now, now),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError as exc:
+                raise DuplicateSession(session_id) from exc
+
     def get_session(self, session_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
         with self._connect() as conn:
@@ -305,6 +341,22 @@ class SqliteMetadataStore:
             conn.execute(
                 f"UPDATE session_metadata SET session_name = ? WHERE session_id = ?{owner}",
                 (name, session_id, *oparams),
+            )
+            conn.commit()
+
+    def set_source_template(self, session_id, value, user_id=None):
+        """Persist a fork's provenance JSON on the session row (owner-scoped).
+
+        The metadata-store copy of ``.source_template.json`` — the durable source
+        for the "forked from" chip on hosted, where list endpoints cannot afford
+        to hydrate a workspace to stat the file. Owner-scoped like every other
+        session mutation: a non-owner write is a no-op.
+        """
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE session_metadata SET source_template = ? WHERE session_id = ?{owner}",
+                (value, session_id, *oparams),
             )
             conn.commit()
 
@@ -575,6 +627,11 @@ class PostgresMetadataStore:
                 "ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS "
                 "runtime TEXT NOT NULL DEFAULT 'langchain'"
             )
+            # Fork provenance ({id,name,forked_at} JSON) — add to pre-existing
+            # hosted tables. Idempotent; nullable (a normal session has none).
+            cur.execute(
+                "ALTER TABLE session_metadata ADD COLUMN IF NOT EXISTS source_template TEXT"
+            )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_session_user_created "
                 "ON session_metadata(user_id, created_at)"
@@ -642,6 +699,22 @@ class PostgresMetadataStore:
             )
             conn.commit()
 
+    def insert_session(self, session_id, user_id, session_name, model_name, project_id, now):
+        import psycopg.errors as pg_errors  # lazy
+
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO session_metadata (session_id, user_id, session_name, model_name, project_id, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (session_id, user_id, session_name, model_name, project_id, now, now),
+                )
+                conn.commit()
+        except pg_errors.UniqueViolation as exc:
+            raise DuplicateSession(session_id) from exc
+
     def get_session(self, session_id, user_id=None):
         owner, oparams = self._owner_clause(user_id)
         return self._one(f"SELECT * FROM session_metadata WHERE session_id = %s{owner}", (session_id, *oparams))
@@ -668,6 +741,16 @@ class PostgresMetadataStore:
             cur.execute(
                 f"UPDATE session_metadata SET session_name = %s WHERE session_id = %s{owner}",
                 (name, session_id, *oparams),
+            )
+            conn.commit()
+
+    def set_source_template(self, session_id, value, user_id=None):
+        """Postgres parity for :meth:`SqliteMetadataStore.set_source_template`."""
+        owner, oparams = self._owner_clause(user_id)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE session_metadata SET source_template = %s WHERE session_id = %s{owner}",
+                (value, session_id, *oparams),
             )
             conn.commit()
 

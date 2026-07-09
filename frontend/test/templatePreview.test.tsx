@@ -49,13 +49,13 @@ describe("TemplatePreview", () => {
     await waitFor(() => expect(onFork).toHaveBeenCalledWith("sync_fifo"));
   });
 
-  it("surfaces a fork error (e.g. hosted 400) without navigating", async () => {
+  it("surfaces a fork error without navigating", async () => {
     get.mockResolvedValue(DETAIL);
-    const onFork = vi.fn().mockRejectedValue(new Error("Templates are available in self-host today"));
+    const onFork = vi.fn().mockRejectedValue(new Error("Fork failed — please try again"));
     render(<TemplatePreview template={TEMPLATE} onClose={vi.fn()} onFork={onFork} />);
     fireEvent.click(screen.getByTestId("fork-template"));
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("self-host")
+      expect(screen.getByRole("alert")).toHaveTextContent("Fork failed")
     );
   });
 });

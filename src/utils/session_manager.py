@@ -5,6 +5,7 @@ import shutil
 from src.agents import runtime_registry
 from src.platform_engines.metadata_store import (
     DuplicateProject,
+    DuplicateSession,
     SqliteMetadataStore,
     build_metadata_store,
 )
@@ -146,11 +147,27 @@ class SessionManager:
 
         path = self._session_path(session_id)
 
-        if os.path.exists(path):
+        # Fast, friendly pre-check against BOTH the local dir AND the shared
+        # metadata store. On hosted, instance disk is ephemeral and per-instance,
+        # so os.path.exists alone misses an id already owned on another instance;
+        # the metadata store (Cloud SQL) is the authoritative shared namespace.
+        if os.path.exists(path) or self._store.get_session(session_id, user_id=None):
             raise FileExistsError(f"Session '{session_id}' already exists.")
 
         os.makedirs(path)
-        self._upsert_session_metadata(session_id, tag, model_name, project_id, user_id=user_id)
+        # Atomic insert (NOT upsert): the DB primary key is the cross-instance
+        # arbiter for a NEW session. The pre-check above is only a fast path — it
+        # is not atomic, so two forks of the same template on different instances
+        # can both pass it. Exactly one INSERT wins; the loser gets
+        # DuplicateSession and retries a fresh id (via _allocate_fork_session),
+        # never adopting the winner's row nor — critically — clobbering the
+        # winner's object-storage workspace on a later delete_workspace/sync.
+        now = datetime.datetime.now()
+        try:
+            self._store.insert_session(session_id, user_id, tag, model_name, project_id, now)
+        except DuplicateSession:
+            shutil.rmtree(path, ignore_errors=True)  # undo the dir we just made
+            raise FileExistsError(f"Session '{session_id}' already exists.")
         # Seed the default chat at birth: listing threads is read-only (never
         # materializes), so every session must honestly own its "Chat 1" row
         # from creation.
@@ -207,6 +224,14 @@ class SessionManager:
         """
         self._store.rename_session(session_id, name, user_id=user_id)
 
+    def set_source_template(self, session_id, value, user_id=None):
+        """Persist a fork's provenance JSON ({id,name,forked_at}) on the session
+        row (owner-scoped). Thin passthrough — the durable store copy of the
+        workspace ``.source_template.json`` so the "forked from" chip survives on
+        hosted, where list endpoints never hydrate a workspace to read the file.
+        """
+        self._store.set_source_template(session_id, value, user_id=user_id)
+
     def update_session_stats(self, session_id, input_t, output_t, cached_t, cost, user_id=None):
         """Updates token stats and bumps updated_at for a session."""
         self._store.update_stats(
@@ -224,6 +249,24 @@ class SessionManager:
         session_path = os.path.join(self.base_dir, session_id)
         if os.path.exists(session_path):
             shutil.rmtree(session_path)
+        # On cloud, the durable workspace lives in object storage, NOT the local
+        # dir just removed. Purge it too so a deleted id leaves no adoptable
+        # manifest for a later same-name fork to hydrate (the D7 GC gap made
+        # concrete by name-derived fork ids). Lazy + best-effort + cloud-only:
+        # self-host has no provider and skips this entirely.
+        try:
+            from src.platform_engines.settings import get_settings
+
+            if get_settings().is_cloud_workspace:
+                from src.platform_engines.workspace_provider import (
+                    get_workspace_provider,
+                )
+
+                delete_ws = getattr(get_workspace_provider(), "delete_workspace", None)
+                if callable(delete_ws):
+                    delete_ws(session_id)
+        except Exception:
+            pass
         # The store returns the cascaded chat ids — conversation checkpoints
         # are keyed by thread_id, so the purge works from EXACTLY what was
         # deleted (no separate pre-read that could fail or go stale apart
