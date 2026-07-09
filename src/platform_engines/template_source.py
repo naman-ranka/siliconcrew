@@ -260,8 +260,14 @@ def _verify_binaries(dst_dir: str, template_id: str) -> None:
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
             listed = json.load(f).get("files", [])
-    except (OSError, ValueError):
-        return
+    except (OSError, ValueError) as exc:
+        # A present-but-unreadable/malformed manifest is a corruption signal, not
+        # a source-only bundle (that case returned above on the isfile check) —
+        # refusing to silently skip integrity verification. Caller rolls back.
+        raise TemplateStoreUnavailable(
+            f"template '{template_id}': .sc_binaries.json present but "
+            f"unreadable/malformed ({exc}) — refusing to skip sha256 verify"
+        ) from exc
     bad: List[str] = []
     for entry in listed:
         rel = entry.get("path", "")

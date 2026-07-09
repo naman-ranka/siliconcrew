@@ -23,9 +23,11 @@ Historical evidence (``attempt_events.jsonl``, ``completion.event`` markers,
 exists to display, and the copied terminal status + completion markers keep old
 runs from re-announcing.
 
-Level 1 is self-host ONLY: in cloud mode the copytree target is invisible to
-tools (they read object-storage scratch), so fork HARD-GATES to non-cloud with a
-clear message. The hosted gallery is a later wave. [A5]
+Forking works in BOTH modes: self-host copytrees the bundle into the local
+session workspace; hosted materializes it into the object-storage scratch and
+the incremental sync persists it to the forking owner's workspace (the deferred
+[A5] GCS-copy path, now shipped). The gallery lists from the local dir on
+self-host and a GCS index when hosted.
 """
 
 from __future__ import annotations
