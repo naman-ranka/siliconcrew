@@ -90,6 +90,16 @@
       "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/6_final.v",
       "bytes": 146307,
       "sha256": "1a35ea04d8dcb82efb1531b52a0a82c6e0ebca24babd029447d8315355b78e9a"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/mem.json",
+      "bytes": 289208,
+      "sha256": "b90970a7a549054e105329ff011b4b7af8cd8433c735f421f5cba630a7505c23"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon_game/base/route.guide",
+      "bytes": 301833,
+      "sha256": "c41f29f42306f8e18ac7272c21e046e2e9c97b7f96e58772a46343dbf8021b2c"
     }
   ]
 }

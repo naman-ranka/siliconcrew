@@ -29,16 +29,20 @@ from scripts import split_bundle_binaries as S
         ("synth_runs/s1/orfs_results/sky130hd/top/base/6_final.spef", True),
         ("synth_runs/s1/orfs_results/sky130hd/top/base/1_1_yosys.rtlil", True),
         ("synth_runs/s1/orfs_results/sky130hd/top/base/6_final.v", True),
+        # Heavy unread blobs: mem.json (exact name) and any .guide under results.
+        ("synth_runs/s1/orfs_results/sky130hd/top/base/mem.json", True),
+        ("synth_runs/s1/orfs_results/sky130hd/top/base/route.guide", True),
         ("synth_runs/s1/orfs_reports/sky130hd/top/base/final_all.webp", True),
         # KEPT: markers/reports/config under the same trees.
         ("synth_runs/s1/orfs_results/sky130hd/top/base/5_route.sdc", False),
-        ("synth_runs/s1/orfs_results/sky130hd/top/base/mem.json", False),
-        ("synth_runs/s1/orfs_results/sky130hd/top/base/route.guide", False),
+        # KEPT: a non-mem .json under results (only mem.json moves, not blanket).
+        ("synth_runs/s1/orfs_results/sky130hd/top/base/1_synth.json", False),
         ("synth_runs/s1/orfs_results/sky130hd/top/base/clock_period.txt", False),
         ("synth_runs/s1/orfs_reports/sky130hd/top/base/6_finish.rpt", False),
         ("synth_runs/s1/orfs_reports/sky130hd/top/base/synth_stat.txt", False),
-        # KEPT: same extensions OUTSIDE the result trees (RTL source, inputs).
+        # KEPT: same names/extensions OUTSIDE the result trees.
         ("synth_runs/s1/inputs/top.v", False),
+        ("synth_runs/s1/mem.json", False),  # mem.json only counts under orfs_results
         ("top.v", False),
         ("manifest.json", False),
         ("preview.webp", False),  # a webp not under orfs_reports stays
@@ -70,10 +74,12 @@ def _make_bundle(root, template_id="demo"):
     _write(os.path.join(base_res, "6_final.spef"), b"SPEF" * 50)
     _write(os.path.join(base_res, "1_1_yosys.rtlil"), b"RTLIL" * 50)
     _write(os.path.join(base_res, "6_final.v"), b"module top(); endmodule\n")
+    _write(os.path.join(base_res, "mem.json"), b'{"macros": []}' * 100)
+    _write(os.path.join(base_res, "route.guide"), b"guide" * 100)
     _write(os.path.join(base_rep, "final_all.webp"), b"WEBP" * 20)
     # Kept (markers, reports, config, source):
     _write(os.path.join(base_res, "5_route.sdc"), "create_clock\n")
-    _write(os.path.join(base_res, "mem.json"), "{}\n")
+    _write(os.path.join(base_res, "1_synth.json"), "{}\n")  # non-mem json stays
     _write(os.path.join(base_rep, "6_finish.rpt"), "finished\n")
     _write(os.path.join(ws, "synth_runs", "s1", "inputs", "top.v"), "module top(); endmodule\n")
     _write(os.path.join(ws, "top.v"), "module top(); endmodule\n")
@@ -91,6 +97,8 @@ def test_dry_run_lists_but_changes_nothing(tmp_path):
         "synth_runs/s1/orfs_results/sky130hd/top/base/6_final.spef",
         "synth_runs/s1/orfs_results/sky130hd/top/base/1_1_yosys.rtlil",
         "synth_runs/s1/orfs_results/sky130hd/top/base/6_final.v",
+        "synth_runs/s1/orfs_results/sky130hd/top/base/mem.json",
+        "synth_runs/s1/orfs_results/sky130hd/top/base/route.guide",
         "synth_runs/s1/orfs_reports/sky130hd/top/base/final_all.webp",
     }
     # Nothing deleted, no manifest written.
@@ -116,10 +124,15 @@ def test_apply_writes_manifest_and_moves_only_binaries(tmp_path):
     assert gds_entry["sha256"] == expected_sha
     assert gds_entry["bytes"] == 300
 
-    # Binaries gone; kept files (incl. same-ext .sdc/.rpt/inputs .v) survive.
+    base = "synth_runs/s1/orfs_results/sky130hd/top/base"
+    # Binaries gone — including mem.json (exact name) and route.guide.
     assert not os.path.exists(gds)
-    assert not os.path.exists(os.path.join(ws, "synth_runs/s1/orfs_results/sky130hd/top/base/6_final.v"))
-    assert os.path.isfile(os.path.join(ws, "synth_runs/s1/orfs_results/sky130hd/top/base/5_route.sdc"))
+    assert not os.path.exists(os.path.join(ws, base, "6_final.v"))
+    assert not os.path.exists(os.path.join(ws, base, "mem.json"))
+    assert not os.path.exists(os.path.join(ws, base, "route.guide"))
+    # Kept: markers/reports, a NON-mem .json, inputs/source .v.
+    assert os.path.isfile(os.path.join(ws, base, "5_route.sdc"))
+    assert os.path.isfile(os.path.join(ws, base, "1_synth.json"))
     assert os.path.isfile(os.path.join(ws, "synth_runs/s1/orfs_reports/sky130hd/top/base/6_finish.rpt"))
     assert os.path.isfile(os.path.join(ws, "synth_runs/s1/inputs/top.v"))
     assert os.path.isfile(os.path.join(ws, "top.v"))

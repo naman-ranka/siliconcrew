@@ -90,6 +90,16 @@
       "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/6_final.v",
       "bytes": 1529,
       "sha256": "28b108b42a70112b1dcc4940b7a6e0628f9be1bd648823e2b0119327b6088850"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/mem.json",
+      "bytes": 3380,
+      "sha256": "cfbf8d9aca043aec52f0be00c4dd0ab0c811da9aaee16f70034ea8dd2248f192"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/seq_detector_0011/base/route.guide",
+      "bytes": 2851,
+      "sha256": "965e6b701b0e85560987df56a765fa515684b837b360f0a206597c5ca56f551a"
     }
   ]
 }

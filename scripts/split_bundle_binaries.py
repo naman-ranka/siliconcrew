@@ -42,12 +42,20 @@ WORKSPACE_SUBDIR = "workspace"
 SC_BINARIES_NAME = ".sc_binaries.json"
 SC_BINARIES_VERSION = 1
 
-# Heavy, regenerable result TYPES moved out of git. Keyed by the result tree
+# Heavy, regenerable result files moved out of git. Keyed by the result tree
 # they live under so a same-extension file elsewhere in the workspace (e.g. an
-# RTL ``.v`` under ``inputs/`` or the repo source) is never touched.
+# RTL ``.v`` under ``inputs/`` or the repo source) is never touched. The line is
+# principled: KEEP whatever some on-instance reader consumes (stage markers
+# ``.sdc``/``.odb``, ``get_ppa`` on ``.rpt``/logs, ``design_report`` on
+# ``design_metrics.json``/``run_meta``), MOVE unread heavy blobs. That is why
+# ``mem.json`` (the OpenROAD macro/mem placement dump, ~1.7 MB in aes — no
+# reader) and ``route.guide`` (~MB routing guides — no reader) move despite
+# being ``.json``/``.guide``; a bare ``.json``/``.guide`` filter would wrongly
+# take the KB-scale stage config, so ``mem.json`` is matched by EXACT name only.
 _ORFS_RESULTS_DIR = "orfs_results"
 _ORFS_REPORTS_DIR = "orfs_reports"
-_RESULTS_BINARY_EXTS = {".gds", ".def", ".spef", ".rtlil", ".v"}
+_RESULTS_BINARY_EXTS = {".gds", ".def", ".spef", ".rtlil", ".v", ".guide"}
+_RESULTS_BINARY_NAMES = {"mem.json"}
 _REPORTS_BINARY_EXTS = {".webp"}
 
 
@@ -55,12 +63,15 @@ def is_binary(rel_path: str) -> bool:
     """True if a workspace-relative path is a heavy binary to move to GCS.
 
     ``rel_path`` uses forward slashes (workspace-relative). Classification is by
-    directory membership + extension, never by filename, so the rule is stable
-    across the ``orfs_results/<platform>/<top>/base/`` nesting.
+    result-tree membership + extension (plus a small exact-name set), never by a
+    blanket extension, so the rule is stable across the
+    ``orfs_results/<platform>/<top>/base/`` nesting and never sweeps up the
+    lightweight stage config that shares an extension.
     """
     parts = rel_path.split("/")
-    ext = os.path.splitext(parts[-1])[1].lower()
-    if _ORFS_RESULTS_DIR in parts[:-1] and ext in _RESULTS_BINARY_EXTS:
+    name = parts[-1]
+    ext = os.path.splitext(name)[1].lower()
+    if _ORFS_RESULTS_DIR in parts[:-1] and (ext in _RESULTS_BINARY_EXTS or name in _RESULTS_BINARY_NAMES):
         return True
     if _ORFS_REPORTS_DIR in parts[:-1] and ext in _REPORTS_BINARY_EXTS:
         return True

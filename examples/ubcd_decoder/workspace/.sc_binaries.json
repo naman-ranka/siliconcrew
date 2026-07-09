@@ -80,6 +80,16 @@
       "path": "synth_runs/synth_0001/orfs_results/sky130hd/universal_bcd_decoder/base/6_final.v",
       "bytes": 21328,
       "sha256": "59f66fd1d33f2a39b577337291ed097024ac812b122e8874453511d83bce4bd4"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/universal_bcd_decoder/base/mem.json",
+      "bytes": 104228,
+      "sha256": "f80e9c7c9093e8bf851f176c37a951908d851e0bc657f35e6ccb8a3983989d39"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/universal_bcd_decoder/base/route.guide",
+      "bytes": 49711,
+      "sha256": "92dafb4187f1636b9441f330b115d8078cc48d1fd70d22c0fac433a036bf32fd"
     }
   ]
 }

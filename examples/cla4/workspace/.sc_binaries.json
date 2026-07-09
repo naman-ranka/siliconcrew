@@ -90,6 +90,16 @@
       "path": "synth_runs/synth_0001/orfs_results/sky130hd/cla4/base/6_final.v",
       "bytes": 5995,
       "sha256": "05963dd554b12ef5f826d31f5ecd0e0772ba7075a88551208b485e8fff736ba7"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/cla4/base/mem.json",
+      "bytes": 34971,
+      "sha256": "ac7727c88c266a95480eb1bcf186eba444e1b45cf6365d96f24edf7b39f473e7"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/cla4/base/route.guide",
+      "bytes": 11946,
+      "sha256": "7d301141d1b7f69c560483de7c0107ab3cadc8d3b8d3b973baa0ebc3bf65008a"
     }
   ]
 }

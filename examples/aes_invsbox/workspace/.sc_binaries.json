@@ -90,6 +90,16 @@
       "path": "synth_runs/synth_0001/orfs_results/sky130hd/sbox_aesinv/base/6_final.v",
       "bytes": 56061,
       "sha256": "f5d884d62def367ce28a3d45353c53a83f29ec85de153455dc75e205e8597a43"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/sbox_aesinv/base/mem.json",
+      "bytes": 1750446,
+      "sha256": "d98bc96a4603441428c4b61e629bcb1fccbc7b17d98cbc8bf96ab4c163a7c9ef"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/sbox_aesinv/base/route.guide",
+      "bytes": 153791,
+      "sha256": "989e62b4a9d999962eef73a75f885dc2737f2c1df39aae6d92ee50412cc936f6"
     }
   ]
 }

@@ -90,6 +90,16 @@
       "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/6_final.v",
       "bytes": 21695,
       "sha256": "2d3dd899189dc92d5d30847ee40a1da38111772d3db6879cd8d8c951fbaf2d09"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/mem.json",
+      "bytes": 18860,
+      "sha256": "9b56807e986e25c4cb5f3b96ca52fd36c2d948b3769d41504c25a4985c748bed"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/traffic_light/base/route.guide",
+      "bytes": 41511,
+      "sha256": "5a1d332391bb3644d632540be816be0f164b299d91b22c1893d48f2e29cae3dc"
     }
   ]
 }

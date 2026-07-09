@@ -80,6 +80,16 @@
       "path": "synth_runs/synth_0001/orfs_results/sky130hd/sn74169/base/6_final.v",
       "bytes": 4088,
       "sha256": "8abf7430b4d32024895d73ef8fe5539750401c0ae99c169344f6217fdc7d695b"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/sn74169/base/mem.json",
+      "bytes": 27919,
+      "sha256": "9c6977a5d5c2647d97f7cdde6524753a0b118fd958816082a75320f99c6d5865"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/sn74169/base/route.guide",
+      "bytes": 8951,
+      "sha256": "25972ab62d209184a4f878298f6ce73abb115f0fba02942b84187a724017f386"
     }
   ]
 }

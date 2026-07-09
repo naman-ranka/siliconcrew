@@ -90,6 +90,16 @@
       "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/6_final.v",
       "bytes": 144132,
       "sha256": "1bac31d77da4bb0bd1e56a76197a77fbabdefcbb15b39afbc80296b438e42d9a"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/mem.json",
+      "bytes": 164033,
+      "sha256": "ee0c31c562f3b6a2c18cbc4a897abb179d6bc2eda9541c93ade70f04d2cfcd9c"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/simon128_cipher/base/route.guide",
+      "bytes": 232214,
+      "sha256": "f38928d86b1b4cc913ae6a5a1ad3008d0143218437ee414b56655c66350fb91b"
     }
   ]
 }

@@ -90,6 +90,16 @@
       "path": "synth_runs/synth_0001/orfs_results/sky130hd/pwm_generator/base/6_final.v",
       "bytes": 118718,
       "sha256": "4b1779979e03749b04e2d116b63a596f3d2eabe3ef5259792d80025d81220bda"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/pwm_generator/base/mem.json",
+      "bytes": 26611,
+      "sha256": "f71a53bd353bee91c03ec4c72a9b25fa346b59b5ebf46dd4edc1d8bc6fa00ed1"
+    },
+    {
+      "path": "synth_runs/synth_0001/orfs_results/sky130hd/pwm_generator/base/route.guide",
+      "bytes": 255649,
+      "sha256": "2f52e1274de52d1479e6679137235f37adb48a3e6546f246cebce0feba51516f"
     }
   ]
 }
