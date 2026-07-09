@@ -15,7 +15,13 @@ import {
 } from "@/components/ui/select";
 import { workspaceApi } from "@/lib/api";
 
-export function SchematicViewer() {
+interface SchematicViewerProps {
+  // v2 tab model: render EXACTLY this schematic file (skips the self-listing).
+  // When absent, behavior is the original self-listing viewer, unchanged.
+  filename?: string;
+}
+
+export function SchematicViewer({ filename: filenameProp }: SchematicViewerProps = {}) {
   const { currentSession } = useStore();
   const [schematicFiles, setSchematicFiles] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -23,11 +29,16 @@ export function SchematicViewer() {
   const [zoom, setZoom] = useState(1);
   const [loading, setLoading] = useState(false);
 
+  const overridden = filenameProp != null;
+  const effectiveFiles = overridden ? [filenameProp!] : schematicFiles;
+  const effectiveSelected = filenameProp ?? selectedFile;
+
   useEffect(() => {
-    if (currentSession) {
+    if (currentSession && !overridden) {
       loadSchematicFiles();
     }
-  }, [currentSession]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSession, overridden]);
 
   const loadSchematicFiles = async () => {
     if (!currentSession) return;
@@ -43,10 +54,11 @@ export function SchematicViewer() {
   };
 
   useEffect(() => {
-    if (currentSession && selectedFile) {
-      loadSchematic(selectedFile);
+    if (currentSession && effectiveSelected) {
+      loadSchematic(effectiveSelected);
     }
-  }, [currentSession, selectedFile]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSession, effectiveSelected]);
 
   const loadSchematic = async (filename: string) => {
     if (!currentSession) return;
@@ -62,18 +74,18 @@ export function SchematicViewer() {
   };
 
   const handleDownload = () => {
-    if (svgContent && selectedFile) {
+    if (svgContent && effectiveSelected) {
       const blob = new Blob([svgContent], { type: "image/svg+xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = selectedFile;
+      a.download = effectiveSelected;
       a.click();
       URL.revokeObjectURL(url);
     }
   };
 
-  if (schematicFiles.length === 0) {
+  if (effectiveFiles.length === 0) {
     return (
       <EmptyState
         icon={<CircuitBoard />}
@@ -90,6 +102,12 @@ export function SchematicViewer() {
       {/* Header */}
       <div className="flex items-center justify-between p-3 border-b border-border">
         <div className="flex items-center gap-2">
+          {overridden ? (
+            <span className="flex items-center gap-2 h-8 px-2 text-xs font-mono text-muted-foreground bg-surface-1 border border-border rounded-md min-w-0">
+              <CircuitBoard className="h-4 w-4 shrink-0" />
+              <span className="truncate max-w-[220px]">{filenameProp}</span>
+            </span>
+          ) : (
           <Select value={selectedFile || ""} onValueChange={setSelectedFile}>
             <SelectTrigger className="h-8 w-[200px]">
               <CircuitBoard className="h-4 w-4 mr-2" />
@@ -103,6 +121,7 @@ export function SchematicViewer() {
               ))}
             </SelectContent>
           </Select>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <Button
@@ -128,7 +147,7 @@ export function SchematicViewer() {
             variant="ghost"
             size="icon"
             className="h-7 w-7"
-            onClick={() => loadSchematicFiles()}
+            onClick={() => (overridden ? loadSchematic(filenameProp!) : loadSchematicFiles())}
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
