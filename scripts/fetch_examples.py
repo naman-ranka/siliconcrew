@@ -39,10 +39,10 @@ from typing import List, Optional, Tuple
 WORKSPACE_SUBDIR = "workspace"
 SC_BINARIES_NAME = ".sc_binaries.json"
 
-# The official public templates bucket. NOTE: the terraform bucket name is
-# provisioned in Item 2 (`<project>-siliconcrew-templates`, public objectViewer);
-# until then this constant is the single source of truth for the published URL.
-# Override with --base-url or $SILICONCREW_TEMPLATES_BASE_URL.
+# The official public templates bucket (`siliconcrew-siliconcrew-templates`,
+# us-central1, uniform bucket-level access, allUsers objectViewer). Public-read,
+# so this fetch needs no auth and no cloud SDK. Override with --base-url or
+# $SILICONCREW_TEMPLATES_BASE_URL.
 DEFAULT_BASE_URL = "https://storage.googleapis.com/siliconcrew-siliconcrew-templates"
 BASE_URL_ENV = "SILICONCREW_TEMPLATES_BASE_URL"
 
