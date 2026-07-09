@@ -7,6 +7,7 @@ Provides REST endpoints and WebSocket streaming for the Next.js frontend.
 
 import os
 import json
+import uuid
 import asyncio
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -14,15 +15,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 import yaml
-import aiosqlite
 
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+# The checkpointer (sqlite self-host / pooled Postgres hosted) is engine-selected
+# in src/platform_engines/checkpointer.py; api.py imports open_checkpointer below.
 
 from src.agents.architect import create_architect_agent, load_system_prompt
+from src.agents import runtime_registry
 from src.model_catalog import DEFAULT_MODEL, PRICING, normalize_model_name, model_catalog_entries
 from src.utils.session_manager import SessionManager
 from src.utils.session_context import SessionContext, set_current_session, session_scope
@@ -42,6 +45,7 @@ from src.tools.design_report import save_design_report
 from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
 from src.tools import manifest as manifest_mod
 from src.api.actions import build_actions_router
+from src.api import workspace_fs
 
 # Load environment
 load_dotenv()
@@ -69,12 +73,80 @@ _KEY_VAULT = build_key_vault(get_settings(), db_path=os.path.join(_DATA_DIR, "by
 # capped hosted tier) instead of always reading process env.
 _LLM_KEY_PROVIDER = build_llm_key_provider(get_settings(), _KEY_VAULT)
 
+# --- Codex runtime extension (optional, flag-gated, removable) --------------
+# The ONE sanctioned point where shared code names the Codex package. Guarded by
+# the CODEX_ENABLED flag AND a try/except import: with the flag off (or the
+# src/agents/codex package deleted) the app is exactly the native-only workbench.
+# Nothing else in the shared path imports codex.
+_CODEX_AUTH_MANAGER = None
+_CODEX_STORE = None
+if get_settings().codex_enabled:
+    try:
+        from src.agents.codex.codex_auth import CodexAccountAuthManager, VaultCodexCredentialStore
+        from src.agents.codex.register import register_codex_runtime
+
+        # Durable per-user credential store (hosted): reuse the encrypted,
+        # tenant-keyed BYOK vault so the ChatGPT login survives redeploy/scale.
+        # None in self-host (no vault) → the local auth_home file is the durable
+        # copy, i.e. today's behavior.
+        _codex_creds = VaultCodexCredentialStore(_KEY_VAULT) if _KEY_VAULT is not None else None
+        _CODEX_AUTH_MANAGER = CodexAccountAuthManager(_DATA_DIR, credential_store=_codex_creds)
+
+        def _codex_account_home_for(uid):
+            # Normalize to match the /api/codex/auth endpoints, which store the
+            # login under (uid or "anonymous"). In self-host uid is None, so
+            # without this the turn would look up None, miss the "anonymous"
+            # login, and wrongly fall back to a BYOK key.
+            uid = uid or "anonymous"
+            # DEFAULT path: the per-user ChatGPT login the user completed via the
+            # in-app device-auth flow (/api/codex/auth). This is the only account
+            # source out of the box — no credential copying.
+            if _CODEX_AUTH_MANAGER and _CODEX_AUTH_MANAGER.is_connected(uid):
+                # Restore the durable credential to local disk (hosted) / use the
+                # local file (self-host). ensure_local returns None if the
+                # credential can't be staged — do NOT fall back to an empty home
+                # (that would run an account turn with no auth.json); let it
+                # resolve BYOK / fail cleanly instead.
+                staged = _CODEX_AUTH_MANAGER.ensure_local(uid)
+                if staged:
+                    return staged
+            # ADVANCED, OFF BY DEFAULT: point CODEX_ACCOUNT_HOME at a
+            # pre-provisioned CODEX_HOME (e.g. a mounted service-account login for
+            # headless/CI). Unset by default; never mounts a user's personal
+            # ~/.codex — the device-auth flow above is the intended path.
+            host = os.environ.get("CODEX_ACCOUNT_HOME")
+            if host and os.path.exists(os.path.join(host, "auth.json")):
+                return host
+            return None
+
+        _CODEX_STORE = register_codex_runtime(
+            db_path=DB_PATH,
+            session_manager=session_manager,
+            llm_key_resolve=lambda uid, model: _LLM_KEY_PROVIDER.resolve(uid, model),
+            account_home_for=_codex_account_home_for,
+            system_prompt_loader=load_system_prompt,
+            default_model=DEFAULT_MODEL,
+            normalize_model=normalize_model_name,
+            enabled=True,
+            persist_credential=lambda uid: _CODEX_AUTH_MANAGER.persist(uid),
+        )
+        print("[API] Codex runtime extension: ENABLED")
+    except Exception as exc:  # noqa: BLE001 - codex wiring must never break startup
+        print(f"[API] Codex runtime extension disabled (wiring failed): {exc}")
+        _CODEX_AUTH_MANAGER = None
+        _CODEX_STORE = None
+
 
 # =============================================================================
 # PYDANTIC MODELS
 # =============================================================================
 
 class ProjectCreate(BaseModel):
+    name: str
+
+
+class ProjectPatch(BaseModel):
+    # Rename only. The project id/slug is immutable (sessions reference it).
     name: str
 
 
@@ -91,7 +163,14 @@ class SessionCreate(BaseModel):
 
 
 class SessionPatch(BaseModel):
-    project_id: Optional[str] = None  # None = remove from project
+    # Both fields optional; a PATCH must provide at least one (else 400).
+    # ``name`` is a DISPLAY-ONLY rename: the session id and its workspace
+    # directory never change (files/runs/threads all stay keyed by session_id).
+    name: Optional[str] = None
+    # project_id: None = remove from project. Only applied when the field is
+    # actually present in the payload (model_fields_set), so a pure rename
+    # never clears the project assignment.
+    project_id: Optional[str] = None
 
 
 class SessionResponse(BaseModel):
@@ -103,6 +182,10 @@ class SessionResponse(BaseModel):
     updated_at: Optional[str] = None
     total_tokens: int = 0
     total_cost: float = 0.0
+    # Honest COUNT of chat_threads rows for this session. A fresh session shows
+    # 0 until its default "Chat 1" row is created (first thread list / connect);
+    # the UI treats 0 as "no chats yet". Never triggers workspace hydration.
+    thread_count: int = 0
 
 
 class MessageResponse(BaseModel):
@@ -115,6 +198,7 @@ class MessageResponse(BaseModel):
 class ThreadCreate(BaseModel):
     title: Optional[str] = None
     model: Optional[str] = None
+    runtime: Optional[str] = None  # 'langchain' (default) | 'codex'
 
 
 class ThreadPatch(BaseModel):
@@ -131,6 +215,7 @@ class ThreadResponse(BaseModel):
     session_id: str
     title: Optional[str] = None
     model: Optional[str] = None
+    runtime: Optional[str] = None
     created_at: Optional[str] = None
     last_active: Optional[str] = None
 
@@ -141,6 +226,7 @@ def _thread_to_response(t: dict) -> "ThreadResponse":
         session_id=t.get("session_id"),
         title=t.get("title"),
         model=t.get("model"),
+        runtime=t.get("runtime"),
         created_at=str(t["created_at"]) if t.get("created_at") else None,
         last_active=str(t["last_active"]) if t.get("last_active") else None,
     )
@@ -276,25 +362,12 @@ def resolve_report_path(workspace: str, run_id: Optional[str] = None) -> tuple[O
     return None, None
 
 
-@asynccontextmanager
-async def open_checkpointer(db_path: str):
-    """
-    Open AsyncSqliteSaver with compatibility for aiosqlite variants that do not
-    expose Connection.is_alive().
-    """
-    conn = await aiosqlite.connect(db_path)
-
-    # langgraph.checkpoint.sqlite.aio.AsyncSqliteSaver expects this method.
-    if not hasattr(conn, "is_alive"):
-        def _is_alive() -> bool:
-            return bool(getattr(conn, "_running", False))
-        setattr(conn, "is_alive", _is_alive)
-
-    memory = AsyncSqliteSaver(conn)
-    try:
-        yield memory
-    finally:
-        await conn.close()
+# Engine-selected checkpointer (Wave 10): SQLite per-call on self-host, a
+# shared app-scoped pooled AsyncPostgresSaver on hosted so conversation content
+# survives restart/redeploy/scale and is shared across instances. The seam is
+# unchanged for callers — `create_architect_agent(checkpointer=…)` and the
+# thread-history reads stay engine-agnostic.
+from src.platform_engines.checkpointer import open_checkpointer  # noqa: E402,F401
 
 
 # =============================================================================
@@ -320,6 +393,13 @@ async def lifespan(app: FastAPI):
     # Mount and run MCP server if in hosted mode
     from src.platform_engines.settings import get_settings
     settings = get_settings()
+
+    # Durable checkpointer: build the shared Postgres pool + saver (hosted).
+    # Fail-fast — a checkpointer that can't init must abort startup rather than
+    # silently run on ephemeral SQLite in production (the data-loss bug). No-op
+    # in self-host (stays SQLite per-call).
+    from src.platform_engines.checkpointer import init_checkpointer, close_checkpointer
+    await init_checkpointer(settings)
     if settings.hosted:
         print("[API] Hosted mode: initializing remote MCP server integration")
         from mcp_server import RTLDesignMCPServer
@@ -349,6 +429,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("[API] Shutting down...")
+    await close_checkpointer()
     if hasattr(app.state, "mcp_task"):
         print("[API] Stopping remote MCP server...")
         app.state.mcp_task.cancel()
@@ -587,6 +668,11 @@ async def list_sessions(identity: Identity = Depends(get_identity)):
     """List the caller's sessions (tenant-scoped in hosted mode)."""
     uid = _uid(identity)
     sessions = session_manager.get_all_sessions(user_id=uid)
+    # ONE grouped COUNT over chat_threads for the whole list (not a per-session
+    # query, and no workspace hydration). Honest row count: a fresh session's
+    # default "Chat 1" row doesn't exist until the first thread list/connect,
+    # so it reports 0 ("no chats yet").
+    thread_counts = session_manager.count_threads_by_session(user_id=uid)
     result = []
 
     for session_id in sessions:
@@ -599,7 +685,8 @@ async def list_sessions(identity: Identity = Depends(get_identity)):
             created_at=str(meta.get("created_at")) if meta else None,
             updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
             total_tokens=meta.get("total_tokens", 0) if meta else 0,
-            total_cost=meta.get("total_cost", 0.0) if meta else 0.0
+            total_cost=meta.get("total_cost", 0.0) if meta else 0.0,
+            thread_count=thread_counts.get(session_id, 0),
         ))
 
     return result
@@ -624,7 +711,10 @@ async def create_session(data: SessionCreate, identity: Identity = Depends(requi
             created_at=str(meta.get("created_at")) if meta else None,
             updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
             total_tokens=0,
-            total_cost=0.0
+            total_cost=0.0,
+            # Creation seeds "Chat 1" (Wave 8) — report the honest count so
+            # the client isn't stale until the next list/GET.
+            thread_count=1,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -656,6 +746,7 @@ async def create_trial_session(data: SessionCreate, identity: Identity = Depends
             updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
             total_tokens=0,
             total_cost=0.0,
+            thread_count=1,  # seeded "Chat 1" (Wave 8)
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -669,35 +760,6 @@ async def create_trial_session(data: SessionCreate, identity: Identity = Depends
 # sessions), so if this GET were registered before ``GET …/threads`` it would
 # shadow it — ``/api/sessions/<sid>/threads`` would bind session_id="<sid>/threads"
 # and 404. Keep specific GET sub-routes ABOVE the catch-all. See get_session below.
-
-
-@app.delete("/api/sessions/{session_id:path}")
-async def delete_session(session_id: str, identity: Identity = Depends(require_signed_in)):
-    """Delete a session (owner only)."""
-    uid = _require_owned(session_id, identity)
-    session_manager.delete_session(session_id, user_id=uid)
-    return {"status": "deleted", "session_id": session_id}
-
-
-@app.patch("/api/sessions/{session_id:path}", response_model=SessionResponse)
-async def patch_session(session_id: str, data: SessionPatch, identity: Identity = Depends(require_signed_in)):
-    """Move a session to a different project (owner only)."""
-    uid = _require_owned(session_id, identity)
-    try:
-        session_manager.move_session_to_project(session_id, data.project_id, user_id=uid)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    meta = session_manager.get_session_metadata(session_id, user_id=uid)
-    return SessionResponse(
-        id=session_id,
-        name=meta.get("session_name"),
-        model_name=meta.get("model_name"),
-        project_id=meta.get("project_id"),
-        created_at=str(meta.get("created_at")),
-        updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
-        total_tokens=meta.get("total_tokens", 0),
-        total_cost=meta.get("total_cost", 0.0),
-    )
 
 
 # =============================================================================
@@ -719,6 +781,24 @@ async def create_project(data: ProjectCreate, identity: Identity = Depends(requi
         return ProjectResponse(id=project["id"], name=project["name"], created_at=str(project["created_at"]))
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.patch("/api/projects/{project_id}", response_model=ProjectResponse)
+async def rename_project(project_id: str, data: ProjectPatch, identity: Identity = Depends(require_signed_in)):
+    """Rename a project (owner only; requires sign-in like create/delete).
+
+    The project id/slug is immutable — only the display name changes; sessions
+    keep their project_id unchanged.
+    """
+    uid = _uid(identity)
+    if not session_manager.get_project(project_id, user_id=uid):
+        raise HTTPException(status_code=404, detail="Project not found")
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="'name' must be a non-empty string.")
+    session_manager.rename_project(project_id, name, user_id=uid)
+    p = session_manager.get_project(project_id, user_id=uid)
+    return ProjectResponse(id=p["id"], name=p["name"], created_at=str(p.get("created_at") or ""))
 
 
 @app.delete("/api/projects/{project_id}")
@@ -786,6 +866,52 @@ async def delete_key(provider: str, identity: Identity = Depends(require_signed_
 
 
 # =============================================================================
+# CODEX ACCOUNT AUTH (device-auth). Always present; degrade cleanly when the
+# Codex extension is off/absent (runtime_enabled=false, not connected).
+# =============================================================================
+
+def _codex_auth_payload(status: Dict[str, Any]) -> Dict[str, Any]:
+    return {**status, "runtime_enabled": get_settings().codex_enabled}
+
+
+def _codex_disabled_status() -> Dict[str, Any]:
+    return {"connected": False, "in_progress": False, "login_url": None,
+            "user_code": None, "message": "Codex runtime is not enabled."}
+
+
+@app.get("/api/codex/auth")
+async def codex_auth_status(identity: Identity = Depends(require_signed_in)):
+    if _CODEX_AUTH_MANAGER is None:
+        return _codex_auth_payload(_codex_disabled_status())
+    return _codex_auth_payload(_CODEX_AUTH_MANAGER.status(_uid(identity) or "anonymous"))
+
+
+@app.post("/api/codex/auth/device/start")
+async def codex_auth_device_start(identity: Identity = Depends(require_signed_in)):
+    """Start `codex login --device-auth` for the signed-in user."""
+    if _CODEX_AUTH_MANAGER is None:
+        raise HTTPException(status_code=409, detail="Codex runtime is not enabled.")
+    try:
+        return _codex_auth_payload(_CODEX_AUTH_MANAGER.start_device_auth(_uid(identity) or "anonymous"))
+    except Exception as exc:  # noqa: BLE001 - structured error, never a 500 page
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/api/codex/auth/device/cancel")
+async def codex_auth_device_cancel(identity: Identity = Depends(require_signed_in)):
+    if _CODEX_AUTH_MANAGER is None:
+        raise HTTPException(status_code=409, detail="Codex runtime is not enabled.")
+    return _codex_auth_payload(_CODEX_AUTH_MANAGER.cancel(_uid(identity) or "anonymous"))
+
+
+@app.delete("/api/codex/auth")
+async def codex_auth_disconnect(identity: Identity = Depends(require_signed_in)):
+    if _CODEX_AUTH_MANAGER is None:
+        return _codex_auth_payload(_codex_disabled_status())
+    return _codex_auth_payload(_CODEX_AUTH_MANAGER.disconnect(_uid(identity) or "anonymous"))
+
+
+# =============================================================================
 # MODELS ENDPOINT (availability from usable provider keys; tenant-scoped)
 # =============================================================================
 
@@ -844,6 +970,24 @@ async def _read_thread_history(thread_id: str, model_name: str, uid: Optional[st
     if construction still fails for lack of a key the callers treat it as "no
     history" so viewing never 500s.
     """
+    # Codex threads persist their own transcript (no checkpointer). Read it from
+    # the codex store and return the same history shape the native path yields.
+    if _CODEX_STORE is not None:
+        _row = session_manager.get_thread(thread_id, user_id=uid)
+        if _row and _row.get("runtime") == "codex":
+            history: List[Dict[str, Any]] = []
+            for m in _CODEX_STORE.list_messages(thread_id):
+                if m["role"] == "user":
+                    history.append({"role": "user", "content": m["content"]})
+                elif m["role"] == "assistant":
+                    meta = m.get("tool_metadata") or {}
+                    history.append({
+                        "role": "assistant", "content": m["content"],
+                        "tool_calls": meta.get("tool_calls", []),
+                        "tool_results": meta.get("tool_results", []),
+                    })
+            return history
+
     api_key: Optional[str] = None
     try:
         api_key = _LLM_KEY_PROVIDER.resolve(uid, model_name).api_key
@@ -928,17 +1072,28 @@ async def get_chat_history(session_id: str, identity: Identity = Depends(get_ide
 
 @app.get("/api/sessions/{session_id:path}/threads", response_model=List[ThreadResponse])
 async def list_threads(session_id: str, identity: Identity = Depends(get_identity)):
-    """List this session's chat threads (newest active first). Ensures Chat 1."""
+    """List this session's chat threads (newest active first). READ-ONLY:
+    browsing never materializes rows — "Chat 1" is seeded at creation."""
     uid = _require_owned(session_id, identity)
     return [_thread_to_response(t) for t in session_manager.list_threads(session_id, user_id=uid)]
 
 
 @app.post("/api/sessions/{session_id:path}/threads", response_model=ThreadResponse, status_code=201)
 async def create_thread(session_id: str, data: ThreadCreate, identity: Identity = Depends(get_identity)):
-    """Start a fresh chat in this workspace (own conversation; shared files)."""
+    """Start a fresh chat in this workspace (own conversation; shared files).
+
+    ``runtime`` picks the agent: native by default, or a registered extension
+    (e.g. 'codex'). An unknown/disabled runtime is rejected — you can't create a
+    thread for a runtime the server doesn't have.
+    """
     uid = _require_owned(session_id, identity)
     model = normalize_model_name(data.model) if data.model else None
-    t = session_manager.create_thread(session_id, user_id=uid, title=data.title, model=model)
+    runtime = runtime_registry.NATIVE_RUNTIME
+    if data.runtime and data.runtime != runtime_registry.NATIVE_RUNTIME:
+        if not runtime_registry.is_registered(data.runtime):
+            raise HTTPException(status_code=409, detail=f"Runtime '{data.runtime}' is not enabled on this server.")
+        runtime = data.runtime
+    t = session_manager.create_thread(session_id, user_id=uid, title=data.title, model=model, runtime=runtime)
     return _thread_to_response(t)
 
 
@@ -979,7 +1134,8 @@ async def get_session(session_id: str, identity: Identity = Depends(get_identity
         created_at=str(meta.get("created_at")),
         updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
         total_tokens=meta.get("total_tokens", 0),
-        total_cost=meta.get("total_cost", 0.0)
+        total_cost=meta.get("total_cost", 0.0),
+        thread_count=session_manager.count_threads(session_id, user_id=uid),
     )
 
 
@@ -987,6 +1143,12 @@ async def get_session(session_id: str, identity: Identity = Depends(get_identity
 async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: Identity = Depends(get_identity)):
     """Rename a thread and/or set its model (owner-checked)."""
     uid = _require_owned(session_id, identity)
+    # A PATCH is a deliberate act on the chat (unlike browsing), so the
+    # DEFAULT thread only (tid == session_id) may materialize here — legacy
+    # sessions predate creation-time seeding and would otherwise have no
+    # row to rename / set a model on until their first WS message.
+    if tid == session_id:
+        session_manager.ensure_default_thread(session_id, user_id=uid)
     if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
         raise HTTPException(status_code=404, detail="Thread not found")
     if data.title is not None:
@@ -1006,10 +1168,118 @@ async def delete_thread(session_id: str, tid: str, identity: Identity = Depends(
     return {"status": "deleted", "thread_id": tid}
 
 
+# NOTE: session-level DELETE/PATCH use the greedy `{session_id:path}` converter
+# and MUST be registered AFTER every /threads sub-route above — otherwise
+# `PATCH /api/sessions/<sid>/threads/<tid>` binds session_id="<sid>/threads/<tid>"
+# and 404s (this shadowing silently broke thread rename/model-set over REST).
+@app.delete("/api/sessions/{session_id:path}")
+async def delete_session(session_id: str, identity: Identity = Depends(require_signed_in)):
+    """Delete a session (owner only)."""
+    uid = _require_owned(session_id, identity)
+    session_manager.delete_session(session_id, user_id=uid)
+    return {"status": "deleted", "session_id": session_id}
+
+
+@app.patch("/api/sessions/{session_id:path}", response_model=SessionResponse)
+async def patch_session(session_id: str, data: SessionPatch, identity: Identity = Depends(require_signed_in)):
+    """Rename a session and/or move it to a different project (owner only).
+
+    Rename is DISPLAY-ONLY: the session id and its workspace directory never
+    change — files, runs, threads, and checkpoints all stay keyed by the
+    original session_id. At least one of ``name``/``project_id`` is required.
+    """
+    uid = _require_owned(session_id, identity)
+    # model_fields_set distinguishes "field absent" from "explicit null":
+    # {"project_id": null} means remove-from-project; {} is an empty patch.
+    provided = data.model_fields_set & {"name", "project_id"}
+    if not provided:
+        raise HTTPException(status_code=400,
+                            detail="Provide at least one of 'name' or 'project_id'.")
+    if "name" in provided:
+        name = (data.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="'name' must be a non-empty string.")
+        session_manager.rename_session(session_id, name, user_id=uid)
+    if "project_id" in provided:
+        try:
+            session_manager.move_session_to_project(session_id, data.project_id, user_id=uid)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    meta = session_manager.get_session_metadata(session_id, user_id=uid)
+    return SessionResponse(
+        id=session_id,
+        name=meta.get("session_name"),
+        model_name=meta.get("model_name"),
+        project_id=meta.get("project_id"),
+        created_at=str(meta.get("created_at")),
+        updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
+        total_tokens=meta.get("total_tokens", 0),
+        total_cost=meta.get("total_cost", 0.0),
+        thread_count=session_manager.count_threads(session_id, user_id=uid),
+    )
+
+
+
 # Keepalive cadence for the chat stream. LangGraph emits nothing during a long
 # tool call (e.g. a 60s+ ORFS synth wait); a `ping` well under the ~30s GCP load
 # balancer / proxy idle timeout keeps the connection from being dropped mid-run.
 _WS_HEARTBEAT_SEC = 20
+# Coalesce token deltas: at most one text_delta frame per interval per turn, so
+# a fast stream doesn't flood the socket / React state. The authoritative
+# `text` frame carries anything the gate trimmed.
+_WS_DELTA_INTERVAL_SEC = 0.05
+
+
+class _ActiveTurn:
+    """Handle to a thread's in-flight agent run.
+
+    Process-local by design: Cloud Run session affinity pins a user's requests
+    to one instance, so the runs for a thread land in the same process.
+    """
+
+    def __init__(self, task: asyncio.Task, queue: asyncio.Queue):
+        self.task = task
+        self.queue = queue
+
+    def supersede(self) -> None:
+        self.task.cancel()
+        try:
+            # Wake the run's consumer so it terminates its socket cleanly.
+            self.queue.put_nowait(("superseded", None))
+        except asyncio.QueueFull:
+            pass
+
+
+# One live run per chat thread. A run can outlive its socket (headless after a
+# refresh/drop); without this registry a new message would start a SECOND run
+# on the same thread — two writers interleaving on one checkpoint (SQLite lock
+# stalls, no reply to the new message, terminal frames never sent).
+_ACTIVE_TURNS: Dict[str, _ActiveTurn] = {}
+
+# Fire-and-forget background tasks (post-turn bookkeeping) need a strong
+# reference or the event loop may garbage-collect them mid-flight; this set
+# holds them until they finish, then a done-callback removes themselves.
+_BACKGROUND_TASKS: set = set()
+
+
+def _run_in_background(coro) -> None:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
+def _pending_tool_call_ids(messages) -> list:
+    """Tool-call ids with no matching ToolMessage yet (dangling after an
+    interrupted/stopped run)."""
+    pending: set = set()
+    for msg in messages or []:
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            for tc in msg.tool_calls:
+                pending.add(tc.get("id"))
+        elif hasattr(msg, "tool_call_id"):
+            pending.discard(msg.tool_call_id)
+    pending.discard(None)
+    return sorted(pending)
 
 
 @app.websocket("/api/chat/{session_id:path}")
@@ -1066,23 +1336,148 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
         while True:
             # Receive message from client
             data = await websocket.receive_json()
+
+            # A late `stop` after the turn already ended is a no-op, not an error.
+            if isinstance(data, dict) and data.get("type") == "stop":
+                continue
+
             message = data.get("message", "")
 
             if not message.strip():
                 await websocket.send_json({"type": "error", "error": "Empty message"})
                 continue
 
+            # Stable per-turn id (client-generated when provided): echoed on
+            # every frame of this turn so the UI can correlate frames — and
+            # drop stale ones after a stop or reconnect — by id instead of by
+            # last-message heuristics.
+            turn_id = str(data.get("turn_id") or "") or uuid.uuid4().hex
+
             # Resolve the chat thread for this turn (per-message override → the
             # connection default → Chat 1). The workspace stays bound to
-            # session_id; only the conversation checkpoint key varies.
-            thread_id = data.get("thread_id") or conn_thread_id or session_id
-            session_manager.ensure_thread(thread_id, session_id, user_id=uid)
+            # session_id; only the conversation checkpoint key varies. The id
+            # is VALIDATED, never trusted: only the default ("Chat 1") is
+            # lazily materialized — a stale/crafted id must not create rows.
+            requested_tid = data.get("thread_id") or conn_thread_id or session_id
+            thread_id = session_manager.resolve_ws_thread(requested_tid, session_id, user_id=uid)
+            if thread_id is None:
+                await websocket.send_json({"type": "error", "error": "Unknown chat thread"})
+                continue
             # Bump activity + auto-title an untitled thread from the first message.
             session_manager.touch_thread(thread_id, user_id=uid, auto_title_from=message)
 
+            # --- Runtime dispatch seam (plans/codex-runtime-extension.md) ------
+            # Extensions (e.g. Codex) register a handler + own a per-thread
+            # `runtime` marker; the shell routes their turns here. The native
+            # LangChain turn below is the DEFAULT and runs UNCHANGED whenever the
+            # thread resolves to native — which is always, until an extension +
+            # a `runtime` column land. Shipping with zero extensions registered
+            # makes this a no-op today: removability is the default state.
+            _turn_thread_row = session_manager.get_thread(thread_id, user_id=uid)
+            _ext_runtime = runtime_registry.handler_for(
+                runtime_registry.resolve_runtime(_turn_thread_row)
+            )
+            if _ext_runtime is not None:
+                _ext_client_gone = False
+
+                async def _ext_send(frame: dict) -> None:
+                    nonlocal _ext_client_gone
+                    if _ext_client_gone:
+                        return
+                    frame.setdefault("turn_id", turn_id)
+                    try:
+                        await websocket.send_json(frame)
+                    except Exception:
+                        _ext_client_gone = True  # keep the turn going headless
+
+                # Run the extension turn as a task so we can (a) emit heartbeat
+                # pings during long MCP tool calls — else the client's liveness
+                # watchdog closes the socket ~45s in and drops the turn — and
+                # (b) read a `stop` frame concurrently and cancel mid-run. Mirrors
+                # the native path's ping/stop handling.
+                _ext_turn = asyncio.create_task(_ext_runtime.run_turn(
+                    runtime_registry.RuntimeTurnContext(
+                        message=message, turn_id=turn_id, thread_id=thread_id,
+                        session_id=session_id, workspace=workspace, user_id=uid,
+                        thread_row=_turn_thread_row, send=_ext_send,
+                        tier=identity.tier, auth_token=token,
+                    )
+                ))
+
+                async def _ext_watch_stop():
+                    # Return "stop" on a stop frame, "disconnect" if the socket
+                    # drops. Non-stop frames are ignored (UI queues follow-ups).
+                    while True:
+                        try:
+                            frame = await websocket.receive_json()
+                        except Exception:
+                            return "disconnect"
+                        if isinstance(frame, dict) and frame.get("type") == "stop":
+                            return "stop"
+
+                _ext_stop = asyncio.create_task(_ext_watch_stop())
+                _ext_stopped = False
+                try:
+                    while True:
+                        done, _ = await asyncio.wait(
+                            {_ext_turn, _ext_stop},
+                            timeout=_WS_HEARTBEAT_SEC,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if not done:
+                            await _ext_send({"type": "ping"})
+                            continue
+                        if _ext_turn in done:
+                            break  # turn finished on its own (persisted in run_turn)
+                        # The stop-watcher fired first.
+                        if _ext_stop.result() == "stop":
+                            # Explicit stop: cancel the turn (unless it just finished).
+                            if not _ext_turn.done():
+                                _ext_stopped = True
+                                _ext_turn.cancel()
+                            break
+                        # Client disconnected: stop framing, but let the turn run to
+                        # completion HEADLESS so it still persists and a reload
+                        # refetches it — do NOT cancel it (native-parity, inv #9).
+                        _ext_client_gone = True
+                        try:
+                            await _ext_turn
+                        except Exception:
+                            pass  # run_turn handles its own errors; nothing to send
+                        break
+                finally:
+                    # Only ever cancel the stop-watcher here; the turn was finished,
+                    # explicitly cancelled above, or completed headless — never
+                    # cancelled on disconnect.
+                    if not _ext_stop.done():
+                        _ext_stop.cancel()
+                    for _t in (_ext_turn, _ext_stop):
+                        try:
+                            await _t
+                        except (asyncio.CancelledError, Exception):
+                            pass
+
+                if _ext_stopped:
+                    await _ext_send({"type": "stopped", "tokens": {"input": 0, "output": 0}})
+                continue
+            # --- native LangChain turn (unchanged) ----------------------------
+
+            # One live run per thread: a new message SUPERSEDES a run that is
+            # still executing for this thread (left running headless after a
+            # page refresh, or orphaned by a dropped socket). Two concurrent
+            # runs would interleave writes on one checkpoint — the "sent a
+            # message, got no reply, but the old run was still going" failure.
+            # The superseded run's dangling tool calls are repaired by the
+            # start-of-turn scan below.
+            prior = _ACTIVE_TURNS.pop(thread_id, None)
+            if prior is not None and not prior.task.done():
+                prior.supersede()
+                # Let its checkpoint writes settle before we read state.
+                await asyncio.wait({prior.task}, timeout=10)
+
             print(f"[CHAT] Session: {session_id} | Thread: {thread_id} | Message: {message[:50]}...")
 
-            # Initialize agent with AsyncSqliteSaver (supports async streaming/state).
+            # Initialize agent with the engine-selected checkpointer (async).
             # The model is read from the ACTIVE THREAD (falls back to the session's
             # model, then DEFAULT) so each chat can use a different model.
             async with open_checkpointer(DB_PATH) as memory:
@@ -1116,120 +1511,249 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 )
                 config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
 
-                # Check for corrupted state
+                # Start-of-turn repair: a previous run interrupted mid-tool
+                # leaves dangling tool calls in the checkpoint; close them with
+                # explicit interrupted results so the provider accepts the
+                # history.
                 snapshot = await agent_graph.aget_state(config)
                 input_messages = []
 
                 if snapshot.values and snapshot.values.get("messages"):
-                    messages = snapshot.values["messages"]
-                    pending_tool_ids = set()
-
-                    for msg in messages:
-                        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
-                            for tc in msg.tool_calls:
-                                pending_tool_ids.add(tc.get("id"))
-                        elif hasattr(msg, "tool_call_id"):
-                            pending_tool_ids.discard(msg.tool_call_id)
-
-                    # Fix corrupted state with fake responses
-                    if pending_tool_ids:
-                        for tool_id in pending_tool_ids:
-                            fake_response = ToolMessage(
-                                content="[Tool execution was interrupted. Please retry the operation.]",
-                                tool_call_id=tool_id
-                            )
-                            input_messages.append(fake_response)
+                    for tool_id in _pending_tool_call_ids(snapshot.values["messages"]):
+                        input_messages.append(ToolMessage(
+                            content="[Tool execution was interrupted. Please retry the operation.]",
+                            tool_call_id=tool_id,
+                        ))
 
                 if not snapshot.values or not snapshot.values.get("messages"):
                     input_messages.append(SystemMessage(content=load_system_prompt()))
                 input_messages.append(("user", message))
 
-                # Stream using LangGraph's astream()
-                await websocket.send_json({"type": "start"})
-
+                # Stream the agent turn. A background task drains astream() into
+                # a bounded queue; a second task reads the socket (so `stop`
+                # works mid-run) and forwards control signals onto the SAME
+                # queue. This coroutine is the single consumer and the ONLY
+                # writer to the websocket — no concurrent-send races.
+                #
+                # The heartbeat MUST time out on the queue read, never on the
+                # generator itself: asyncio.wait_for cancels its awaitable on
+                # timeout, and cancelling astream.__anext__ threw CancelledError
+                # into the running graph — aborting the very long tool call
+                # (e.g. wait_for_synthesis) the ping was meant to protect
+                # (plans/phase2/REVIEW_FINDINGS.md P0 #2).
                 total_input_tokens = 0
                 total_output_tokens = 0
                 pending_tool_calls: Dict[str, Dict[str, Any]] = {}
+                client_gone = False
+                stop_requested = False
 
-                try:
-                    # Heartbeat-wrapped iteration: wait for each stream event with
-                    # a timeout; on timeout (a long silent tool call) send a `ping`
-                    # keepalive and keep waiting. Serialized on this one coroutine,
-                    # so there's no concurrent-send race with the frames below.
-                    _stream = agent_graph.astream(
-                        {"messages": input_messages},
-                        config,
-                        stream_mode="updates",
-                    ).__aiter__()
+                async def _send(payload: dict) -> None:
+                    # Single writer (this coroutine only). Every frame carries
+                    # the turn id so the UI can drop stale frames by id. After
+                    # a client drop, keep the agent running to completion (the
+                    # checkpoint persists; the UI refetches history on
+                    # reconnect) but stop attempting sends.
+                    nonlocal client_gone
+                    if client_gone:
+                        return
+                    payload.setdefault("turn_id", turn_id)
+                    try:
+                        await websocket.send_json(payload)
+                    except Exception:
+                        client_gone = True
+
+                await _send({"type": "start"})
+
+                # Bounded: a slow client backpressures the drain task instead
+                # of building unbounded memory.
+                event_queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+
+                async def _drain_stream() -> None:
+                    try:
+                        async for ev in agent_graph.astream(
+                            {"messages": input_messages},
+                            config,
+                            stream_mode=["updates", "messages"],
+                        ):
+                            await event_queue.put(("event", ev))
+                    except Exception as exc:
+                        await event_queue.put(("error", exc))
+                    else:
+                        await event_queue.put(("end", None))
+
+                drain_task = asyncio.create_task(_drain_stream())
+                turn_handle = _ActiveTurn(drain_task, event_queue)
+                _ACTIVE_TURNS[thread_id] = turn_handle
+
+                async def _watch_client() -> None:
+                    # Reads the socket for the duration of the run. A `stop`
+                    # frame cancels the run; any other frame is rejected — the
+                    # UI queues follow-up messages and sends them after the
+                    # terminal frame. Signals go through the event queue so
+                    # sending stays with the single writer.
                     while True:
                         try:
-                            event = await asyncio.wait_for(
-                                _stream.__anext__(), timeout=_WS_HEARTBEAT_SEC
+                            frame = await websocket.receive_json()
+                        except Exception:
+                            await event_queue.put(("disconnect", None))
+                            return
+                        if isinstance(frame, dict) and frame.get("type") == "stop":
+                            await event_queue.put(("stop", None))
+                            return
+                        await event_queue.put(("busy", None))
+
+                watch_task = asyncio.create_task(_watch_client())
+
+                # `text_delta` frames carry the cumulative text of the CURRENT
+                # LLM segment (the UI replaces the active text block), so a
+                # replayed or duplicated frame is harmless. A new message id
+                # starts a new segment; the authoritative `text` frame closes it.
+                segment_text = ""
+                segment_id = None
+
+                def _handle_updates(update: dict) -> List[dict]:
+                    nonlocal total_input_tokens, total_output_tokens, segment_text, segment_id
+                    frames: List[dict] = []
+                    if "agent" in update:
+                        msg = update["agent"]["messages"][-1]
+                        text = get_clean_content(msg)
+                        if text:
+                            frames.append({"type": "text", "content": text})
+                            segment_text, segment_id = "", None
+                        if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                            total_input_tokens += msg.usage_metadata.get("input_tokens", 0)
+                            total_output_tokens += msg.usage_metadata.get("output_tokens", 0)
+                        if hasattr(msg, "tool_calls") and msg.tool_calls:
+                            for tc in msg.tool_calls:
+                                tc_id = tc.get("id", "")
+                                tc_name = tc.get("name", "unknown")
+                                tc_args = tc.get("args", {}) if isinstance(tc.get("args"), dict) else {}
+                                if tc_id:
+                                    pending_tool_calls[tc_id] = {"name": tc_name, "args": tc_args}
+                                log_tool_call(
+                                    workspace=workspace,
+                                    session_id=session_id,
+                                    source="api_ws",
+                                    tool=tc_name,
+                                    arguments=tc_args,
+                                    tool_call_id=tc_id or None,
+                                )
+                                frames.append({"type": "tool_call", "tool": format_tool_call_for_api(tc)})
+                    elif "tools" in update:
+                        msg = update["tools"]["messages"][-1]
+                        result = format_tool_result_for_api(msg.content)
+                        call_meta = pending_tool_calls.pop(msg.tool_call_id, {})
+                        log_tool_result(
+                            workspace=workspace,
+                            session_id=session_id,
+                            source="api_ws",
+                            tool=call_meta.get("name", "unknown"),
+                            result=msg.content,
+                            status="success" if result.get("status") == "success" else "error",
+                            tool_call_id=msg.tool_call_id,
+                            arguments=call_meta.get("args", {}),
+                        )
+                        frames.append({"type": "tool_result", "tool_call_id": msg.tool_call_id, **result})
+                    return frames
+
+                agent_error: Optional[Exception] = None
+                superseded = False
+                delta_gate = 0.0
+                try:
+                    while True:
+                        try:
+                            kind, payload = await asyncio.wait_for(
+                                event_queue.get(), timeout=_WS_HEARTBEAT_SEC
                             )
                         except asyncio.TimeoutError:
-                            await websocket.send_json({"type": "ping"})
+                            # Silent gap (tool still running). This cancels only
+                            # the queue read — never the agent stream.
+                            await _send({"type": "ping"})
                             continue
-                        except StopAsyncIteration:
+
+                        if kind == "end":
                             break
-
-                        if "agent" in event:
-                            msg = event["agent"]["messages"][-1]
-
-                            # Send text content
-                            text = get_clean_content(msg)
-                            if text:
-                                await websocket.send_json({
-                                    "type": "text",
-                                    "content": text
-                                })
-
-                            # Track tokens
-                            if hasattr(msg, "usage_metadata") and msg.usage_metadata:
-                                total_input_tokens += msg.usage_metadata.get("input_tokens", 0)
-                                total_output_tokens += msg.usage_metadata.get("output_tokens", 0)
-
-                            # Send tool calls
-                            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                                for tc in msg.tool_calls:
-                                    tc_id = tc.get("id", "")
-                                    tc_name = tc.get("name", "unknown")
-                                    tc_args = tc.get("args", {}) if isinstance(tc.get("args"), dict) else {}
-                                    if tc_id:
-                                        pending_tool_calls[tc_id] = {"name": tc_name, "args": tc_args}
-                                    log_tool_call(
-                                        workspace=workspace,
-                                        session_id=session_id,
-                                        source="api_ws",
-                                        tool=tc_name,
-                                        arguments=tc_args,
-                                        tool_call_id=tc_id or None,
-                                    )
-                                    await websocket.send_json({
-                                        "type": "tool_call",
-                                        "tool": format_tool_call_for_api(tc)
-                                    })
-
-                        elif "tools" in event:
-                            msg = event["tools"]["messages"][-1]
-                            result = format_tool_result_for_api(msg.content)
-                            call_meta = pending_tool_calls.pop(msg.tool_call_id, {})
-                            log_tool_result(
-                                workspace=workspace,
-                                session_id=session_id,
-                                source="api_ws",
-                                tool=call_meta.get("name", "unknown"),
-                                result=msg.content,
-                                status="success" if result.get("status") == "success" else "error",
-                                tool_call_id=msg.tool_call_id,
-                                arguments=call_meta.get("args", {}),
-                            )
-                            await websocket.send_json({
-                                "type": "tool_result",
-                                "tool_call_id": msg.tool_call_id,
-                                **result
+                        if kind == "error":
+                            agent_error = payload
+                            break
+                        if kind == "stop":
+                            stop_requested = True
+                            drain_task.cancel()
+                            break
+                        if kind == "superseded":
+                            # A newer message on this thread took over the run.
+                            superseded = True
+                            break
+                        if kind == "disconnect":
+                            # Client dropped mid-run. Finish the run headless so
+                            # the result lands in the checkpoint; the UI
+                            # reconciles via history refetch.
+                            client_gone = True
+                            continue
+                        if kind == "busy":
+                            await _send({
+                                "type": "error", "code": "busy",
+                                "error": "A response is already in progress.",
                             })
+                            continue
 
-                    # Update token usage
+                        mode, data = payload
+                        if mode == "messages":
+                            chunk, meta = data
+                            if (meta or {}).get("langgraph_node") == "agent":
+                                piece = get_clean_content(chunk)
+                                if piece:
+                                    chunk_id = getattr(chunk, "id", None)
+                                    if chunk_id != segment_id:
+                                        segment_id, segment_text = chunk_id, ""
+                                        delta_gate = 0.0  # new segment: emit at once
+                                    segment_text += piece
+                                    now = asyncio.get_running_loop().time()
+                                    if now - delta_gate >= _WS_DELTA_INTERVAL_SEC:
+                                        delta_gate = now
+                                        await _send({"type": "text_delta", "content": segment_text})
+                        elif mode == "updates":
+                            for frame in _handle_updates(data):
+                                await _send(frame)
+                finally:
+                    watch_task.cancel()
+                    if not drain_task.done():
+                        drain_task.cancel()
+                    try:
+                        await drain_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    if _ACTIVE_TURNS.get(thread_id) is turn_handle:
+                        _ACTIVE_TURNS.pop(thread_id, None)
+
+                if stop_requested:
+                    # Close the turn cleanly NOW: write explicit interrupted
+                    # results for any dangling tool calls into the checkpoint,
+                    # so the conversation history is immediately consistent
+                    # instead of being lazily repaired on the next turn.
+                    try:
+                        snap = await agent_graph.aget_state(config)
+                        repairs = [
+                            ToolMessage(
+                                content="[Stopped by user before this tool finished.]",
+                                tool_call_id=tid,
+                            )
+                            for tid in _pending_tool_call_ids(
+                                (snap.values or {}).get("messages") or []
+                            )
+                        ]
+                        if repairs:
+                            await agent_graph.aupdate_state(config, {"messages": repairs})
+                    except Exception:
+                        pass  # the next turn's start-of-turn repair still covers it
+
+                # Fast, correctness-sensitive bookkeeping stays synchronous and
+                # BEFORE the terminal frame: local SQLite writes (sub-ms), and
+                # the hosted-tier limiter must reflect this turn's usage before
+                # the client can possibly send the next message on this same
+                # connection, or a rapid back-to-back turn could slip past a
+                # cap it should have hit.
+                try:
                     if total_input_tokens > 0 or total_output_tokens > 0:
                         current_meta = session_manager.get_session_metadata(session_id, user_id=uid)
                         if current_meta:
@@ -1247,27 +1771,52 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         if limiter is not None:
                             turn_cost = calculate_cost(total_input_tokens, total_output_tokens, model_name)
                             limiter.record(uid or "anonymous", total_input_tokens + total_output_tokens, turn_cost)
+                except Exception as exc:
+                    print(f"[WARN] token/limiter bookkeeping failed: {exc}")
 
-                    # Persist any workspace changes back to durable storage in
-                    # hosted mode (cloud provider). No-op for the local provider.
-                    _sync = getattr(_ws_provider, "sync", None)
-                    if callable(_sync):
-                        _sync(session_id)
-
-                    await websocket.send_json({
-                        "type": "done",
-                        "tokens": {
-                            "input": total_input_tokens,
-                            "output": total_output_tokens
-                        }
+                # Terminal frame goes out NOW — the moment the assistant's turn
+                # is logically complete — not after whatever comes next.
+                tokens = {"input": total_input_tokens, "output": total_output_tokens}
+                if agent_error is not None:
+                    print(f"[ERROR] Agent error: {agent_error}")
+                    await _send({"type": "error", "error": str(agent_error)})
+                elif stop_requested:
+                    # Explicit terminal marker for a user-initiated stop; the
+                    # dangling tool calls were closed with interrupted results
+                    # right above.
+                    await _send({"type": "stopped", "tokens": tokens})
+                elif superseded:
+                    # Usually the socket is already gone (this run was
+                    # orphaned); if a second tab is still attached, tell it
+                    # honestly what happened.
+                    await _send({
+                        "type": "error", "code": "superseded",
+                        "error": "A newer message took over this chat.",
                     })
+                else:
+                    await _send({"type": "done", "tokens": tokens})
 
-                except Exception as e:
-                    print(f"[ERROR] Agent error: {e}")
-                    await websocket.send_json({
-                        "type": "error",
-                        "error": str(e)
-                    })
+                # Persist workspace changes to durable storage in hosted mode
+                # (no-op locally) as a background task — this is the ONE slow,
+                # non-critical step (a real network upload). Awaiting it before
+                # the terminal frame made the UI sit on "Stop" for as long as
+                # the upload took (observed up to ~1 minute) even though the
+                # reply had fully rendered. It doesn't touch the checkpoint
+                # connection (already closed by then), so it's safe to outlive
+                # this turn.
+                _sync = getattr(_ws_provider, "sync", None)
+                if callable(_sync):
+                    async def _background_sync() -> None:
+                        try:
+                            await asyncio.to_thread(_sync, session_id)
+                        except Exception as exc:
+                            print(f"[WARN] workspace sync failed: {exc}")
+
+                    _run_in_background(_background_sync())
+
+                if client_gone:
+                    # The socket is dead; nothing more can be received on it.
+                    return
 
     except WebSocketDisconnect:
         print(f"[CHAT] WebSocket disconnected: {session_id}")
@@ -1294,44 +1843,53 @@ async def list_workspace_files(session_id: str, _acl: Optional[str] = Depends(ve
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        # Manifest roles annotate the design files (rtl/tb/sdc/include).
+        # Manifest roles annotate the design files (rtl/tb/sdc/include),
+        # keyed by workspace-relative path (nested design files have roles too).
+        ignore: List[str] = []
         try:
             with session_scope(SessionContext(session_id=session_id, workspace=workspace)):
                 manifest = manifest_mod.read_manifest(workspace, session_id)
-            roles = {f.name: f.role for f in manifest.files}
+            roles = {f.path: f.role for f in manifest.files}
+            ignore = manifest.ignore
         except Exception:
             roles = {}
 
+        # Recursive listing under the manifest's exclusion policy (run dirs,
+        # dot-dirs, user ignore globs, depth cap). ``path`` is the
+        # workspace-relative POSIX path — the same key the manifest uses.
         files = []
-        for item in os.listdir(workspace):
-            item_path = os.path.join(workspace, item)
-            if os.path.isfile(item_path):
+        for rel in manifest_mod.iter_workspace_files(workspace, ignore):
+            item_path = os.path.join(workspace, rel)
+            try:
                 stat = os.stat(item_path)
+            except OSError:
+                continue
+            item = os.path.basename(rel)
 
-                # Determine file type
-                ext = os.path.splitext(item)[1].lower()
-                file_type = "unknown"
-                if ext in [".v", ".sv"]:
-                    file_type = "verilog"
-                elif ext == ".yaml":
-                    file_type = "spec" if "_spec" in item else "yaml"
-                elif ext == ".vcd":
-                    file_type = "waveform"
-                elif ext == ".gds":
-                    file_type = "layout"
-                elif ext == ".svg":
-                    file_type = "schematic"
-                elif ext == ".md":
-                    file_type = "report"
+            # Determine file type
+            ext = os.path.splitext(item)[1].lower()
+            file_type = "unknown"
+            if ext in [".v", ".sv"]:
+                file_type = "verilog"
+            elif ext == ".yaml":
+                file_type = "spec" if "_spec" in item else "yaml"
+            elif ext == ".vcd":
+                file_type = "waveform"
+            elif ext == ".gds":
+                file_type = "layout"
+            elif ext == ".svg":
+                file_type = "schematic"
+            elif ext == ".md":
+                file_type = "report"
 
-                files.append(FileInfo(
-                    name=item,
-                    path=item_path,
-                    type=file_type,
-                    size=stat.st_size,
-                    modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                    role=roles.get(item),
-                ))
+            files.append(FileInfo(
+                name=item,
+                path=rel,
+                type=file_type,
+                size=stat.st_size,
+                modified=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                role=roles.get(rel),
+            ))
 
         return sorted(files, key=lambda f: f.modified, reverse=True)
 
@@ -1346,8 +1904,9 @@ async def get_spec(session_id: str, _acl: Optional[str] = Depends(verify_session
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
 
+        # Recursive under the manifest exclusion policy (nested specs count too).
         spec_files = sorted(
-            [f for f in os.listdir(workspace) if f.endswith("_spec.yaml")],
+            [f for f in manifest_mod.iter_workspace_files(workspace) if f.endswith("_spec.yaml")],
             key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
             reverse=True
         )
@@ -1383,17 +1942,30 @@ async def get_code_files(session_id: str, _acl: Optional[str] = Depends(verify_s
         if not os.path.exists(workspace):
             raise HTTPException(status_code=404, detail="Session not found")
 
-        files = sorted([
-            f for f in os.listdir(workspace)
-            if f.endswith(('.v', '.sv')) and os.path.isfile(os.path.join(workspace, f))
-        ])
+        # Manifest-driven, recursive: code files = manifest files with code roles
+        # (rtl/tb/include) + any .v/.sv the exclusion-aware scan found. ``filename``
+        # is the workspace-relative POSIX path (the frontend keys code tabs by it).
+        try:
+            with session_scope(SessionContext(session_id=session_id, workspace=workspace)):
+                manifest = manifest_mod.read_manifest(workspace, session_id)
+            rels = {f.path for f in manifest.files if f.role in ("rtl", "tb", "include")}
+            ignore = manifest.ignore
+        except Exception:
+            rels, ignore = set(), []
+        rels.update(
+            rel for rel in manifest_mod.iter_workspace_files(workspace, ignore)
+            if rel.lower().endswith((".v", ".sv"))
+        )
 
         result = []
-        for filename in files:
-            with open(os.path.join(workspace, filename), "r", errors='ignore') as f:
+        for filename in sorted(rels):
+            full = os.path.join(workspace, filename)
+            if not os.path.isfile(full):
+                continue
+            with open(full, "r", errors='ignore') as f:
                 content = f.read()
 
-            lang = "systemverilog" if filename.endswith(".sv") else "verilog"
+            lang = "systemverilog" if filename.endswith((".sv", ".svh")) else "verilog"
             result.append(CodeFile(filename=filename, content=content, language=lang))
 
         return result
@@ -1417,7 +1989,7 @@ async def get_code_file(session_id: str, filename: str, _acl: Optional[str] = De
         with open(file_path, "r", errors='ignore') as f:
             content = f.read()
 
-        lang = "systemverilog" if filename.endswith(".sv") else "verilog"
+        lang = "systemverilog" if filename.endswith((".sv", ".svh")) else "verilog"
         return CodeFile(filename=filename, content=content, language=lang)
 
     return await asyncio.to_thread(work)
@@ -1449,7 +2021,11 @@ async def get_waveform_data(session_id: str, filename: str, _acl: Optional[str] 
     if not is_within(workspace, vcd_path):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    return await asyncio.to_thread(_parse_vcd_file, vcd_path, filename)
+    parsed = await asyncio.to_thread(_parse_vcd_file, vcd_path, filename)
+    # A terminal run's VCD never changes — let the browser cache the (expensive)
+    # parsed payload forever; loose/root VCDs stay uncached.
+    cache_control = await asyncio.to_thread(workspace_fs.artifact_cache_control, workspace, vcd_path)
+    return JSONResponse(parsed, headers={"Cache-Control": cache_control})
 
 
 def _parse_vcd_file(vcd_path: str, filename: str) -> dict:
@@ -1642,6 +2218,9 @@ async def get_layout_svg(session_id: str, filename: str, _acl: Optional[str] = D
     the viewer shows gracefully rather than failing the request.
     """
     # F6: hydration + the (potentially heavy) gdstk render run off the loop.
+    # A terminal run's GDS never changes — cache the rendered SVG immutably.
+    cache_holder = {"cc": workspace_fs.CACHE_NO_STORE}
+
     def work():
         workspace = _resolve_workspace(session_id)
         gds_path = os.path.join(workspace, filename)
@@ -1649,6 +2228,7 @@ async def get_layout_svg(session_id: str, filename: str, _acl: Optional[str] = D
             raise HTTPException(status_code=403, detail="Access denied")
         if not os.path.exists(gds_path):
             raise HTTPException(status_code=404, detail="Layout not found")
+        cache_holder["cc"] = workspace_fs.artifact_cache_control(workspace, gds_path)
 
         # 1) pre-rendered SVG sidecar
         sidecar = gds_path + ".svg"
@@ -1685,7 +2265,8 @@ async def get_layout_svg(session_id: str, filename: str, _acl: Optional[str] = D
         except Exception as e:
             return {"error": "render_failed", "message": str(e), "cell_name": ""}
 
-    return await asyncio.to_thread(work)
+    payload = await asyncio.to_thread(work)
+    return JSONResponse(payload, headers={"Cache-Control": cache_holder["cc"]})
 
 
 @app.get("/api/workspace/{session_id:path}/schematics")
@@ -1702,25 +2283,44 @@ async def list_schematic_files(session_id: str, _acl: Optional[str] = Depends(ve
 
 
 @app.get("/api/workspace/{session_id:path}/file/{filename:path}")
-async def get_file_content(session_id: str, filename: str, _acl: Optional[str] = Depends(verify_session_access)):
-    """Get raw file content."""
-    def work():  # F6: hydration + file read off-thread
+async def get_file_content(
+    session_id: str,
+    filename: str,
+    raw: bool = Query(default=False),
+    _acl: Optional[str] = Depends(verify_session_access),
+):
+    """File content with honest binary/size handling.
+
+    Default: JSON ``{filename, content, size, binary, tooLarge}`` — content is
+    null (never lossy garbage) for binary or oversized files. ``?raw=1``
+    streams the raw bytes as a download (the VCD/GDS/netlist escape hatch).
+    Terminal-run artifacts get immutable cache headers (their bytes can never
+    change); everything else is no-store.
+    """
+    def resolve():  # F6: hydration + stat off-thread
         workspace = _resolve_workspace(session_id)
         file_path = os.path.join(workspace, filename)
 
-        if not os.path.exists(file_path):
+        if not os.path.exists(file_path) or not os.path.isfile(file_path):
             raise HTTPException(status_code=404, detail="File not found")
 
         # Security check - ensure file is within workspace
         if not is_within(workspace, file_path):
             raise HTTPException(status_code=403, detail="Access denied")
 
-        with open(file_path, "r", errors='ignore') as f:
-            content = f.read()
+        return workspace, file_path, workspace_fs.artifact_cache_control(workspace, file_path)
 
-        return {"filename": filename, "content": content}
+    workspace, file_path, cache_control = await asyncio.to_thread(resolve)
 
-    return await asyncio.to_thread(work)
+    if raw:
+        return FileResponse(
+            file_path,
+            filename=os.path.basename(filename),
+            headers={"Cache-Control": cache_control},
+        )
+
+    payload = await asyncio.to_thread(workspace_fs.read_smart_file, workspace, file_path, filename)
+    return JSONResponse(payload, headers={"Cache-Control": cache_control})
 
 
 # =============================================================================
