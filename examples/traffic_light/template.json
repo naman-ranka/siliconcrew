@@ -5,7 +5,8 @@
   "highlights": [
     "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
     "Timing met: WNS 0.0 ns; 172 std cells",
-    "Self-checking testbench: one-hot + phase-duration + legal-order checks PASSED"
+    "Self-checking testbench: one-hot + phase-duration + legal-order checks PASSED",
+    "Interactive: open traffic_light.dashboard.html to watch the real netlist run in your browser"
   ],
   "top_module": "traffic_light",
   "platform": "sky130hd",
