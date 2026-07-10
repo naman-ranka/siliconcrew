@@ -566,6 +566,7 @@ def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> st
     else:
         return f"Error: {result['message']}"
 
+from src.tools.build_interactive_sim import build_websim_netlist
 from src.tools.generate_schematic import generate_schematic
 from src.tools.design_report import generate_design_report, save_design_report, save_metrics
 from src.tools.spec_manager import (
@@ -788,6 +789,61 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
         return f"Schematic generated successfully! 🎨\nSVG Path: {result['svg_path']}\n(The user can see this in the 'Schematic' tab)"
     else:
         return f"Failed to generate schematic: {result['error']}"
+
+@tool
+def build_interactive_sim(verilog_files: list[str] | str, top_module: str) -> str:
+    """
+    Compiles RTL into the netlist artifact behind an interactive browser
+    dashboard (`<top>.websim.json`) — the design then runs as a real gate-level
+    simulation in the user's browser. Follow up by writing
+    `<top>.dashboard.html` with write_file: a self-contained HTML/CSS/JS page
+    (no external scripts/styles — everything inline) that
+
+      * declares its netlist via
+        `<meta name="siliconcrew-sim" content="<top>.websim.json">`, and
+      * drives the design ONLY through the injected `window.simBridge` API:
+          simBridge.ready(cb)            — cb(ports) once the sim is loaded;
+                                           ports = [{name, direction, bits}]
+          simBridge.setInput(name, val)  — set an input port (integer value)
+          simBridge.onUpdate(cb)         — cb({outputs, cycle}) after each
+                                           clock tick; outputs = {name: int}
+                                           (an output is null while any of
+                                           its bits is undefined/x)
+          simBridge.setClockHz(hz)       — full clock cycles per second
+                                           (default 25; 'clk' is auto-driven)
+
+    NEVER re-implement or approximate the design's behavior in dashboard JS —
+    every displayed state must come from onUpdate. If this tool fails, say so;
+    do not ship a mock. Only offer dashboards for designs with human-shaped
+    I/O (buttons, LEDs, displays, games, controllers); for datapath/protocol
+    blocks (FIFOs, bus bridges, ALU pipelines) recommend simulation_tool +
+    waveform_tool instead of building a junk switch panel.
+
+    Args:
+        verilog_files: RTL file name(s), e.g. 'counter.v' or ['simon.v', 'simon_game.v'].
+        top_module: Name of the top-level module.
+
+    Returns the design's port list so you can wire dashboard widgets to real pins.
+    """
+    workspace = get_workspace_path()
+    files = _normalize_verilog_files_arg(verilog_files)
+    result = build_websim_netlist(files, top_module, cwd=workspace)
+
+    if not result["success"]:
+        return f"Failed to build interactive sim netlist: {result['error']}"
+
+    port_lines = "\n".join(
+        f"  - {p['name']}: {p['direction']}, {p['bits']} bit(s)" for p in result["ports"]
+    )
+    return (
+        f"Interactive sim netlist built: {result['artifact']} (engine: {result['engine']})\n"
+        f"Ports of {top_module}:\n{port_lines}\n\n"
+        f"Next: write `{top_module}.dashboard.html` (self-contained, inline CSS/JS) "
+        f"with the meta tag `<meta name=\"siliconcrew-sim\" content=\"{result['artifact']}\">` "
+        "and drive it exclusively via window.simBridge. The user opens it from the "
+        "workbench's Interactive tab."
+    )
+
 
 @tool
 def save_metrics_tool(
@@ -1238,6 +1294,7 @@ mcp_tools = [
     compare_pd_runs,
     search_logs_tool,
     schematic_tool,
+    build_interactive_sim,
     # Reporting & Metrics
     save_metrics_tool,
     generate_report_tool,
