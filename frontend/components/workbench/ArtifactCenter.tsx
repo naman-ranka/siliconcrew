@@ -11,6 +11,7 @@ import {
   Home,
   Image as ImageIcon,
   Layers,
+  MonitorPlay,
   Table2,
   Type,
   X,
@@ -31,6 +32,7 @@ import { SchematicArtifact } from "./viewers/SchematicArtifact";
 import { ImageArtifact } from "./viewers/ImageArtifact";
 import { DataArtifact } from "./viewers/DataArtifact";
 import { TextArtifact } from "./viewers/TextArtifact";
+import { InteractiveArtifact } from "./viewers/InteractiveArtifact";
 import { ViewerEmpty } from "./viewers/panels";
 
 const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }>> = {
@@ -44,6 +46,7 @@ const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }
   image: ImageIcon,
   data: Table2,
   text: Type,
+  interactive: MonitorPlay,
 };
 
 // Route one open tab to its wrapper viewer. Wrappers load their own data via
@@ -75,6 +78,8 @@ function ArtifactBody({ artifactKey, readOnly }: { artifactKey: string; readOnly
       return <DataArtifact path={parsed.ref ?? ""} />;
     case "text":
       return <TextArtifact path={parsed.ref ?? ""} />;
+    case "interactive":
+      return <InteractiveArtifact path={parsed.ref ?? ""} />;
   }
 }
 

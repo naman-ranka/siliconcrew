@@ -105,7 +105,12 @@ export function artifactKeyForToolCall(
     case "write_file":
     case "edit_file_tool": {
       const file = firstStringArg(args, ["filename", "target_file", "file", "path"]);
-      return file ? `code:${file}` : null;
+      if (!file) return null;
+      // A written dashboard opens in the interactive viewer (the sim is the
+      // point); every other written file opens as code.
+      return file.toLowerCase().endsWith(".dashboard.html")
+        ? `interactive:${file}`
+        : `code:${file}`;
     }
 
     case "apply_patch_tool": {
@@ -151,6 +156,13 @@ export function artifactKeyForToolCall(
       if (!vcd) return null;
       const runId = runIdFromPath(vcd);
       return runId ? `wave:${runId}` : `wavefile:${vcd}`;
+    }
+
+    case "build_interactive_sim": {
+      // The openable thing at build time is the websim artifact itself (the
+      // dashboard usually doesn't exist yet); it's JSON → data viewer.
+      const websim = /\b[\w./-]+\.websim\.json\b/.exec(resultText ?? "")?.[0] ?? null;
+      return websim ? `data:${websim}` : null;
     }
 
     case "run_python_analysis":

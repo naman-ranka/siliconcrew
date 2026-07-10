@@ -13,6 +13,7 @@ import {
   FileText,
   Image as ImageIcon,
   Layers,
+  MonitorPlay,
   Table2,
   Type,
   X,
@@ -61,6 +62,7 @@ const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }
   image: ImageIcon,
   data: Table2,
   text: Type,
+  interactive: MonitorPlay,
 };
 
 const KIND_OPEN_LABEL: Record<ArtifactKind, string> = {
@@ -74,6 +76,7 @@ const KIND_OPEN_LABEL: Record<ArtifactKind, string> = {
   image: "image",
   data: "data",
   text: "text",
+  interactive: "interactive sim",
 };
 
 /** "Open <kind> →" — a tool call whose result maps to an artifact gets a

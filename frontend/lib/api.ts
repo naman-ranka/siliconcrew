@@ -366,6 +366,19 @@ export const workspaceApi = {
     const blob = await response.blob();
     return URL.createObjectURL(blob);
   },
+
+  // Raw bytes as an ArrayBuffer — for content-hash provenance checks and the
+  // websim netlist (which can exceed the smart-file reader's inline cap).
+  fetchRawBytes: async (sessionId: string, path: string): Promise<ArrayBuffer> => {
+    const response = await fetchWithAuthRecovery(() =>
+      fetch(
+        `${getApiBase()}/api/workspace/${encodeSessionId(sessionId)}/file/${encodeFilePath(path)}?raw=1`,
+        { headers: { ...authHeader() } }
+      )
+    );
+    if (!response.ok) throw new Error(`Load failed (HTTP ${response.status})`);
+    return response.arrayBuffer();
+  },
 };
 
 // Workbench action layer — manifest, IDE-first buttons, unified runs.

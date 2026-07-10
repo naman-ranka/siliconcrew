@@ -11,6 +11,7 @@ import {
   Image as ImageIcon,
   Layers,
   Search,
+  MonitorPlay,
   Table2,
   Type,
 } from "lucide-react";
@@ -32,6 +33,7 @@ const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }
   image: ImageIcon,
   data: Table2,
   text: Type,
+  interactive: MonitorPlay,
 };
 
 const KIND_NAME: Record<ArtifactKind, string> = {
@@ -45,6 +47,7 @@ const KIND_NAME: Record<ArtifactKind, string> = {
   image: "Image",
   data: "Data",
   text: "Text",
+  interactive: "Interactive",
 };
 
 interface QuickOpenItem {

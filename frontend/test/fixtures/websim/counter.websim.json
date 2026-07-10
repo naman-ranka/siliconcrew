@@ -1,0 +1,208 @@
+{
+ "format": "siliconcrew-websim-v1",
+ "top": "counter",
+ "generated_at": "2026-07-10T00:00:00+00:00",
+ "sources": {
+  "counter.v": "6270fa1d20a0ca37030d7a3ccd107b5629844b2e4ad6b473f9fbba5b7ae525fa"
+ },
+ "ports": [
+  {
+   "name": "clk",
+   "direction": "input",
+   "bits": 1
+  },
+  {
+   "name": "rst_n",
+   "direction": "input",
+   "bits": 1
+  },
+  {
+   "name": "en",
+   "direction": "input",
+   "bits": 1
+  },
+  {
+   "name": "count",
+   "direction": "output",
+   "bits": 4
+  }
+ ],
+ "yosys_netlist": {
+  "creator": "Yosys 0.67 (git sha1 2d1509d1b, Release, Clang /workspace/YoWASP/yosys/wasi-sdk-33.0-x86_64-linux/share/cmake/../..//bin/clang++ 22.1.0)",
+  "modules": {
+   "counter": {
+    "attributes": {
+     "top": "00000000000000000000000000000001",
+     "src": "counter.v:1.1-13.10"
+    },
+    "ports": {
+     "clk": {
+      "direction": "input",
+      "bits": [
+       2
+      ]
+     },
+     "rst_n": {
+      "direction": "input",
+      "bits": [
+       3
+      ]
+     },
+     "en": {
+      "direction": "input",
+      "bits": [
+       4
+      ]
+     },
+     "count": {
+      "direction": "output",
+      "bits": [
+       5,
+       6,
+       7,
+       8
+      ]
+     }
+    },
+    "cells": {
+     "$add$counter.v:11$3": {
+      "hide_name": 1,
+      "type": "$add",
+      "parameters": {
+       "A_SIGNED": "00000000000000000000000000000000",
+       "A_WIDTH": "00000000000000000000000000000100",
+       "B_SIGNED": "00000000000000000000000000000000",
+       "B_WIDTH": "00000000000000000000000000000100",
+       "Y_WIDTH": "00000000000000000000000000000100"
+      },
+      "attributes": {
+       "src": "counter.v:11.22-11.34"
+      },
+      "port_directions": {
+       "A": "input",
+       "B": "input",
+       "Y": "output"
+      },
+      "connections": {
+       "A": [
+        5,
+        6,
+        7,
+        8
+       ],
+       "B": [
+        "1",
+        "0",
+        "0",
+        "0"
+       ],
+       "Y": [
+        9,
+        10,
+        11,
+        12
+       ]
+      }
+     },
+     "$auto$ff.cc:337:slice$11": {
+      "hide_name": 1,
+      "type": "$adffe",
+      "parameters": {
+       "ARST_POLARITY": "00000000000000000000000000000000",
+       "ARST_VALUE": "0000",
+       "CLK_POLARITY": "00000000000000000000000000000001",
+       "EN_POLARITY": "00000000000000000000000000000001",
+       "WIDTH": "00000000000000000000000000000100"
+      },
+      "attributes": {
+       "src": "counter.v:7.5-12.8"
+      },
+      "port_directions": {
+       "ARST": "input",
+       "CLK": "input",
+       "D": "input",
+       "EN": "input",
+       "Q": "output"
+      },
+      "connections": {
+       "ARST": [
+        3
+       ],
+       "CLK": [
+        2
+       ],
+       "D": [
+        9,
+        10,
+        11,
+        12
+       ],
+       "EN": [
+        4
+       ],
+       "Q": [
+        5,
+        6,
+        7,
+        8
+       ]
+      }
+     }
+    },
+    "netnames": {
+     "$add$counter.v:11$3_Y": {
+      "hide_name": 1,
+      "bits": [
+       9,
+       10,
+       11,
+       12
+      ],
+      "attributes": {
+       "src": "counter.v:11.22-11.34"
+      }
+     },
+     "clk": {
+      "hide_name": 0,
+      "bits": [
+       2
+      ],
+      "attributes": {
+       "src": "counter.v:2.17-2.20"
+      }
+     },
+     "count": {
+      "hide_name": 0,
+      "bits": [
+       5,
+       6,
+       7,
+       8
+      ],
+      "attributes": {
+       "src": "counter.v:5.23-5.28"
+      }
+     },
+     "en": {
+      "hide_name": 0,
+      "bits": [
+       4
+      ],
+      "attributes": {
+       "src": "counter.v:4.17-4.19"
+      }
+     },
+     "rst_n": {
+      "hide_name": 0,
+      "bits": [
+       3
+      ],
+      "attributes": {
+       "src": "counter.v:3.17-3.22"
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -13,6 +13,7 @@ import type { ArtifactKind } from "@/types";
 //   image:<path>       — a workspace image (png/jpg/webp/gif/svg)
 //   data:<path>        — a workspace data file (csv/tsv/json/yaml)
 //   text:<path>        — a workspace text file (txt/log/rpt)
+//   interactive:<path> — an interactive sim dashboard (*.dashboard.html)
 export type ArtifactKey = string;
 
 const REF_KINDS: ReadonlySet<string> = new Set([
@@ -25,6 +26,7 @@ const REF_KINDS: ReadonlySet<string> = new Set([
   "image",
   "data",
   "text",
+  "interactive",
 ]);
 
 export interface ParsedArtifactKey {
