@@ -187,3 +187,60 @@ Two rules to keep the plan coherent:
 2. **The self-verification-gap result is the crown jewel** — spend it at the venue with the best
    audience (DATE 2027 now, or hold the strongest version for LAD 2027/DAC 2027), not at the
    first deadline that happens to be open.
+
+---
+
+## 5. Platform-first strategy: the paper as a credibility engine
+
+The actual goal is not "publish papers" — it is **credibility for SiliconCrew as a unified
+open-source platform**: a complete IDE + agent UI where anyone can drive open-source tools
+(Yosys, OpenROAD, Icarus, cocotb, SymbiYosys, XLS, SkyWater PDK) from spec all the way to GDSII.
+That reframes the role of each paper:
+
+### 5.1 What the anchor citation should be
+When people *use* a platform in their own research, they cite its anchor paper — that citation
+loop is how OpenROAD (DAC 2019 paper), Chipyard, and Verilator built academic legitimacy. So the
+paper whose citation you want circulating is the **platform paper (Paper B)**, titled around the
+platform, not around one benchmark result. `CITATION.cff` should be updated to point at it the
+day it is accepted (arXiv first, then the proceedings version).
+
+### 5.2 How to make a platform paper publishable
+Selective venues reject pure platform papers as "engineering glue." The fix is to make the
+platform the *instrument* and the analysis the *measurement only that instrument could take*:
+
+- **Contribution 1 (platform):** unified tool backend shared by an IDE-grade web UI and an MCP
+  server; LangChain→MCP tool auto-discovery; session/workspace model shared across interfaces;
+  N open-source tools integrated spec→GDSII with no commercial dependency.
+- **Contribution 2 (tool-interface design study):** `docs/TOOL_DESIGN_DECISIONS.md` — what tool
+  granularity, error surfaces, and artifact formats let an LLM agent actually close the loop.
+- **Contribution 3 (evidence):** leak-gated CVDP 60/92 as the end-to-end proof the integration
+  works, plus the self-verification-gap findings — results that required a full-loop open
+  platform to even observe.
+
+One flagship paper structured this way (platform + interface study + CVDP evidence) is the ideal
+**LAD 2027** submission. The deeper failure-mechanism analysis (Paper A) stays a separate paper
+for DATE/DAC so the two don't cannibalize each other.
+
+### 5.3 Venues that exist specifically for open-source EDA platforms
+Peer review is only one of three credibility channels for a platform (the others: benchmark
+results with integrity, and community adoption). These venues feed the adoption channel — they
+put SiliconCrew in front of the exact maintainers and users of the tools it unifies:
+
+| Venue | What/when | Why it matters for SiliconCrew |
+|---|---|---|
+| **WOSET** (Workshop on Open-Source EDA Technology, co-located with ICCAD) | Historically ~Sept deadline, workshop in Nov; watch woset-workshop.github.io for the 2026 edition | *The* venue for open-source EDA tool papers — OpenROAD-ecosystem tools debut here. Short paper + talk, low effort, exactly the right audience |
+| **ORConf 2026** (FOSSi Foundation) | **Sept 11–13, 2026, Ghent, Belgium** — talk proposals are lightweight and usually open until shortly before | Premier open-source silicon community event. A live demo (spec→GDS in the browser) lands harder here than any paper |
+| **Latch-Up** (FOSSi, North America) | 2026 edition (Waterloo, May) has passed; Latch-Up 2027 expected ~May 2027 | Same community, US/Canada edition |
+| **OSDA** (Open-Source Design Automation workshop at DATE) | 2025 edition was cancelled; status for DATE 2026/2027 uncertain — check osda.ws | If revived, a natural short-paper home |
+| **DAC Engineering Track / demo sessions** | With DAC 2027 CFP (~Nov 2026) | Industry-facing demo of the platform without burning research novelty |
+
+### 5.4 Adjusted priorities under the platform-first goal
+1. **ORConf 2026 talk proposal (Ghent, Sept 11–13)** — submit a talk/demo proposal now; this is
+   the highest credibility-per-hour action available for a platform.
+2. **WOSET 2026 short paper** (expect ~Sept deadline) — the platform paper's community debut.
+3. **LAD 2027 flagship platform paper** (§5.2 structure) — the anchor citation.
+4. **DATE 2027 analysis paper** (Paper A) — research-depth credibility that reflects back on the
+   platform ("the SiliconCrew people found the self-verification gap").
+5. ICCAD 2026 SRC (Jul 31) and the arXiv preprint stay as scheduled in §4.
+6. ASP-DAC 2027 (abstract Jul 11) becomes optional: under a platform-first strategy it is better
+   to spend the next two months on ORConf/WOSET + the DATE paper than on a one-week sprint.
