@@ -47,6 +47,8 @@ export function artifactKeyForFile(path: string): ArtifactKey {
     return `schematic:${path}`;
   }
   if (/(^|\/)[^/]*_spec\.yaml$/.test(lower)) return "spec";
+  // Interactive sim dashboards (agent-authored, run in the sandboxed viewer).
+  if (lower.endsWith(".dashboard.html")) return `interactive:${path}`;
   if (IMAGE_EXT.test(lower)) return `image:${path}`;
   if (DATA_EXT.test(lower)) return `data:${path}`;
   if (TEXT_EXT.test(lower)) return `text:${path}`;
@@ -64,11 +66,12 @@ const KIND_LABEL: Record<string, string> = {
   image: "Image",
   data: "Data",
   text: "Text",
+  interactive: "Interactive",
 };
 
 // File-path-backed kinds label by basename (like code); run-scoped kinds label
 // by "<Kind> · <ref>".
-const BASENAME_KINDS = new Set(["code", "schematic", "image", "data", "text", "wavefile"]);
+const BASENAME_KINDS = new Set(["code", "schematic", "image", "data", "text", "wavefile", "interactive"]);
 
 /** Short human label for a tab / quick-open row. */
 export function artifactLabel(key: ArtifactKey): string {

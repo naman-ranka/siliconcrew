@@ -373,7 +373,8 @@ export type ArtifactKind =
   | "schematic"
   | "image"
   | "data"
-  | "text";
+  | "text"
+  | "interactive";
 
 // --- Tool catalog (GET /api/workspace/{sid}/tools) ---------------------------
 // The backend introspects the SAME LangChain @tool registry the agent and MCP
