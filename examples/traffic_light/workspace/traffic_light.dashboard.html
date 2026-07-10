@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="siliconcrew-sim" content="traffic_light.websim.json">
+<title>Traffic-Light Controller — interactive sim</title>
+<style>
+  /* Self-contained by design: the sandboxed frame has no network access. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    background: #101418; color: #cbd5e1;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 24px; padding: 24px;
+  }
+  h1 { font-size: 15px; font-weight: 600; color: #e2e8f0; letter-spacing: .02em; }
+  .scene { display: flex; align-items: center; gap: 40px; }
+  .housing {
+    background: #1c232b; border: 1px solid #2b3743; border-radius: 14px;
+    padding: 18px 14px; display: flex; flex-direction: column; gap: 14px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  }
+  .lamp {
+    width: 56px; height: 56px; border-radius: 50%;
+    background: #232b33; border: 2px solid #303c48;
+    transition: box-shadow .12s, background .12s;
+  }
+  .lamp.green.on  { background: #22c55e; box-shadow: 0 0 26px 6px rgba(34,197,94,.55); }
+  .lamp.yellow.on { background: #eab308; box-shadow: 0 0 26px 6px rgba(234,179,8,.55); }
+  .lamp.red.on    { background: #ef4444; box-shadow: 0 0 26px 6px rgba(239,68,68,.55); }
+  .lamp.unknown   { background: repeating-linear-gradient(45deg,#232b33,#232b33 6px,#3b2530 6px,#3b2530 12px); }
+  .phase { font-size: 13px; min-width: 180px; }
+  .phase b { display: block; font-size: 22px; color: #e2e8f0; margin-bottom: 6px; }
+  .controls { display: flex; gap: 12px; align-items: center; font-size: 12px; }
+  button {
+    background: #263140; color: #e2e8f0; border: 1px solid #35455a;
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { background: #2f3d50; }
+  input[type=range] { width: 130px; accent-color: #38bdf8; }
+  .note { font-size: 11px; color: #64748b; max-width: 420px; text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <h1>traffic_light — 3-state Moore FSM (GREEN 8 · YELLOW 3 · RED 8 ticks)</h1>
+
+  <div class="scene">
+    <div class="housing">
+      <div class="lamp red"    id="lamp-red"></div>
+      <div class="lamp yellow" id="lamp-yellow"></div>
+      <div class="lamp green"  id="lamp-green"></div>
+    </div>
+    <div class="phase">
+      <b id="phase">—</b>
+      <span id="onehot">waiting for simulation…</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="reset">Reset (rst_n pulse)</button>
+    <label>clock <input type="range" id="hz" min="1" max="30" value="4"> <span id="hzv">4</span> Hz</label>
+  </div>
+
+  <p class="note">
+    Every lamp below is driven by the <code>green/yellow/red</code> output
+    pins of the synthesized netlist simulating in your browser — nothing here
+    is animated by this page's own logic. A hatched lamp means that output is
+    undefined (x).
+  </p>
+
+<script>
+  var lamps = {
+    green:  document.getElementById("lamp-green"),
+    yellow: document.getElementById("lamp-yellow"),
+    red:    document.getElementById("lamp-red")
+  };
+  var phaseEl = document.getElementById("phase");
+  var onehotEl = document.getElementById("onehot");
+
+  window.simBridge.ready(function () {
+    // Active-low reset: release it so the FSM runs; demo pace 4 Hz
+    // (phases are 8/3/8 ticks → 2 s green, 0.75 s yellow, 2 s red).
+    window.simBridge.setInput("rst_n", 1);
+    window.simBridge.setClockHz(4);
+  });
+
+  document.getElementById("reset").onclick = function () {
+    window.simBridge.setInput("rst_n", 0);
+    setTimeout(function () { window.simBridge.setInput("rst_n", 1); }, 150);
+  };
+
+  var hz = document.getElementById("hz");
+  hz.oninput = function () {
+    document.getElementById("hzv").textContent = hz.value;
+    window.simBridge.setClockHz(Number(hz.value));
+  };
+
+  window.simBridge.onUpdate(function (u) {
+    var names = ["green", "yellow", "red"];
+    var bits = "";
+    for (var i = 0; i < names.length; i++) {
+      var v = u.outputs[names[i]];
+      lamps[names[i]].classList.toggle("on", v === 1);
+      lamps[names[i]].classList.toggle("unknown", v === null || v === undefined);
+      bits += v === null || v === undefined ? "x" : String(v);
+    }
+    var phase = u.outputs.green === 1 ? "GREEN" : u.outputs.yellow === 1 ? "YELLOW" : u.outputs.red === 1 ? "RED" : "—";
+    phaseEl.textContent = phase;
+    onehotEl.textContent = "outputs {green,yellow,red} = " + bits + " · cycle " + u.cycle;
+  });
+</script>
+</body>
+</html>
