@@ -14,9 +14,11 @@ import glob
 import hashlib
 import json
 import os
-import re
+from html.parser import HTMLParser
 
 import pytest
+
+from src.tools.build_interactive_sim import ARTIFACT_FORMAT
 
 EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "examples")
 
@@ -27,9 +29,26 @@ DASHBOARDS = sorted(
     glob.glob(os.path.join(EXAMPLES, "*", "workspace", "*.dashboard.html"))
 )
 
-META_RE = re.compile(
-    r'<meta\s+name="siliconcrew-sim"\s+content="([^"]+)"', re.IGNORECASE
-)
+class _SimMetaParser(HTMLParser):
+    """Real HTML parsing (attribute order/quoting agnostic) so this gate can't
+    diverge from the runtime's DOMParser on valid HTML."""
+
+    def __init__(self):
+        super().__init__()
+        self.sim_ref = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "meta" or self.sim_ref is not None:
+            return
+        d = dict(attrs)
+        if (d.get("name") or "").lower() == "siliconcrew-sim":
+            self.sim_ref = d.get("content")
+
+
+def parse_sim_meta(html):
+    p = _SimMetaParser()
+    p.feed(html)
+    return p.sim_ref
 
 
 def _sha256(path):
@@ -38,6 +57,15 @@ def _sha256(path):
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def test_meta_parser_is_quoting_and_order_agnostic():
+    """The runtime uses DOMParser; this gate must accept the same valid HTML
+    (single quotes, reversed attribute order) — no false drift failures."""
+    assert parse_sim_meta("<meta name='siliconcrew-sim' content='a.websim.json'>") == "a.websim.json"
+    assert parse_sim_meta('<meta content="b.websim.json" name="siliconcrew-sim">') == "b.websim.json"
+    assert parse_sim_meta('<META NAME="siliconcrew-sim" CONTENT="c.websim.json">') == "c.websim.json"
+    assert parse_sim_meta("<html><body>no meta</body></html>") is None
 
 
 def test_at_least_one_runnable_example_ships():
@@ -49,7 +77,7 @@ def test_at_least_one_runnable_example_ships():
 def test_websim_artifact_fresh_against_sources(artifact):
     with open(artifact) as f:
         payload = json.load(f)
-    assert payload["format"] == "siliconcrew-websim-v1", artifact
+    assert payload["format"] == ARTIFACT_FORMAT, artifact
     assert payload["sources"], f"{artifact} has no provenance sources"
 
     workspace = os.path.dirname(artifact)
@@ -73,9 +101,8 @@ def test_websim_artifact_fresh_against_sources(artifact):
 def test_dashboard_declares_an_existing_netlist_by_relative_name(dashboard):
     with open(dashboard) as f:
         html = f.read()
-    m = META_RE.search(html)
-    assert m, f"{dashboard} has no siliconcrew-sim meta tag (would render as mockup)"
-    ref = m.group(1)
+    ref = parse_sim_meta(html)
+    assert ref, f"{dashboard} has no siliconcrew-sim meta tag (would render as mockup)"
     assert "/" not in ref and not os.path.isabs(ref), (
         f"{dashboard}: netlist ref {ref!r} must be a bare sibling name (fork-safe)"
     )

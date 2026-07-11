@@ -6,6 +6,7 @@ import {
   BRIDGE_SOURCE,
   checkProvenance,
   composeSrcdoc,
+  parseSimClockMeta,
   parseSimMeta,
   parseWebsimPayload,
   sha256Hex,
@@ -46,6 +47,13 @@ describe("parseSimMeta", () => {
     ).toBe("counter.websim.json");
     expect(parseSimMeta("<html><body><h1>hi</h1></body></html>")).toBeNull();
     expect(parseSimMeta('<meta name="siliconcrew-sim" content="  ">')).toBeNull();
+  });
+
+  it("reads the optional clock-port override meta", () => {
+    expect(
+      parseSimClockMeta('<meta name="siliconcrew-sim-clock" content="pixel_clk">')
+    ).toBe("pixel_clk");
+    expect(parseSimClockMeta('<meta name="siliconcrew-sim" content="a.websim.json">')).toBeNull();
   });
 });
 

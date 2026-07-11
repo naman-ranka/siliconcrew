@@ -10,6 +10,7 @@ beforeAll(() => {
 });
 
 const fetchRawBytes = vi.fn();
+const getFileSmart = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   projectsApi: {},
@@ -18,16 +19,24 @@ vi.mock("@/lib/api", () => ({
   workbenchApi: {},
   workspaceApi: {
     fetchRawBytes: (...a: unknown[]) => fetchRawBytes(...a),
+    getFileSmart: (...a: unknown[]) => getFileSmart(...a),
     downloadRawFile: vi.fn(),
   },
 }));
 
 // The real engine can't construct in jsdom (jointjs needs real SVG); session
 // creation is mocked — engine behavior is covered by websim.engine.test.ts.
+// checkProvenance is mocked for deterministic freshness per test (its real
+// hash logic is covered in websim.test.ts).
 const createWebsimSession = vi.fn();
+const checkProvenance = vi.fn();
 vi.mock("@/lib/websim", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/websim")>();
-  return { ...actual, createWebsimSession: (...a: unknown[]) => createWebsimSession(...a) };
+  return {
+    ...actual,
+    createWebsimSession: (...a: unknown[]) => createWebsimSession(...a),
+    checkProvenance: (...a: unknown[]) => checkProvenance(...a),
+  };
 });
 
 import { useStore } from "@/lib/store";
@@ -44,15 +53,24 @@ const SESSION = {
   total_cost: 0,
 };
 
-function seedFile(path: string, content: string) {
+function seedFile(
+  path: string,
+  content: string | null,
+  over: Partial<{ binary: boolean; tooLarge: boolean }> = {}
+) {
+  const file = {
+    filename: path,
+    content,
+    size: content?.length ?? 0,
+    binary: over.binary ?? false,
+    tooLarge: over.tooLarge ?? false,
+  };
+  // The component's mount effect refetches through the store; serve the same
+  // payload there so the seeded slice isn't clobbered by a mock error.
+  getFileSmart.mockResolvedValue(file);
   useStore.setState({
     currentSession: SESSION as never,
-    fileCache: {
-      [path]: {
-        status: "ready",
-        file: { filename: path, content, size: content.length, binary: false, tooLarge: false },
-      },
-    } as never,
+    fileCache: { [path]: { status: "ready", file } } as never,
   });
 }
 
@@ -65,22 +83,25 @@ const PAYLOAD = {
   yosys_netlist: { modules: {} },
 };
 
-function fakeSession() {
+function fakeSession(over: Partial<{ hasClock: boolean; sequential: boolean }> = {}) {
   return {
     ports: PAYLOAD.ports,
-    hasClock: true,
+    hasClock: over.hasClock ?? true,
+    sequential: over.sequential ?? true,
     cycle: 0,
     setInput: vi.fn(),
     readOutputs: () => ({}),
     tickCycle: vi.fn(),
-    settle: vi.fn(),
     dispose: vi.fn(),
   };
 }
 
 beforeEach(() => {
   fetchRawBytes.mockReset();
+  getFileSmart.mockReset();
   createWebsimSession.mockReset();
+  checkProvenance.mockReset();
+  checkProvenance.mockResolvedValue("fresh");
   useStore.setState({ currentSession: SESSION as never, fileCache: {} });
 });
 
@@ -142,19 +163,56 @@ describe("InteractiveArtifact provenance strip (shell-rendered, unspoofable)", (
     expect(screen.getByTestId("websim-provenance").textContent).toContain("no timing");
   });
 
+  it("warns when a sequential design has no detectable clock (would look alive at 0 cycles)", async () => {
+    seedFile(
+      "noclock.dashboard.html",
+      '<html><head><meta name="siliconcrew-sim" content="counter.websim.json"></head><body></body></html>'
+    );
+    fetchRawBytes.mockResolvedValue(new TextEncoder().encode(JSON.stringify(PAYLOAD)).buffer);
+    createWebsimSession.mockResolvedValue(fakeSession({ hasClock: false, sequential: true }));
+
+    render(<InteractiveArtifact path="noclock.dashboard.html" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("websim-provenance").textContent).toMatch(/NO CLOCK DETECTED/)
+    );
+  });
+
+  it("dead-ends honestly (with Download) for oversized dashboards instead of spinning forever", async () => {
+    seedFile("big.dashboard.html", null, { tooLarge: true });
+    render(<InteractiveArtifact path="big.dashboard.html" />);
+    await waitFor(() => expect(screen.getByText(/Too large/i)).toBeTruthy());
+    expect(screen.getByText("Download")).toBeTruthy();
+  });
+
+  it("marks unverified freshness distinctly from verified-fresh (data-freshness attr)", async () => {
+    seedFile(
+      "unk.dashboard.html",
+      '<html><head><meta name="siliconcrew-sim" content="counter.websim.json"></head><body></body></html>'
+    );
+    fetchRawBytes.mockResolvedValue(new TextEncoder().encode(JSON.stringify(PAYLOAD)).buffer);
+    createWebsimSession.mockResolvedValue(fakeSession());
+    checkProvenance.mockResolvedValue("unknown");
+
+    render(<InteractiveArtifact path="unk.dashboard.html" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("websim-provenance").textContent).toMatch(/freshness unverified/)
+    );
+    expect(screen.getByTestId("websim-provenance").getAttribute("data-freshness")).toBe("unknown");
+  });
+
   it("flags STALE when source hashes no longer match the artifact", async () => {
     seedFile(
       "stale.dashboard.html",
       '<html><head><meta name="siliconcrew-sim" content="counter.websim.json"></head><body></body></html>'
     );
-    const bytes = new TextEncoder().encode(JSON.stringify(PAYLOAD));
-    // first call: the netlist; later calls: source bytes that won't hash to aa…
-    fetchRawBytes.mockResolvedValue(bytes.buffer);
+    fetchRawBytes.mockResolvedValue(new TextEncoder().encode(JSON.stringify(PAYLOAD)).buffer);
     createWebsimSession.mockResolvedValue(fakeSession());
+    checkProvenance.mockResolvedValue("stale");
 
     render(<InteractiveArtifact path="stale.dashboard.html" />);
     await waitFor(() =>
       expect(screen.getByTestId("websim-provenance").textContent).toMatch(/STALE: sources changed/)
     );
+    expect(screen.getByTestId("websim-provenance").getAttribute("data-freshness")).toBe("stale");
   });
 });

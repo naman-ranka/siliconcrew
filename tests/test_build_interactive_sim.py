@@ -152,6 +152,34 @@ def test_yosys_failure_surfaces_stderr(tmp_path, monkeypatch):
     assert not result["success"] and "syntax error" in result["error"]
 
 
+def test_docker_engine_runs_in_the_workspace_mount(tmp_path, monkeypatch):
+    """Regression: the yosys script uses workspace-relative paths, but
+    run_docker_command's default container cwd is /OpenROAD-flow-scripts/flow.
+    The docker branch must run inside the /workspace mount or every read/write
+    misses the workspace."""
+    ws = str(tmp_path)
+    _write_source(ws)
+    calls = []
+
+    def fake_docker(command, workspace_path=None, cwd=None, **kwargs):
+        calls.append({"command": command, "workspace_path": workspace_path, "cwd": cwd})
+        # Simulate yosys running IN the mount: the relative write_json target
+        # must land in the host workspace.
+        out = command.rsplit("write_json ", 1)[1].rstrip("'")
+        with open(os.path.join(workspace_path, out), "w") as f:
+            json.dump(COUNTER_NETLIST, f)
+        return {"success": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(bis, "pick_engine", lambda: {"engine": "docker"})
+    monkeypatch.setattr("src.tools.run_docker.run_docker_command", fake_docker)
+
+    result = bis.build_websim_netlist(["counter.v"], "counter", cwd=ws)
+    assert result["success"], result
+    assert result["engine"] == "docker"
+    assert calls[0]["cwd"] == "/workspace"
+    assert calls[0]["workspace_path"] == ws
+
+
 def test_catalog_policy_flags():
     from src.api import tool_catalog as tc
 

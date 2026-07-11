@@ -53,3 +53,38 @@ describe("createWebsimSession — REAL engine on the counter netlist", () => {
     s.dispose();
   });
 });
+
+describe("clock detection (heuristic + declared override)", () => {
+  // Renaming the clock consistently through the whole fixture (port, netnames,
+  // cell connections) exercises detection against a REAL netlist.
+  const renamedPayload = (to: string) =>
+    parseWebsimPayload(payloadText.replaceAll('"clk"', `"${to}"`))!;
+
+  it("finds *_clk suffixed clocks (sys_clk) and still simulates", async () => {
+    const s = await createWebsimSession(renamedPayload("sys_clk"));
+    expect(s.hasClock).toBe(true);
+    s.setInput("rst_n", 1);
+    s.setInput("en", 1);
+    s.tickCycle();
+    s.tickCycle();
+    expect(s.readOutputs().count).toBe(2);
+    s.dispose();
+  });
+
+  it("does NOT mistake a clock-enable (clk_en) for the clock; flags sequential-without-clock", async () => {
+    const s = await createWebsimSession(renamedPayload("clk_en"));
+    expect(s.hasClock).toBe(false); // clk_en must not be auto-driven as clock
+    expect(s.sequential).toBe(true); // has flops → viewer must warn
+    s.dispose();
+  });
+
+  it("a dashboard-declared clock port overrides the heuristic", async () => {
+    const s = await createWebsimSession(renamedPayload("pixelck"), { clockPort: "pixelck" });
+    expect(s.hasClock).toBe(true);
+    s.setInput("rst_n", 1);
+    s.setInput("en", 1);
+    s.tickCycle();
+    expect(s.readOutputs().count).toBe(1);
+    s.dispose();
+  });
+});

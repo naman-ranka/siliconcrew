@@ -810,7 +810,12 @@ def build_interactive_sim(verilog_files: list[str] | str, top_module: str) -> st
                                            (an output is null while any of
                                            its bits is undefined/x)
           simBridge.setClockHz(hz)       — full clock cycles per second
-                                           (default 25; 'clk' is auto-driven)
+                                           (default 25). The clock pin is
+                                           auto-detected for names like clk /
+                                           clock / *_clk; for any other name
+                                           declare it with a second meta tag:
+                                           <meta name="siliconcrew-sim-clock"
+                                           content="<port>">.
 
     NEVER re-implement or approximate the design's behavior in dashboard JS —
     every displayed state must come from onUpdate. If this tool fails, say so;
