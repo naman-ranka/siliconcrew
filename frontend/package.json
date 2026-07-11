@@ -31,6 +31,7 @@
     "@radix-ui/react-tooltip": "^1.1.2",
     "@tanstack/react-virtual": "^3.14.5",
     "@workos-inc/authkit-js": "^0.20.1",
+    "3vl": "^1.0.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",

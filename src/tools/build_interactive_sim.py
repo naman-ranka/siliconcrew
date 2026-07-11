@@ -87,7 +87,12 @@ def _run_yosys(script: str, cwd: str, engine: str) -> Dict[str, Any]:
 
     from src.tools.run_docker import run_docker_command
 
-    result = run_docker_command(command=f"yosys -p '{script}'", workspace_path=cwd)
+    # The script uses workspace-relative paths, and run_docker_command's
+    # default container cwd is /OpenROAD-flow-scripts/flow — run in the
+    # /workspace mount or read_verilog/write_json miss the workspace entirely.
+    result = run_docker_command(
+        command=f"yosys -p '{script}'", workspace_path=cwd, cwd="/workspace"
+    )
     return {"success": result["success"], "stderr": result.get("stderr", "")}
 
 

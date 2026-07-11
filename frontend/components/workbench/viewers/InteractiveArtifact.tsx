@@ -1,16 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircuitBoard, Download, ShieldAlert, Zap, ZapOff } from "lucide-react";
+import { CircuitBoard, Code2, Download, ShieldAlert, Zap, ZapOff } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { workspaceApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { openArtifact } from "@/lib/openArtifact";
 import { ViewerError, ViewerSkeleton } from "./panels";
 import {
   checkProvenance,
   composeSrcdoc,
   createWebsimSession,
+  parseSimClockMeta,
   parseSimMeta,
   parseWebsimPayload,
   DEFAULT_CLOCK_HZ,
@@ -36,7 +38,15 @@ type SimState =
   | { phase: "loading" }
   | { phase: "mockup" } // no siliconcrew-sim meta tag — declared static
   | { phase: "broken"; detail: string } // meta present but netlist unusable
-  | { phase: "live"; netlist: string; sources: string[]; freshness: Freshness };
+  | {
+      phase: "live";
+      netlist: string;
+      sources: string[];
+      freshness: Freshness;
+      /** Sequential design but no clock port identified — the sim will never
+       *  advance; say so instead of looking alive (invariant 4). */
+      noClock: boolean;
+    };
 
 export function InteractiveArtifact({ path }: { path: string }) {
   const sessionId = useStore((s) => s.currentSession?.id ?? null);
@@ -47,7 +57,11 @@ export function InteractiveArtifact({ path }: { path: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<WebsimSession | null>(null);
   const clockHzRef = useRef(DEFAULT_CLOCK_HZ);
-  const runningRef = useRef(false);
+  // Handshake gate: true only between the frame's hello and the next
+  // dashboard swap — the clock must not advance a session whose frame hasn't
+  // (re)connected, or cycles pass invisibly.
+  const frameReadyRef = useRef(false);
+  const lastOutputsRef = useRef<string>("");
 
   const [sim, setSim] = useState<SimState>({ phase: "loading" });
   const [srcdoc, setSrcdoc] = useState<string | null>(null);
@@ -77,6 +91,7 @@ export function InteractiveArtifact({ path }: { path: string }) {
     let cancelled = false;
     sessionRef.current?.dispose();
     sessionRef.current = null;
+    frameReadyRef.current = false; // new document must re-handshake
     setSim({ phase: "loading" });
     setSrcdoc(null);
     setCycleDisplay(0);
@@ -94,7 +109,9 @@ export function InteractiveArtifact({ path }: { path: string }) {
         const bytes = await workspaceApi.fetchRawBytes(sessionId, netlistPath);
         const payload = parseWebsimPayload(new TextDecoder().decode(bytes));
         if (!payload) throw new Error(`${netlistPath} is not a websim-v1 artifact`);
-        const session = await createWebsimSession(payload);
+        const session = await createWebsimSession(payload, {
+          clockPort: parseSimClockMeta(html),
+        });
         if (cancelled) {
           session.dispose();
           return;
@@ -106,6 +123,7 @@ export function InteractiveArtifact({ path }: { path: string }) {
           netlist: netlistPath,
           sources: Object.keys(payload.sources),
           freshness: "unknown",
+          noClock: session.sequential && !session.hasClock,
         });
         // Freshness lands asynchronously — never block the sim on it, never
         // claim fresh before the hashes agree.
@@ -148,7 +166,7 @@ export function InteractiveArtifact({ path }: { path: string }) {
           "*"
         );
         if (s) {
-          runningRef.current = true;
+          frameReadyRef.current = true;
           postUpdate();
         }
       } else if (msg.type === "websim:setInput" && s && typeof msg.name === "string") {
@@ -164,26 +182,44 @@ export function InteractiveArtifact({ path }: { path: string }) {
 
   // Clock loop: batched cycles per animation frame (RTL time constants assume
   // a real clock — one tick per frame would make a debouncer take minutes).
-  // Paused while the tab is keep-alive-hidden (offsetParent null) or the
-  // document is hidden: a sim the user can't see must not advance.
+  // Scheduled only while a live sim exists (mockup/broken/loading tabs burn
+  // zero frames), and paused while the tab is keep-alive-hidden (offsetParent
+  // null) or the document is hidden: a sim the user can't see must not advance.
+  const live = sim.phase === "live";
   useEffect(() => {
+    if (!live) return;
     let raf = 0;
     let last = performance.now();
     let carry = 0;
     let lastShown = -1;
+    let frame = 0;
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
       const dt = Math.min(0.25, (now - last) / 1000);
       last = now;
+      frame += 1;
       const s = sessionRef.current;
-      if (!s || !runningRef.current || !s.hasClock) return;
+      if (!s || !frameReadyRef.current || !s.hasClock) return;
       if (document.hidden || containerRef.current?.offsetParent == null) return;
       carry += clockHzRef.current * dt;
       let n = Math.min(Math.floor(carry), MAX_CYCLES_PER_FRAME);
-      carry -= n;
+      // Consume-or-drop: a backlog beyond one frame's budget is discarded so
+      // slow frames can't keep the sim pinned "behind" wall-clock forever.
+      carry = Math.min(carry - n, MAX_CYCLES_PER_FRAME);
       if (n <= 0) return;
       while (n-- > 0) s.tickCycle();
-      postUpdate();
+      // Post only when outputs changed (plus a periodic heartbeat carrying
+      // the cycle count) — wide idle designs shouldn't pay a structured
+      // clone per frame.
+      const outputs = s.readOutputs();
+      const fingerprint = JSON.stringify(outputs);
+      if (fingerprint !== lastOutputsRef.current || frame % 15 === 0) {
+        lastOutputsRef.current = fingerprint;
+        iframeRef.current?.contentWindow?.postMessage(
+          { type: "websim:update", outputs, cycle: s.cycle },
+          "*"
+        );
+      }
       // Cycle counter is honesty UI (a dead dashboard is visibly dead), but
       // don't re-render the shell 60×/s for it.
       if (s.cycle - lastShown >= clockHzRef.current / 4 || s.cycle < lastShown) {
@@ -193,7 +229,7 @@ export function InteractiveArtifact({ path }: { path: string }) {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [postUpdate]);
+  }, [live, postUpdate]);
 
   const fileName = path.split("/").pop() || path;
   const download = () => {
@@ -201,6 +237,29 @@ export function InteractiveArtifact({ path }: { path: string }) {
   };
 
   if (!slice || (slice.status === "loading" && html == null)) return <ViewerSkeleton />;
+  // Honest dead-end for oversized/binary dashboards (smart reader returns
+  // null content): say so and offer the bytes — never spin forever. Checked
+  // BEFORE the error branch: a known-too-large file is a verdict, not a
+  // transient failure.
+  if (slice.file && (slice.file.binary || slice.file.tooLarge)) {
+    return (
+      <div className="flex h-full flex-col" data-testid="interactive-artifact">
+        <ViewerError
+          title={fileName}
+          detail={
+            slice.file.binary
+              ? "Binary file — download to view"
+              : "Too large to render in the sandbox — download to view"
+          }
+        />
+        <div className="flex justify-center pb-6">
+          <Button size="sm" variant="outline" className="gap-1" onClick={download}>
+            <Download className="h-3 w-3" /> Download
+          </Button>
+        </div>
+      </div>
+    );
+  }
   if (slice.status === "error" && html == null) {
     return (
       <ViewerError
@@ -217,18 +276,26 @@ export function InteractiveArtifact({ path }: { path: string }) {
       {/* Provenance strip — shell-rendered, outside the sandbox, unspoofable */}
       <div
         data-testid="websim-provenance"
+        data-freshness={sim.phase === "live" ? sim.freshness : undefined}
         className={cn(
           "flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-xs font-mono",
-          sim.phase === "live" && sim.freshness !== "stale"
+          sim.phase === "live" && sim.freshness !== "stale" && !sim.noClock
             ? "bg-surface-1 text-foreground"
             : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
         )}
       >
         {sim.phase === "live" ? (
-          sim.freshness === "stale" ? (
+          sim.freshness === "stale" || sim.noClock ? (
             <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
           ) : (
-            <Zap className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+            // Emerald only when the hashes actually agreed — unverified must
+            // not glow like verified-fresh.
+            <Zap
+              className={cn(
+                "h-3.5 w-3.5 shrink-0",
+                sim.freshness === "fresh" ? "text-emerald-500" : "text-muted-foreground"
+              )}
+            />
           )
         ) : sim.phase === "loading" ? (
           <CircuitBoard className="h-3.5 w-3.5 shrink-0" />
@@ -243,6 +310,8 @@ export function InteractiveArtifact({ path }: { path: string }) {
           {sim.phase === "live" && (
             <>
               live gate-level sim · {sim.netlist} ← {sim.sources.join(", ")}
+              {sim.noClock &&
+                ' · NO CLOCK DETECTED — sequential design will not advance (declare <meta name="siliconcrew-sim-clock">)'}
               {sim.freshness === "stale" && " · STALE: sources changed — rebuild the netlist"}
               {sim.freshness === "unknown" && " · freshness unverified"}
             </>
@@ -263,6 +332,16 @@ export function InteractiveArtifact({ path }: { path: string }) {
           size="sm"
           variant="ghost"
           className={cn("h-6 gap-1 px-2 text-[11px] font-sans", sim.phase !== "live" && "ml-auto")}
+          title="Open the dashboard's HTML in the code editor"
+          onClick={() => openArtifact(sessionId, `code:${path}`)}
+          data-testid="websim-open-source"
+        >
+          <Code2 className="h-3 w-3" /> Source
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 gap-1 px-2 text-[11px] font-sans"
           onClick={download}
         >
           <Download className="h-3 w-3" /> Download

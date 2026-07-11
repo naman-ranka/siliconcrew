@@ -42,6 +42,16 @@ function fileFromUnifiedDiff(diff: string | null): string | null {
 
 const SVG_RE = /\b[\w./-]+\.svg\b/;
 
+/** One key per file for EVERY mutation tool (write/edit/patch must agree, or
+ *  the same file opens under two tab keys — the dual-key class of bug
+ *  migrateVcdTabKey exists for). Dashboards open in the interactive viewer
+ *  (the sim is the point); everything else written opens as code. */
+function mutationKey(file: string): ArtifactKey {
+  return file.toLowerCase().endsWith(".dashboard.html")
+    ? `interactive:${file}`
+    : `code:${file}`;
+}
+
 /** One produced artifact from a `run_python_analysis` result payload. */
 interface PyArtifact {
   path: string;
@@ -105,19 +115,14 @@ export function artifactKeyForToolCall(
     case "write_file":
     case "edit_file_tool": {
       const file = firstStringArg(args, ["filename", "target_file", "file", "path"]);
-      if (!file) return null;
-      // A written dashboard opens in the interactive viewer (the sim is the
-      // point); every other written file opens as code.
-      return file.toLowerCase().endsWith(".dashboard.html")
-        ? `interactive:${file}`
-        : `code:${file}`;
+      return file ? mutationKey(file) : null;
     }
 
     case "apply_patch_tool": {
       const file =
         firstStringArg(args, ["filename", "target_file"]) ??
         fileFromUnifiedDiff(str(args.unified_diff));
-      return file ? `code:${file}` : null;
+      return file ? mutationKey(file) : null;
     }
 
     case "write_spec":
@@ -160,9 +165,11 @@ export function artifactKeyForToolCall(
 
     case "build_interactive_sim": {
       // The openable thing at build time is the websim artifact itself (the
-      // dashboard usually doesn't exist yet); it's JSON → data viewer.
-      const websim = /\b[\w./-]+\.websim\.json\b/.exec(resultText ?? "")?.[0] ?? null;
-      return websim ? `data:${websim}` : null;
+      // dashboard usually doesn't exist yet); it's JSON → data viewer. The
+      // artifact name is deterministic from the tool's own arg — never
+      // scraped from result prose.
+      const top = firstStringArg(args, ["top_module"]);
+      return top ? `data:${top}.websim.json` : null;
     }
 
     case "run_python_analysis":

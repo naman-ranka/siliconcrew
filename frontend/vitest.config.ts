@@ -14,11 +14,12 @@ export default defineConfig({
     exclude: ["node_modules", ".next", "e2e"],
   },
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "."),
-      // Headless digitaljs engine — same alias as next.config.mjs (the root
-      // export's browser condition would pull the jointjs view bundle).
-      digitaljs: path.resolve(__dirname, "node_modules/digitaljs/lib/circuit.js"),
-    },
+    alias: [
+      { find: "@", replacement: path.resolve(__dirname, ".") },
+      // Headless digitaljs engine — mirrors next.config.mjs's exact-match
+      // `digitaljs$` alias. Regex-exact so `digitaljs/<subpath>` imports are
+      // NOT rewritten (a bare-string alias is a prefix match in vite).
+      { find: /^digitaljs$/, replacement: path.resolve(__dirname, "node_modules/digitaljs/lib/circuit.js") },
+    ],
   },
 });

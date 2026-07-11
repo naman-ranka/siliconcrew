@@ -5,7 +5,7 @@
 //
 // The engine is imported dynamically so the (heavy) simulator only loads when
 // an interactive tab actually opens. `digitaljs` is aliased to its headless
-// entry in next.config.mjs / vitest.config.mts — the view half (jointjs SVG
+// entry in next.config.mjs / vitest.config.ts — the view half (jointjs SVG
 // rendering) is never bundled.
 //
 // Honesty contracts here:
@@ -58,8 +58,19 @@ export function parseWebsimPayload(text: string): WebsimPayload | null {
 /** Netlist file declared by a dashboard's
  *  `<meta name="siliconcrew-sim" content="...">`; null → static mockup. */
 export function parseSimMeta(html: string): string | null {
+  return parseMeta(html, "siliconcrew-sim");
+}
+
+/** Optional clock-port override: `<meta name="siliconcrew-sim-clock"
+ *  content="pixel_clk">` — the escape hatch when the name heuristic can't
+ *  identify the clock. */
+export function parseSimClockMeta(html: string): string | null {
+  return parseMeta(html, "siliconcrew-sim-clock");
+}
+
+function parseMeta(html: string, name: string): string | null {
   const doc = new DOMParser().parseFromString(html, "text/html");
-  const content = doc.querySelector('meta[name="siliconcrew-sim"]')?.getAttribute("content");
+  const content = doc.querySelector(`meta[name="${name}"]`)?.getAttribute("content");
   return content && content.trim() ? content.trim() : null;
 }
 
@@ -80,18 +91,21 @@ export async function checkProvenance(
   fetchBytes: (path: string) => Promise<ArrayBuffer>
 ): Promise<Freshness> {
   try {
-    for (const [path, recorded] of Object.entries(payload.sources)) {
-      let bytes: ArrayBuffer;
-      try {
-        bytes = await fetchBytes(path);
-      } catch {
-        return "stale"; // source gone or unreadable — the netlist outlived it
-      }
-      // hashing trouble (no crypto.subtle etc.) → outer catch → unknown:
-      // never claim stale OR fresh without evidence
-      if ((await sha256Hex(bytes)) !== recorded) return "stale";
-    }
-    return "fresh";
+    // Independent round trips — fetch/hash concurrently.
+    const verdicts = await Promise.all(
+      Object.entries(payload.sources).map(async ([path, recorded]) => {
+        let bytes: ArrayBuffer;
+        try {
+          bytes = await fetchBytes(path);
+        } catch {
+          return "stale"; // source gone or unreadable — the netlist outlived it
+        }
+        // hashing trouble (no crypto.subtle etc.) → outer catch → unknown:
+        // never claim stale OR fresh without evidence
+        return (await sha256Hex(bytes)) === recorded ? "fresh" : "stale";
+      })
+    );
+    return verdicts.includes("stale") ? "stale" : "fresh";
   } catch {
     return "unknown";
   }
@@ -102,6 +116,10 @@ export async function checkProvenance(
 export interface WebsimSession {
   ports: WebsimPort[];
   hasClock: boolean;
+  /** The design contains flip-flops — without a clock it will never advance.
+   *  The viewer must surface `sequential && !hasClock` as a warning, not let
+   *  the dashboard sit silently at 0 cycles looking alive. */
+  sequential: boolean;
   /** Cycles ticked so far (0 for clockless designs). */
   cycle: number;
   setInput(name: string, value: number): void;
@@ -109,15 +127,18 @@ export interface WebsimSession {
   readOutputs(): Record<string, number | null>;
   /** One full clock cycle (clk↑ settle, clk↓ settle). No-op when clockless. */
   tickCycle(): void;
-  /** Propagate pending combinational events (after setInput on clockless designs). */
-  settle(): void;
   dispose(): void;
 }
 
 // Iteration cap so a combinational loop in the netlist can't hang the tab.
 const SETTLE_CAP = 10_000;
 
-const CLOCK_NAME = /^(clk|clock)/i;
+// Clock heuristic: exact clk/clock, a `_clk` suffix (i_clk, sys_clk,
+// pixel_clk), or clk+digits — deliberately NOT a bare `clk`/`clock` prefix,
+// which would grab enables like clk_en/clock_enable. For anything the
+// heuristic can't name, the dashboard declares it:
+// <meta name="siliconcrew-sim-clock" content="...">.
+const CLOCK_NAME = /^(clk|clock|clk\d+)$|_clk$/i;
 
 interface EngineDevice {
   type?: string;
@@ -125,7 +146,10 @@ interface EngineDevice {
   bits?: number;
 }
 
-export async function createWebsimSession(payload: WebsimPayload): Promise<WebsimSession> {
+export async function createWebsimSession(
+  payload: WebsimPayload,
+  opts: { clockPort?: string | null } = {}
+): Promise<WebsimSession> {
   const [{ yosys2digitaljs }, dj, { Vector3vl }] = await Promise.all([
     import("yosys2digitaljs/core"),
     import("digitaljs"),
@@ -136,9 +160,11 @@ export async function createWebsimSession(payload: WebsimPayload): Promise<Websi
 
   const inputs = new Map<string, { id: string; bits: number }>();
   const outputs = new Map<string, { id: string; bits: number }>();
+  let sequential = false;
   for (const [id, dev] of Object.entries(circuitDef.devices as Record<string, EngineDevice>)) {
     if (dev.type === "Input" && dev.net) inputs.set(dev.net, { id, bits: dev.bits ?? 1 });
     if (dev.type === "Output" && dev.net) outputs.set(dev.net, { id, bits: dev.bits ?? 1 });
+    if (dev.type === "Dff") sequential = true;
   }
 
   const settle = () => {
@@ -148,8 +174,19 @@ export async function createWebsimSession(payload: WebsimPayload): Promise<Websi
     } while (circuit.hasPendingEvents && ++n < SETTLE_CAP);
   };
 
-  const clockEntry =
-    Array.from(inputs.entries()).find(([name, m]) => m.bits === 1 && CLOCK_NAME.test(name)) ?? null;
+  // Dashboard-declared clock beats the name heuristic; a declared name that
+  // doesn't exist falls through to clockless (surfaced by the viewer).
+  const declared = opts.clockPort ? inputs.get(opts.clockPort) : undefined;
+  const clockEntry: [string, { id: string; bits: number }] | null =
+    declared && declared.bits === 1
+      ? [opts.clockPort as string, declared]
+      : Array.from(inputs.entries()).find(([name, m]) => m.bits === 1 && CLOCK_NAME.test(name)) ??
+        null;
+
+  // Constant clock edges — tickCycle runs in per-frame batches; don't allocate
+  // fresh vectors thousands of times a frame.
+  const CLK_HIGH = Vector3vl.ones(1);
+  const CLK_LOW = Vector3vl.zeros(1);
 
   // Deterministic start: all inputs low (mirrors a 2-state power-on; the
   // dashboard drives reset explicitly from here).
@@ -159,6 +196,7 @@ export async function createWebsimSession(payload: WebsimPayload): Promise<Websi
   const session: WebsimSession = {
     ports: payload.ports,
     hasClock: clockEntry !== null,
+    sequential,
     cycle: 0,
     setInput(name, value) {
       const m = inputs.get(name);
@@ -177,13 +215,12 @@ export async function createWebsimSession(payload: WebsimPayload): Promise<Websi
     tickCycle() {
       if (!clockEntry) return;
       const [, m] = clockEntry;
-      circuit.setInput(m.id, Vector3vl.ones(1));
+      circuit.setInput(m.id, CLK_HIGH);
       settle();
-      circuit.setInput(m.id, Vector3vl.zeros(1));
+      circuit.setInput(m.id, CLK_LOW);
       settle();
       session.cycle += 1;
     },
-    settle,
     dispose() {
       inputs.clear();
       outputs.clear();
