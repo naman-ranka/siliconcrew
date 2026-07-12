@@ -97,6 +97,40 @@ def test_websim_artifact_fresh_against_sources(artifact):
     assert payload["ports"], artifact
 
 
+def test_interactive_bundle_survives_a_real_template_fork(tmp_path):
+    """Fork the SHIPPED traffic_light bundle through the real fork path and
+    prove the interactive artifacts arrive intact: dashboard + websim netlist
+    copied, the meta ref resolves to its sibling, and provenance still hashes
+    FRESH in the fork (content hashes are copy-proof; mtimes are not — the
+    copy2 sharp edge is exactly why the contract is hashes)."""
+    from src.utils.session_manager import SessionManager
+    from src.utils import templates as T
+
+    sm = SessionManager(
+        base_dir=str(tmp_path / "workspace"), db_path=str(tmp_path / "state.db")
+    )
+    fid = T.fork_from_template(
+        sm, "traffic_light", examples_dir=os.path.abspath(EXAMPLES)
+    )
+    ws = sm.get_workspace_path(fid)
+
+    dashboard = os.path.join(ws, "traffic_light.dashboard.html")
+    websim = os.path.join(ws, "traffic_light.websim.json")
+    assert os.path.isfile(dashboard), "dashboard not copied by fork"
+    assert os.path.isfile(websim), "websim netlist not copied by fork"
+
+    with open(dashboard) as f:
+        ref = parse_sim_meta(f.read())
+    assert ref and os.path.isfile(os.path.join(ws, ref)), "meta ref broken in fork"
+
+    with open(websim) as f:
+        payload = json.load(f)
+    for rel, recorded in payload["sources"].items():
+        src = os.path.join(ws, rel)
+        assert os.path.isfile(src), f"source {rel} missing in fork"
+        assert _sha256(src) == recorded, f"fork went stale: {rel}"
+
+
 @pytest.mark.parametrize("dashboard", DASHBOARDS)
 def test_dashboard_declares_an_existing_netlist_by_relative_name(dashboard):
     with open(dashboard) as f:
