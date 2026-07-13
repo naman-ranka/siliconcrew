@@ -195,6 +195,35 @@ def test_yosys_script_handles_inferred_memories(tmp_path, fake_yosys):
     assert script.index("wreduce") < script.index("memory -nomap")
 
 
+def test_parameter_overrides_elaborate_and_are_recorded(tmp_path, fake_yosys):
+    """Timing-constant overrides (TICKS_PER_MILLI/CLK_FREQ idiom): passed to
+    yosys as `hierarchy -chparam` and recorded verbatim in the artifact so the
+    provenance strip can show the sim is NOT the source defaults."""
+    ws = str(tmp_path)
+    _write_source(ws)
+    result = bis.build_websim_netlist(
+        ["counter.v"], "counter", cwd=ws, parameters={"TICKS_PER_MILLI": 1}
+    )
+    assert result["success"], result
+    assert "hierarchy -chparam TICKS_PER_MILLI 1 -top counter" in fake_yosys[0]["script"]
+    with open(os.path.join(ws, "counter.websim.json")) as f:
+        assert json.load(f)["parameters"] == {"TICKS_PER_MILLI": 1}
+
+    # no overrides → no parameters key (v1 artifacts stay byte-identical)
+    result = bis.build_websim_netlist(["counter.v"], "counter", cwd=ws)
+    with open(os.path.join(ws, "counter.websim.json")) as f:
+        assert "parameters" not in json.load(f)
+
+
+def test_hostile_parameter_names_and_values_rejected(tmp_path, fake_yosys):
+    ws = str(tmp_path)
+    _write_source(ws)
+    for params in [{"P; delete -all": 1}, {"CLK_FREQ": "50; evil"}, {"CLK_FREQ": True}]:
+        result = bis.build_websim_netlist(["counter.v"], "counter", cwd=ws, parameters=params)
+        assert not result["success"], params
+    assert not fake_yosys  # engine never invoked
+
+
 def test_catalog_policy_flags():
     from src.api import tool_catalog as tc
 

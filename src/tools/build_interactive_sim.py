@@ -65,8 +65,21 @@ def pick_engine() -> Dict[str, str]:
     return {"error": "yosys is not installed on this instance."}
 
 
-def _yosys_script(rel_files: List[str], top_module: str, json_out: str) -> str:
+def _yosys_script(
+    rel_files: List[str],
+    top_module: str,
+    json_out: str,
+    parameters: Optional[Dict[str, int]] = None,
+) -> str:
     reads = "; ".join(f"read_verilog {f}" for f in rel_files)
+    # Timing-constant overrides (the CLK_FREQ parameter idiom): RTL written
+    # for a real clock counts real milliseconds; the browser engine sustains
+    # ~1-10 kHz, so a design like simon_game (50 ticks/ms) is unplayable at
+    # its default parameter. `hierarchy -chparam` elaborates the top with the
+    # override — same mechanism its own testbench uses to simulate fast.
+    chparams = "".join(
+        f" -chparam {name} {value}" for name, value in (parameters or {}).items()
+    )
     # Designs with inferred memories need two extra passes: the browser engine
     # rejects raw $memrd/$memwr pairs, so `memory -nomap` collects them into
     # the $mem cells it simulates natively (O(1) per access — mapping to
@@ -75,7 +88,7 @@ def _yosys_script(rel_files: List[str], top_module: str, json_out: str) -> str:
     # ABITS=32, which overflows the engine's address arithmetic. Both are
     # no-ops for memory-less designs.
     return (
-        f"{reads}; hierarchy -top {top_module}; proc; opt; "
+        f"{reads}; hierarchy{chparams} -top {top_module}; proc; opt; "
         f"wreduce; memory -nomap; opt; write_json {json_out}"
     )
 
@@ -123,14 +136,31 @@ def extract_ports(netlist: Dict[str, Any], top_module: str) -> Optional[List[Dic
 
 
 def build_websim_netlist(
-    verilog_files: List[str], top_module: str, cwd: str
+    verilog_files: List[str],
+    top_module: str,
+    cwd: str,
+    parameters: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Compile RTL to the websim artifact. Returns
-    {success, artifact, ports, engine} or {success: False, error}."""
+    {success, artifact, ports, engine} or {success: False, error}.
+
+    ``parameters`` overrides top-module parameters at elaboration (integers
+    only — for timing constants like TICKS_PER_MILLI/CLK_FREQ so the design
+    runs at browser-simulation speed). Overrides are recorded verbatim in the
+    artifact: the netlist is honestly labeled as compiled with them.
+    """
     if not verilog_files:
         return {"success": False, "error": "No Verilog files given."}
     if not _SAFE_MODULE.match(top_module or ""):
         return {"success": False, "error": f"Invalid top module name: {top_module!r}"}
+    for name, value in (parameters or {}).items():
+        if not _SAFE_MODULE.match(name or ""):
+            return {"success": False, "error": f"Invalid parameter name: {name!r}"}
+        if not isinstance(value, int) or isinstance(value, bool):
+            return {
+                "success": False,
+                "error": f"Parameter {name} must be an integer, got {value!r}.",
+            }
 
     rel_files: List[str] = []
     for item in verilog_files:
@@ -154,7 +184,7 @@ def build_websim_netlist(
     engine = picked["engine"]
 
     json_tmp = f"{top_module}.websim.netlist.tmp.json"
-    script = _yosys_script(rel_files, top_module, json_tmp)
+    script = _yosys_script(rel_files, top_module, json_tmp, parameters)
     ran = _run_yosys(script, cwd, engine)
     tmp_path = os.path.join(cwd, json_tmp)
     try:
@@ -185,6 +215,10 @@ def build_websim_netlist(
         "ports": ports,
         "yosys_netlist": netlist,
     }
+    if parameters:
+        # honesty: the sim runs THIS elaboration, not the source defaults —
+        # the viewer surfaces the overrides in the provenance strip
+        payload["parameters"] = dict(parameters)
     with open(os.path.join(cwd, artifact_name), "w") as f:
         json.dump(payload, f)
 

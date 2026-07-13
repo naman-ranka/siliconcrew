@@ -805,7 +805,11 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
         return f"Failed to generate schematic: {result['error']}"
 
 @tool
-def build_interactive_sim(verilog_files: list[str] | str, top_module: str) -> str:
+def build_interactive_sim(
+    verilog_files: list[str] | str,
+    top_module: str,
+    parameters: dict[str, int] | None = None,
+) -> str:
     """
     Compiles RTL into the netlist artifact behind an interactive browser
     dashboard (`<top>.websim.json`) — the design then runs as a real gate-level
@@ -838,15 +842,25 @@ def build_interactive_sim(verilog_files: list[str] | str, top_module: str) -> st
     blocks (FIFOs, bus bridges, ALU pipelines) recommend simulation_tool +
     waveform_tool instead of building a junk switch panel.
 
+    The browser engine sustains roughly 1-10k cycles/sec, so RTL whose time
+    constants assume a real clock (debounce counters, ms tick dividers) will
+    feel frozen. When the design exposes them as top-module parameters (the
+    CLK_FREQ / TICKS_PER_MILLI idiom), pass integer overrides via
+    `parameters` to re-elaborate at browser speed — the override is recorded
+    in the artifact and shown to the user, never hidden.
+
     Args:
         verilog_files: RTL file name(s), e.g. 'counter.v' or ['simon.v', 'simon_game.v'].
         top_module: Name of the top-level module.
+        parameters: Optional integer top-module parameter overrides,
+            e.g. {'TICKS_PER_MILLI': 1}. Timing constants only — do not use
+            it to change design behavior.
 
     Returns the design's port list so you can wire dashboard widgets to real pins.
     """
     workspace = get_workspace_path()
     files = _normalize_verilog_files_arg(verilog_files)
-    result = build_websim_netlist(files, top_module, cwd=workspace)
+    result = build_websim_netlist(files, top_module, cwd=workspace, parameters=parameters)
 
     if not result["success"]:
         return f"Failed to build interactive sim netlist: {result['error']}"
