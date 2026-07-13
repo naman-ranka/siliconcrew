@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="siliconcrew-sim" content="alu4.websim.json">
+<title>alu4 — interactive sim</title>
+<style>
+  /* Self-contained by design: the sandboxed frame has no network access. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    background: #101418; color: #cbd5e1;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 20px; padding: 24px;
+  }
+  h1 { font-size: 15px; font-weight: 600; color: #e2e8f0; letter-spacing: .02em; }
+  .calc {
+    background: #1c232b; border: 1px solid #2b3743; border-radius: 14px;
+    padding: 20px 24px; display: flex; flex-direction: column; gap: 16px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  }
+  .operands { display: flex; gap: 28px; justify-content: center; }
+  .operand { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .operand .name { font-size: 12px; color: #94a3b8; }
+  .nibble { display: flex; gap: 6px; }
+  .bitbtn {
+    width: 30px; height: 42px; border-radius: 7px; background: #232b33;
+    border: 2px solid #303c48; cursor: pointer; color: #64748b;
+    font-family: ui-monospace, monospace; font-size: 14px;
+  }
+  .bitbtn.on { background: #0e7490; border-color: #22d3ee; color: #e0f2fe; }
+  .operand .dec { font-family: ui-monospace, monospace; font-size: 13px; color: #e2e8f0; }
+  .ops { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .ops button {
+    background: #263140; color: #cbd5e1; border: 1px solid #35455a;
+    border-radius: 8px; padding: 8px 4px; font-size: 12px; cursor: pointer;
+    font-family: ui-monospace, monospace;
+  }
+  .ops button:hover { background: #2f3d50; }
+  .ops button.sel { background: #7c2d92; border-color: #d946ef; color: #fae8ff; }
+  .result { display: flex; align-items: center; gap: 20px; justify-content: center; }
+  .rbits { display: flex; gap: 5px; }
+  .rled {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #232b33; border: 2px solid #303c48;
+  }
+  .rled.on { background: #34d399; box-shadow: 0 0 12px 3px rgba(52,211,153,.5); }
+  .rled.unknown { background: repeating-linear-gradient(45deg,#232b33,#232b33 4px,#3b2530 4px,#3b2530 8px); }
+  .rhex { font-family: ui-monospace, monospace; font-size: 24px; color: #e2e8f0; min-width: 78px; }
+  .flags { display: flex; gap: 12px; font-size: 11px; color: #94a3b8; }
+  .flag { display: flex; align-items: center; gap: 5px; }
+  .flag .dot { width: 12px; height: 12px; border-radius: 50%; background: #232b33; border: 1px solid #303c48; }
+  .flag .dot.on { background: #f43f5e; box-shadow: 0 0 8px 2px rgba(244,63,94,.6); }
+  .meaning { font-size: 12px; color: #94a3b8; text-align: center; min-height: 16px; font-family: ui-monospace, monospace; }
+  .controls { display: flex; gap: 14px; align-items: center; font-size: 12px; }
+  .controls button {
+    background: #263140; color: #e2e8f0; border: 1px solid #35455a;
+    border-radius: 8px; padding: 7px 14px; font-size: 12px; cursor: pointer;
+  }
+  .note { font-size: 11px; color: #64748b; max-width: 470px; text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <h1>alu4 — 4-bit ALU with registered result + flags</h1>
+
+  <div class="calc">
+    <div class="operands">
+      <div class="operand"><span class="name">operand a</span><div class="nibble" id="a"></div><span class="dec" id="adec">0</span></div>
+      <div class="operand"><span class="name">operand b</span><div class="nibble" id="b"></div><span class="dec" id="bdec">0</span></div>
+    </div>
+    <div class="ops" id="ops"></div>
+    <div class="result">
+      <div class="rbits" id="rbits"></div>
+      <div class="rhex" id="rhex">—</div>
+      <div class="flags">
+        <div class="flag"><div class="dot" id="carry"></div>carry</div>
+        <div class="flag"><div class="dot" id="ovf"></div>overflow</div>
+      </div>
+    </div>
+    <div class="meaning" id="meaning"></div>
+  </div>
+
+  <div class="controls">
+    <button id="reset">Reset</button>
+    <span id="cyc">cycle 0</span>
+  </div>
+
+  <p class="note">
+    Toggle operand bits, pick an operation — the 8-bit result lamps are the
+    netlist's registered <code>result</code> output (updates on the next clock
+    edge, clock free-runs at 30&nbsp;Hz). DIV packs {remainder, quotient};
+    ENC is (a≪4|b) ⊕ 0xAB. Carry/overflow are only meaningful for ADD/SUB.
+  </p>
+
+<script>
+  var OPS = [
+    ["ADD", 0], ["SUB", 1], ["MUL", 2], ["DIV", 3], ["AND", 4],
+    ["OR", 5], ["XOR", 6], ["NOT a", 7], ["ENC", 8], ["—", 9]
+  ];
+  var a = 0, b = 0, opcode = 0;
+
+  function nibble(el, decEl, get, set) {
+    var btns = [];
+    for (var i = 3; i >= 0; i--) (function (bit) {
+      var btn = document.createElement("button");
+      btn.className = "bitbtn";
+      btn.textContent = "0";
+      btn.onclick = function () {
+        set(get() ^ (1 << bit));
+        var v = get();
+        btns.forEach(function (bn, idx) {
+          var on = (v >> (3 - idx)) & 1;
+          bn.classList.toggle("on", !!on);
+          bn.textContent = on;
+        });
+        decEl.textContent = v;
+      };
+      el.appendChild(btn);
+      btns.push(btn);
+    })(i);
+  }
+  nibble(document.getElementById("a"), document.getElementById("adec"),
+    function () { return a; }, function (v) { a = v; window.simBridge.setInput("a", v); });
+  nibble(document.getElementById("b"), document.getElementById("bdec"),
+    function () { return b; }, function (v) { b = v; window.simBridge.setInput("b", v); });
+
+  var opsEl = document.getElementById("ops");
+  var opBtns = [];
+  OPS.forEach(function (op) {
+    var btn = document.createElement("button");
+    btn.textContent = op[0];
+    btn.onclick = function () {
+      opcode = op[1];
+      window.simBridge.setInput("opcode", opcode);
+      opBtns.forEach(function (bn) { bn.classList.remove("sel"); });
+      btn.classList.add("sel");
+    };
+    opsEl.appendChild(btn);
+    opBtns.push(btn);
+  });
+  opBtns[0].classList.add("sel");
+
+  var rleds = [];
+  var rbitsEl = document.getElementById("rbits");
+  for (var i = 7; i >= 0; i--) {
+    var led = document.createElement("div");
+    led.className = "rled";
+    rbitsEl.appendChild(led);
+    rleds[i] = led;
+  }
+  var rhex = document.getElementById("rhex");
+  var carry = document.getElementById("carry");
+  var ovf = document.getElementById("ovf");
+  var meaning = document.getElementById("meaning");
+  var cyc = document.getElementById("cyc");
+
+  window.simBridge.ready(function () {
+    window.simBridge.setInput("rst_n", 1);
+    window.simBridge.setInput("opcode", 0);
+    window.simBridge.setClockHz(30);
+  });
+
+  document.getElementById("reset").onclick = function () {
+    window.simBridge.setInput("rst_n", 0);
+    setTimeout(function () { window.simBridge.setInput("rst_n", 1); }, 120);
+  };
+
+  window.simBridge.onUpdate(function (u) {
+    var v = u.outputs.result;
+    for (var i = 0; i < 8; i++) {
+      var unknown = v === null || v === undefined;
+      rleds[i].classList.toggle("unknown", unknown);
+      rleds[i].classList.toggle("on", !unknown && ((v >> i) & 1) === 1);
+    }
+    rhex.textContent = v === null || v === undefined ? "0xxx" : "0x" + v.toString(16).toUpperCase().padStart(2, "0");
+    carry.classList.toggle("on", u.outputs.carry_out === 1);
+    ovf.classList.toggle("on", u.outputs.overflow === 1);
+    cyc.textContent = "cycle " + u.cycle;
+    if (v === null || v === undefined) { meaning.textContent = ""; return; }
+    if (opcode === 3) meaning.textContent = "quotient " + (v & 15) + ", remainder " + (v >> 4);
+    else meaning.textContent = "result = " + v;
+  });
+</script>
+</body>
+</html>
