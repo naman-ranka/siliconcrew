@@ -5,7 +5,8 @@
   "highlights": [
     "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
     "Timing met: WNS 0.0 ns; 192 std cells; 1232 um^2",
-    "Self-checking testbench (BCD 0-9 + hex A-F vs golden font) PASSED"
+    "Self-checking testbench (BCD 0-9 + hex A-F vs golden font) PASSED",
+    "Interactive: open universal_bcd_decoder.dashboard.html to flip through all 8 glyph families live"
   ],
   "top_module": "universal_bcd_decoder",
   "platform": "sky130hd",
