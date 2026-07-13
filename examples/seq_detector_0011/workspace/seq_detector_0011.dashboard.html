@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="siliconcrew-sim" content="seq_detector_0011.websim.json">
+<title>seq_detector_0011 — interactive sim</title>
+<style>
+  /* Self-contained by design: the sandboxed frame has no network access. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    background: #101418; color: #cbd5e1;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 22px; padding: 24px;
+  }
+  h1 { font-size: 15px; font-weight: 600; color: #e2e8f0; letter-spacing: .02em; }
+  .panel {
+    display: flex; align-items: center; gap: 36px; background: #1c232b;
+    border: 1px solid #2b3743; border-radius: 14px; padding: 22px 28px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  }
+  .switch { display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 11px; color: #94a3b8; }
+  .toggle {
+    width: 46px; height: 78px; border-radius: 10px; background: #232b33;
+    border: 2px solid #303c48; position: relative; cursor: pointer;
+  }
+  .toggle .knob {
+    position: absolute; left: 4px; right: 4px; height: 32px; border-radius: 7px;
+    background: #475569; top: 40px; transition: top .1s, background .1s;
+  }
+  .toggle.on .knob { top: 4px; background: #38bdf8; }
+  .lampwrap { display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 11px; color: #94a3b8; }
+  .lamp {
+    width: 62px; height: 62px; border-radius: 50%;
+    background: #232b33; border: 2px solid #303c48; transition: box-shadow .1s, background .1s;
+  }
+  .lamp.on { background: #f59e0b; box-shadow: 0 0 28px 8px rgba(245,158,11,.55); }
+  .history {
+    display: flex; gap: 5px; font-family: ui-monospace, monospace; font-size: 15px;
+    background: #151b21; border: 1px solid #2b3743; border-radius: 10px; padding: 10px 14px;
+    min-height: 44px; align-items: center;
+  }
+  .history b { color: #f59e0b; }
+  .history span { color: #64748b; }
+  .history .g { color: #334155; }
+  .controls { display: flex; gap: 16px; align-items: center; font-size: 12px; }
+  button {
+    background: #263140; color: #e2e8f0; border: 1px solid #35455a;
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { background: #2f3d50; }
+  input[type=range] { width: 120px; accent-color: #38bdf8; }
+  .note { font-size: 11px; color: #64748b; max-width: 470px; text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <h1>seq_detector_0011 — overlapping serial detector for 0-0-1-1</h1>
+
+  <div class="panel">
+    <div class="switch">
+      <div class="toggle" id="din"><div class="knob"></div></div>
+      din = <span id="dinv">0</span>
+    </div>
+    <div class="lampwrap">
+      <div class="lamp" id="det"></div>
+      detected
+    </div>
+  </div>
+
+  <div class="history" id="hist"><span>bits sampled at each clock tick appear here…</span></div>
+
+  <div class="controls">
+    <button id="reset">Reset window</button>
+    <label>clock <input type="range" id="hz" min="1" max="8" value="2"> <span id="hzv">2</span> Hz</label>
+    <span id="cyc">cycle 0</span>
+  </div>
+
+  <p class="note">
+    Flip the switch to feed a serial bit stream; the netlist shifts one bit in
+    per clock tick. The lamp is the design's real <code>detected</code> output —
+    it fires for exactly one cycle when the last four sampled bits were
+    0,0,1,1 (overlaps count). The tape shows the din level as each tick
+    sampled it.
+  </p>
+
+<script>
+  var din = 0;
+  var dinEl = document.getElementById("din");
+  var dinv = document.getElementById("dinv");
+  var det = document.getElementById("det");
+  var hist = document.getElementById("hist");
+  var cyc = document.getElementById("cyc");
+  var lastCycle = 0;
+  var entries = [];
+
+  window.simBridge.ready(function () {
+    window.simBridge.setInput("rst_n", 1);
+    window.simBridge.setClockHz(2);
+  });
+
+  dinEl.onclick = function () {
+    din = din ? 0 : 1;
+    dinEl.classList.toggle("on", !!din);
+    dinv.textContent = din;
+    window.simBridge.setInput("din", din);
+  };
+
+  document.getElementById("reset").onclick = function () {
+    window.simBridge.setInput("rst_n", 0);
+    setTimeout(function () { window.simBridge.setInput("rst_n", 1); }, 120);
+    entries = [];
+    render();
+  };
+
+  var hz = document.getElementById("hz");
+  hz.oninput = function () {
+    document.getElementById("hzv").textContent = hz.value;
+    window.simBridge.setClockHz(Number(hz.value));
+  };
+
+  function render() {
+    if (!entries.length) {
+      hist.innerHTML = "<span>bits sampled at each clock tick appear here…</span>";
+      return;
+    }
+    hist.innerHTML = entries
+      .slice(-24)
+      .map(function (e) {
+        if (e.gap) return '<span class="g">·</span>';
+        return e.hit ? "<b>" + e.bit + "</b>" : "<span>" + e.bit + "</span>";
+      })
+      .join("");
+  }
+
+  window.simBridge.onUpdate(function (u) {
+    var hit = u.outputs.detected === 1;
+    det.classList.toggle("on", hit);
+    cyc.textContent = "cycle " + u.cycle;
+    if (u.cycle > lastCycle) {
+      // more than one tick since the last frame → mark the unseen gap
+      if (u.cycle - lastCycle > 1) entries.push({ gap: true });
+      entries.push({ bit: din, hit: hit });
+      lastCycle = u.cycle;
+      render();
+    }
+  });
+</script>
+</body>
+</html>
