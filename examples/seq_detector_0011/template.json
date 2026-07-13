@@ -1,11 +1,12 @@
 {
   "id": "seq_detector_0011",
   "name": "Sequence Detector (0011)",
-  "description": "A clean-room overlapping serial detector for the pattern 0011, taken spec \u2192 lint \u2192 simulation \u2192 GDS on the SkyWater sky130hd PDK entirely through the platform.",
+  "description": "A clean-room overlapping serial detector for the pattern 0011, taken spec → lint → simulation → GDS on the SkyWater sky130hd PDK entirely through the platform.",
   "highlights": [
     "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
     "Timing met: WNS 0.0 ns",
-    "5 std cells; self-checking testbench PASSED"
+    "5 std cells; self-checking testbench PASSED",
+    "Interactive: open seq_detector_0011.dashboard.html and feed the netlist a bit stream by hand"
   ],
   "top_module": "seq_detector_0011",
   "platform": "sky130hd",
