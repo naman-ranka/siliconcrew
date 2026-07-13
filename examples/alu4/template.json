@@ -5,7 +5,8 @@
   "highlights": [
     "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
     "Timing met: WNS 0.0 ns; 237 std cells; 1974 um2",
-    "Self-checking TB: all 9 opcodes x 256 operand pairs (2304 vectors) PASSED"
+    "Self-checking TB: all 9 opcodes x 256 operand pairs (2304 vectors) PASSED",
+    "Interactive: open alu4.dashboard.html — a working calculator panel on the real netlist"
   ],
   "top_module": "alu4",
   "platform": "sky130hd",
