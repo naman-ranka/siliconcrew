@@ -5,7 +5,8 @@
   "highlights": [
     "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
     "Timing met: WNS 0.0 ns; 26 std cells; 283 um2",
-    "Self-checking TB (golden model of load/count/hold + RCOB terminal pulse) PASSED"
+    "Self-checking TB (golden model of load/count/hold + RCOB terminal pulse) PASSED",
+    "Interactive: open sn74169.dashboard.html and drive the ’169’s pins like the TTL part"
   ],
   "top_module": "sn74169",
   "platform": "sky130hd",

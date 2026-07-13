@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="siliconcrew-sim" content="sn74169.websim.json">
+<title>sn74169 — interactive sim</title>
+<style>
+  /* Self-contained by design: the sandboxed frame has no network access. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    background: #101418; color: #cbd5e1;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 20px; padding: 24px;
+  }
+  h1 { font-size: 15px; font-weight: 600; color: #e2e8f0; letter-spacing: .02em; }
+  .chip {
+    background: #1c232b; border: 1px solid #2b3743; border-radius: 14px;
+    padding: 20px 26px; display: flex; flex-direction: column; gap: 18px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  }
+  .row { display: flex; gap: 26px; align-items: flex-end; justify-content: center; flex-wrap: wrap; }
+  .group { display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 11px; color: #94a3b8; }
+  .dip { display: flex; gap: 6px; }
+  .sw {
+    width: 26px; height: 44px; border-radius: 6px; background: #232b33;
+    border: 2px solid #303c48; cursor: pointer; position: relative;
+  }
+  .sw::after {
+    content: ""; position: absolute; left: 3px; right: 3px; height: 16px;
+    border-radius: 4px; background: #475569; bottom: 3px; transition: all .1s;
+  }
+  .sw.on::after { top: 3px; bottom: auto; background: #38bdf8; }
+  .ctl {
+    min-width: 74px; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    background: #263140; color: #cbd5e1; border: 1px solid #35455a;
+    font-size: 12px; font-family: ui-monospace, monospace; text-align: center;
+  }
+  .ctl.low { background: #7c2d12; border-color: #f97316; color: #ffedd5; }
+  .leds { display: flex; gap: 10px; }
+  .ledwrap { display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 10px; color: #64748b; }
+  .led {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: #232b33; border: 2px solid #303c48; transition: box-shadow .1s, background .1s;
+  }
+  .led.on { background: #34d399; box-shadow: 0 0 18px 4px rgba(52,211,153,.5); }
+  .led.rco.on { background: #f43f5e; box-shadow: 0 0 18px 4px rgba(244,63,94,.55); }
+  .led.unknown { background: repeating-linear-gradient(45deg,#232b33,#232b33 5px,#3b2530 5px,#3b2530 10px); }
+  .qhex { font-family: ui-monospace, monospace; font-size: 22px; color: #e2e8f0; }
+  .hint { font-size: 11px; color: #eab308; min-height: 14px; }
+  .controls { display: flex; gap: 16px; align-items: center; font-size: 12px; }
+  input[type=range] { width: 130px; accent-color: #38bdf8; }
+  .note { font-size: 11px; color: #64748b; max-width: 480px; text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <h1>sn74169 — TTL ’169 synchronous up/down counter</h1>
+
+  <div class="chip">
+    <div class="row">
+      <div class="group"><div class="dip" id="A"></div>A₃…A₀ = <span id="Adec">0</span></div>
+      <div class="group"><button class="ctl low" id="LOADB">LOAD̄ = 0</button>load</div>
+      <div class="group"><button class="ctl" id="ENPB">ENP̄ = 1</button>enable P</div>
+      <div class="group"><button class="ctl" id="ENTB">ENT̄ = 1</button>enable T</div>
+      <div class="group"><button class="ctl" id="U_DB">U/D̄ = 1 ↑</button>direction</div>
+    </div>
+    <div class="row">
+      <div class="leds" id="Q"></div>
+      <div class="group"><div class="ledwrap"><div class="led rco" id="RCOB"></div><span>RCŌ (low = TC)</span></div></div>
+      <div class="qhex" id="Qhex">Q = x</div>
+    </div>
+    <div class="hint" id="hint">Power-on state is undefined — pulse a clock with LOAD̄ low to initialize Q.</div>
+  </div>
+
+  <div class="controls">
+    <label>clock <input type="range" id="hz" min="1" max="30" value="4"> <span id="hzv">4</span> Hz</label>
+    <span id="cyc">cycle 0</span>
+  </div>
+
+  <p class="note">
+    A faithful ’169: all controls are active-low, exactly like the TTL part.
+    LOAD̄=0 loads A on the clock edge; LOAD̄=1 with ENP̄=ENT̄=0 counts
+    (U/D̄ high = up); anything else holds. The hatched lamps at power-on are
+    honest — this netlist has no reset, so Q really is undefined until you
+    load it. RCŌ pulses low at 15 counting up or 0 counting down.
+  </p>
+
+<script>
+  var A = 0;
+  var dip = document.getElementById("A");
+  var Adec = document.getElementById("Adec");
+  var sws = [];
+  for (var i = 3; i >= 0; i--) (function (bit) {
+    var sw = document.createElement("div");
+    sw.className = "sw";
+    sw.onclick = function () {
+      A ^= 1 << bit;
+      sw.classList.toggle("on", !!(A >> bit & 1));
+      Adec.textContent = A;
+      window.simBridge.setInput("A", A);
+    };
+    dip.appendChild(sw);
+    sws.push(sw);
+  })(i);
+
+  // active-low control buttons: value 1 = released (inactive)
+  var ctl = { LOADB: 0, ENPB: 1, ENTB: 1, U_DB: 1 };
+  var labels = {
+    LOADB: function (v) { return "LOAD̄ = " + v; },
+    ENPB: function (v) { return "ENP̄ = " + v; },
+    ENTB: function (v) { return "ENT̄ = " + v; },
+    U_DB: function (v) { return "U/D̄ = " + v + (v ? " ↑" : " ↓"); }
+  };
+  Object.keys(ctl).forEach(function (name) {
+    var btn = document.getElementById(name);
+    btn.onclick = function () {
+      ctl[name] = ctl[name] ? 0 : 1;
+      window.simBridge.setInput(name, ctl[name]);
+      btn.textContent = labels[name](ctl[name]);
+      btn.classList.toggle("low", ctl[name] === 0 && name !== "U_DB");
+    };
+  });
+
+  var qleds = [];
+  var qEl = document.getElementById("Q");
+  for (var j = 3; j >= 0; j--) (function (bit) {
+    var wrap = document.createElement("div");
+    wrap.className = "ledwrap";
+    var led = document.createElement("div");
+    led.className = "led";
+    var lab = document.createElement("span");
+    lab.textContent = "Q" + bit;
+    wrap.appendChild(led); wrap.appendChild(lab);
+    qEl.appendChild(wrap);
+    qleds[bit] = led;
+  })(j);
+  var rcob = document.getElementById("RCOB");
+  var qhex = document.getElementById("Qhex");
+  var hint = document.getElementById("hint");
+  var cyc = document.getElementById("cyc");
+  var everDefined = false;
+
+  window.simBridge.ready(function () {
+    // start in "load 0" posture so the first ticks define Q
+    window.simBridge.setInput("LOADB", 0);
+    window.simBridge.setInput("ENPB", 1);
+    window.simBridge.setInput("ENTB", 1);
+    window.simBridge.setInput("U_DB", 1);
+    window.simBridge.setClockHz(4);
+  });
+
+  var hz = document.getElementById("hz");
+  hz.oninput = function () {
+    document.getElementById("hzv").textContent = hz.value;
+    window.simBridge.setClockHz(Number(hz.value));
+  };
+
+  window.simBridge.onUpdate(function (u) {
+    var q = u.outputs.Q;
+    var unknown = q === null || q === undefined;
+    for (var i = 0; i < 4; i++) {
+      qleds[i].classList.toggle("unknown", unknown);
+      qleds[i].classList.toggle("on", !unknown && ((q >> i) & 1) === 1);
+    }
+    qhex.textContent = unknown ? "Q = x" : "Q = " + q;
+    // RCOB is active-low: light the red lamp when it asserts (0)
+    rcob.classList.toggle("unknown", u.outputs.RCOB === null || u.outputs.RCOB === undefined);
+    rcob.classList.toggle("on", u.outputs.RCOB === 0);
+    cyc.textContent = "cycle " + u.cycle;
+    if (!unknown && !everDefined) {
+      everDefined = true;
+      hint.textContent = "";
+    }
+  });
+</script>
+</body>
+</html>
