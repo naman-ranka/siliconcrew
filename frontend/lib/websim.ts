@@ -27,6 +27,10 @@ export interface WebsimPayload {
   sources: Record<string, string>;
   ports: WebsimPort[];
   yosys_netlist: unknown;
+  /** Top-module parameter overrides the netlist was elaborated with (timing
+   *  constants like TICKS_PER_MILLI) — surfaced in the provenance strip so a
+   *  re-parameterized sim is never presented as the source defaults. */
+  parameters?: Record<string, number>;
 }
 
 export const WEBSIM_FORMAT = "siliconcrew-websim-v1";

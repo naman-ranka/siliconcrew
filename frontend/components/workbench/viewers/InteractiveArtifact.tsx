@@ -46,6 +46,10 @@ type SimState =
       /** Sequential design but no clock port identified — the sim will never
        *  advance; say so instead of looking alive (invariant 4). */
       noClock: boolean;
+      /** Parameter overrides baked into the netlist (e.g. TICKS_PER_MILLI=1)
+       *  — shown in the strip so the sim is never mistaken for the source
+       *  defaults (invariant 4). */
+      parameters: Record<string, number> | null;
     };
 
 export function InteractiveArtifact({ path }: { path: string }) {
@@ -124,6 +128,10 @@ export function InteractiveArtifact({ path }: { path: string }) {
           sources: Object.keys(payload.sources),
           freshness: "unknown",
           noClock: session.sequential && !session.hasClock,
+          parameters:
+            payload.parameters && Object.keys(payload.parameters).length
+              ? payload.parameters
+              : null,
         });
         // Freshness lands asynchronously — never block the sim on it, never
         // claim fresh before the hashes agree.
@@ -313,6 +321,10 @@ export function InteractiveArtifact({ path }: { path: string }) {
           {sim.phase === "live" && (
             <>
               live gate-level sim · {sim.netlist} ← {sim.sources.join(", ")}
+              {sim.parameters &&
+                ` · ${Object.entries(sim.parameters)
+                  .map(([k, v]) => `${k}=${v}`)
+                  .join(", ")}`}
               {sim.noClock &&
                 ' · NO CLOCK DETECTED — sequential design will not advance (declare <meta name="siliconcrew-sim-clock">)'}
               {sim.freshness === "stale" && " · STALE: sources changed — rebuild the netlist"}
