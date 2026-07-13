@@ -5,7 +5,8 @@
   "highlights": [
     "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
     "Timing met: WNS 0.0 ns; 21 std cells",
-    "Self-checking testbench: maximal-period 255 + no all-zero lockup PASSED"
+    "Self-checking testbench: maximal-period 255 + no all-zero lockup PASSED",
+    "Interactive: open lfsr8.dashboard.html to watch the real netlist shift in your browser"
   ],
   "top_module": "lfsr8",
   "platform": "sky130hd",

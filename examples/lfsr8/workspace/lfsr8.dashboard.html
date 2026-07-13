@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="siliconcrew-sim" content="lfsr8.websim.json">
+<title>lfsr8 — interactive sim</title>
+<style>
+  /* Self-contained by design: the sandboxed frame has no network access. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    background: #101418; color: #cbd5e1;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 22px; padding: 24px;
+  }
+  h1 { font-size: 15px; font-weight: 600; color: #e2e8f0; letter-spacing: .02em; }
+  .register {
+    display: flex; gap: 10px; background: #1c232b; border: 1px solid #2b3743;
+    border-radius: 14px; padding: 18px 20px; box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  }
+  .bit { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .bit span { font-size: 10px; color: #64748b; }
+  .led {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: #232b33; border: 2px solid #303c48;
+    transition: box-shadow .1s, background .1s;
+  }
+  .led.on { background: #34d399; box-shadow: 0 0 18px 4px rgba(52,211,153,.5); }
+  .led.unknown { background: repeating-linear-gradient(45deg,#232b33,#232b33 5px,#3b2530 5px,#3b2530 10px); }
+  .hex { font-size: 22px; font-family: ui-monospace, monospace; color: #e2e8f0; min-width: 120px; text-align: center; }
+  .hex small { display: block; font-size: 11px; color: #64748b; margin-top: 4px; }
+  .controls { display: flex; gap: 16px; align-items: center; font-size: 12px; flex-wrap: wrap; justify-content: center; }
+  button {
+    background: #263140; color: #e2e8f0; border: 1px solid #35455a;
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { background: #2f3d50; }
+  button.active { background: #0e7490; border-color: #22d3ee; }
+  input[type=range] { width: 130px; accent-color: #38bdf8; }
+  .note { font-size: 11px; color: #64748b; max-width: 460px; text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <h1>lfsr8 — maximal-length Fibonacci LFSR (x⁸+x⁶+x⁵+x⁴+1, period 255)</h1>
+
+  <div class="register" id="register"></div>
+  <div class="hex"><span id="hexv">—</span><small>state (hex) · <span id="cyc">cycle 0</span></small></div>
+
+  <div class="controls">
+    <button id="en" class="active">shifting (en=1)</button>
+    <button id="reset">Reset → 0xFF</button>
+    <label>clock <input type="range" id="hz" min="1" max="60" value="8"> <span id="hzv">8</span> Hz</label>
+  </div>
+
+  <p class="note">
+    Each lamp is one bit of the <code>state</code> output of the synthesized
+    netlist simulating in your browser (bit 7 left). The feedback bit is
+    state[7]⊕state[5]⊕state[4]⊕state[3]; from a non-zero seed the register
+    walks all 255 non-zero patterns. Nothing on this page is animated by its
+    own logic — pause the clock and the lamps freeze.
+  </p>
+
+<script>
+  var reg = document.getElementById("register");
+  var leds = [];
+  for (var i = 7; i >= 0; i--) {
+    var wrap = document.createElement("div");
+    wrap.className = "bit";
+    var led = document.createElement("div");
+    led.className = "led";
+    var lab = document.createElement("span");
+    lab.textContent = "b" + i;
+    wrap.appendChild(led); wrap.appendChild(lab);
+    reg.appendChild(wrap);
+    leds[i] = led;
+  }
+  var hexv = document.getElementById("hexv");
+  var cyc = document.getElementById("cyc");
+  var enBtn = document.getElementById("en");
+  var enabled = 1;
+
+  window.simBridge.ready(function () {
+    // async active-low reset released; seed 0xFF is already latched
+    window.simBridge.setInput("rst_n", 1);
+    window.simBridge.setInput("en", 1);
+    window.simBridge.setClockHz(8);
+  });
+
+  enBtn.onclick = function () {
+    enabled = enabled ? 0 : 1;
+    window.simBridge.setInput("en", enabled);
+    enBtn.classList.toggle("active", !!enabled);
+    enBtn.textContent = enabled ? "shifting (en=1)" : "holding (en=0)";
+  };
+
+  document.getElementById("reset").onclick = function () {
+    window.simBridge.setInput("rst_n", 0);
+    setTimeout(function () { window.simBridge.setInput("rst_n", 1); }, 120);
+  };
+
+  var hz = document.getElementById("hz");
+  hz.oninput = function () {
+    document.getElementById("hzv").textContent = hz.value;
+    window.simBridge.setClockHz(Number(hz.value));
+  };
+
+  window.simBridge.onUpdate(function (u) {
+    var v = u.outputs.state;
+    for (var i = 0; i < 8; i++) {
+      var unknown = v === null || v === undefined;
+      leds[i].classList.toggle("unknown", unknown);
+      leds[i].classList.toggle("on", !unknown && ((v >> i) & 1) === 1);
+    }
+    hexv.textContent = v === null || v === undefined ? "xx" : "0x" + v.toString(16).toUpperCase().padStart(2, "0");
+    cyc.textContent = "cycle " + u.cycle;
+  });
+</script>
+</body>
+</html>
