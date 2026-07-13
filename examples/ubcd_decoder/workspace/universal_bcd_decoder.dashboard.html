@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="siliconcrew-sim" content="universal_bcd_decoder.websim.json">
+<title>universal_bcd_decoder — interactive sim</title>
+<style>
+  /* Self-contained by design: the sandboxed frame has no network access. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    background: #101418; color: #cbd5e1;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 20px; padding: 24px;
+  }
+  h1 { font-size: 15px; font-weight: 600; color: #e2e8f0; letter-spacing: .02em; }
+  .board { display: flex; gap: 34px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .display {
+    background: #151b21; border: 1px solid #2b3743; border-radius: 14px;
+    padding: 26px 34px; box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  }
+  .sseg { position: relative; width: 120px; height: 200px; }
+  .seg { position: absolute; background: #26313b; transition: background .08s, box-shadow .08s; }
+  .seg.h { width: 76px; height: 16px; left: 22px; border-radius: 8px; }
+  .seg.v { width: 16px; height: 72px; border-radius: 8px; }
+  #sa { top: 0; } #sg { top: 92px; } #sd { top: 184px; }
+  #sf { top: 12px; left: 0; } #sb { top: 12px; right: 0; }
+  #se { top: 116px; left: 0; } #sc { top: 116px; right: 0; }
+  .seg.on { background: #f87171; box-shadow: 0 0 18px 3px rgba(248,113,113,.55); }
+  .seg.unknown { background: repeating-linear-gradient(45deg,#26313b,#26313b 5px,#3b2530 5px,#3b2530 10px); }
+  .panel { display: flex; flex-direction: column; gap: 14px; max-width: 330px; }
+  .grid16 { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
+  .grid16 button {
+    padding: 8px 0; border-radius: 7px; background: #232b33; border: 1px solid #303c48;
+    color: #cbd5e1; font-family: ui-monospace, monospace; font-size: 13px; cursor: pointer;
+  }
+  .grid16 button.sel { background: #0e7490; border-color: #22d3ee; color: #e0f2fe; }
+  select {
+    background: #232b33; color: #e2e8f0; border: 1px solid #35455a;
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; width: 100%;
+  }
+  .pins { display: flex; flex-wrap: wrap; gap: 7px; }
+  .pins button {
+    padding: 6px 10px; border-radius: 7px; background: #232b33; border: 1px solid #303c48;
+    color: #94a3b8; font-family: ui-monospace, monospace; font-size: 11px; cursor: pointer;
+  }
+  .pins button.on { background: #365314; border-color: #84cc16; color: #ecfccb; }
+  .status { font-size: 11px; color: #94a3b8; font-family: ui-monospace, monospace; }
+  .note { font-size: 11px; color: #64748b; max-width: 500px; text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <h1>universal_bcd_decoder — 8 seven-segment glyph families on one die</h1>
+
+  <div class="board">
+    <div class="display">
+      <div class="sseg">
+        <div class="seg h" id="sa"></div><div class="seg v" id="sb"></div>
+        <div class="seg v" id="sc"></div><div class="seg h" id="sd"></div>
+        <div class="seg v" id="se"></div><div class="seg v" id="sf"></div>
+        <div class="seg h" id="sg"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="grid16" id="values"></div>
+      <select id="version">
+        <option value="0">000 · standard (blanks A–F)</option>
+        <option value="1">001 · TI (TIL-306 style A–F)</option>
+        <option value="2">010 · National Semiconductor</option>
+        <option value="3">011 · Toshiba (repeats 0–5)</option>
+        <option value="4">100 · lines (dash codes)</option>
+        <option value="5">101 · Electronika (Soviet VFD)</option>
+        <option value="6">110 · Code B (−, E, H, L, P)</option>
+        <option value="7" selected>111 · hexadecimal (A–F)</option>
+      </select>
+      <div class="pins" id="pins"></div>
+      <div class="status" id="status">RBO = ?</div>
+    </div>
+  </div>
+
+  <p class="note">
+    Pure combinational silicon — no clock. Every segment is the live
+    <code>Qa…Qg</code> pin of the synthesized netlist; change any input and
+    the decode propagates instantly. LT̄ (lamp test) and BĪ (blanking) are
+    active-low as in a real 74xx-style decoder; RBĪ=0 blanks a zero (ripple
+    blanking); AL sets the pins' active level — flip it and the raw pins
+    invert, exactly as this page then shows.
+  </p>
+
+<script>
+  var value = 0;
+  var valEl = document.getElementById("values");
+  var valBtns = [];
+  for (var i = 0; i < 16; i++) (function (v) {
+    var btn = document.createElement("button");
+    btn.textContent = v.toString(16).toUpperCase();
+    btn.onclick = function () {
+      value = v;
+      valBtns.forEach(function (b) { b.classList.remove("sel"); });
+      btn.classList.add("sel");
+      window.simBridge.setInput("A", v & 1);
+      window.simBridge.setInput("B", (v >> 1) & 1);
+      window.simBridge.setInput("C", (v >> 2) & 1);
+      window.simBridge.setInput("D", (v >> 3) & 1);
+    };
+    valEl.appendChild(btn);
+    valBtns.push(btn);
+  })(i);
+  valBtns[0].classList.add("sel");
+
+  document.getElementById("version").onchange = function () {
+    var v = Number(this.value);
+    window.simBridge.setInput("V0", v & 1);
+    window.simBridge.setInput("V1", (v >> 1) & 1);
+    window.simBridge.setInput("V2", (v >> 2) & 1);
+  };
+
+  // pin toggles with honest active-low labels; defaults = display enabled
+  var pinDefs = [
+    ["LT", 1, "LT̄"], ["BI", 1, "BĪ"], ["RBI", 1, "RBĪ"], ["AL", 1, "AL"],
+    ["X6", 0, "X6"], ["X7", 0, "X7"], ["X9", 0, "X9"]
+  ];
+  var pinsEl = document.getElementById("pins");
+  pinDefs.forEach(function (def) {
+    var name = def[0], state = def[1], label = def[2];
+    var btn = document.createElement("button");
+    var paint = function () {
+      btn.textContent = label + "=" + state;
+      btn.classList.toggle("on", state === 1);
+    };
+    btn.onclick = function () {
+      state = state ? 0 : 1;
+      window.simBridge.setInput(name, state);
+      paint();
+    };
+    paint();
+    pinsEl.appendChild(btn);
+  });
+
+  var segEls = {
+    Qa: document.getElementById("sa"), Qb: document.getElementById("sb"),
+    Qc: document.getElementById("sc"), Qd: document.getElementById("sd"),
+    Qe: document.getElementById("se"), Qf: document.getElementById("sf"),
+    Qg: document.getElementById("sg")
+  };
+  var status = document.getElementById("status");
+
+  window.simBridge.ready(function () {
+    // enable the display: lamp-test off, not blanked, active-high, RBI high;
+    // start in the hexadecimal family so all 16 codes render
+    ["LT", "BI", "RBI", "AL", "V0", "V1", "V2"].forEach(function (pin) {
+      window.simBridge.setInput(pin, 1);
+    });
+  });
+
+  window.simBridge.onUpdate(function (u) {
+    Object.keys(segEls).forEach(function (name) {
+      var v = u.outputs[name];
+      segEls[name].classList.toggle("unknown", v === null || v === undefined);
+      segEls[name].classList.toggle("on", v === 1);
+    });
+    status.textContent = "RBO = " + (u.outputs.RBO === null || u.outputs.RBO === undefined ? "x" : u.outputs.RBO);
+  });
+</script>
+</body>
+</html>
