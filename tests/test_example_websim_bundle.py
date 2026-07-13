@@ -133,7 +133,9 @@ def test_interactive_bundle_survives_a_real_template_fork(tmp_path):
 
 @pytest.mark.parametrize("dashboard", DASHBOARDS)
 def test_dashboard_declares_an_existing_netlist_by_relative_name(dashboard):
-    with open(dashboard) as f:
+    # dashboards declare <meta charset="utf-8">; the platform default
+    # (cp1252 on Windows) must not decide whether this gate can read them
+    with open(dashboard, encoding="utf-8") as f:
         html = f.read()
     ref = parse_sim_meta(html)
     assert ref, f"{dashboard} has no siliconcrew-sim meta tag (would render as mockup)"
