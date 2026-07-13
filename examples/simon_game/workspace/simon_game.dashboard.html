@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="siliconcrew-sim" content="simon_game.websim.json">
+<title>simon_game — interactive sim</title>
+<style>
+  /* Self-contained by design: the sandboxed frame has no network access. */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    background: #101418; color: #cbd5e1;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px; padding: 24px;
+  }
+  h1 { font-size: 15px; font-weight: 600; color: #e2e8f0; letter-spacing: .02em; }
+  .board { display: flex; gap: 34px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .disc {
+    position: relative; width: 260px; height: 260px; border-radius: 50%;
+    background: #1c232b; border: 1px solid #2b3743; padding: 14px;
+    display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45);
+  }
+  .pad {
+    border: 3px solid #303c48; cursor: pointer; opacity: .45;
+    transition: opacity .06s, box-shadow .06s; user-select: none; -webkit-user-select: none;
+  }
+  .pad.lit { opacity: 1; }
+  .pad0 { background: #22c55e; border-radius: 100% 8px 8px 8px; }
+  .pad0.lit { box-shadow: 0 0 30px 6px rgba(34,197,94,.6); }
+  .pad1 { background: #ef4444; border-radius: 8px 100% 8px 8px; }
+  .pad1.lit { box-shadow: 0 0 30px 6px rgba(239,68,68,.6); }
+  .pad2 { background: #eab308; border-radius: 8px 8px 8px 100%; }
+  .pad2.lit { box-shadow: 0 0 30px 6px rgba(234,179,8,.6); }
+  .pad3 { background: #3b82f6; border-radius: 8px 8px 100% 8px; }
+  .pad3.lit { box-shadow: 0 0 30px 6px rgba(59,130,246,.6); }
+  .hub {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    width: 108px; height: 108px; border-radius: 50%; background: #151b21;
+    border: 1px solid #2b3743; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 2px; text-align: center;
+  }
+  .hub b { font-size: 11px; color: #e2e8f0; font-family: ui-monospace, monospace; }
+  .hub span { font-size: 9px; color: #64748b; }
+  .hub.over b { color: #f43f5e; }
+  .side { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+  .score { display: flex; gap: 10px; align-items: center; background: #151b21; border: 1px solid #2b3743; border-radius: 12px; padding: 14px 18px; }
+  .sseg { position: relative; width: 44px; height: 76px; transition: opacity .2s; }
+  .sseg.stale { opacity: .25; }
+  .s { position: absolute; background: #26313b; }
+  .s.h { width: 26px; height: 7px; left: 9px; border-radius: 3px; }
+  .s.v { width: 7px; height: 26px; border-radius: 3px; }
+  .s.on { background: #f87171; box-shadow: 0 0 8px 2px rgba(248,113,113,.5); }
+  .sa { top: 0; } .sg { top: 34px; } .sd { top: 69px; }
+  .sf { top: 5px; left: 0; } .sb { top: 5px; right: 0; }
+  .se { top: 42px; left: 0; } .sc { top: 42px; right: 0; }
+  .lv { font-size: 12px; color: #94a3b8; text-align: center; }
+  .lv b { display: block; font-size: 20px; color: #e2e8f0; font-family: ui-monospace, monospace; }
+  .buzz { font-size: 11px; color: #64748b; }
+  .buzz.on { color: #f59e0b; }
+  .controls { display: flex; gap: 14px; align-items: center; font-size: 12px; flex-wrap: wrap; justify-content: center; }
+  button.ctl {
+    background: #263140; color: #e2e8f0; border: 1px solid #35455a;
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  input[type=range] { width: 130px; accent-color: #38bdf8; }
+  .note { font-size: 11px; color: #64748b; max-width: 500px; text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <h1>simon_game — press any pad to start, then echo the sequence</h1>
+
+  <div class="board">
+    <div class="disc">
+      <div class="pad pad0" data-bit="0"></div>
+      <div class="pad pad1" data-bit="1"></div>
+      <div class="pad pad2" data-bit="2"></div>
+      <div class="pad pad3" data-bit="3"></div>
+      <div class="hub" id="hub"><b id="state">—</b><span id="cyc">cycle 0</span></div>
+    </div>
+    <div class="side">
+      <div class="score" id="score"></div>
+      <div class="lv"><b id="level">0</b>rounds survived</div>
+      <div class="buzz" id="buzz">🔇 buzzer idle</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="ctl" id="reset">Reset game</button>
+    <label>speed <input type="range" id="hz" min="100" max="2000" value="1000" step="100"> <span id="hzv">1.0</span>×</label>
+  </div>
+
+  <p class="note">
+    The real Simon FSM netlist, simulating in your browser: pads light from the
+    design's <code>led</code> pins, the score digits are its multiplexed
+    seven-segment bus (a digit dims when the design stops driving it), and the
+    buzzer icon flickers when the <code>sound</code> pin is oscillating. The
+    bundle is compiled with TICKS_PER_MILLI=1 so one clock cycle is one
+    game-millisecond — 1.0× speed needs 1000 cycles/sec from your machine.
+  </p>
+
+<script>
+  var STATES = ["POWER-ON", "INIT", "PLAY", "PLAY-WAIT", "YOUR TURN", "INPUT", "NEXT LEVEL", "GAME OVER"];
+  var pads = Array.prototype.slice.call(document.querySelectorAll(".pad"));
+  var stateEl = document.getElementById("state");
+  var hub = document.getElementById("hub");
+  var cyc = document.getElementById("cyc");
+  var levelEl = document.getElementById("level");
+  var buzz = document.getElementById("buzz");
+
+  window.simBridge.ready(function () {
+    // simon's reset is SYNCHRONOUS: rst_n must stay low across real clock
+    // edges before release, or the flops never initialize (stay x).
+    window.simBridge.setClockHz(1000); // 1 cycle = 1 game-ms → 1.0× speed
+    setTimeout(function () { window.simBridge.setInput("rst_n", 1); }, 250);
+  });
+
+  var btn = 0;
+  pads.forEach(function (pad) {
+    var bit = Number(pad.getAttribute("data-bit"));
+    var press = function (ev) { ev.preventDefault(); btn |= 1 << bit; window.simBridge.setInput("btn", btn); };
+    var release = function () { btn &= ~(1 << bit); window.simBridge.setInput("btn", btn); };
+    pad.addEventListener("mousedown", press);
+    pad.addEventListener("touchstart", press);
+    pad.addEventListener("mouseup", release);
+    pad.addEventListener("mouseleave", release);
+    pad.addEventListener("touchend", release);
+  });
+
+  document.getElementById("reset").onclick = function () {
+    window.simBridge.setInput("rst_n", 0);
+    setTimeout(function () { window.simBridge.setInput("rst_n", 1); }, 120);
+  };
+
+  var hz = document.getElementById("hz");
+  hz.oninput = function () {
+    document.getElementById("hzv").textContent = (Number(hz.value) / 1000).toFixed(1);
+    window.simBridge.setClockHz(Number(hz.value));
+  };
+
+  // two-digit multiplexed 7-seg: paint whichever digit the design is driving
+  // this frame; a digit not driven for a while dims (sample-hold, honestly
+  // marked stale rather than frozen-fresh)
+  var scoreEl = document.getElementById("score");
+  var segNames = ["sa", "sb", "sc", "sd", "se", "sf", "sg"];
+  var digits = [];
+  for (var d = 1; d >= 0; d--) {
+    var wrap = document.createElement("div");
+    wrap.className = "sseg stale";
+    var segs = {};
+    segNames.forEach(function (n) {
+      var s = document.createElement("div");
+      s.className = "s " + (n === "sa" || n === "sd" || n === "sg" ? "h" : "v") + " " + n;
+      wrap.appendChild(s);
+      segs[n] = s;
+    });
+    scoreEl.appendChild(wrap);
+    digits[d] = { wrap: wrap, segs: segs, lastSeen: 0 };
+  }
+
+  var lastSound = null, soundEdges = 0, lastSoundCheck = 0;
+
+  window.simBridge.onUpdate(function (u) {
+    var led = u.outputs.led;
+    pads.forEach(function (pad, i) {
+      pad.classList.toggle("lit", led !== null && led !== undefined && ((led >> i) & 1) === 1);
+    });
+
+    var st = u.outputs.dbg_state;
+    stateEl.textContent = st === null || st === undefined ? "x" : STATES[st];
+    hub.classList.toggle("over", u.outputs.game_over === 1);
+    cyc.textContent = "cycle " + u.cycle;
+    levelEl.textContent = u.outputs.level === null || u.outputs.level === undefined ? "x" : u.outputs.level;
+
+    // digits: 2'b01 = ones digit driven, 2'b10 = tens digit driven
+    var sel = u.outputs.segment_digits;
+    var seg = u.outputs.segments;
+    var now = Date.now();
+    if (seg !== null && seg !== undefined && (sel === 1 || sel === 2)) {
+      var digit = digits[sel === 1 ? 0 : 1];
+      digit.lastSeen = now;
+      segNames.forEach(function (n, i) {
+        digit.segs[n].classList.toggle("on", ((seg >> i) & 1) === 1);
+      });
+    }
+    digits.forEach(function (digit) {
+      digit.wrap.classList.toggle("stale", now - digit.lastSeen > 700);
+    });
+
+    // buzzer: the sound pin oscillates at audio rate — count observed edges
+    if (u.outputs.sound !== lastSound) {
+      lastSound = u.outputs.sound;
+      soundEdges += 1;
+    }
+    if (now - lastSoundCheck > 250) {
+      buzz.classList.toggle("on", soundEdges > 1);
+      buzz.textContent = soundEdges > 1 ? "🔊 buzzer active" : "🔇 buzzer idle";
+      soundEdges = 0;
+      lastSoundCheck = now;
+    }
+  });
+</script>
+</body>
+</html>
