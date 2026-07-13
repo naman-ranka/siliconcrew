@@ -46,6 +46,10 @@ type SimState =
       /** Sequential design but no clock port identified — the sim will never
        *  advance; say so instead of looking alive (invariant 4). */
       noClock: boolean;
+      /** Parameter overrides baked into the netlist (e.g. TICKS_PER_MILLI=1)
+       *  — shown in the strip so the sim is never mistaken for the source
+       *  defaults (invariant 4). */
+      parameters: Record<string, number> | null;
     };
 
 export function InteractiveArtifact({ path }: { path: string }) {
@@ -124,6 +128,10 @@ export function InteractiveArtifact({ path }: { path: string }) {
           sources: Object.keys(payload.sources),
           freshness: "unknown",
           noClock: session.sequential && !session.hasClock,
+          parameters:
+            payload.parameters && Object.keys(payload.parameters).length
+              ? payload.parameters
+              : null,
         });
         // Freshness lands asynchronously — never block the sim on it, never
         // claim fresh before the hashes agree.
@@ -192,12 +200,11 @@ export function InteractiveArtifact({ path }: { path: string }) {
     let last = performance.now();
     let carry = 0;
     let lastShown = -1;
-    let frame = 0;
+    let lastHeartbeat = 0;
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
       const dt = Math.min(0.25, (now - last) / 1000);
       last = now;
-      frame += 1;
       const s = sessionRef.current;
       if (!s || !frameReadyRef.current || !s.hasClock) return;
       if (document.hidden || containerRef.current?.offsetParent == null) return;
@@ -210,11 +217,15 @@ export function InteractiveArtifact({ path }: { path: string }) {
       while (n-- > 0) s.tickCycle();
       // Post only when outputs changed (plus a periodic heartbeat carrying
       // the cycle count) — wide idle designs shouldn't pay a structured
-      // clone per frame.
+      // clone per frame. The heartbeat is time-based, not frame-modulo:
+      // this branch only runs on frames that ticked, and at slow clocks a
+      // modulo heartbeat almost never coincides with a tick frame — the
+      // dashboard's cycle display would sit frozen while the sim advances.
       const outputs = s.readOutputs();
       const fingerprint = JSON.stringify(outputs);
-      if (fingerprint !== lastOutputsRef.current || frame % 15 === 0) {
+      if (fingerprint !== lastOutputsRef.current || now - lastHeartbeat > 250) {
         lastOutputsRef.current = fingerprint;
+        lastHeartbeat = now;
         iframeRef.current?.contentWindow?.postMessage(
           { type: "websim:update", outputs, cycle: s.cycle },
           "*"
@@ -310,6 +321,10 @@ export function InteractiveArtifact({ path }: { path: string }) {
           {sim.phase === "live" && (
             <>
               live gate-level sim · {sim.netlist} ← {sim.sources.join(", ")}
+              {sim.parameters &&
+                ` · ${Object.entries(sim.parameters)
+                  .map(([k, v]) => `${k}=${v}`)
+                  .join(", ")}`}
               {sim.noClock &&
                 ' · NO CLOCK DETECTED — sequential design will not advance (declare <meta name="siliconcrew-sim-clock">)'}
               {sim.freshness === "stale" && " · STALE: sources changed — rebuild the netlist"}

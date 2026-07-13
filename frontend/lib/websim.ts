@@ -27,6 +27,10 @@ export interface WebsimPayload {
   sources: Record<string, string>;
   ports: WebsimPort[];
   yosys_netlist: unknown;
+  /** Top-module parameter overrides the netlist was elaborated with (timing
+   *  constants like TICKS_PER_MILLI) — surfaced in the provenance strip so a
+   *  re-parameterized sim is never presented as the source defaults. */
+  parameters?: Record<string, number>;
 }
 
 export const WEBSIM_FORMAT = "siliconcrew-websim-v1";
@@ -202,7 +206,11 @@ export async function createWebsimSession(
       const m = inputs.get(name);
       if (!m) return;
       circuit.setInput(m.id, Vector3vl.fromNumber(value, m.bits));
-      if (!clockEntry) settle();
+      // Settle for clocked designs too: at interactive clock rates a user
+      // input is stable long before the next edge (setup time respected).
+      // Without this, a deep input→D cone is still propagating when the
+      // flop's clock event fires and it samples a half-updated value.
+      settle();
     },
     readOutputs() {
       const out: Record<string, number | null> = {};
