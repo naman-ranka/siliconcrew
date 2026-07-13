@@ -67,7 +67,17 @@ def pick_engine() -> Dict[str, str]:
 
 def _yosys_script(rel_files: List[str], top_module: str, json_out: str) -> str:
     reads = "; ".join(f"read_verilog {f}" for f in rel_files)
-    return f"{reads}; hierarchy -top {top_module}; proc; opt; write_json {json_out}"
+    # Designs with inferred memories need two extra passes: the browser engine
+    # rejects raw $memrd/$memwr pairs, so `memory -nomap` collects them into
+    # the $mem cells it simulates natively (O(1) per access — mapping to
+    # flops+muxes instead measured 18x slower); and `wreduce` first narrows
+    # addresses so a 32-bit index constant (`seq[0] <= ...`) can't force
+    # ABITS=32, which overflows the engine's address arithmetic. Both are
+    # no-ops for memory-less designs.
+    return (
+        f"{reads}; hierarchy -top {top_module}; proc; opt; "
+        f"wreduce; memory -nomap; opt; write_json {json_out}"
+    )
 
 
 def _run_yosys(script: str, cwd: str, engine: str) -> Dict[str, Any]:

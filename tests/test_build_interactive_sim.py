@@ -180,6 +180,21 @@ def test_docker_engine_runs_in_the_workspace_mount(tmp_path, monkeypatch):
     assert calls[0]["workspace_path"] == ws
 
 
+def test_yosys_script_handles_inferred_memories(tmp_path, fake_yosys):
+    """Regression: the browser engine rejects raw $memrd/$memwr pairs, and its
+    $mem cell breaks on ABITS=32 (a 32-bit literal index like `seq[0] <= x`
+    widens the collected address). The script must wreduce THEN collect
+    memories so designs like simon_game simulate at all."""
+    ws = str(tmp_path)
+    _write_source(ws)
+    result = bis.build_websim_netlist(["counter.v"], "counter", cwd=ws)
+    assert result["success"]
+    script = fake_yosys[0]["script"]
+    assert "wreduce; memory -nomap" in script
+    # narrowing must happen BEFORE collection or ABITS is already frozen
+    assert script.index("wreduce") < script.index("memory -nomap")
+
+
 def test_catalog_policy_flags():
     from src.api import tool_catalog as tc
 
