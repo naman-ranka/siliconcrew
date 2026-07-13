@@ -84,7 +84,11 @@ async function openByQuickOpen(page: Page, name: string) {
   const input = page.getByPlaceholder("Open artifact…");
   await expect(input).toBeVisible();
   await input.fill(name);
-  await page.keyboard.press("Enter");
+  // the artifact list loads asynchronously — Enter before the option renders
+  // is a no-op, so wait for a match and click it instead of racing
+  const option = page.getByRole("option", { name: new RegExp(name.replace(/\./g, "\\.")) }).first();
+  await expect(option).toBeVisible({ timeout: 10_000 });
+  await option.click();
 }
 
 test("shipped traffic_light dashboard runs the REAL netlist sim in the browser", async ({ page }) => {
