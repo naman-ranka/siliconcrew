@@ -5,7 +5,8 @@
   "highlights": [
     "Full flow to GDSII on sky130hd (OpenROAD/ORFS)",
     "Timing met: WNS 0.0 ns; 1125 std cells; 2.91 mW",
-    "Original self-checking TB plays a full game (observe LEDs, replay, wrong-input loss) \u2014 TEST PASSED"
+    "Original self-checking TB plays a full game (observe LEDs, replay, wrong-input loss) — TEST PASSED",
+    "Interactive: open simon_game.dashboard.html and play the real netlist (compiled at TICKS_PER_MILLI=1 for browser speed)"
   ],
   "top_module": "simon_game",
   "platform": "sky130hd",
