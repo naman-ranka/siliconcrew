@@ -202,7 +202,11 @@ export async function createWebsimSession(
       const m = inputs.get(name);
       if (!m) return;
       circuit.setInput(m.id, Vector3vl.fromNumber(value, m.bits));
-      if (!clockEntry) settle();
+      // Settle for clocked designs too: at interactive clock rates a user
+      // input is stable long before the next edge (setup time respected).
+      // Without this, a deep input→D cone is still propagating when the
+      // flop's clock event fires and it samples a half-updated value.
+      settle();
     },
     readOutputs() {
       const out: Record<string, number | null> = {};

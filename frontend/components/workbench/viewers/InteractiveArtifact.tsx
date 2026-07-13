@@ -192,12 +192,11 @@ export function InteractiveArtifact({ path }: { path: string }) {
     let last = performance.now();
     let carry = 0;
     let lastShown = -1;
-    let frame = 0;
+    let lastHeartbeat = 0;
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
       const dt = Math.min(0.25, (now - last) / 1000);
       last = now;
-      frame += 1;
       const s = sessionRef.current;
       if (!s || !frameReadyRef.current || !s.hasClock) return;
       if (document.hidden || containerRef.current?.offsetParent == null) return;
@@ -210,11 +209,15 @@ export function InteractiveArtifact({ path }: { path: string }) {
       while (n-- > 0) s.tickCycle();
       // Post only when outputs changed (plus a periodic heartbeat carrying
       // the cycle count) — wide idle designs shouldn't pay a structured
-      // clone per frame.
+      // clone per frame. The heartbeat is time-based, not frame-modulo:
+      // this branch only runs on frames that ticked, and at slow clocks a
+      // modulo heartbeat almost never coincides with a tick frame — the
+      // dashboard's cycle display would sit frozen while the sim advances.
       const outputs = s.readOutputs();
       const fingerprint = JSON.stringify(outputs);
-      if (fingerprint !== lastOutputsRef.current || frame % 15 === 0) {
+      if (fingerprint !== lastOutputsRef.current || now - lastHeartbeat > 250) {
         lastOutputsRef.current = fingerprint;
+        lastHeartbeat = now;
         iframeRef.current?.contentWindow?.postMessage(
           { type: "websim:update", outputs, cycle: s.cycle },
           "*"
