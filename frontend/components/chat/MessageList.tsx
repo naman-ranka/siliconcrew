@@ -8,6 +8,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { openArtifact } from "@/lib/openArtifact";
 import { useStore } from "@/lib/store";
+import { Logo } from "@/components/branding/Logo";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToolCallCard } from "./ToolCallCard";
@@ -351,26 +352,35 @@ function StreamingMessage({ showIcon = true }: { showIcon?: boolean }) {
   );
 }
 
-const WELCOME_SUGGESTIONS = [
+// The four welcome cards (onboarding wave, plan: onboarding-and-example-cards).
+// Card faces show only label + hint; clicking sends the FULL prompt as the
+// user's own visible message (sendMessage — the transcript shows exactly what
+// was sent, invariant 4). The prompt texts are validated research artifacts
+// (tested against the live hosted agent) — do not reword casually.
+export const WELCOME_CARDS = [
   {
-    title: "Design an 8-bit counter",
-    description: "with async reset and enable",
-    prompt: "Design an 8-bit counter with asynchronous reset and enable signals",
+    label: "Tour the tools",
+    hint: "what can you actually do?",
+    prompt:
+      "I'm new here. Walk me through what you actually do, from a written spec down to a finished layout on sky130. Show me how you check the design along the way, and be honest about anything you can't do. Finish with a few small things we could build first.",
   },
   {
-    title: "Create a FIFO buffer",
-    description: "16 entries deep, 8-bit width",
-    prompt: "Create a synchronous FIFO with 16 entries depth and 8-bit data width",
+    label: "Brief this workspace",
+    hint: "what's designed, verified, built here",
+    prompt:
+      "Brief me on this workspace before I touch anything. In plain language: what's being designed, does it actually pass its tests, and what are the best area and timing numbers so far? Then give me the single most useful next step. If it's empty, just say so and tell me how we'd start. Don't run anything yet.",
   },
   {
-    title: "Design a simple ALU",
-    description: "add, sub, and, or operations",
-    prompt: "Design a simple ALU that supports add, subtract, AND, and OR operations on 8-bit operands",
+    label: "Design a FIFO",
+    hint: "spec, RTL, a testbench that tries to break it",
+    prompt:
+      "Build me a small synchronous FIFO, 16 deep and 8 bits wide, with full, empty, and almost full flags. Write a short spec first, then the Verilog, then a self checking testbench that really tries to break it: reset, overflow, underflow, and reads and writes at the same time. Get it passing simulation cleanly. Then ask me what I want next: a cocotb test, a SymbiYosys formal check that the flags can never lie, or taking it through synthesis.",
   },
   {
-    title: "Build an FSM controller",
-    description: "for a traffic light system",
-    prompt: "Design a finite state machine controller for a traffic light system with red, yellow, and green states",
+    label: "Explain RTL to GDS",
+    hint: "a lesson, not a job",
+    prompt:
+      "I'm new to physical design. Walk me through how you take RTL to a finished sky130 layout, stage by stage, and what each stage produces. Explain WNS, TNS, and utilization simply, and show how retrying from a stage and comparing two runs works. Keep it concrete, the way you run it.",
   },
 ];
 
@@ -380,31 +390,41 @@ function WelcomeScreen() {
 
   return (
     <div className="flex-1 flex items-center justify-center px-4">
-      {/* Calm, secondary welcome — the workbench is the product; chat is the aid.
-          Smaller, lighter, less-saturated than the artifact viewers. */}
-      <div className="text-center max-w-md">
-        <div className="w-9 h-9 rounded-xl bg-surface-2 flex items-center justify-center mx-auto mb-3">
-          <Sparkles className="h-4 w-4 text-muted-foreground" />
-        </div>
-        <h2 className="text-sm font-medium text-foreground mb-1">Welcome to SiliconCrew</h2>
-        <p className="text-xs text-muted-foreground mb-5 max-w-xs mx-auto leading-relaxed">
-          Describe the hardware you need and I&apos;ll draft the spec, implement
-          the RTL, and help verify it.
-        </p>
-        {/* Column count follows the CONTAINER (rail vs centered), not the
-            viewport — a desktop viewport with a narrow rail is still narrow. */}
-        <div className={cn("grid gap-2 max-w-lg mx-auto", compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2")}>
-          {WELCOME_SUGGESTIONS.map((suggestion, idx) => (
+      {/* Sparse by design (Claude Code / ChatGPT register): the mark, one
+          inviting line, and four SMALL cards as a nudge — not the main event.
+          Density follows the CONTAINER (rail vs centered), not the viewport. */}
+      <div className="text-center w-full max-w-md">
+        <Logo
+          className={cn(
+            "mx-auto text-muted-foreground/60",
+            compact ? "h-6 w-6 mb-3" : "h-8 w-8 mb-4"
+          )}
+        />
+        <h2 className={cn("font-medium text-foreground", compact ? "text-[13.5px] mb-1" : "text-[15px] mb-1")}>
+          What silicon will you design today?
+        </h2>
+        {!compact && (
+          <p className="text-[11.5px] text-muted-foreground/80 mb-6">
+            open EDA tools, one agent, spec to GDS
+          </p>
+        )}
+        {compact && <div className="mb-4" />}
+        <div className={cn("grid gap-1.5 mx-auto", compact ? "grid-cols-1 max-w-[260px]" : "grid-cols-2 max-w-sm")}>
+          {WELCOME_CARDS.map((card) => (
             <button
-              key={idx}
-              className="text-left p-3 rounded-lg bg-surface-1/60 hover:bg-surface-2 border border-border/70 hover:border-border transition-all group"
-              onClick={() => sendMessage(suggestion.prompt)}
+              key={card.label}
+              data-testid={`welcome-card-${card.label.toLowerCase().replace(/\s+/g, "-")}`}
+              className={cn(
+                "text-left rounded-md border border-border/60 bg-surface-1/40 hover:bg-surface-2 hover:border-border transition-colors group",
+                compact ? "px-2.5 py-1.5" : "px-3 py-2"
+              )}
+              onClick={() => sendMessage(card.prompt)}
             >
-              <p className="text-xs font-medium text-foreground/90 group-hover:text-foreground transition-colors">
-                {suggestion.title}
+              <p className="text-[11.5px] font-medium text-foreground/85 group-hover:text-foreground transition-colors truncate">
+                {card.label}
               </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                {suggestion.description}
+              <p className="text-[10.5px] text-muted-foreground/70 truncate">
+                {card.hint}
               </p>
             </button>
           ))}
