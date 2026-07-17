@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { TemplateSummary } from "@/types";
 
 // Sign-in on intent: a signed-out user who clicks New session (or Fork) triggers
@@ -12,7 +12,9 @@ let storeState: Record<string, unknown>;
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/lib/auth", () => ({ useAuth: () => authState }));
-vi.mock("@/lib/store", () => ({ useStore: () => storeState }));
+vi.mock("@/lib/store", () => ({
+  useStore: Object.assign(() => storeState, { getState: () => storeState }),
+}));
 vi.mock("@/lib/workbenchUiStore", () => ({
   useWorkbenchUiStore: Object.assign(() => ({}), {
     getState: () => ({ perSession: {}, setShell: vi.fn() }),
@@ -46,6 +48,7 @@ const BASE = {
   templatesError: null as string | null,
   loadTemplates: vi.fn(),
   forkTemplate: vi.fn(),
+  pushToast: vi.fn(),
 };
 
 const KEY = "sc-pending-intent";
@@ -82,6 +85,17 @@ describe("Launcher — sign-in on intent", () => {
     authState = { enabled: true, status: "signed_in", signIn };
     render(<Launcher />);
     expect(forkTemplate).toHaveBeenCalledWith("sync_fifo");
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("toasts (no silent dead-end) when a resumed fork fails", async () => {
+    const pushToast = vi.fn();
+    const forkTemplate = vi.fn().mockRejectedValue(new Error("fork failed"));
+    storeState = { ...BASE, forkTemplate, pushToast };
+    sessionStorage.setItem(KEY, JSON.stringify({ kind: "fork", templateId: "sync_fifo" }));
+    authState = { enabled: true, status: "signed_in", signIn };
+    render(<Launcher />);
+    await waitFor(() => expect(pushToast).toHaveBeenCalled());
     expect(sessionStorage.getItem(KEY)).toBeNull();
   });
 

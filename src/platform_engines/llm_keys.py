@@ -436,11 +436,16 @@ class ByokHostedLlmKeyProvider:
                 return LlmKey(provider="gemini", api_key=env_gemini, source="env")
             if self._hosted_gemini_key:
                 self._limiter.check(user_id or "anonymous")
+                # Pin to the free-tier constant, NOT self._hosted_model: the gate
+                # above only lets flash-lite through, so the served model must be
+                # flash-lite too. Pinning to an operator-overridable
+                # HOSTED_GEMINI_MODEL could silently run a different model than
+                # the user picked (an honest-state violation).
                 return LlmKey(
                     provider="gemini",
                     api_key=self._hosted_gemini_key,
                     source="hosted",
-                    model=self._hosted_model,
+                    model=HOSTED_FREE_MODEL,
                 )
 
         display = _PROVIDER_DISPLAY.get(provider, provider.title())

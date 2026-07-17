@@ -104,6 +104,20 @@ def test_provider_falls_back_to_hosted_gemini(monkeypatch):
     assert key.source == "hosted" and key.api_key == "HOSTED"
 
 
+def test_hosted_served_model_is_always_flash_lite(monkeypatch):
+    # Honest state: even if an operator misconfigures HOSTED_GEMINI_MODEL to a
+    # non-free model, a keyless flash-lite request must be SERVED flash-lite,
+    # never silently upgraded to the operator's model. (Fails pre-fix, where the
+    # served model was self._hosted_model.)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    provider = ByokHostedLlmKeyProvider(
+        _vault(), hosted_gemini_key="HOSTED", hosted_model="gemini-3.5-flash"
+    )
+    key = provider.resolve("u1", "gemini-3.1-flash-lite")
+    assert key.source == "hosted"
+    assert key.model == "gemini-3.1-flash-lite"
+
+
 def test_provider_requires_byok_for_non_gemini_without_key():
     provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED")
     with pytest.raises(ValueError, match="need your own"):

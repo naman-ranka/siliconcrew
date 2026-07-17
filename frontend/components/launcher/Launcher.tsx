@@ -231,7 +231,15 @@ export function Launcher() {
       setCreateGroup(intent.groupName);
       setCreating(true);
     } else if (intent.kind === "fork") {
-      void forkExample(intent.templateId);
+      // Surface a resumed-fork failure — otherwise the user signs in expecting
+      // a fork and lands nowhere with no feedback (no TemplatePreview catch here).
+      forkExample(intent.templateId).catch(() => {
+        useStore.getState().pushToast({
+          kind: "error",
+          title: "Couldn't fork that example",
+          detail: "Something went wrong finishing the fork. Please try again.",
+        });
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus]);
