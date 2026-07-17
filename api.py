@@ -31,6 +31,7 @@ from src.agents import runtime_registry
 from src.model_catalog import (
     CODEX_DEFAULT_MODEL,
     DEFAULT_MODEL,
+    HOSTED_FREE_MODEL,
     PRICING,
     codex_catalog_entries,
     normalize_model_name,
@@ -1067,6 +1068,45 @@ def _usable_providers(identity: Identity) -> set:
     return usable
 
 
+def _byok_providers(identity: Identity) -> set:
+    """Providers for which THIS request has its OWN key — self-host container
+    env, or the user's hosted BYOK vault. Excludes the shared hosted Gemini
+    tier and (on hosted) container env keys, so it mirrors what
+    ByokHostedLlmKeyProvider.resolve will actually accept per model."""
+    settings = get_settings()
+    if not settings.hosted:
+        return {p for p, env in _PROVIDER_ENV.items() if os.environ.get(env)}
+    providers = set()
+    uid = identity.user_id
+    if _KEY_VAULT is not None and uid:
+        for p in VALID_PROVIDERS:
+            try:
+                if _KEY_VAULT.has_key(uid, p):
+                    providers.add(p)
+            except Exception:
+                pass
+    return providers
+
+
+def _native_model_available(entry: dict, byok: set) -> bool:
+    """Model-granular availability for the native picker. A model is offered
+    only if it would actually resolve: the user has their own key for its
+    provider, or it is the free default (flash-lite) served by the shared/host
+    Gemini key. Keyless hosted users therefore see ONLY flash-lite as
+    available, never the whole Gemini provider (or an env-keyed OpenAI/
+    Anthropic model)."""
+    if entry["provider"] in byok:
+        return True
+    settings = get_settings()
+    if not settings.hosted:
+        return False
+    if entry["id"] == HOSTED_FREE_MODEL and (
+        settings.hosted_gemini_key or os.environ.get("GOOGLE_API_KEY")
+    ):
+        return True
+    return False
+
+
 @app.get("/api/models")
 async def list_models(identity: Identity = Depends(get_identity)):
     """Model registry for the pickers, with per-request availability.
@@ -1078,10 +1118,13 @@ async def list_models(identity: Identity = Depends(get_identity)):
     (the account state lives in the Codex auth endpoints, not here).
     """
     usable = _usable_providers(identity)
+    byok = _byok_providers(identity)
     models = [
-        {**e, "available": e["provider"] in usable}
+        {**e, "available": _native_model_available(e, byok)}
         for e in model_catalog_entries()
     ]
+    # Codex is a separate OpenAI-only runtime (connected accounts bypass key
+    # resolution entirely), so its picker stays provider-granular.
     codex_models = [
         {**e, "available": e["provider"] in usable}
         for e in codex_catalog_entries()
