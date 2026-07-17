@@ -20,12 +20,15 @@ import {
   Settings,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { useAuth } from "@/lib/auth";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { sessionsApi, threadsApi } from "@/lib/api";
 import { openSession, type ViewMode } from "@/lib/nav";
+import { stashAuthIntent, takeAuthIntent } from "@/lib/authIntent";
+import { performCreate } from "./createSessionAction";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -80,7 +83,7 @@ export function Launcher() {
     loadTemplates,
     forkTemplate,
   } = useStore();
-  const { status: authStatus } = useAuth();
+  const { status: authStatus, enabled: authEnabled, signIn } = useAuth();
 
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortMode>("recent");
@@ -94,6 +97,7 @@ export function Launcher() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<Session | null>(null);
+  const [replayError, setReplayError] = useState<string | null>(null);
 
   // Load on mount AND when sign-in completes (same gating the old sidebar had:
   // fetching before the token restores would return an empty list).
@@ -108,6 +112,36 @@ export function Launcher() {
   useEffect(() => {
     loadTemplates();
   }, [loadTemplates]);
+
+  // E2 intent replay: after sign-in completes, finish what the signed-out
+  // user started (create / fork / new group) in one motion. Driven by the
+  // status TRANSITION, not page load — WorkOS returns via a full-page
+  // redirect to `/`, but Google/GIS signs in with no navigation at all.
+  // takeAuthIntent() clears before returning, so the replay runs at most
+  // once even if it fails.
+  useEffect(() => {
+    if (authStatus !== "signed_in") return;
+    const intent = takeAuthIntent();
+    if (!intent) return;
+    void (async () => {
+      try {
+        if (intent.kind === "create") {
+          const sessionId = await performCreate(intent);
+          openSession(router, sessionId, { chat: null, view: intent.posture });
+        } else if (intent.kind === "fork") {
+          const sessionId = await useStore.getState().forkTemplate(intent.templateId);
+          openSession(router, sessionId, { chat: null, view: "ide" });
+        } else if (intent.kind === "createGroup") {
+          await useStore.getState().createProject(intent.name);
+        }
+      } catch (e) {
+        // The replayed action failed for a real reason (quota, 409, network).
+        // Surface it the same way the launcher surfaces load errors instead
+        // of failing silently.
+        setReplayError(e instanceof Error ? e.message : "Couldn't finish the signed-out action.");
+      }
+    })();
+  }, [authStatus, router]);
 
   const groupColor = (projectId: string) =>
     groupSwatch(projects.findIndex((p) => p.id === projectId));
@@ -243,7 +277,11 @@ export function Launcher() {
                   placeholder: "group name",
                   cta: "Create",
                   onConfirm: (v) => {
-                    void createProject(v).then((p) => moveSession(s.id, p.id));
+                    createProject(v)
+                      .then((p) => moveSession(s.id, p.id))
+                      .catch((e) =>
+                        setReplayError(e instanceof Error ? e.message : "Couldn't create the group.")
+                      );
                     setPrompt(null);
                   },
                 }),
@@ -307,13 +345,28 @@ export function Launcher() {
               placeholder: "group name",
               cta: "Create",
               onConfirm: (v) => {
-                void createProject(v);
+                createGroupGated(v);
                 setPrompt(null);
               },
             }),
         },
       ],
     });
+  };
+
+  // Group creation shared by the bg context menu and the grouped view's
+  // "New group" button. E2 gate: signed-out users sign in first (the intent
+  // replays); other failures surface instead of vanishing into a void'd
+  // promise (they were fully silent before this wave).
+  const createGroupGated = (v: string) => {
+    if (authEnabled && authStatus === "anonymous") {
+      stashAuthIntent({ kind: "createGroup", name: v });
+      void signIn();
+      return;
+    }
+    createProject(v).catch((e) =>
+      setReplayError(e instanceof Error ? e.message : "Couldn't create the group.")
+    );
   };
 
   const startCreate = (groupName: string | null) => {
@@ -510,6 +563,24 @@ export function Launcher() {
           </div>
         </header>
 
+        {/* Post-sign-in replay / group-create failures — dismissible, honest. */}
+        {replayError && (
+          <div
+            role="alert"
+            className="mx-6 mt-3 flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-[12.5px] text-foreground"
+          >
+            <span className="min-w-0 flex-1 truncate">{replayError}</span>
+            <button
+              type="button"
+              aria-label="Dismiss"
+              onClick={() => setReplayError(null)}
+              className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Content */}
         {isBooting ? (
           <div className="flex-1 overflow-y-auto px-6 py-6">
@@ -663,7 +734,7 @@ export function Launcher() {
                         placeholder: "group name",
                         cta: "Create",
                         onConfirm: (v) => {
-                          void createProject(v);
+                          createGroupGated(v);
                           setPrompt(null);
                         },
                       })

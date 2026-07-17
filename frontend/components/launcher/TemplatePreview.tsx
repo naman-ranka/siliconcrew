@@ -11,6 +11,8 @@ import {
   X,
 } from "lucide-react";
 import { templatesApi } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { stashAuthIntent } from "@/lib/authIntent";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { plural } from "./util";
@@ -37,6 +39,7 @@ type DetailState =
  * example" primary action.
  */
 export function TemplatePreview({ template, onClose, onFork }: TemplatePreviewProps) {
+  const { enabled: authEnabled, status: authStatus, signIn } = useAuth();
   const [state, setState] = useState<DetailState>({ status: "loading" });
   const [forking, setForking] = useState(false);
   const [forkError, setForkError] = useState<string | null>(null);
@@ -63,6 +66,14 @@ export function TemplatePreview({ template, onClose, onFork }: TemplatePreviewPr
   const conversations = detail?.conversations ?? [];
 
   const doFork = async () => {
+    // E2 intent gate: signed-out fork signs in first; the Launcher replays
+    // the fork when auth completes ("anonymous" only — never bounce a user
+    // whose token restore is still loading).
+    if (authEnabled && authStatus === "anonymous") {
+      stashAuthIntent({ kind: "fork", templateId: template.id });
+      void signIn();
+      return;
+    }
     setForking(true);
     setForkError(null);
     try {
