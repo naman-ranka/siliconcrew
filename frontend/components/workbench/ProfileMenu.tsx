@@ -136,7 +136,7 @@ export function ProfileMenu({
                       onClick={runItem(signIn)}
                       className="mt-1 inline-flex h-6 items-center rounded bg-primary px-2 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
                     >
-                      Sign in with Google
+                      Sign in
                     </button>
                   </div>
                 )}

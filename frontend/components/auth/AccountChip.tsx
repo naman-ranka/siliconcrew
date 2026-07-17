@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 /**
  * Sign-in button / account chip. Renders nothing when OAuth is unconfigured
  * (self-host / zero-config) — `enabled` is false, so the header looks exactly
- * like today. Signed-out: "Sign in with Google". Signed-in: avatar + email with
+ * like today. Signed-out: "Sign in" (WorkOS AuthKit: Google or email). Signed-in: avatar + email with
  * a small dropdown (manual popover, matching Breadcrumb/ThreadSwitcher) that
  * offers Sign out.
  */
@@ -43,11 +43,11 @@ export function AccountChip() {
         size="sm"
         className="gap-1.5 text-xs"
         onClick={() => signIn()}
-        aria-label="Sign in with Google"
+        aria-label="Sign in"
         data-testid="signin-button"
       >
         <LogIn className="h-3.5 w-3.5" />
-        Sign in with Google
+        Sign in
       </Button>
     );
   }

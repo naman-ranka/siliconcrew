@@ -212,7 +212,7 @@ function SignInState({ onSignIn }: { onSignIn: () => void }) {
         Sign in to add your own API keys and use models beyond the free tier.
       </Notice>
       <Button onClick={onSignIn} className="gap-1.5">
-        Sign in with Google
+        Sign in
       </Button>
     </div>
   );

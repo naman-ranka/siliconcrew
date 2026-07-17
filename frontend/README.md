@@ -165,7 +165,7 @@ runtime — no rebuild per environment).
 | `GOOGLE_CLIENT_ID` | Behavior |
 |--------------------|----------|
 | **unset** | Self-host / dev default. No auth UI, no GIS script, no token sent. Anonymous trial = full local access. |
-| **set**   | "Sign in with Google" via Google Identity Services. After sign-in the ID token rides `Authorization: Bearer` on REST and `?token=` on the chat WebSocket. Synth/save prompt sign-in when signed-out; lint/sim stay available. On a 401 the token is cleared → re-sign-in prompt. |
+| **set**   | "Sign in" via WorkOS AuthKit (Google or email/password) or Google Identity Services. After sign-in the ID token rides `Authorization: Bearer` on REST and `?token=` on the chat WebSocket. Synth/save prompt sign-in when signed-out; lint/sim stay available. On a 401 the token is cleared → re-sign-in prompt. |
 
 No `next-auth` / server callback — GIS hands us the ID token and the backend
 re-verifies it. The decoded JWT is used for display only.
