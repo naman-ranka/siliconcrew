@@ -38,7 +38,9 @@ PRICING = {
 }
 
 
-DEFAULT_MODEL = "gemini-3.5-flash"
+# Onboarding wave: the default is the hosted free-tier model, so a keyless
+# first run works out of the box (the platform key serves ONLY this model).
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
 
 # UI-facing model registry — the top current model of each provider plus a
@@ -47,11 +49,12 @@ DEFAULT_MODEL = "gemini-3.5-flash"
 # speed/capability bucket the picker groups by hint; `hint` is the one-line
 # capability/speed note shown under each row.
 CATALOG = [
-    # Google
-    {"id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash", "provider": "gemini",
-     "tier": "balanced", "hint": "Frontier speed/quality default — great for most RTL work."},
+    # Google — flash-lite first: it is the free-tier default, and the
+    # frontend's models[0] fallback follows catalog order.
     {"id": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash-Lite", "provider": "gemini",
-     "tier": "fast", "hint": "Cheapest + quickest; light edits and quick questions."},
+     "tier": "fast", "hint": "Free tier — quick and capable; the default for new work."},
+    {"id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash", "provider": "gemini",
+     "tier": "balanced", "hint": "Frontier speed/quality — great for most RTL work."},
     {"id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro", "provider": "gemini",
      "tier": "capable", "hint": "Deeper reasoning for tricky debugging / architecture."},
     # OpenAI

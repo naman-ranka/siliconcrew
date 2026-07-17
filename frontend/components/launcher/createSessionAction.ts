@@ -60,7 +60,7 @@ export async function performCreate({ name, posture, group }: CreateSessionInput
   // Model: the real catalog default (loaded by the modal / launcher);
   // sessionsApi falls back to its own default when the registry hasn't landed.
   const { defaultModel, models } = useStore.getState();
-  const model = defaultModel ?? models[0]?.id ?? "gemini-3.5-flash";
+  const model = defaultModel ?? models[0]?.id ?? "gemini-3.1-flash-lite";
   const session = await createSession(slug, model, projectId);
   useWorkbenchUiStore.getState().setShell(session.id, posture);
   return session.id;

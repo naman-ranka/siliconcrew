@@ -157,6 +157,11 @@ export function ModelPicker() {
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
                         <span className="text-xs font-medium text-foreground truncate">{m.label}</span>
+                        {m.free && (
+                          <span className="text-[10px] rounded border border-primary/40 bg-primary/10 px-1 py-0.5 text-primary shrink-0">
+                            Free
+                          </span>
+                        )}
                         {!m.available && !isCurrent && (
                           <span className="text-[10px] rounded border border-border px-1 py-0.5 text-muted-foreground shrink-0">
                             needs key

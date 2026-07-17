@@ -1062,9 +1062,22 @@ def _usable_providers(identity: Identity) -> set:
     for p, env in _PROVIDER_ENV.items():
         if os.environ.get(env):
             usable.add(p)
-    if settings.hosted_gemini_key:
-        usable.add("gemini")  # hosted free tier (capped)
+    # NOTE: the hosted free tier is deliberately NOT provider-granular any
+    # more — the platform key serves only the allowlisted models, so its
+    # availability is computed per-model in list_models (onboarding wave, E5).
     return usable
+
+
+def _free_tier_models() -> set:
+    """Normalized model ids the shared platform key serves (hosted only)."""
+    settings = get_settings()
+    if not (settings.hosted and settings.hosted_gemini_key):
+        return set()
+    return {
+        normalize_model_name(m)
+        for m in getattr(settings, "hosted_fallback_models", ())
+        if m
+    }
 
 
 @app.get("/api/models")
@@ -1078,8 +1091,16 @@ async def list_models(identity: Identity = Depends(get_identity)):
     (the account state lives in the Codex auth endpoints, not here).
     """
     usable = _usable_providers(identity)
+    free = _free_tier_models()
+    # Availability is per-MODEL: a provider key (BYOK/env) unlocks the whole
+    # provider; the platform key unlocks only the allowlisted free models —
+    # never offer a model that would fail at send time.
     models = [
-        {**e, "available": e["provider"] in usable}
+        {
+            **e,
+            "available": e["provider"] in usable or e["id"] in free,
+            "free": e["id"] in free,
+        }
         for e in model_catalog_entries()
     ]
     codex_models = [
@@ -1132,7 +1153,12 @@ async def _read_thread_history(thread_id: str, model_name: str, uid: Optional[st
     try:
         api_key = _LLM_KEY_PROVIDER.resolve(uid, model_name).api_key
     except Exception:
-        api_key = None  # no key yet — read-only path tolerates it
+        # No key resolvable. This path never calls the LLM — it only reads the
+        # checkpoint — but client CONSTRUCTION demands a key string, and with
+        # api_key=None the factory falls back to env vars that a hardened
+        # hosted deployment no longer carries (E5). A placeholder keeps a
+        # keyless user's old transcripts readable instead of silently blank.
+        api_key = "history-read-only"
     async with open_checkpointer(DB_PATH) as memory:
         agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name, api_key=api_key)
         config = {"configurable": {"thread_id": thread_id}}
@@ -1523,6 +1549,48 @@ def _log_chat_timing(thread_id: str, turn_id: str, event: str, **fields: object)
         pass
 
 
+def _is_recursion_limit_error(exc: BaseException) -> bool:
+    """True when the agent turn died on LangGraph's step budget (E6).
+
+    Checked by type when langgraph is importable, with a message fallback —
+    the observed live failure surfaced as a raw stringified error, and tests
+    stub the agent stack.
+    """
+    try:
+        from langgraph.errors import GraphRecursionError
+
+        if isinstance(exc, GraphRecursionError):
+            return True
+    except Exception:
+        pass
+    return "Recursion limit" in str(exc)
+
+
+def _friendly_agent_error(exc: BaseException) -> str:
+    """Map raw provider errors to actionable messages (E6/A19).
+
+    A BYOK user with an exhausted account otherwise sees the provider's raw
+    4xx body (e.g. Anthropic's "credit balance is too low") with no guidance.
+    Everything else passes through unchanged — honest, not sanitized.
+    """
+    text = str(exc)
+    lowered = text.lower()
+    billing_markers = (
+        "credit balance",
+        "insufficient_quota",
+        "exceeded your current quota",
+        "billing",
+        "payment required",
+    )
+    if any(m in lowered for m in billing_markers):
+        return (
+            "Your API key's account can't be billed right now "
+            f"(provider says: {text.strip()[:300]}). Add a different key in "
+            "Settings, or switch to the free model."
+        )
+    return text
+
+
 @app.websocket("/api/chat/{session_id:path}")
 async def chat_websocket(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for streaming chat."""
@@ -1767,7 +1835,14 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 agent_graph = create_architect_agent(
                     checkpointer=memory, model_name=model_name, api_key=llm_key.api_key
                 )
-                config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
+                # Step budget per turn (E6): config, not hard-code. Raised to
+                # 80 by default — live FIFO showcase turns hit 50 in 3 of 4
+                # runs; graceful limit handling below is the real fix, the
+                # headroom just makes it rarer.
+                config = {
+                    "configurable": {"thread_id": thread_id},
+                    "recursion_limit": get_settings().chat_recursion_limit,
+                }
 
                 # Start-of-turn repair: a previous run interrupted mid-tool
                 # leaves dangling tool calls in the checkpoint; close them with
@@ -2064,9 +2139,26 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 # Terminal frame goes out NOW — the moment the assistant's turn
                 # is logically complete — not after whatever comes next.
                 tokens = {"input": total_input_tokens, "output": total_output_tokens}
-                if agent_error is not None:
+                if agent_error is not None and _is_recursion_limit_error(agent_error):
+                    # The turn hit its step budget mid-task (E6). The work so
+                    # far IS saved (checkpoint + workspace); a follow-up turn
+                    # resumes from the dangling-tool-call repair above. Send an
+                    # honest continue nudge and a REAL done — never the raw
+                    # LangGraph error, which reads as a crash and leaves the
+                    # thread without a terminal frame.
+                    print(f"[INFO] Turn hit the step budget: {agent_error}")
+                    await _send({
+                        "type": "text",
+                        "content": (
+                            "I hit this turn's step budget mid-task. Everything "
+                            "so far is saved in the workspace — say \"continue\" "
+                            "and I'll pick up exactly where I stopped."
+                        ),
+                    })
+                    await _send({"type": "done", "tokens": tokens})
+                elif agent_error is not None:
                     print(f"[ERROR] Agent error: {agent_error}")
-                    await _send({"type": "error", "error": str(agent_error)})
+                    await _send({"type": "error", "error": _friendly_agent_error(agent_error)})
                 elif stop_requested:
                     # Explicit terminal marker for a user-initiated stop; the
                     # dangling tool calls were closed with interrupted results

@@ -143,9 +143,9 @@ def test_byok_key_is_passed_to_the_agent(harness):
 
 def test_gemini_with_no_key_uses_capped_hosted_key(harness):
     harness.set_provider(
-        ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="hosted-gemini-secret", hosted_model="gemini-3-flash-preview")
+        ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="hosted-gemini-secret")
     )
-    harness.set_model("gemini-3-flash-preview")
+    harness.set_model("gemini-3.1-flash-lite")
 
     frames = harness.drive()
 
@@ -169,7 +169,7 @@ def test_hosted_tier_exhausted_emits_structured_error(harness):
     harness.set_provider(
         ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="hosted-gemini-secret", limiter=limiter)
     )
-    harness.set_model("gemini-3-flash-preview")
+    harness.set_model("gemini-3.1-flash-lite")
 
     frames = harness.drive()
 

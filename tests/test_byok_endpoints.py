@@ -103,7 +103,8 @@ def test_resolve_falls_back_to_hosted_gemini_without_byok(tmp_path):
     db = str(tmp_path / "byok.db")
     vault = EnvelopeKeyVault(SqliteWrappedKeyStore(db), ReversibleCipher(), FakeKek())
     provider = ByokHostedLlmKeyProvider(vault, hosted_gemini_key="HOSTED")
-    key = provider.resolve("google_1", "gemini-3-flash-preview")
+    # E5: only the allowlisted free model rides the platform key.
+    key = provider.resolve("google_1", "gemini-3.1-flash-lite")
     assert key.source == "hosted" and key.api_key == "HOSTED"
 
 

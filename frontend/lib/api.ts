@@ -135,7 +135,7 @@ export const projectsApi = {
 export const sessionsApi = {
   list: () => apiFetch<Session[]>("/api/sessions"),
 
-  create: (name: string, model: string = "gemini-3.5-flash", projectId?: string | null) =>
+  create: (name: string, model: string = "gemini-3.1-flash-lite", projectId?: string | null) =>
     apiFetch<Session>("/api/sessions", {
       method: "POST",
       body: JSON.stringify({ name, model, project_id: projectId ?? null }),

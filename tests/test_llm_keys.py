@@ -92,15 +92,58 @@ def test_each_store_uses_a_fresh_dek():
 def test_provider_prefers_byok_over_hosted():
     vault = _vault()
     vault.store_key("u1", "gemini", "user-own-gemini-key")
-    provider = ByokHostedLlmKeyProvider(vault, hosted_gemini_key="HOSTED", hosted_model="gemini-3-flash-preview")
-    key = provider.resolve("u1", "gemini-3-flash-preview")
+    provider = ByokHostedLlmKeyProvider(vault, hosted_gemini_key="HOSTED")
+    # BYOK wins even for the allowlisted free model.
+    key = provider.resolve("u1", "gemini-3.1-flash-lite")
     assert key.source == "byok" and key.api_key == "user-own-gemini-key"
 
 
-def test_provider_falls_back_to_hosted_gemini():
-    provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED", hosted_model="gemini-3-flash-preview")
-    key = provider.resolve("u1", "gemini-3-flash-preview")
+def test_provider_falls_back_to_hosted_for_allowed_model_only():
+    provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED")
+    key = provider.resolve("u1", "gemini-3.1-flash-lite")
     assert key.source == "hosted" and key.api_key == "HOSTED"
+    # The pin is the VALIDATED requested model — never a separately configured
+    # hosted model that could silently upgrade the turn to a costlier model.
+    assert key.model == "gemini-3.1-flash-lite"
+
+
+def test_disallowed_gemini_model_requires_byok():
+    provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED")
+    with pytest.raises(ValueError, match="free model"):
+        provider.resolve("u1", "gemini-3.5-flash")
+
+
+def test_env_keys_never_serve_end_users_in_hosted(monkeypatch):
+    # The old blanket env fallback served ANY model, uncapped, bypassing the
+    # limiter (the E5 leak). With a container env key present: allowed models
+    # still resolve through the CAPPED hosted branch, and disallowed models
+    # still require BYOK.
+    monkeypatch.setenv("GOOGLE_API_KEY", "env-leak")
+    provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED")
+    key = provider.resolve("u1", "gemini-3.1-flash-lite")
+    assert key.source == "hosted" and key.api_key == "HOSTED"
+    with pytest.raises(ValueError):
+        provider.resolve("u1", "gemini-3.5-flash")
+
+
+def test_allowlist_and_request_aliases_normalize():
+    # A deprecated alias in env config still matches the normalized request,
+    # and an aliased request matches the canonical allowlist.
+    provider = ByokHostedLlmKeyProvider(
+        _vault(), hosted_gemini_key="HOSTED",
+        allowed_fallback_models=("gemini-3.1-flash-lite-preview",),
+    )
+    key = provider.resolve("u1", "gemini-3.1-flash-lite")
+    assert key.source == "hosted" and key.model == "gemini-3.1-flash-lite"
+
+
+def test_no_platform_key_reads_all_byok():
+    # Platform key pulled → every model (including the free one) honestly
+    # reads as bring-your-own-key, with no mention of a free tier.
+    provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="")
+    with pytest.raises(ValueError) as ei:
+        provider.resolve("u1", "gemini-3.1-flash-lite")
+    assert "free model" not in str(ei.value)
 
 
 def test_provider_requires_byok_for_non_gemini_without_key():
@@ -112,10 +155,10 @@ def test_provider_requires_byok_for_non_gemini_without_key():
 def test_hosted_tier_daily_token_cap():
     limiter = HostedTierLimiter(HostedTierLimits(tokens_per_day=100, global_cost_ceiling_usd=1000))
     provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED", limiter=limiter)
-    provider.resolve("u1", "gemini-3-flash-preview")  # ok
+    provider.resolve("u1", "gemini-3.1-flash-lite")  # ok
     limiter.record("u1", tokens=100, cost_usd=0.01)
     with pytest.raises(HostedTierExhausted) as ei:
-        provider.resolve("u1", "gemini-3-flash-preview")
+        provider.resolve("u1", "gemini-3.1-flash-lite")
     assert ei.value.code == "hosted_tier_exhausted"
 
 
@@ -124,7 +167,7 @@ def test_hosted_tier_global_cost_ceiling():
     provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED", limiter=limiter)
     limiter.record("whoever", tokens=1, cost_usd=1.0)  # exhaust global budget
     with pytest.raises(HostedTierExhausted):
-        provider.resolve("u2", "gemini-3-flash-preview")
+        provider.resolve("u2", "gemini-3.1-flash-lite")
 
 
 def test_env_provider_reads_environment(monkeypatch):

@@ -63,6 +63,8 @@ export interface ModelInfo {
   hint?: string;
   pricing?: { input: number; output: number };
   available: boolean;
+  /** Served by the hosted platform key (no BYOK needed) — E5 free tier. */
+  free?: boolean;
 }
 
 // Chat thread types — a chat = a LangGraph thread_id; many per workspace.

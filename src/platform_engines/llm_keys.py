@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Protocol
 
 from src.llm.factory import infer_provider_from_model
+from src.model_catalog import normalize_model_name
 
 
 @dataclass
@@ -406,12 +407,16 @@ class ByokHostedLlmKeyProvider:
         self,
         vault: EnvelopeKeyVault,
         hosted_gemini_key: str = "",
-        hosted_model: str = "gemini-3.5-flash",
+        allowed_fallback_models: tuple = ("gemini-3.1-flash-lite",),
         limiter: Optional[HostedTierLimiter] = None,
     ):
         self._vault = vault
         self._hosted_gemini_key = hosted_gemini_key
-        self._hosted_model = hosted_model
+        # Normalized once so aliases in env config (e.g. a deprecated
+        # "-preview" id) still match the normalized request at resolve time.
+        self._allowed_fallback = tuple(
+            normalize_model_name(m) for m in allowed_fallback_models if m
+        )
         self._limiter = limiter or HostedTierLimiter()
 
     def resolve(self, user_id: Optional[str], model_name: str) -> LlmKey:
@@ -422,26 +427,38 @@ class ByokHostedLlmKeyProvider:
             if byok:
                 return LlmKey(provider=provider, api_key=byok, source="byok")
 
-        # Fall back to container environment variables if present (useful for single-user staging/prod)
-        env_vars = {"gemini": "GOOGLE_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
-        env_key = os.environ.get(env_vars[provider])
-        if env_key:
-            return LlmKey(provider=provider, api_key=env_key, source="env")
-
-        # No BYOK key or env key — only the hosted Gemini tier is available, under caps.
-        if provider == "gemini" and self._hosted_gemini_key:
+        # Platform fallback: ONLY the capped hosted tier, ONLY for allowlisted
+        # free models. (The old blanket env fallback served ANY model of the
+        # provider, uncapped, bypassing the limiter — removed in the
+        # onboarding wave; the platform key is reachable through this branch
+        # alone, per-request, and is never written to the BYOK vault.)
+        requested = normalize_model_name(model_name)
+        if (
+            provider == "gemini"
+            and self._hosted_gemini_key
+            and requested in self._allowed_fallback
+        ):
             self._limiter.check(user_id or "anonymous")
+            # Pin the VALIDATED requested model — pinning a separately
+            # configured hosted model could silently upgrade a free-tier turn
+            # to a costlier model if the two settings ever disagreed.
             return LlmKey(
                 provider="gemini",
                 api_key=self._hosted_gemini_key,
                 source="hosted",
-                model=self._hosted_model,
+                model=requested,
             )
 
         display = _PROVIDER_DISPLAY.get(provider, provider.title())
+        # Only advertise the free tier when it actually exists: with the
+        # platform key unset, everything honestly reads as bring-your-own-key.
+        if self._hosted_gemini_key and self._allowed_fallback:
+            raise ValueError(
+                f"No key available for {display}. Add your own {display} API key "
+                f"in Settings, or switch to the free model ({self._allowed_fallback[0]})."
+            )
         raise ValueError(
-            f"No key available for {display}. Add your own {display} API key, "
-            "or use the hosted Gemini tier."
+            f"No key available for {display}. Add your own {display} API key in Settings."
         )
 
     @property
@@ -501,6 +518,8 @@ def build_llm_key_provider(settings, vault: Optional[EnvelopeKeyVault]) -> LlmKe
         return ByokHostedLlmKeyProvider(
             vault,
             hosted_gemini_key=settings.hosted_gemini_key,
-            hosted_model=settings.hosted_gemini_model,
+            allowed_fallback_models=getattr(
+                settings, "hosted_fallback_models", ("gemini-3.1-flash-lite",)
+            ),
         )
     return EnvLlmKeyProvider()
