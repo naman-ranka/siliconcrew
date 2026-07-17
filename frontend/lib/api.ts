@@ -58,10 +58,27 @@ async function apiFetch<T>(
   if (!response.ok) {
     // Expired/invalid token → let the auth layer drop to anonymous + re-prompt.
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    // Attach the HTTP status so callers can branch on graceful states (e.g. BYOK:
-    // 400 self-host, 503 vault-off) without parsing the message string.
-    const err = new Error(error.detail || "API request failed") as Error & { status?: number };
+    // FastAPI `detail` may be a plain string OR a structured object
+    // ({code, message}) — e.g. the 401/403 auth errors and the no_key key
+    // error. Pull a human string out of either shape; a bare object here used
+    // to stringify to the literal "[object Object]" in the UI.
+    const detail = error?.detail;
+    const message =
+      typeof detail === "string"
+        ? detail
+        : detail && typeof detail === "object" && typeof detail.message === "string"
+          ? detail.message
+          : detail != null
+            ? JSON.stringify(detail)
+            : "API request failed";
+    // Attach the HTTP status (and structured code when present) so callers can
+    // branch on graceful states (e.g. BYOK: 400 self-host, 503 vault-off, or a
+    // no_key error) without parsing the message string.
+    const err = new Error(message) as Error & { status?: number; code?: string };
     err.status = response.status;
+    if (detail && typeof detail === "object" && typeof detail.code === "string") {
+      err.code = detail.code;
+    }
     throw err;
   }
 

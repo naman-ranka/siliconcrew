@@ -47,4 +47,22 @@ describe("keysApi contract", () => {
     global.fetch = f as unknown as typeof fetch;
     await expect(keysApi.list()).rejects.toMatchObject({ status: 503 });
   });
+
+  it("renders an object `detail` ({code,message}) as its message, not [object Object]", async () => {
+    // FastAPI 401/403 return detail={code,message}; a bare object used to
+    // stringify to the literal "[object Object]" in the create/fork dialogs.
+    const f = mockFetch(403, { detail: { code: "forbidden", message: "You do not have access to this workspace." } });
+    global.fetch = f as unknown as typeof fetch;
+    await expect(keysApi.list()).rejects.toMatchObject({
+      status: 403,
+      code: "forbidden",
+      message: "You do not have access to this workspace.",
+    });
+  });
+
+  it("keeps a plain string `detail` as the message", async () => {
+    const f = mockFetch(400, { detail: "Bad request." });
+    global.fetch = f as unknown as typeof fetch;
+    await expect(keysApi.list()).rejects.toMatchObject({ status: 400, message: "Bad request." });
+  });
 });
