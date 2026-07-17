@@ -41,6 +41,44 @@ async function fetchWithAuthRecovery(makeRequest: () => Promise<Response>): Prom
   return response;
 }
 
+/**
+ * One extractor for every error body the backend can produce, so no path ever
+ * renders "[object Object]". Shapes seen in the wild:
+ *   - detail: "plain string"                      (most HTTPExceptions)
+ *   - detail: { code, message }                   (auth deps, api.py:613-631)
+ *   - detail: { error: { message } }              (envelope-in-HTTPException)
+ *   - detail: [{ loc, msg, ... }]                 (pydantic 422)
+ *   - { error: { message } } / { message }        (top-level envelopes)
+ */
+export function extractErrorMessage(body: unknown, fallback: string): string {
+  if (typeof body === "string" && body) return body;
+  if (!body || typeof body !== "object") return fallback;
+  const b = body as Record<string, unknown>;
+
+  const detail = b.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d) => (d && typeof d === "object" ? (d as { msg?: unknown }).msg : null))
+      .filter((m): m is string => typeof m === "string" && m.length > 0);
+    if (msgs.length) return msgs.join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    const d = detail as { message?: unknown; error?: { message?: unknown } };
+    if (typeof d.message === "string" && d.message) return d.message;
+    if (typeof d.error?.message === "string" && d.error.message) return d.error.message;
+  }
+
+  const err = b.error;
+  if (typeof err === "string" && err) return err;
+  if (err && typeof err === "object") {
+    const m = (err as { message?: unknown }).message;
+    if (typeof m === "string" && m) return m;
+  }
+  if (typeof b.message === "string" && b.message) return b.message;
+  return fallback;
+}
+
 // Generic fetch wrapper with error handling
 async function apiFetch<T>(
   endpoint: string,
@@ -60,7 +98,9 @@ async function apiFetch<T>(
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     // Attach the HTTP status so callers can branch on graceful states (e.g. BYOK:
     // 400 self-host, 503 vault-off) without parsing the message string.
-    const err = new Error(error.detail || "API request failed") as Error & { status?: number };
+    const err = new Error(
+      extractErrorMessage(error, "API request failed")
+    ) as Error & { status?: number };
     err.status = response.status;
     throw err;
   }
@@ -377,8 +417,7 @@ async function actionFetch<T>(endpoint: string, options?: RequestInit): Promise<
   }));
   const body = await response.json().catch(() => null);
   if (!response.ok || (body && body.ok === false)) {
-    const err = body?.detail?.error || body?.error || { message: response.statusText };
-    throw new Error(err.message || "Action failed");
+    throw new Error(extractErrorMessage(body, response.statusText || "Action failed"));
   }
   return body as T;
 }
@@ -407,7 +446,7 @@ export const workbenchApi = {
     }));
     const body = await response.json().catch(() => null);
     if (!response.ok || (body && body.ok === false)) {
-      throw new Error(body?.detail?.error?.message || "Upload failed");
+      throw new Error(extractErrorMessage(body, "Upload failed"));
     }
     return body as { ok: true; uploaded: string[]; manifest: DesignManifest };
   },
