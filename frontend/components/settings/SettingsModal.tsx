@@ -39,11 +39,10 @@ const PROVIDERS: {
   env: string;
   console: string;
   hint: string;
-  freeTier?: boolean;
 }[] = [
   { id: "anthropic", label: "Anthropic", env: "ANTHROPIC_API_KEY", console: "https://console.anthropic.com/settings/keys", hint: "Starts with sk-ant-" },
   { id: "openai", label: "OpenAI", env: "OPENAI_API_KEY", console: "https://platform.openai.com/api-keys", hint: "Starts with sk-" },
-  { id: "gemini", label: "Google (Gemini)", env: "GOOGLE_API_KEY", console: "https://aistudio.google.com/apikey", hint: "Google AI Studio key", freeTier: true },
+  { id: "gemini", label: "Google (Gemini)", env: "GOOGLE_API_KEY", console: "https://aistudio.google.com/apikey", hint: "Google AI Studio key" },
 ];
 
 type Mode = "loading" | "signin" | "self_host" | "vault_off" | "hosted" | "error";
@@ -150,8 +149,9 @@ export function SettingsModal() {
           {mode === "vault_off" && (
             <Notice icon={<AlertTriangle className="h-4 w-4 text-status-fail" />}>
               Key storage isn’t configured on this server, so BYOK is unavailable.
-              The hosted free tier (Gemini) may still work; other providers need a
-              server-side key.
+              {models.some((m) => m.free)
+                ? " The free tier keeps working; everything else needs a server-side key."
+                : " All models need a server-side key."}
             </Notice>
           )}
 
@@ -176,6 +176,7 @@ export function SettingsModal() {
                 <ProviderRow
                   key={p.id}
                   provider={p}
+                  freeModel={models.find((m) => m.provider === p.id && m.free)?.label ?? null}
                   isConfigured={configured.includes(p.id)}
                   onSaved={async () => {
                     await refreshList();
@@ -265,12 +266,17 @@ function SelfHostState({ envUsable }: { envUsable: Set<string> }) {
 
 function ProviderRow({
   provider,
+  freeModel,
   isConfigured,
   onSaved,
   onRemoved,
   pushToast,
 }: {
   provider: (typeof PROVIDERS)[number];
+  /** Label of this provider's platform-served free model, or null when the
+   *  free tier is off — derived LIVE from /api/models' free flag, never
+   *  hardcoded (a pulled platform key must read as BYOK everywhere). */
+  freeModel: string | null;
   isConfigured: boolean;
   onSaved: () => Promise<void>;
   onRemoved: () => Promise<void>;
@@ -341,7 +347,7 @@ function ProviderRow({
               <Check className="h-3 w-3" /> configured
             </span>
           )}
-          {provider.freeTier && !isConfigured && (
+          {freeModel && !isConfigured && (
             <span className="rounded-full bg-info/15 px-2 py-0.5 text-[10px] text-info">free tier</span>
           )}
         </label>
@@ -361,9 +367,10 @@ function ProviderRow({
         </Tooltip>
       </div>
 
-      {provider.freeTier && (
+      {freeModel && (
         <p className="text-[11px] text-muted-foreground">
-          Gemini works without a key on the capped free hosted tier. Add a key to lift the cap.
+          {freeModel} works without a key on the capped free tier. Add a key to
+          use the other {provider.label} models.
         </p>
       )}
 

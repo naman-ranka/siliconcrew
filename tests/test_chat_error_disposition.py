@@ -3,8 +3,8 @@
 The chat loop's terminal-frame logic must (a) turn a step-budget death into
 an honest continue nudge + a real done frame, never the raw LangGraph error,
 and (b) map provider billing errors to actionable messages. These test the
-pure helpers; the frame sequence itself is exercised by the WS tests that
-drive the loop with fakes.
+pure helpers; the frame sequence itself is exercised by
+tests/test_chat_recursion_frames.py against the real WS loop.
 """
 import api
 
@@ -34,10 +34,21 @@ def test_billing_errors_get_actionable_mapping():
         'Error code: 400 - {"error": {"message": "Your credit balance is too low '
         'to access the Anthropic API."}}'
     )
-    msg = api._friendly_agent_error(exc)
+    msg = api._friendly_agent_error(exc, key_source="byok")
     assert "Add a different key in Settings" in msg
     assert "free model" in msg
     assert "credit balance" in msg  # the provider's own words stay visible
+
+
+def test_platform_key_billing_errors_never_blame_the_user():
+    # Adversarial-review finding: a keyless free-tier user whose turn ran on
+    # the PLATFORM key must not be told "your API key" failed or to "switch
+    # to the free model" they are already on.
+    exc = RuntimeError("429 You exceeded your current quota, please check your plan and billing details.")
+    msg = api._friendly_agent_error(exc, key_source="hosted")
+    assert "free tier is temporarily unavailable" in msg
+    assert "Your API key" not in msg
+    assert "switch to the free model" not in msg
 
 
 def test_non_billing_errors_pass_through_unchanged():

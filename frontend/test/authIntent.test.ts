@@ -24,6 +24,23 @@ describe("authIntent", () => {
     expect(takeAuthIntent()).toBeNull();
   });
 
+  it("expires abandoned intents instead of replaying them later", () => {
+    // Adversarial-review finding: an abandoned sign-in must not leave a
+    // landmine that fires (with navigation) on a voluntary sign-in later.
+    sessionStorage.setItem(
+      "sc-auth-intent",
+      JSON.stringify({ intent: { kind: "fork", templateId: "alu4" }, at: Date.now() - 16 * 60 * 1000 })
+    );
+    expect(takeAuthIntent()).toBeNull();
+    expect(sessionStorage.getItem("sc-auth-intent")).toBeNull();
+  });
+
+  it("kind filter takes only matching intents and leaves others in place", () => {
+    stashAuthIntent({ kind: "fork", templateId: "alu4" });
+    expect(takeAuthIntent("create")).toBeNull(); // not ours — left stashed
+    expect(takeAuthIntent()).toEqual({ kind: "fork", templateId: "alu4" });
+  });
+
   it("clears and returns null on malformed or unknown-kind payloads", () => {
     sessionStorage.setItem("sc-auth-intent", "{not json");
     expect(takeAuthIntent()).toBeNull();

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { useAuth } from "@/lib/auth";
-import { stashAuthIntent } from "@/lib/authIntent";
+import { stashAuthIntent, takeAuthIntent } from "@/lib/authIntent";
 import { sessionUrl, type ViewMode } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -91,6 +91,30 @@ export function CreateSessionModal({ presetGroup, defaultStartIn, onClose }: Cre
   }, []);
 
   const slug = slugify(name) || "untitled";
+
+  // GIS-mode / NavRail replay: this modal is also mounted OUTSIDE the
+  // Launcher (workbench nav rail), and Google/GIS sign-in completes with no
+  // navigation — so when sign-in finishes while the modal is still open,
+  // finish the stashed create HERE. takeAuthIntent("create") is
+  // read-and-clear, so whichever replay host runs first wins and the other
+  // finds nothing (no duplicate workspaces).
+  useEffect(() => {
+    if (authStatus !== "signed_in") return;
+    const intent = takeAuthIntent("create");
+    if (!intent || intent.kind !== "create") return;
+    setBusy(true);
+    setError(null);
+    void performCreate(intent)
+      .then((sessionId) => {
+        router.push(sessionUrl(sessionId, { view: intent.posture }));
+        onCloseRef.current();
+      })
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : "Failed to create the workspace");
+        setBusy(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus]);
 
   const submit = async () => {
     if (busy) return;

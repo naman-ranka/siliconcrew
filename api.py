@@ -1566,12 +1566,15 @@ def _is_recursion_limit_error(exc: BaseException) -> bool:
     return "Recursion limit" in str(exc)
 
 
-def _friendly_agent_error(exc: BaseException) -> str:
+def _friendly_agent_error(exc: BaseException, key_source: Optional[str] = None) -> str:
     """Map raw provider errors to actionable messages (E6/A19).
 
     A BYOK user with an exhausted account otherwise sees the provider's raw
     4xx body (e.g. Anthropic's "credit balance is too low") with no guidance.
-    Everything else passes through unchanged — honest, not sanitized.
+    ``key_source`` disambiguates WHOSE account failed: when the turn ran on
+    the shared platform key ("hosted"), blaming "your API key" would be
+    dishonest — the user may have no key at all and is already on the free
+    model. Everything non-billing passes through unchanged.
     """
     text = str(exc)
     lowered = text.lower()
@@ -1583,6 +1586,12 @@ def _friendly_agent_error(exc: BaseException) -> str:
         "payment required",
     )
     if any(m in lowered for m in billing_markers):
+        if key_source == "hosted":
+            return (
+                "The free tier is temporarily unavailable "
+                f"(provider says: {text.strip()[:300]}). Add your own API key "
+                "in Settings to keep going, or try again later."
+            )
         return (
             "Your API key's account can't be billed right now "
             f"(provider says: {text.strip()[:300]}). Add a different key in "
@@ -2158,7 +2167,12 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     await _send({"type": "done", "tokens": tokens})
                 elif agent_error is not None:
                     print(f"[ERROR] Agent error: {agent_error}")
-                    await _send({"type": "error", "error": _friendly_agent_error(agent_error)})
+                    await _send({
+                        "type": "error",
+                        "error": _friendly_agent_error(
+                            agent_error, key_source=getattr(llm_key, "source", None)
+                        ),
+                    })
                 elif stop_requested:
                     # Explicit terminal marker for a user-initiated stop; the
                     # dangling tool calls were closed with interrupted results

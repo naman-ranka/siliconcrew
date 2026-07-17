@@ -20,25 +20,46 @@ export type AuthIntent =
 
 const KEY = "sc-auth-intent";
 
+// An abandoned sign-in must not leave a landmine: without an expiry, a user
+// who bails out of AuthKit and voluntarily signs in hours later would have
+// the stale action silently replayed WITH navigation. Sign-in round trips
+// take seconds; anything older than this is abandonment.
+const MAX_AGE_MS = 15 * 60 * 1000;
+
 export function stashAuthIntent(intent: AuthIntent): void {
   try {
-    sessionStorage.setItem(KEY, JSON.stringify(intent));
+    sessionStorage.setItem(KEY, JSON.stringify({ intent, at: Date.now() }));
   } catch {
     // Storage unavailable (private mode quota etc.) — the user just signs in
     // and repeats the action by hand; never block the sign-in itself.
   }
 }
 
-export function takeAuthIntent(): AuthIntent | null {
+/**
+ * Read-and-clear the stashed intent. With `kind`, only an intent of that kind
+ * is taken — others are left in place for the replay host that owns them
+ * (the create modal takes only "create"; the Launcher takes anything).
+ */
+export function takeAuthIntent(kind?: AuthIntent["kind"]): AuthIntent | null {
   try {
     const raw = sessionStorage.getItem(KEY);
     if (!raw) return null;
-    sessionStorage.removeItem(KEY);
-    const parsed = JSON.parse(raw) as AuthIntent;
-    if (parsed && (parsed.kind === "create" || parsed.kind === "fork" || parsed.kind === "createGroup")) {
-      return parsed;
+    const envelope = JSON.parse(raw) as { intent?: AuthIntent; at?: number };
+    const parsed = envelope?.intent;
+    const valid =
+      parsed &&
+      (parsed.kind === "create" || parsed.kind === "fork" || parsed.kind === "createGroup");
+    if (!valid) {
+      sessionStorage.removeItem(KEY);
+      return null;
     }
-    return null;
+    if (typeof envelope.at !== "number" || Date.now() - envelope.at > MAX_AGE_MS) {
+      sessionStorage.removeItem(KEY); // expired — abandoned sign-in
+      return null;
+    }
+    if (kind && parsed.kind !== kind) return null; // not ours; leave it
+    sessionStorage.removeItem(KEY);
+    return parsed;
   } catch {
     try { sessionStorage.removeItem(KEY); } catch { /* ignore */ }
     return null;
