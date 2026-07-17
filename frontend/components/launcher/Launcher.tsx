@@ -55,6 +55,35 @@ import type { Project, Session, TemplateSummary } from "@/types";
 
 type SortMode = "recent" | "grouped";
 
+// Sign-in-on-intent: a signed-out user who commits to a MUTATING action
+// (New session / Fork) triggers the sign-in redirect with the intent stashed,
+// so we complete it automatically on return instead of firing a doomed 401/403.
+// sessionStorage survives the same-origin AuthKit round-trip (and the in-page
+// Google flow), and is scoped to the tab.
+const PENDING_INTENT_KEY = "sc-pending-intent";
+type PendingIntent =
+  | { kind: "new_session"; groupName: string | null }
+  | { kind: "fork"; templateId: string };
+
+function stashIntent(intent: PendingIntent) {
+  try {
+    sessionStorage.setItem(PENDING_INTENT_KEY, JSON.stringify(intent));
+  } catch {
+    /* storage unavailable — fall through; the action just won't resume */
+  }
+}
+
+function takeIntent(): PendingIntent | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_INTENT_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(PENDING_INTENT_KEY);
+    return JSON.parse(raw) as PendingIntent;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The Launcher — the app's front door (`/`). A session IS a workspace IS one
  * design block; cards lead with recency (revision 1), groups are tags over
@@ -80,7 +109,7 @@ export function Launcher() {
     loadTemplates,
     forkTemplate,
   } = useStore();
-  const { status: authStatus } = useAuth();
+  const { enabled: authEnabled, status: authStatus, signIn } = useAuth();
 
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortMode>("recent");
@@ -171,12 +200,41 @@ export function Launcher() {
     setSelTemplate(t);
   };
 
+  // Sign-in-on-intent gate: if a signed-out user commits to a mutating action,
+  // stash the intent and kick off sign-in instead of firing a doomed request.
+  // Returns true when the caller should stop and let the resume finish it.
+  const gateOnSignIn = (intent: PendingIntent): boolean => {
+    if (authEnabled && authStatus === "anonymous") {
+      stashIntent(intent);
+      signIn();
+      return true;
+    }
+    return false;
+  };
+
   // Fork → new user-owned session, then route straight into it. Errors bubble
   // to the preview (e.g. a hosted deployment returns 400).
   const forkExample = async (templateId: string) => {
+    if (gateOnSignIn({ kind: "fork", templateId })) return;
     const sessionId = await forkTemplate(templateId);
     open(sessionId);
   };
+
+  // Resume a stashed intent once sign-in completes — the WorkOS redirect reload
+  // and the in-page Google flow both land here when authStatus flips to
+  // signed_in. Cleared before executing so it fires exactly once.
+  useEffect(() => {
+    if (authStatus !== "signed_in") return;
+    const intent = takeIntent();
+    if (!intent) return;
+    if (intent.kind === "new_session") {
+      setCreateGroup(intent.groupName);
+      setCreating(true);
+    } else if (intent.kind === "fork") {
+      void forkExample(intent.templateId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus]);
 
   // Drag-to-group: optimistic move, reverted on server failure.
   const moveToGroup = async (sessionId: string, projectId: string | null) => {
@@ -317,6 +375,7 @@ export function Launcher() {
   };
 
   const startCreate = (groupName: string | null) => {
+    if (gateOnSignIn({ kind: "new_session", groupName })) return;
     setCreateGroup(groupName);
     setCreating(true);
   };
