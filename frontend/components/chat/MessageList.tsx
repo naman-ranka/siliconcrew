@@ -351,26 +351,33 @@ function StreamingMessage({ showIcon = true }: { showIcon?: boolean }) {
   );
 }
 
+// Card faces are label-only (title + one-line hint); the full prompt is what
+// gets sent (and shown as the user's message) on click. Wording is the
+// creator-authored, domain-fluent voice — not a beginner persona.
 const WELCOME_SUGGESTIONS = [
   {
-    title: "Design an 8-bit counter",
-    description: "with async reset and enable",
-    prompt: "Design an 8-bit counter with asynchronous reset and enable signals",
+    title: "Tour the tools",
+    description: "what it can take on",
+    prompt:
+      "Lay out what you can actually take on here, from a spec to a finished sky130 layout, and be straight about where you're strong and where you still want me in the loop. Then pitch me three designs worth building to put it through its paces.",
   },
   {
-    title: "Create a FIFO buffer",
-    description: "16 entries deep, 8-bit width",
-    prompt: "Create a synchronous FIFO with 16 entries depth and 8-bit data width",
+    title: "Brief this workspace",
+    description: "state of play",
+    prompt:
+      "Give me the state of this workspace. What are we building, does it pass its tests, and what's the best PPA so far. Then call the one move worth making next. Don't start any runs, just read what's here and tell me.",
   },
   {
-    title: "Design a simple ALU",
-    description: "add, sub, and, or operations",
-    prompt: "Design a simple ALU that supports add, subtract, AND, and OR operations on 8-bit operands",
+    title: "Design a FIFO",
+    description: "spec to verified RTL",
+    prompt:
+      "Build a synchronous FIFO, 16 deep and 8 wide, with full, empty, and almost full flags. Spec it, write the RTL, then hammer it with a self checking testbench for reset, overflow, underflow, and simultaneous read and write. Back that up with a cocotb test and a SymbiYosys proof that it can never overflow or underflow. Once it's all green, check with me before we take it through synthesis.",
   },
   {
-    title: "Build an FSM controller",
-    description: "for a traffic light system",
-    prompt: "Design a finite state machine controller for a traffic light system with red, yellow, and green states",
+    title: "Explain RTL → GDS",
+    description: "how a chip gets built",
+    prompt:
+      "Walk me through how you take a design from RTL to GDS on sky130, stage by stage, and what each one hands to the next. Show me how you read WNS, TNS, and utilization, and how you'd retry from a stage and compare two runs to close timing. Ground it in a real example from the flow.",
   },
 ];
 
@@ -386,11 +393,7 @@ function WelcomeScreen() {
         <div className="w-9 h-9 rounded-xl bg-surface-2 flex items-center justify-center mx-auto mb-3">
           <Sparkles className="h-4 w-4 text-muted-foreground" />
         </div>
-        <h2 className="text-sm font-medium text-foreground mb-1">Welcome to SiliconCrew</h2>
-        <p className="text-xs text-muted-foreground mb-5 max-w-xs mx-auto leading-relaxed">
-          Describe the hardware you need and I&apos;ll draft the spec, implement
-          the RTL, and help verify it.
-        </p>
+        <h2 className="text-sm font-medium text-foreground mb-5">Let&apos;s build a chip.</h2>
         {/* Column count follows the CONTAINER (rail vs centered), not the
             viewport — a desktop viewport with a narrow rail is still narrow. */}
         <div className={cn("grid gap-2 max-w-lg mx-auto", compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2")}>
