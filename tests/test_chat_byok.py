@@ -141,11 +141,12 @@ def test_byok_key_is_passed_to_the_agent(harness):
     assert harness.calls[-1]["model_name"] == "claude-sonnet-4-6"
 
 
-def test_gemini_with_no_key_uses_capped_hosted_key(harness):
+def test_gemini_with_no_key_uses_capped_hosted_key(harness, monkeypatch):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     harness.set_provider(
-        ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="hosted-gemini-secret", hosted_model="gemini-3-flash-preview")
+        ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="hosted-gemini-secret", hosted_model="gemini-3.1-flash-lite")
     )
-    harness.set_model("gemini-3-flash-preview")
+    harness.set_model("gemini-3.1-flash-lite")
 
     frames = harness.drive()
 
@@ -164,12 +165,13 @@ def test_non_gemini_no_key_emits_structured_no_key_error(harness):
     assert not harness.calls, "agent must not be built when no key resolves"
 
 
-def test_hosted_tier_exhausted_emits_structured_error(harness):
+def test_hosted_tier_exhausted_emits_structured_error(harness, monkeypatch):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     limiter = HostedTierLimiter(HostedTierLimits(global_cost_ceiling_usd=0.0))
     harness.set_provider(
         ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="hosted-gemini-secret", limiter=limiter)
     )
-    harness.set_model("gemini-3-flash-preview")
+    harness.set_model("gemini-3.1-flash-lite")
 
     frames = harness.drive()
 

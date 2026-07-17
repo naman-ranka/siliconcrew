@@ -46,7 +46,7 @@ class FakeSettings:
     kms_key_uri: str = ""
     llm_key_engine: str = "byok"
     hosted_gemini_key: str = "HOSTED_GEMINI"
-    hosted_gemini_model: str = "gemini-3-flash-preview"
+    hosted_gemini_model: str = "gemini-3.1-flash-lite"
 
 
 # --- persistent store round trip --------------------------------------------
@@ -99,11 +99,12 @@ def test_store_then_resolve_returns_byok_key(tmp_path):
     assert "api_key" in inspect.signature(create_llm).parameters
 
 
-def test_resolve_falls_back_to_hosted_gemini_without_byok(tmp_path):
+def test_resolve_falls_back_to_hosted_gemini_without_byok(tmp_path, monkeypatch):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     db = str(tmp_path / "byok.db")
     vault = EnvelopeKeyVault(SqliteWrappedKeyStore(db), ReversibleCipher(), FakeKek())
     provider = ByokHostedLlmKeyProvider(vault, hosted_gemini_key="HOSTED")
-    key = provider.resolve("google_1", "gemini-3-flash-preview")
+    key = provider.resolve("google_1", "gemini-3.1-flash-lite")
     assert key.source == "hosted" and key.api_key == "HOSTED"
 
 

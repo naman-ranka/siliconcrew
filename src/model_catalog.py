@@ -38,7 +38,13 @@ PRICING = {
 }
 
 
-DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
+
+# The single model the shared platform/host key serves to a keyless hosted user.
+# Everything else requires the user's own (BYOK) key. Kept as its own constant
+# (not just DEFAULT_MODEL) so "the free tier model" stays an explicit, greppable
+# concept even if the default is retuned later.
+HOSTED_FREE_MODEL = "gemini-3.1-flash-lite"
 
 
 # UI-facing model registry — the top current model of each provider plus a
@@ -48,10 +54,10 @@ DEFAULT_MODEL = "gemini-3.5-flash"
 # capability/speed note shown under each row.
 CATALOG = [
     # Google
-    {"id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash", "provider": "gemini",
-     "tier": "balanced", "hint": "Frontier speed/quality default — great for most RTL work."},
     {"id": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash-Lite", "provider": "gemini",
-     "tier": "fast", "hint": "Cheapest + quickest; light edits and quick questions."},
+     "tier": "fast", "hint": "Free default. Fast and capable for everyday RTL work."},
+    {"id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash", "provider": "gemini",
+     "tier": "balanced", "hint": "Frontier speed and quality; bring your own Google key."},
     {"id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro", "provider": "gemini",
      "tier": "capable", "hint": "Deeper reasoning for tricky debugging / architecture."},
     # OpenAI

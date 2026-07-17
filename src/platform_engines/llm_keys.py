@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Protocol
 
 from src.llm.factory import infer_provider_from_model
+from src.model_catalog import HOSTED_FREE_MODEL, normalize_model_name
 
 
 @dataclass
@@ -406,7 +407,7 @@ class ByokHostedLlmKeyProvider:
         self,
         vault: EnvelopeKeyVault,
         hosted_gemini_key: str = "",
-        hosted_model: str = "gemini-3.5-flash",
+        hosted_model: str = HOSTED_FREE_MODEL,
         limiter: Optional[HostedTierLimiter] = None,
     ):
         self._vault = vault
@@ -422,26 +423,30 @@ class ByokHostedLlmKeyProvider:
             if byok:
                 return LlmKey(provider=provider, api_key=byok, source="byok")
 
-        # Fall back to container environment variables if present (useful for single-user staging/prod)
-        env_vars = {"gemini": "GOOGLE_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
-        env_key = os.environ.get(env_vars[provider])
-        if env_key:
-            return LlmKey(provider=provider, api_key=env_key, source="env")
-
-        # No BYOK key or env key — only the hosted Gemini tier is available, under caps.
-        if provider == "gemini" and self._hosted_gemini_key:
-            self._limiter.check(user_id or "anonymous")
-            return LlmKey(
-                provider="gemini",
-                api_key=self._hosted_gemini_key,
-                source="hosted",
-                model=self._hosted_model,
-            )
+        # Keyless: the shared tier serves ONLY the free default model
+        # (HOSTED_FREE_MODEL = gemini-3.1-flash-lite). Every other model —
+        # including other Gemini models, and any OpenAI/Anthropic model — needs
+        # the user's own key. This is what makes "remove the platform key →
+        # everything is BYOK" true: a set container env key for OpenAI/Anthropic
+        # must NOT silently serve a keyless user (that was the source of the raw
+        # "credit balance too low" error surfaced to users on hosted).
+        if normalize_model_name(model_name) == HOSTED_FREE_MODEL:
+            env_gemini = os.environ.get("GOOGLE_API_KEY")
+            if env_gemini:
+                return LlmKey(provider="gemini", api_key=env_gemini, source="env")
+            if self._hosted_gemini_key:
+                self._limiter.check(user_id or "anonymous")
+                return LlmKey(
+                    provider="gemini",
+                    api_key=self._hosted_gemini_key,
+                    source="hosted",
+                    model=self._hosted_model,
+                )
 
         display = _PROVIDER_DISPLAY.get(provider, provider.title())
         raise ValueError(
-            f"No key available for {display}. Add your own {display} API key, "
-            "or use the hosted Gemini tier."
+            f"{display} models need your own {display} API key. Add it in "
+            "Settings, or switch to the free Gemini model (gemini-3.1-flash-lite)."
         )
 
     @property

@@ -97,34 +97,76 @@ def test_provider_prefers_byok_over_hosted():
     assert key.source == "byok" and key.api_key == "user-own-gemini-key"
 
 
-def test_provider_falls_back_to_hosted_gemini():
-    provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED", hosted_model="gemini-3-flash-preview")
-    key = provider.resolve("u1", "gemini-3-flash-preview")
+def test_provider_falls_back_to_hosted_gemini(monkeypatch):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED", hosted_model="gemini-3.1-flash-lite")
+    key = provider.resolve("u1", "gemini-3.1-flash-lite")
     assert key.source == "hosted" and key.api_key == "HOSTED"
 
 
 def test_provider_requires_byok_for_non_gemini_without_key():
     provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED")
-    with pytest.raises(ValueError, match="No key available"):
+    with pytest.raises(ValueError, match="need your own"):
         provider.resolve("u1", "claude-opus-4-8")
 
 
-def test_hosted_tier_daily_token_cap():
+def test_keyless_non_flashlite_gemini_requires_byok(monkeypatch):
+    # Only the free default (flash-lite) rides the shared key; other Gemini
+    # models need the user's own key.
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED")
+    with pytest.raises(ValueError, match="need your own"):
+        provider.resolve("u1", "gemini-3.5-flash")
+
+
+def test_keyless_env_does_not_serve_non_gemini(monkeypatch):
+    # A container OpenAI/Anthropic key must NOT silently serve a keyless user —
+    # that was the source of the raw "credit balance too low" error on hosted.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-anthropic")
+    monkeypatch.setenv("OPENAI_API_KEY", "env-openai")
+    provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED")
+    with pytest.raises(ValueError, match="need your own"):
+        provider.resolve("u1", "claude-opus-4-8")
+    with pytest.raises(ValueError, match="need your own"):
+        provider.resolve("u1", "gpt-5.5")
+
+
+def test_keyless_env_gemini_serves_flashlite_only(monkeypatch):
+    monkeypatch.setenv("GOOGLE_API_KEY", "env-gemini")
+    provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED")
+    key = provider.resolve("u1", "gemini-3.1-flash-lite")
+    assert key.source == "env" and key.api_key == "env-gemini"
+    with pytest.raises(ValueError, match="need your own"):
+        provider.resolve("u1", "gemini-3.5-flash")
+
+
+def test_byok_wins_for_any_model(monkeypatch):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    vault = _vault()
+    vault.store_key("u1", "anthropic", "user-claude-key")
+    provider = ByokHostedLlmKeyProvider(vault, hosted_gemini_key="HOSTED")
+    key = provider.resolve("u1", "claude-opus-4-8")
+    assert key.source == "byok" and key.api_key == "user-claude-key"
+
+
+def test_hosted_tier_daily_token_cap(monkeypatch):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     limiter = HostedTierLimiter(HostedTierLimits(tokens_per_day=100, global_cost_ceiling_usd=1000))
     provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED", limiter=limiter)
-    provider.resolve("u1", "gemini-3-flash-preview")  # ok
+    provider.resolve("u1", "gemini-3.1-flash-lite")  # ok
     limiter.record("u1", tokens=100, cost_usd=0.01)
     with pytest.raises(HostedTierExhausted) as ei:
-        provider.resolve("u1", "gemini-3-flash-preview")
+        provider.resolve("u1", "gemini-3.1-flash-lite")
     assert ei.value.code == "hosted_tier_exhausted"
 
 
-def test_hosted_tier_global_cost_ceiling():
+def test_hosted_tier_global_cost_ceiling(monkeypatch):
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     limiter = HostedTierLimiter(HostedTierLimits(tokens_per_day=10**9, global_cost_ceiling_usd=1.0))
     provider = ByokHostedLlmKeyProvider(_vault(), hosted_gemini_key="HOSTED", limiter=limiter)
     limiter.record("whoever", tokens=1, cost_usd=1.0)  # exhaust global budget
     with pytest.raises(HostedTierExhausted):
-        provider.resolve("u2", "gemini-3-flash-preview")
+        provider.resolve("u2", "gemini-3.1-flash-lite")
 
 
 def test_env_provider_reads_environment(monkeypatch):
