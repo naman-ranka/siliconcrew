@@ -623,7 +623,21 @@ def write_spec(
     # Validate
     validation = validate_spec(spec)
     if not validation["valid"]:
-        return f"Spec validation failed:\n" + "\n".join(validation["errors"])
+        # An empty port name after parsing means the payload's keys were
+        # malformed (e.g. a model emitting {'"name"': ...} or misnamed keys).
+        # Echo the keys actually received so the failure is diagnosable in
+        # one read instead of a bare "Port name cannot be empty" per port.
+        bad_entry_keys = [
+            ", ".join(repr(k) for k in raw) or "none"
+            for raw, parsed in zip(ports, spec.ports)
+            if isinstance(raw, dict) and not parsed.name
+        ]
+        errors = []
+        for err in validation["errors"]:
+            if err == "Port name cannot be empty" and bad_entry_keys:
+                err = f"{err} (entry keys: {bad_entry_keys.pop(0)})"
+            errors.append(err)
+        return f"Spec validation failed:\n" + "\n".join(errors)
     
     # Generate module signature if not provided
     if not spec.module_signature:

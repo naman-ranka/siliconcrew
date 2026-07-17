@@ -125,32 +125,69 @@ class DesignSpec:
         return f"create_clock -period {self.clock_period_ns} [get_ports {clock_port}]"
 
 
+def _normalize_port_entry(port_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize the keys of a port dict: strip whitespace and stray quotes.
+
+    Some tool-calling models intermittently emit literally-quoted keys
+    (e.g. ``{'"name"': "clk"}``); without normalization every lookup misses
+    and validation reports an unhelpful empty port name.
+    """
+    return {str(k).strip().strip('\'"'): v for k, v in port_data.items()}
+
+
 def parse_yaml_spec(yaml_content: str) -> DesignSpec:
     """
     Parse YAML content into a DesignSpec object.
-    
+
     Args:
         yaml_content: YAML string content
-        
+
     Returns:
         DesignSpec object
     """
     data = yaml.safe_load(yaml_content)
-    
+
     if not data:
         raise ValueError("Empty YAML content")
-    
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Invalid spec YAML: expected a top-level mapping, got {type(data).__name__}"
+        )
+
     # Get the top-level key (module name)
     module_name = list(data.keys())[0]
     spec_data = data[module_name]
-    
+
+    if not isinstance(spec_data, dict):
+        # Flat hand-written YAML (e.g. "module_name: counter" at top level)
+        # lands here — say so instead of AttributeError'ing on .get below.
+        raise ValueError(
+            f"Invalid spec YAML: expected a mapping under '{module_name}', got "
+            f"{type(spec_data).__name__}. Spec fields (description, clock_period, "
+            f"ports, ...) must be nested under the module name, not written as "
+            f"flat top-level keys."
+        )
+
     # Parse clock period (handle "1.1ns" format)
     clock_str = spec_data.get("clock_period", "10ns")
-    clock_period = float(clock_str.replace("ns", "").strip())
-    
+    clock_period = float(str(clock_str).replace("ns", "").strip())
+
     # Parse ports
     ports = []
-    for port_data in spec_data.get("ports", []):
+    ports_data = spec_data.get("ports", [])
+    if not isinstance(ports_data, list):
+        raise ValueError(
+            f"Invalid spec YAML: 'ports' should be a list of mappings, got "
+            f"{type(ports_data).__name__}"
+        )
+    for idx, port_data in enumerate(ports_data, start=1):
+        if not isinstance(port_data, dict):
+            raise ValueError(
+                f"Invalid spec YAML: ports entry {idx} should be a mapping "
+                f"(name/direction/...), got {type(port_data).__name__}"
+            )
+        port_data = _normalize_port_entry(port_data)
         port = PortSpec(
             name=port_data.get("name", ""),
             direction=port_data.get("direction", "input"),
@@ -314,7 +351,7 @@ def create_spec_from_dict(data: Dict[str, Any]) -> DesignSpec:
             width=p.get("width"),
             description=p.get("description", "")
         )
-        for p in data.get("ports", [])
+        for p in (_normalize_port_entry(pd) for pd in data.get("ports", []))
     ]
     
     return DesignSpec(
