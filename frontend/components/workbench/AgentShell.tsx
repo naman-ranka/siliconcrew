@@ -149,7 +149,7 @@ function ContextStrip() {
         </span>
       )}
       {showTotals && (
-        <span className="ml-auto flex items-center gap-2 font-mono">
+        <span className="ml-auto flex items-center gap-2 font-mono" title="Estimated model usage for this workspace. On the free model without your own key, this is covered by the platform.">
           <span>{formatTokens(session.total_tokens)}</span>
           <span>{formatCost(session.total_cost)}</span>
         </span>

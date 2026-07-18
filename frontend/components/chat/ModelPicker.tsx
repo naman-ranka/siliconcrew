@@ -169,7 +169,11 @@ export function ModelPicker() {
                         )}
                       </span>
                       {m.hint && <span className="block text-[11px] text-muted-foreground">{m.hint}</span>}
-                      {m.pricing && (
+                      {m.free ? (
+                        <span className="block text-[10px] text-muted-foreground/70">
+                          included in the free tier
+                        </span>
+                      ) : m.pricing && (
                         <span className="block text-[10px] text-muted-foreground/70">
                           ${m.pricing.input}/${m.pricing.output} per Mtok (in/out)
                         </span>

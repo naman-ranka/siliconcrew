@@ -137,7 +137,7 @@ export function ChatArea({
             the session name out (the numbers stay one click away in the
             launcher / agent context strip). */}
         {!compact && currentSession && (currentSession.total_tokens > 0 || currentSession.total_cost > 0) && (
-          <div className="flex shrink-0 items-center gap-4 pl-3">
+          <div className="flex shrink-0 items-center gap-4 pl-3" title="Estimated model usage for this workspace. On the free model without your own key, this is covered by the platform.">
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Hash className="h-3.5 w-3.5" />
               <span>{formatTokens(currentSession.total_tokens)}</span>
