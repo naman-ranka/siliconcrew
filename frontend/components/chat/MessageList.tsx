@@ -384,6 +384,99 @@ export const WELCOME_CARDS = [
   },
 ];
 
+// Codes where the remedy is a key/model change, not a retry of the same setup.
+const KEY_ERROR_CODES = new Set(["no_key", "hosted_tier_exhausted"]);
+
+/**
+ * In-thread failure card (blind-test S2a): when a turn errors, the failure —
+ * and its remedies — appear WHERE the user is looking, attached to the
+ * conversation, instead of only in a dismissible banner far from the message
+ * that was silently swallowed. Presentation-only: reads chatError from the
+ * store; the transcript itself is unchanged.
+ */
+function FailedTurnCard() {
+  const chatError = useStore((s) => s.chatError);
+  const chatErrorCode = useStore((s) => s.chatErrorCode);
+  const isStreaming = useStore((s) => s.isStreaming);
+  const messages = useStore((s) => s.messages);
+  const models = useStore((s) => s.models);
+  const compact = useChatCompact();
+  if (!chatError || isStreaming) return null;
+
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const isKeyError = !!chatErrorCode && KEY_ERROR_CODES.has(chatErrorCode);
+  const freeModel = models.find((m) => m.free && m.available);
+
+  const clearError = () => useStore.setState({ chatError: null, chatErrorCode: null });
+  const retry = () => {
+    if (!lastUser) return;
+    clearError();
+    void useStore.getState().sendMessage(lastUser.content);
+  };
+  const useFreeAndRetry = async () => {
+    if (!freeModel) return;
+    await useStore.getState().setActiveThreadModel(freeModel.id);
+    retry();
+  };
+
+  return (
+    <div className={cn("flex items-start", compact ? "px-3 py-2" : "gap-3 px-4 py-3")}>
+      {!compact && (
+        <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-destructive/10 flex items-center justify-center">
+          <Bot className="h-4 w-4 text-destructive" />
+        </div>
+      )}
+      <div
+        data-testid="failed-turn-card"
+        className="flex-1 min-w-0 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5"
+      >
+        <p className="text-xs text-foreground/90 break-words">{chatError}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {isKeyError && freeModel && (
+            <button
+              type="button"
+              data-testid="failed-turn-use-free"
+              onClick={() => void useFreeAndRetry()}
+              className="h-6 rounded bg-primary px-2 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              Use {freeModel.label} (free) and retry
+            </button>
+          )}
+          {isKeyError && (
+            <button
+              type="button"
+              onClick={() => {
+                clearError();
+                useStore.getState().setSettingsOpen(true);
+              }}
+              className="h-6 rounded border border-border px-2 text-[11px] text-foreground/80 hover:bg-surface-2"
+            >
+              Add a key
+            </button>
+          )}
+          {lastUser && (
+            <button
+              type="button"
+              data-testid="failed-turn-retry"
+              onClick={retry}
+              className="h-6 rounded border border-border px-2 text-[11px] text-foreground/80 hover:bg-surface-2"
+            >
+              Retry
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={clearError}
+            className="h-6 rounded px-2 text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WelcomeScreen() {
   const sendMessage = useStore((state) => state.sendMessage);
   const compact = useChatCompact();
@@ -542,6 +635,7 @@ export function MessageList() {
         )}
 
         <StreamingMessage showIcon={!lastGroupIsAssistant} />
+        <FailedTurnCard />
       </div>
     </ScrollArea>
   );
