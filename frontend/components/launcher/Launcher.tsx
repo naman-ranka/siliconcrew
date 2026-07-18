@@ -128,6 +128,9 @@ export function Launcher() {
         if (intent.kind === "create") {
           const sessionId = await performCreate(intent);
           openSession(router, sessionId, { chat: null, view: intent.posture });
+        } else if (intent.kind === "openCreate") {
+          setCreateGroup(intent.group);
+          setCreating(true);
         } else if (intent.kind === "fork") {
           const sessionId = await useStore.getState().forkTemplate(intent.templateId);
           openSession(router, sessionId, { chat: null, view: "ide" });
@@ -370,6 +373,15 @@ export function Launcher() {
   };
 
   const startCreate = (groupName: string | null) => {
+    // Pre-modal gate (ported from PR #38): a signed-out user signs in BEFORE
+    // seeing the form — no filling out a modal that can't submit. The replay
+    // reopens the modal (group preserved) when sign-in completes; the modal's
+    // own submit gate still covers its workbench (NavRail) mount.
+    if (authEnabled && authStatus === "anonymous") {
+      stashAuthIntent({ kind: "openCreate", group: groupName });
+      void signIn();
+      return;
+    }
     setCreateGroup(groupName);
     setCreating(true);
   };

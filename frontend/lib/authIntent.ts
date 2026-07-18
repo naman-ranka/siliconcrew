@@ -15,6 +15,10 @@ import type { ViewMode } from "@/lib/nav";
 
 export type AuthIntent =
   | { kind: "create"; name: string; posture: ViewMode; group: string }
+  /** Launcher pre-modal gate (ported from PR #38): sign in BEFORE the form,
+   *  then reopen the create modal (optionally group-preset) on return. The
+   *  workbench-mounted modal still uses the full-fidelity "create" intent. */
+  | { kind: "openCreate"; group: string | null }
   | { kind: "fork"; templateId: string }
   | { kind: "createGroup"; name: string };
 
@@ -48,7 +52,10 @@ export function takeAuthIntent(kind?: AuthIntent["kind"]): AuthIntent | null {
     const parsed = envelope?.intent;
     const valid =
       parsed &&
-      (parsed.kind === "create" || parsed.kind === "fork" || parsed.kind === "createGroup");
+      (parsed.kind === "create" ||
+        parsed.kind === "openCreate" ||
+        parsed.kind === "fork" ||
+        parsed.kind === "createGroup");
     if (!valid) {
       sessionStorage.removeItem(KEY);
       return null;
