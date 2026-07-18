@@ -1,8 +1,7 @@
 name: Claude PR Review
 
-# Automatic invariant-focused review on PR open, plus @claude mentions from
-# maintainers. Review-only: the agent never pushes code, approves, or merges
-# (main merges stay fast-forward-push-only to preserve commit signatures).
+# Automatic code review on PR open, plus @claude mentions from maintainers.
+# Review-only: the agent never pushes code, approves, or merges.
 
 on:
   pull_request:
@@ -37,7 +36,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
           prompt: |
-            Review PR #${{ github.event.pull_request.number }} of SiliconCrew.
+            Review PR #${{ github.event.pull_request.number }}.
 
             Process:
             1. Resolve stacking first: `gh pr view ${{ github.event.pull_request.number }} --json baseRefName`.
@@ -47,48 +46,16 @@ jobs:
                bugs with concrete failure sequences (inputs/state -> wrong behavior).
                Verify every finding against the actual code before reporting it —
                no speculation. Mark each finding "verified" or "plausible".
-            3. Check the diff against the platform invariants:
-               - Single tool registry: new tools registered once; policy (categories,
-                 PROTECTED/ASYNC/MUTATING/EXCLUDED_FROM_UI) lives only in
-                 src/api/tool_catalog.py — never a hand-maintained parallel list.
-               - One event log: every actor's tool calls land in attempt_events.jsonl;
-                 UI gestures that call tools go through /invoke so they ARE events.
-               - Honest state: no simulated data, no fake liveness, no ambiguous
-                 verdicts. Grep new UI/dashboards for Math.random/setInterval/
-                 setTimeout/mock/fake and classify each hit as real-drive vs faked.
-                 No session-level status dots (per-run only). Staleness shown, never
-                 pretended freshness.
-               - The run directory is the database: run_meta.json + artifacts are
-                 authoritative; one key (run_id); no run ever stuck "running".
-               - The UI is a viewer: it never polls run status on its own.
-               - URL is the source of truth for location; populated store data never
-                 blanks; stale-response guards on cross-session async.
-               - Tenancy owner-scoped everywhere; listing/browse endpoints stay
-                 read-only; in-memory registries scoped by workspace (bare ids like
-                 synth_0001 collide across workspaces).
-               - Self-host must never need a cloud dependency installed (cloud
-                 branches use lazy imports).
-            4. Check the known sharp edges against the diff:
-               - Naive-datetime .timestamp() (reads as LOCAL time; parse ISO, assume
-                 UTC when naive, compare aware).
-               - Route order: /api/sessions/{session_id:path} is greedy — session
-                 routes stay registered AFTER /threads sub-routes.
-               - shutil.copy2 preserves mtimes — mtime-based "did THIS run produce
-                 it" logic needs a dispatch-time floor.
-               - Frontend session switches must reset per-session slices (runs,
-                 selectedRunId, synthJob) — run ids collide across sessions.
-               - Any new subprocess/tool argument needs an anchored validation regex
-                 and a hostile-input test.
-               - Monaco/e2e: string matchers not regex (nbsp rendering).
-            5. Test-coverage delta: every fix commit needs a regression test that
-               exercises the actual fixed path — not one that string-matches the
-               implementation.
+            3. Focus on: correctness bugs; security (input validation, injection,
+               path traversal, secrets or credentials committed); error handling and
+               edge cases; and whether changed behavior has adequate test coverage
+               (a regression test that exercises the actual changed path, not one
+               that string-matches the implementation).
 
             Output: post ONE review comment on the PR containing: (a) a 3-sentence
             summary of what the PR does; (b) findings ranked by severity, each with
             file:line, the concrete failure scenario, and verified/plausible;
-            (c) invariant-compliance notes; (d) a recommendation: ready /
-            needs-fixes / needs-discussion.
+            (c) a recommendation: ready / needs-fixes / needs-discussion.
 
             Hard rules: never push commits, never approve, never merge, never edit
             the PR branch. Review only.
@@ -117,9 +84,7 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Implementation work runs on Opus 4.8 (the review job stays on the
-          # default tier). When asked to fix an issue: branch from main, commit
-          # with the repo's SSH-signed identity + Co-Authored-By trailer, and
-          # OPEN A PR — never push to main (main is fast-forward-push-only).
+          # Implementation runs on Opus 4.8. When asked to fix an issue: branch
+          # from main, open a PR against main — never push to main directly.
           claude_args: |
             --model claude-opus-4-8
