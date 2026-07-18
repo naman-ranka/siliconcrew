@@ -96,10 +96,14 @@ class SessionManager:
         now = datetime.datetime.now()
         self._store.upsert_session(session_id, user_id, session_name, model_name, project_id, now)
 
-    def get_all_sessions(self, user_id: str | None = None):
-        """Returns session IDs sorted by updated_at/created_at (newest first).
+    def list_session_rows(self, user_id: str | None = None):
+        """Returns full session-metadata rows sorted by updated_at/created_at
+        (newest first) — the SAME order/filtering as :meth:`get_all_sessions`,
+        but carrying the whole row so a list endpoint needs no per-session
+        re-fetch (kills the N+1: one grouped SELECT covers the entire list).
 
-        When ``user_id`` is given, only that tenant's sessions are returned.
+        When ``user_id`` is given, only that tenant's rows are returned
+        (owner-scoped by construction in the store).
         """
         rows = self._store.get_all_session_rows(user_id=user_id)
         if self._uses_ephemeral_workspace_listing():
@@ -109,7 +113,14 @@ class SessionManager:
                 return []
             result = [r for r in rows if os.path.isdir(os.path.join(self.base_dir, r["session_id"]))]
         result.sort(key=lambda x: str(x.get("updated_at") or x.get("created_at") or ""), reverse=True)
-        return [r["session_id"] for r in result]
+        return result
+
+    def get_all_sessions(self, user_id: str | None = None):
+        """Returns session IDs sorted by updated_at/created_at (newest first).
+
+        When ``user_id`` is given, only that tenant's sessions are returned.
+        """
+        return [r["session_id"] for r in self.list_session_rows(user_id=user_id)]
 
     def _uses_ephemeral_workspace_listing(self) -> bool:
         """True when metadata, not local workspace dirs, is the durable list.
