@@ -46,7 +46,6 @@ class FakeSettings:
     kms_key_uri: str = ""
     llm_key_engine: str = "byok"
     hosted_gemini_key: str = "HOSTED_GEMINI"
-    hosted_gemini_model: str = "gemini-3-flash-preview"
 
 
 # --- persistent store round trip --------------------------------------------

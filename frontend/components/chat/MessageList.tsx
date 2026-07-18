@@ -362,7 +362,7 @@ export const WELCOME_CARDS = [
     label: "Tour the tools",
     hint: "what can you actually do?",
     prompt:
-      "I'm new here. Walk me through what you actually do, from a written spec down to a finished layout on sky130. Show me how you check the design along the way, and be honest about anything you can't do. Finish with a few small things we could build first.",
+      "I'm new here. Walk me through what you actually do, from a written spec down to a finished layout on sky130. Show me how you check the design along the way, and be honest about anything you can't do. Then pitch me three designs worth building to put it through its paces.",
   },
   {
     label: "Brief this workspace",

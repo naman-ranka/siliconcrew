@@ -89,7 +89,6 @@ class PlatformSettings:
     # LLM keys
     llm_key_engine: str       # "env" | "byok"
     kms_key_uri: str          # Cloud KMS key for envelope encryption (byok)
-    hosted_gemini_model: str
     hosted_gemini_key: str
     # Models the shared platform key may serve (hosted free tier). Everything
     # else is BYOK/Codex by policy — see llm_keys.ByokHostedLlmKeyProvider.
@@ -241,7 +240,6 @@ def get_settings() -> PlatformSettings:
         database_url=_env("DATABASE_URL"),
         llm_key_engine=llm_key_engine,
         kms_key_uri=_env("KMS_KEY_URI"),
-        hosted_gemini_model=_env("HOSTED_GEMINI_MODEL", "gemini-3.1-flash-lite"),
         hosted_gemini_key=_env("HOSTED_GEMINI_KEY"),
         hosted_fallback_models=tuple(
             m.strip()
