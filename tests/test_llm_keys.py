@@ -174,3 +174,20 @@ def test_env_provider_reads_environment(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "env-anthropic")
     key = EnvLlmKeyProvider().resolve(None, "claude-opus-4-8")
     assert key.source == "env" and key.api_key == "env-anthropic" and key.provider == "anthropic"
+
+
+def test_tier_limits_come_from_settings():
+    # Live-tested finding: the hard-coded 200k/day cap was one heavy design
+    # turn on flash-lite. Limits must be deploy-tunable without a code change.
+    from src.platform_engines.llm_keys import build_llm_key_provider
+
+    class S:
+        llm_key_engine = "byok"
+        hosted_gemini_key = "HOSTED"
+        hosted_fallback_models = ("gemini-3.1-flash-lite",)
+        hosted_tier_tokens_per_day = 123
+        hosted_tier_cost_ceiling_usd = 7.5
+
+    provider = build_llm_key_provider(S(), _vault())
+    assert provider.limiter._limits.tokens_per_day == 123
+    assert provider.limiter._limits.global_cost_ceiling_usd == 7.5

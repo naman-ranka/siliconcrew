@@ -515,11 +515,20 @@ def build_key_vault(settings, db_path: Optional[str] = None) -> Optional[Envelop
 def build_llm_key_provider(settings, vault: Optional[EnvelopeKeyVault]) -> LlmKeyProvider:
     """Pick the LLM key provider: env keys (self-host) or BYOK+hosted (hosted)."""
     if settings.llm_key_engine == "byok" and vault is not None:
+        # Tier limits from settings (live-tested finding: the old hard-coded
+        # 200k/day is roughly ONE heavy design turn on flash-lite — a first
+        # click on the showcase card exhausted it; the $ ceiling, not the
+        # token count, is the real guardrail).
+        limits = HostedTierLimits(
+            tokens_per_day=getattr(settings, "hosted_tier_tokens_per_day", 2_000_000),
+            global_cost_ceiling_usd=getattr(settings, "hosted_tier_cost_ceiling_usd", 50.0),
+        )
         return ByokHostedLlmKeyProvider(
             vault,
             hosted_gemini_key=settings.hosted_gemini_key,
             allowed_fallback_models=getattr(
                 settings, "hosted_fallback_models", ("gemini-3.1-flash-lite",)
             ),
+            limiter=HostedTierLimiter(limits),
         )
     return EnvLlmKeyProvider()

@@ -107,6 +107,10 @@ class PlatformSettings:
     # Chat agent step budget per turn (LangGraph recursion_limit).
     chat_recursion_limit: int
 
+    # Hosted free-tier guardrails (per-user daily tokens; global $ ceiling).
+    hosted_tier_tokens_per_day: int
+    hosted_tier_cost_ceiling_usd: float
+
     # Dev-only auth escape hatch — OFF by default; explicit opt-in only, never
     # enabled by mere misconfiguration. (Must be last: it carries a default.)
     dev_insecure_auth: bool = False
@@ -252,6 +256,8 @@ def get_settings() -> PlatformSettings:
         synth_queue_global_workers=_int_env("SYNTH_QUEUE_GLOBAL_WORKERS", 16),
         num_cores=_int_env("ORFS_NUM_CORES", 4),
         chat_recursion_limit=_int_env("CHAT_RECURSION_LIMIT", 80),
+        hosted_tier_tokens_per_day=_int_env("HOSTED_TIER_TOKENS_PER_DAY", 2_000_000),
+        hosted_tier_cost_ceiling_usd=float(_env("HOSTED_TIER_COST_CEILING_USD", "50.0")),
         dev_insecure_auth=_flag("SILICONCREW_DEV_INSECURE_AUTH", default=False),
         test_bearer_token=_env("SILICONCREW_TEST_BEARER_TOKEN"),
         # Accept either the new flag or the reference's ENABLE_CODEX_RUNTIME.
