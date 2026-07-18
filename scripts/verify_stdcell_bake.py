@@ -29,7 +29,7 @@ def main() -> int:
         try:
             with open(manifest_path, encoding="utf-8") as f:
                 manifest = json.load(f)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             print(f"FAIL {platform}: manifest unreadable: {exc}")
             ok = False
             continue
