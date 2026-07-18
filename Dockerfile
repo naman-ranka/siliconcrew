@@ -80,6 +80,26 @@ WORKDIR /app
 
 COPY . .
 
+# ---- Bake stdcell simulation models into the image ----
+# Hosted scale-from-zero boots spent ~46s downloading the pinned stdcell
+# models from GitHub on every cold start (entrypoint.sh bootstraps when
+# /workspace/_stdcells/<platform>/sim is empty). Baking them at build time
+# makes entrypoint's skip-if-present check a no-op on hosted; self-host is
+# unchanged (its /workspace bind mount shadows the baked copy and the runtime
+# bootstrap remains the fallback). The manifest check fails the BUILD on any
+# partial download: bootstrap_stdcells only raises when the cache is fully
+# empty, so without it a thin bake would look fixed while silently
+# reintroducing the runtime fetch. Expected counts: asap7=7, sky130hd=622.
+# For a leaner local image: docker build --build-arg BAKE_STDCELLS=0 ...
+ARG BAKE_STDCELLS=1
+RUN if [ "$BAKE_STDCELLS" = "1" ]; then set -eux; \
+      PYTHONPATH=/app python /app/scripts/bootstrap_stdcells.py \
+        --workspace /workspace --platform asap7 && \
+      PYTHONPATH=/app python /app/scripts/bootstrap_stdcells.py \
+        --workspace /workspace --platform sky130hd && \
+      python /app/scripts/verify_stdcell_bake.py --workspace /workspace; \
+    fi
+
 ENV RTL_WORKSPACE=/workspace
 
 EXPOSE 3000 8000 8080
