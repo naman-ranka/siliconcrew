@@ -53,7 +53,7 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
   const { currentSession, selectSessionById, selectThread, loadWorkbench, workspaceError } =
     useStore();
   const router = useRouter();
-  const { status: authStatus } = useAuth();
+  const { status: authStatus, enabled: authEnabled, signIn } = useAuth();
   // The assistant rail is collapsible (per-session, persisted) so the artifact
   // center gets full width when the user is driving the pipeline themselves.
   const { chatOpen, setChatOpen } = useSessionUi(currentSession?.id);
@@ -120,6 +120,34 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
   }, [authStatus, sessionId, threadId]);
 
   if (notFound) {
+    // Blind-test finding S5: for a signed-out visitor, tenancy hides every
+    // session — "not found" would tell a returning user (expired/failed
+    // token refresh) that their work is GONE. Say the true cause and offer
+    // the fix; when sign-in completes, the load effect re-runs (authStatus
+    // is a dep) and the workspace opens without a manual reload.
+    if (authEnabled && authStatus === "anonymous") {
+      return (
+        <main
+          data-testid="workbench-signin-required"
+          className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-surface-0"
+        >
+          <p className="text-sm text-muted-foreground">
+            Sign in to open{" "}
+            <span className="font-mono text-foreground">{sessionId}</span>.
+          </p>
+          <button
+            type="button"
+            onClick={() => void signIn()}
+            className="h-8 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Sign in
+          </button>
+          <Link href="/" className="text-sm text-primary hover:underline">
+            Back to home
+          </Link>
+        </main>
+      );
+    }
     return (
       <main
         data-testid="workbench-not-found"
