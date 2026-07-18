@@ -44,6 +44,63 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SAFE_MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 _YOSYS_TIMEOUT_SEC = 120
+# Accident/malice gates for the NATIVE yosys child (the hosted path). yosys
+# parses attacker-controlled Verilog on hosted, so this is a bespoke gated
+# subprocess in the same spirit as run_python.py — a scrubbed env and POSIX
+# rlimits, with yosys-appropriate ceilings (its wall budget is 120s, not 30s).
+_YOSYS_CPU_SECONDS = 120           # CPU rlimit, aligned with the wall timeout
+_YOSYS_AS_BYTES = 2 * 1024 * 1024 * 1024   # 2 GiB address-space cap → stops OOM
+_YOSYS_FSIZE_BYTES = 256 * 1024 * 1024     # bound the written netlist size
+
+
+def _scrubbed_env(workspace: str) -> dict:
+    """A minimal, EXPLICIT env for the yosys child — NEVER the backend process
+    env, which holds DATABASE_URL, HOSTED_GEMINI_KEY, and SILICONCREW_MASTER_KEY.
+
+    This is the load-bearing gate on hosted: yosys parses Verilog the caller
+    fully controls (they ``write_file`` it), and yosys honors `` `include ``, so
+    an inherited env would let a crafted include surface a secret's bytes in the
+    parser error we return. Native yosys needs only PATH (to find its own
+    helper binaries) plus HOME/LANG; HOME points at the workspace so yosys never
+    writes into the real backend home."""
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": workspace,
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+    }
+    # Windows: the binary needs a few system vars to even start; none are secrets.
+    for key in ("SYSTEMROOT", "SystemRoot", "WINDIR", "PATHEXT", "TEMP", "TMP", "COMSPEC"):
+        val = os.environ.get(key)
+        if val:
+            env[key] = val
+    return env
+
+
+def _posix_rlimits():
+    """``preexec_fn`` capping CPU + address space (a crafted netlist can no
+    longer OOM the shared instance) and starting a new session so a wall-timeout
+    kills the whole yosys tree. ``None`` on non-POSIX (Windows self-host)."""
+    try:
+        import resource  # POSIX-only
+    except ImportError:
+        return None
+
+    def _apply():
+        for res, limit in (
+            (resource.RLIMIT_CPU, _YOSYS_CPU_SECONDS),
+            (resource.RLIMIT_AS, _YOSYS_AS_BYTES),
+            (resource.RLIMIT_FSIZE, _YOSYS_FSIZE_BYTES),
+        ):
+            try:
+                resource.setrlimit(res, (limit, limit))
+            except (ValueError, OSError):
+                pass
+        try:
+            os.setsid()
+        except OSError:
+            pass
+
+    return _apply
 
 
 def _sha256_file(path: str) -> str:
@@ -103,6 +160,11 @@ def _run_yosys(script: str, cwd: str, engine: str) -> Dict[str, Any]:
                 capture_output=True,
                 text=True,
                 timeout=_YOSYS_TIMEOUT_SEC,
+                # Bespoke gates (see _scrubbed_env / _posix_rlimits): the child
+                # never inherits the backend's secrets, and can't OOM/CPU-spin
+                # the shared hosted instance on crafted RTL.
+                env=_scrubbed_env(cwd),
+                preexec_fn=_posix_rlimits(),
             )
         except subprocess.TimeoutExpired:
             return {"success": False, "stderr": f"yosys timed out after {_YOSYS_TIMEOUT_SEC}s"}

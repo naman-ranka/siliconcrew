@@ -238,3 +238,70 @@ def test_registered_in_single_tool_registry():
     from src.tools.wrappers import mcp_tools
 
     assert "build_interactive_sim" in {t.name for t in mcp_tools}
+
+
+# --- Security hardening: the native yosys child is a bespoke gated subprocess ---
+
+
+def test_scrubbed_env_omits_backend_secrets(monkeypatch, tmp_path):
+    """The load-bearing hosted gate: yosys parses attacker-controlled Verilog,
+    so the child must NOT inherit the backend's secrets (an inherited env +
+    a crafted `include` would surface a secret's bytes in the parser error)."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pw@host/db")
+    monkeypatch.setenv("HOSTED_GEMINI_KEY", "AIza-super-secret")
+    monkeypatch.setenv("SILICONCREW_MASTER_KEY", "master-secret")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    env = bis._scrubbed_env(str(tmp_path))
+
+    assert "DATABASE_URL" not in env
+    assert "HOSTED_GEMINI_KEY" not in env
+    assert "SILICONCREW_MASTER_KEY" not in env
+    assert "secret" not in json.dumps(env)
+    # yosys still needs PATH to find its own helpers; HOME points at the workspace.
+    assert env["PATH"] == "/usr/bin:/bin"
+    assert env["HOME"] == str(tmp_path)
+
+
+def test_posix_rlimits_returns_a_limiter_on_posix():
+    limiter = bis._posix_rlimits()
+    # POSIX (CI/Linux) → a callable preexec_fn; non-POSIX → None (documented).
+    if os.name == "posix":
+        assert callable(limiter)
+    else:
+        assert limiter is None
+
+
+def test_native_yosys_runs_scrubbed_and_rlimited(tmp_path, monkeypatch):
+    """The real _run_yosys native branch must pass the scrubbed env AND a
+    preexec_fn (rlimits) to subprocess.run — proving the OOM/secret gates are
+    actually wired, not just defined. Fails on pre-fix code (bare inherited env,
+    no preexec_fn)."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://secret")
+    ws = str(tmp_path)
+    _write_source(ws)
+    captured = {}
+
+    class _Proc:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    def _fake_run(argv, **kwargs):
+        captured.update(kwargs)
+        # Emulate yosys writing the netlist the script asked for.
+        out = argv[2].rsplit("write_json ", 1)[1]
+        with open(os.path.join(kwargs["cwd"], out), "w") as f:
+            json.dump(COUNTER_NETLIST, f)
+        return _Proc()
+
+    monkeypatch.setattr(bis, "pick_engine", lambda: {"engine": "native"})
+    monkeypatch.setattr(bis.subprocess, "run", _fake_run)
+
+    result = bis.build_websim_netlist(["counter.v"], "counter", cwd=ws)
+    assert result["success"], result
+    assert "DATABASE_URL" not in captured["env"]  # scrubbed
+    assert captured["env"]["PATH"]                 # but still runnable
+    if os.name == "posix":
+        assert callable(captured["preexec_fn"])    # rlimits applied
+    assert captured["timeout"] == bis._YOSYS_TIMEOUT_SEC
