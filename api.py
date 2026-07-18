@@ -12,7 +12,7 @@ import json
 import uuid
 import asyncio
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Header, Depends
@@ -207,7 +207,10 @@ class SessionResponse(BaseModel):
     source_template: Optional[Dict[str, Any]] = None
 
 
-def _source_template(meta: Optional[Dict[str, Any]], workspace_path: str) -> Optional[Dict[str, Any]]:
+def _source_template(
+    meta: Optional[Dict[str, Any]],
+    workspace_path: "Union[str, Callable[[], str]]",
+) -> Optional[Dict[str, Any]]:
     """Resolve a fork's provenance for the "forked from" chip (D8).
 
     The metadata-store row first — its durable copy is the ONLY source reachable
@@ -215,6 +218,10 @@ def _source_template(meta: Optional[Dict[str, Any]], workspace_path: str) -> Opt
     workspace ``.source_template.json`` file, which covers pre-existing self-host
     forks that predate the store column. A null/malformed stored value falls
     through to the file. Read-only: never hydrates or mutates a workspace.
+
+    ``workspace_path`` may be a callable resolved LAZILY: the list endpoint pays
+    the per-session workspace lookup + disk stat only for the rare legacy row
+    whose stored ``source_template`` is empty, not once per session.
     """
     raw = (meta or {}).get("source_template")
     if raw:
@@ -224,7 +231,8 @@ def _source_template(meta: Optional[Dict[str, Any]], workspace_path: str) -> Opt
                 return data
         except (TypeError, ValueError):
             pass
-    return templates_mod.read_provenance(workspace_path)
+    ws = workspace_path() if callable(workspace_path) else workspace_path
+    return templates_mod.read_provenance(ws)
 
 
 class MessageResponse(BaseModel):
@@ -717,32 +725,36 @@ def _resolve_workspace(session_id: str) -> str:
 async def list_sessions(identity: Identity = Depends(get_identity)):
     """List the caller's sessions (tenant-scoped in hosted mode)."""
     uid = _uid(identity)
-    sessions = session_manager.get_all_sessions(user_id=uid)
-    # ONE grouped COUNT over chat_threads for the whole list (not a per-session
-    # query, and no workspace hydration). Honest row count: a fresh session's
-    # default "Chat 1" row doesn't exist until the first thread list/connect,
-    # so it reports 0 ("no chats yet").
+    # ONE grouped SELECT for the whole list (full rows, owner-scoped) + ONE
+    # grouped COUNT over chat_threads — NOT a per-session query each. The rows
+    # already carry every field SessionResponse needs, so the loop below does
+    # zero further DB round-trips (was an N+1: one get_session per session,
+    # which on hosted Postgres opened a fresh Cloud SQL connection apiece).
+    rows = session_manager.list_session_rows(user_id=uid)
+    # Honest row count: a fresh session's default "Chat 1" row doesn't exist
+    # until the first thread list/connect, so it reports 0 ("no chats yet").
     thread_counts = session_manager.count_threads_by_session(user_id=uid)
     result = []
 
-    for session_id in sessions:
-        meta = session_manager.get_session_metadata(session_id, user_id=uid)
+    for meta in rows:
+        session_id = meta["session_id"]
         result.append(SessionResponse(
             id=session_id,
-            name=meta.get("session_name") if meta else None,
-            model_name=meta.get("model_name") if meta else None,
-            project_id=meta.get("project_id") if meta else None,
-            created_at=str(meta.get("created_at")) if meta else None,
-            updated_at=str(meta.get("updated_at")) if meta and meta.get("updated_at") else None,
-            total_tokens=meta.get("total_tokens", 0) if meta else 0,
-            total_cost=meta.get("total_cost", 0.0) if meta else 0.0,
+            name=meta.get("session_name"),
+            model_name=meta.get("model_name"),
+            project_id=meta.get("project_id"),
+            created_at=str(meta.get("created_at")) if meta.get("created_at") is not None else None,
+            updated_at=str(meta.get("updated_at")) if meta.get("updated_at") else None,
+            total_tokens=meta.get("total_tokens", 0) or 0,
+            total_cost=meta.get("total_cost", 0.0) or 0.0,
             thread_count=thread_counts.get(session_id, 0),
             # Store-first provenance (durable row copy; file fallback) so the
             # "forked from" chip survives a reload on hosted too — no workspace
-            # hydration, no row materialization. The store selects currentSession
-            # from this list.
+            # hydration, no row materialization. The workspace lookup + disk
+            # stat is resolved LAZILY: paid only for a legacy row whose stored
+            # source_template is empty, never once per session.
             source_template=_source_template(
-                meta, session_manager.get_workspace_path(session_id)
+                meta, lambda sid=session_id: session_manager.get_workspace_path(sid)
             ),
         ))
 
