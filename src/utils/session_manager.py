@@ -439,6 +439,10 @@ class SessionManager:
     def set_thread_model(self, thread_id, model, user_id=None):
         self._store.update_thread(thread_id, user_id=user_id, model=model)
 
+    def set_thread_reasoning_effort(self, thread_id, reasoning_effort, user_id=None):
+        self._store.update_thread(
+            thread_id, user_id=user_id, reasoning_effort=reasoning_effort)
+
     def set_thread_runtime(self, thread_id, runtime, user_id=None):
         """Set the shell-level runtime marker that drives dispatch (which
         registered agent runtime owns this thread). See runtime_registry."""

@@ -40,6 +40,7 @@ import { useWorkbenchUiStore } from "./workbenchUiStore";
 export interface QueuedMessage {
   id: string;
   content: string;
+  images?: string[];
 }
 
 // Hard cap on client-side queued follow-ups (bounded memory, sane UX).
@@ -426,7 +427,7 @@ interface AppState {
   selectSessionById: (sessionId: string) => Promise<boolean>;
 
   loadChatHistory: () => Promise<void>;
-  sendMessage: (content: string) => void;
+  sendMessage: (content: string, images?: string[]) => void;
   stopStreaming: () => void;
   removeQueuedMessage: (id: string) => void;
   /** Send the next queued follow-up if the previous turn has ended. */
@@ -447,7 +448,9 @@ interface AppState {
 
   // Model actions
   loadModels: () => Promise<void>;
+  loadCodexModels: (force?: boolean) => Promise<void>;
   setActiveThreadModel: (modelId: string) => Promise<void>;
+  setActiveThreadReasoningEffort: (effort: string) => Promise<void>;
 
   toggleArtifacts: () => void;
   setArtifactTab: (tab: ArtifactTab) => void;
@@ -959,14 +962,14 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  sendMessage: (content: string) => {
+  sendMessage: (content: string, images: string[] = []) => {
     const { currentSession, ws: existingWs, wsSessionId, wsThreadId, activeThreadId, messages, isStreaming, queuedMessages } = get();
     if (!currentSession || !content.trim()) return;
     // Mid-turn follow-ups queue instead of interleaving into the running turn;
     // they dispatch (in order) as each turn ends and stay removable until then.
     if (isStreaming) {
       if (queuedMessages.length >= MAX_QUEUED_MESSAGES) return;
-      set({ queuedMessages: [...queuedMessages, { id: generateId(), content }] });
+      set({ queuedMessages: [...queuedMessages, { id: generateId(), content, images }] });
       return;
     }
     const messageContent = content;
@@ -1004,10 +1007,10 @@ export const useStore = create<AppState>((set, get) => ({
       socket.onopen = () => {
         // Ignore stale socket opens after session/socket replacement.
         if (get().ws !== socket) return;
-        socket.send(JSON.stringify({ message: messageContent, thread_id: threadId, turn_id: turnId }));
+        socket.send(JSON.stringify({ message: messageContent, images, thread_id: threadId, turn_id: turnId }));
       };
     } else {
-      ws.send(JSON.stringify({ message: messageContent, thread_id: threadId, turn_id: turnId }));
+      ws.send(JSON.stringify({ message: messageContent, images, thread_id: threadId, turn_id: turnId }));
     }
 
     // Create streaming message placeholder
@@ -1096,6 +1099,27 @@ export const useStore = create<AppState>((set, get) => ({
           const blocks: ContentBlock[] = (msg.blocks ?? []).filter((b) => b.type !== "plan");
           blocks.push({ type: "plan", content: data.content });
           set({ streamingMessage: { ...msg, blocks } });
+          break;
+        }
+
+        case "diff": {
+          if (!msg) break;
+          const blocks: ContentBlock[] = (msg.blocks ?? []).filter((block) => block.type !== "diff");
+          blocks.push({ type: "diff", content: data.content });
+          set({ streamingMessage: { ...msg, blocks } });
+          break;
+        }
+
+        case "compaction": {
+          if (!msg) break;
+          set({ streamingMessage: { ...msg, blocks: [...(msg.blocks ?? []), { type: "status", content: data.content }] } });
+          break;
+        }
+
+        case "model_rerouted": {
+          if (!msg) break;
+          const content = `Codex rerouted this turn from ${data.from_model || "the selected model"} to ${data.to_model || "another model"}.`;
+          set({ streamingMessage: { ...msg, blocks: [...(msg.blocks ?? []), { type: "status", content }] } });
           break;
         }
 
@@ -1346,7 +1370,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (isStreaming || !currentSession || queuedMessages.length === 0) return;
     const [next, ...rest] = queuedMessages;
     set({ queuedMessages: rest });
-    get().sendMessage(next.content);
+    get().sendMessage(next.content, next.images);
   },
 
   // Chat thread actions — many conversations per workspace. Threads share the
@@ -1426,7 +1450,11 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  setCodexAccountConnected: (connected) => set({ codexAccountConnected: connected }),
+  setCodexAccountConnected: (connected) => {
+    const changed = get().codexAccountConnected !== connected;
+    set({ codexAccountConnected: connected });
+    if (changed) void get().loadCodexModels(true);
+  },
 
   prewarmAgentRuntime: async () => {
     const { currentSession, activeThreadId, agentRuntime } = get();
@@ -1547,6 +1575,26 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  loadCodexModels: async (force = false) => {
+    if (!force && get().codexModels.some((m) => m.reasoning_efforts?.length)) return;
+    await singleFlight("codex-models", async () => {
+      try {
+        const data = await codexApi.models();
+        if (Array.isArray(data.models) && data.models.length > 0) {
+          set({ codexModels: data.models, codexDefaultModel: data.default });
+        } else {
+          const fallback = await modelsApi.list();
+          set({
+            codexModels: Array.isArray(fallback.codex_models) ? fallback.codex_models : [],
+            codexDefaultModel: typeof fallback.codex_default === "string" ? fallback.codex_default : null,
+          });
+        }
+      } catch {
+        // Retain the curated fallback loaded from /api/models.
+      }
+    });
+  },
+
   setActiveThreadModel: async (modelId: string) => {
     const { currentSession, activeThreadId } = get();
     if (!currentSession) return;
@@ -1568,6 +1616,16 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({
       activeThreadId: tid,
       threads: state.threads.map((t) => (t.id === tid ? { ...t, model: modelId } : t)),
+    }));
+  },
+
+  setActiveThreadReasoningEffort: async (effort: string) => {
+    const { currentSession, activeThreadId } = get();
+    if (!currentSession || !activeThreadId) return;
+    await threadsApi.patch(currentSession.id, activeThreadId, { reasoning_effort: effort });
+    set((state) => ({
+      threads: state.threads.map((thread) =>
+        thread.id === activeThreadId ? { ...thread, reasoning_effort: effort } : thread),
     }));
   },
 

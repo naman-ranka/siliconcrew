@@ -133,6 +133,9 @@ class RuntimeTurnContext:
     # Generic per-turn context any runtime may use (not runtime-specific).
     tier: Optional[str] = None
     auth_token: Optional[str] = None
+    # Optional data-URL image inputs. Runtime-neutral so other agents can adopt
+    # multimodal turns later without changing the WebSocket contract again.
+    images: tuple[str, ...] = ()
 
     async def emit(self, event: RuntimeEvent) -> None:
         await self.send(event.to_frame())

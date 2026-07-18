@@ -39,6 +39,6 @@ google-cloud-logging
 pyjwt[crypto]>=2.0.0
 # Codex agent runtime (optional, flag-gated by CODEX_ENABLED — see
 # src/agents/codex/). Lazily imported, so this is only needed when the flag is
-# on; pinned to the beta the reference capture (plans/codex-engine-reference.md)
-# was written against.
-openai-codex==0.1.0b3
+# on. Pin the verified SDK release so its generated app-server contracts stay
+# aligned with the adapter and event translation tests.
+openai-codex==0.144.4

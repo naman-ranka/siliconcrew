@@ -221,7 +221,7 @@ export const threadsApi = {
       `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}/history`
     ),
 
-  patch: (sessionId: string, threadId: string, body: { title?: string; model?: string }) =>
+  patch: (sessionId: string, threadId: string, body: { title?: string; model?: string; reasoning_effort?: string }) =>
     apiFetch<ChatThread>(
       `/api/sessions/${encodeSessionId(sessionId)}/threads/${encodeURIComponent(threadId)}`,
       { method: "PATCH", body: JSON.stringify(body) }
@@ -266,6 +266,7 @@ export const codexApi = {
   startDeviceAuth: () => apiFetch<CodexAuthStatus>("/api/codex/auth/device/start", { method: "POST" }),
   cancelDeviceAuth: () => apiFetch<CodexAuthStatus>("/api/codex/auth/device/cancel", { method: "POST" }),
   disconnect: () => apiFetch<CodexAuthStatus>("/api/codex/auth", { method: "DELETE" }),
+  models: () => apiFetch<{ models: ModelInfo[]; default: string; source: string }>("/api/codex/models"),
 };
 
 // Chat API

@@ -78,7 +78,8 @@ class MetadataStore(Protocol):
     def count_threads_by_session(self, user_id: Optional[str] = None) -> Dict[str, int]: ...
     def update_thread(self, thread_id: str, user_id: Optional[str] = None, *,
                       title: Optional[str] = None, model: Optional[str] = None,
-                      last_active: Any = None, runtime: Optional[str] = None) -> None: ...
+                      last_active: Any = None, runtime: Optional[str] = None,
+                      reasoning_effort: Optional[str] = None) -> None: ...
     def delete_thread(self, thread_id: str, user_id: Optional[str] = None) -> None: ...
     # identity migration (operator tool, Slice 3): re-key every row owned by
     # old_user_id to new_user_id. Used to unify google_<sub> -> workos_<sub>
@@ -149,6 +150,7 @@ class SqliteMetadataStore:
                     user_id TEXT,
                     title TEXT,
                     model TEXT,
+                    reasoning_effort TEXT,
                     runtime TEXT NOT NULL DEFAULT 'langchain',
                     created_at TIMESTAMP,
                     last_active TIMESTAMP
@@ -199,6 +201,8 @@ class SqliteMetadataStore:
             cur.execute(
                 "ALTER TABLE chat_threads ADD COLUMN runtime TEXT NOT NULL DEFAULT 'langchain'"
             )
+        if "reasoning_effort" not in thread_cols:
+            cur.execute("ALTER TABLE chat_threads ADD COLUMN reasoning_effort TEXT")
 
     def _migrate_existing_groups(self, cur) -> None:
         rows = cur.execute("SELECT session_id FROM session_metadata").fetchall()
@@ -478,7 +482,8 @@ class SqliteMetadataStore:
             rows = conn.execute(sql, params).fetchall()
         return {r[0]: int(r[1]) for r in rows}
 
-    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None, runtime=None):
+    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None, runtime=None,
+                      reasoning_effort=None):
         sets, params = [], []
         if title is not None:
             sets.append("title = ?"); params.append(title)
@@ -488,6 +493,8 @@ class SqliteMetadataStore:
             sets.append("last_active = ?"); params.append(last_active)
         if runtime is not None:
             sets.append("runtime = ?"); params.append(runtime)
+        if reasoning_effort is not None:
+            sets.append("reasoning_effort = ?"); params.append(reasoning_effort)
         if not sets:
             return
         owner, oparams = self._owner_clause(user_id)
@@ -614,6 +621,7 @@ class PostgresMetadataStore:
                     user_id TEXT,
                     title TEXT,
                     model TEXT,
+                    reasoning_effort TEXT,
                     runtime TEXT NOT NULL DEFAULT 'langchain',
                     created_at TIMESTAMPTZ,
                     last_active TIMESTAMPTZ
@@ -626,6 +634,9 @@ class PostgresMetadataStore:
             cur.execute(
                 "ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS "
                 "runtime TEXT NOT NULL DEFAULT 'langchain'"
+            )
+            cur.execute(
+                "ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS reasoning_effort TEXT"
             )
             # Fork provenance ({id,name,forked_at} JSON) — add to pre-existing
             # hosted tables. Idempotent; nullable (a normal session has none).
@@ -869,7 +880,8 @@ class PostgresMetadataStore:
             rows = cur.fetchall()
         return {r[0]: int(r[1]) for r in rows}
 
-    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None, runtime=None):
+    def update_thread(self, thread_id, user_id=None, *, title=None, model=None, last_active=None, runtime=None,
+                      reasoning_effort=None):
         sets, params = [], []
         if title is not None:
             sets.append("title = %s"); params.append(title)
@@ -879,6 +891,8 @@ class PostgresMetadataStore:
             sets.append("last_active = %s"); params.append(last_active)
         if runtime is not None:
             sets.append("runtime = %s"); params.append(runtime)
+        if reasoning_effort is not None:
+            sets.append("reasoning_effort = %s"); params.append(reasoning_effort)
         if not sets:
             return
         owner, oparams = self._owner_clause(user_id)

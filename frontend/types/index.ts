@@ -59,12 +59,17 @@ export interface ModelInfo {
   id: string;
   label: string;
   provider: "anthropic" | "openai" | "gemini";
-  tier: "fast" | "balanced" | "capable";
+  tier?: "fast" | "balanced" | "capable";
   hint?: string;
   pricing?: { input: number; output: number };
   available: boolean;
   /** Served by the hosted platform key (no BYOK needed) — E5 free tier. */
   free?: boolean;
+  is_default?: boolean;
+  default_reasoning_effort?: string;
+  reasoning_efforts?: { id: string; description?: string }[];
+  input_modalities?: string[];
+  upgrade?: string | null;
 }
 
 // Chat thread types — a chat = a LangGraph thread_id; many per workspace.
@@ -75,6 +80,7 @@ export interface ChatThread {
   title: string | null;
   model: string | null;
   runtime?: string | null; // 'langchain' (native) | 'codex'
+  reasoning_effort?: string | null;
   created_at: string | null;
   last_active: string | null;
 }
@@ -96,6 +102,8 @@ export type ContentBlock =
   | { type: "text"; content: string }
   | { type: "reasoning"; content: string } // agent "thinking" stream (Codex)
   | { type: "plan"; content: string }       // agent plan/todo (Codex)
+  | { type: "diff"; content: string }
+  | { type: "status"; content: string }
   | { type: "tool"; toolCall: ToolCall; result?: ToolResult };
 
 export interface Message {

@@ -79,6 +79,14 @@ def test_thread_stores_and_updates_model(mgr):
     assert mgr.get_thread(t["id"], user_id="alice")["model"] == "gpt-5.4"
 
 
+def test_thread_stores_reasoning_effort(mgr):
+    mgr.create_session("s1", user_id="alice")
+    thread = mgr.create_thread("s1", user_id="alice", model="gpt-5.6-sol")
+    assert thread["reasoning_effort"] is None
+    mgr.set_thread_reasoning_effort(thread["id"], "high", user_id="alice")
+    assert mgr.get_thread(thread["id"], user_id="alice")["reasoning_effort"] == "high"
+
+
 def test_new_thread_inherits_last_used_model(mgr):
     mgr.create_session("s1", user_id="alice")
     # Set a model on the first explicit thread...

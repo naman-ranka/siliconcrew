@@ -170,6 +170,7 @@ class CodexRuntimeHandler:
             system_prompt=self._system_prompt(), tier=tier,
             codex_account_home=None if api_key else account_home,
             sandbox=os.environ.get("CODEX_SANDBOX", "read-only"),
+            reasoning_effort=(thread_row or {}).get("reasoning_effort"),
             mcp_token=auth_token,
             history=self._store.list_messages(thread_id),
         )
@@ -273,6 +274,8 @@ class CodexRuntimeHandler:
                 # LangChain-parity default: read-only so Codex acts only through
                 # the SiliconCrew MCP tools (override with CODEX_SANDBOX).
                 sandbox=os.environ.get("CODEX_SANDBOX", "read-only"),
+                reasoning_effort=(ctx.thread_row or {}).get("reasoning_effort"),
+                images=ctx.images,
                 mcp_token=ctx.auth_token,
                 history=prior_messages,
             )):
@@ -292,6 +295,14 @@ class CodexRuntimeHandler:
                 elif ev.type == "plan" and ev.content:
                     current_segment = ""
                     await ctx.emit(RuntimeEvent.plan(ev.content))
+                elif ev.type == "diff" and ev.content:
+                    current_segment = ""
+                    await ctx.emit(RuntimeEvent("diff", {"content": ev.content}))
+                elif ev.type == "compaction":
+                    current_segment = ""
+                    await ctx.emit(RuntimeEvent("compaction", {"content": ev.content or "Conversation context compacted"}))
+                elif ev.type == "model_rerouted":
+                    await ctx.emit(RuntimeEvent("model_rerouted", ev.metadata))
                 elif ev.type == "tool_call" and ev.tool:
                     current_segment = ""
                     tool_calls.append(ev.tool)

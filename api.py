@@ -243,6 +243,7 @@ class ThreadCreate(BaseModel):
 class ThreadPatch(BaseModel):
     title: Optional[str] = None
     model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
 
 
 class MCPConnectComplete(BaseModel):
@@ -255,6 +256,7 @@ class ThreadResponse(BaseModel):
     title: Optional[str] = None
     model: Optional[str] = None
     runtime: Optional[str] = None
+    reasoning_effort: Optional[str] = None
     created_at: Optional[str] = None
     last_active: Optional[str] = None
 
@@ -266,6 +268,7 @@ def _thread_to_response(t: dict) -> "ThreadResponse":
         title=t.get("title"),
         model=t.get("model"),
         runtime=t.get("runtime"),
+        reasoning_effort=t.get("reasoning_effort"),
         created_at=str(t["created_at"]) if t.get("created_at") else None,
         last_active=str(t["last_active"]) if t.get("last_active") else None,
     )
@@ -1030,9 +1033,60 @@ async def codex_auth_device_cancel(identity: Identity = Depends(require_signed_i
 
 @app.delete("/api/codex/auth")
 async def codex_auth_disconnect(identity: Identity = Depends(require_signed_in)):
+    _CODEX_MODEL_CACHE.pop(_uid(identity) or "anonymous", None)
     if _CODEX_AUTH_MANAGER is None:
         return _codex_auth_payload(_codex_disabled_status())
     return _codex_auth_payload(_CODEX_AUTH_MANAGER.disconnect(_uid(identity) or "anonymous"))
+
+
+_CODEX_MODEL_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+
+
+@app.get("/api/codex/models")
+async def codex_models(identity: Identity = Depends(get_identity)):
+    """Authenticated Codex app-server catalog and model capabilities.
+
+    Unlike the static fallback returned by /api/models, this is authoritative
+    for the connected account/API key and is safe to render directly.
+    """
+    if not get_settings().codex_enabled:
+        return {"models": [], "default": CODEX_DEFAULT_MODEL, "source": "disabled"}
+    uid = _uid(identity) or "anonymous"
+    account_home = None
+    api_key = None
+    if _CODEX_AUTH_MANAGER and _CODEX_AUTH_MANAGER.is_connected(uid):
+        account_home = _CODEX_AUTH_MANAGER.ensure_local(uid)
+    if not account_home:
+        try:
+            resolved = _LLM_KEY_PROVIDER.resolve(_uid(identity), CODEX_DEFAULT_MODEL)
+            api_key = getattr(resolved, "api_key", None)
+        except Exception:
+            api_key = None
+    if not account_home and not api_key:
+        return {"models": [], "default": CODEX_DEFAULT_MODEL, "source": "unavailable"}
+    if account_home:
+        cached = _CODEX_MODEL_CACHE.get(uid)
+        if cached and time.monotonic() - cached[0] < 30:
+            return cached[1]
+    try:
+        from src.agents.codex.codex_engine import discover_codex_models
+
+        discovery_key = uuid.uuid5(uuid.NAMESPACE_URL, uid).hex
+        models = await discover_codex_models(
+            api_key=api_key,
+            account_home=account_home,
+            sqlite_home=os.path.join(_DATA_DIR, "codex-model-discovery", discovery_key),
+        )
+        if account_home and _CODEX_AUTH_MANAGER:
+            _CODEX_AUTH_MANAGER.persist(uid)
+        default = next((m["id"] for m in models if m.get("is_default")), CODEX_DEFAULT_MODEL)
+        payload = {"models": models, "default": default, "source": "sdk"}
+        if account_home:
+            _CODEX_MODEL_CACHE[uid] = (time.monotonic(), payload)
+        return payload
+    except Exception as exc:  # availability degrades to the curated fallback
+        print(f"[CODEX] model discovery failed: {exc}", file=sys.stderr)
+        return {"models": [], "default": CODEX_DEFAULT_MODEL, "source": "fallback"}
 
 
 # =============================================================================
@@ -1376,6 +1430,16 @@ _KNOWN_MODEL_IDS = frozenset(
 )
 
 
+def _valid_dynamic_codex_model_id(model_id: str) -> bool:
+    """Codex catalogs are account-specific and can advance independently of
+    deployments. Keep native models allowlisted, while allowing a bounded,
+    transport-safe SDK model id on Codex-owned threads; the runtime gates
+    account-auth ids against Codex's authoritative model/list before use."""
+    return bool(model_id) and len(model_id) <= 128 and all(
+        char.isalnum() or char in "-._:" for char in model_id
+    )
+
+
 @app.patch("/api/sessions/{session_id:path}/threads/{tid}", response_model=ThreadResponse)
 async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: Identity = Depends(get_identity)):
     """Rename a thread and/or set its model (owner-checked)."""
@@ -1392,9 +1456,20 @@ async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: I
         session_manager.rename_thread(tid, data.title, user_id=uid)
     if data.model is not None:
         normalized = normalize_model_name(data.model)
-        if normalized not in _KNOWN_MODEL_IDS:
+        thread = session_manager.get_thread(tid, user_id=uid) or {}
+        is_dynamic_codex_id = (
+            thread.get("runtime") == "codex"
+            and _valid_dynamic_codex_model_id(normalized)
+        )
+        if normalized not in _KNOWN_MODEL_IDS and not is_dynamic_codex_id:
             raise HTTPException(status_code=422, detail=f"Unknown model id: {data.model!r}")
         session_manager.set_thread_model(tid, normalized, user_id=uid)
+    if data.reasoning_effort is not None:
+        allowed_efforts = {"none", "low", "medium", "high", "xhigh", "max"}
+        if data.reasoning_effort not in allowed_efforts:
+            raise HTTPException(status_code=422, detail="Unsupported reasoning effort")
+        session_manager.set_thread_reasoning_effort(
+            tid, data.reasoning_effort, user_id=uid)
     return _thread_to_response(session_manager.get_thread(tid, user_id=uid))
 
 
@@ -1719,6 +1794,17 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                         session_id=session_id, workspace=workspace, user_id=uid,
                         thread_row=_turn_thread_row, send=_ext_send,
                         tier=identity.tier, auth_token=token,
+                        images=tuple(
+                            image for image in (data.get("images") or [])
+                            if isinstance(image, str)
+                            and image.startswith((
+                                "data:image/png;base64,",
+                                "data:image/jpeg;base64,",
+                                "data:image/webp;base64,",
+                                "data:image/gif;base64,",
+                            ))
+                            and len(image) <= 8_000_000
+                        )[:4],
                     )
                 ))
 
