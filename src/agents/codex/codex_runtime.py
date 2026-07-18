@@ -72,9 +72,9 @@ class CodexRuntimeHandler:
         self._normalize_model = normalize_model
         self._enabled = enabled
         # TTFT warm-keep (plans/codex-ttft-remediation.md): one per-process pool
-        # of session/thread/user-bound workers. Default ON for hosted (where the
-        # ~8.5s per-turn rebuild was measured), opt-in for self-host via
-        # CODEX_WARM_KEEP=1, and CODEX_WARM_KEEP=0 disables everywhere.
+        # of session/thread/user-bound workers. Default ON everywhere: local
+        # app-server startup is the same multi-second tax as hosted startup.
+        # CODEX_WARM_KEEP=0 remains an explicit low-memory/diagnostic opt-out.
         # Injectable so tests share one pool between the handler and the
         # engines their explicit engine_factory builds.
         self._pool = warm_pool if warm_pool is not None else (
@@ -97,10 +97,8 @@ class CodexRuntimeHandler:
             return None
         if raw in ("1", "true", "yes", "on"):
             enabled = True
-        else:  # unset → hosted default-on, self-host default-off (untouched)
-            from src.platform_engines.settings import get_settings
-
-            enabled = get_settings().hosted
+        else:  # unset -> bounded warm-keep is the standard default
+            enabled = True
         if not enabled:
             return None
         from src.agents.codex.codex_warm import CodexWorkerPool
@@ -170,6 +168,7 @@ class CodexRuntimeHandler:
             system_prompt=self._system_prompt(), tier=tier,
             codex_account_home=None if api_key else account_home,
             sandbox=os.environ.get("CODEX_SANDBOX", "read-only"),
+            reasoning_effort=(thread_row or {}).get("reasoning_effort"),
             mcp_token=auth_token,
             history=self._store.list_messages(thread_id),
         )
@@ -257,10 +256,33 @@ class CodexRuntimeHandler:
                                  # new text block after any non-text block).
         tool_calls: list = []
         tool_results: list = []
+        # Preserve the presentation sequence for refresh/reopen. The aggregate
+        # content/tool arrays remain for SDK-history compatibility, but cannot
+        # represent text -> tool -> text ordering on their own.
+        presentation_blocks: list = []
         in_tokens = 0
         out_tokens = 0
         completed = False
         new_external_id: Optional[str] = None
+        sdk_ready_at: Optional[float] = None
+        first_response_logged = False
+        first_text_logged = False
+
+        def _log_first(event: str) -> None:
+            now = time.monotonic()
+            elapsed = now - turn_start
+            after_setup = now - sdk_ready_at if sdk_ready_at is not None else elapsed
+            print(
+                f"[CODEX-TIMING] thread={ctx.thread_id} turn={ctx.turn_id} "
+                f"event={event} elapsed={elapsed:.2f}s after_setup={after_setup:.2f}s",
+                file=sys.stderr,
+            )
+
+        def _flush_text_segment() -> None:
+            nonlocal current_segment
+            if current_segment:
+                presentation_blocks.append({"type": "text", "content": current_segment})
+                current_segment = ""
 
         try:
             async for ev in engine.stream_turn(CodexTurn(
@@ -273,12 +295,22 @@ class CodexRuntimeHandler:
                 # LangChain-parity default: read-only so Codex acts only through
                 # the SiliconCrew MCP tools (override with CODEX_SANDBOX).
                 sandbox=os.environ.get("CODEX_SANDBOX", "read-only"),
+                reasoning_effort=(ctx.thread_row or {}).get("reasoning_effort"),
+                images=ctx.images,
                 mcp_token=ctx.auth_token,
                 history=prior_messages,
             )):
                 if ev.type == "start":
+                    sdk_ready_at = time.monotonic()
                     new_external_id = ev.external_thread_id or new_external_id
-                elif ev.type == "text" and ev.content:
+                    continue
+                if not first_response_logged:
+                    first_response_logged = True
+                    _log_first("first_model_response")
+                if ev.type == "text" and ev.content:
+                    if not first_text_logged:
+                        first_text_logged = True
+                        _log_first("first_token")
                     # Engine emits deltas as `text`; stream the CURRENT segment
                     # (cumulative within the block, not the whole turn) so a text
                     # segment after a tool/reasoning block doesn't repeat earlier
@@ -287,14 +319,47 @@ class CodexRuntimeHandler:
                     assistant_content += ev.content
                     await ctx.emit(RuntimeEvent.text_delta(current_segment))
                 elif ev.type == "reasoning" and ev.content:
-                    current_segment = ""  # a new (non-text) block ends the segment
+                    _flush_text_segment()
+                    if presentation_blocks and presentation_blocks[-1].get("type") == "reasoning":
+                        presentation_blocks[-1]["content"] += ev.content
+                    else:
+                        presentation_blocks.append({"type": "reasoning", "content": ev.content})
                     await ctx.emit(RuntimeEvent.reasoning(ev.content))
                 elif ev.type == "plan" and ev.content:
-                    current_segment = ""
+                    _flush_text_segment()
+                    presentation_blocks[:] = [
+                        block for block in presentation_blocks if block.get("type") != "plan"
+                    ]
+                    presentation_blocks.append({"type": "plan", "content": ev.content})
                     await ctx.emit(RuntimeEvent.plan(ev.content))
+                elif ev.type == "diff" and ev.content:
+                    _flush_text_segment()
+                    presentation_blocks[:] = [
+                        block for block in presentation_blocks if block.get("type") != "diff"
+                    ]
+                    presentation_blocks.append({"type": "diff", "content": ev.content})
+                    await ctx.emit(RuntimeEvent("diff", {"content": ev.content}))
+                elif ev.type == "compaction":
+                    _flush_text_segment()
+                    content = ev.content or "Conversation context compacted"
+                    presentation_blocks.append({"type": "status", "content": content})
+                    await ctx.emit(RuntimeEvent("compaction", {"content": content}))
+                elif ev.type == "model_rerouted":
+                    _flush_text_segment()
+                    from_model = ev.metadata.get("from_model") if ev.metadata else None
+                    to_model = ev.metadata.get("to_model") if ev.metadata else None
+                    presentation_blocks.append({
+                        "type": "status",
+                        "content": (
+                            f"Codex rerouted this turn from {from_model or 'the selected model'} "
+                            f"to {to_model or 'another model'}."
+                        ),
+                    })
+                    await ctx.emit(RuntimeEvent("model_rerouted", ev.metadata))
                 elif ev.type == "tool_call" and ev.tool:
-                    current_segment = ""
+                    _flush_text_segment()
                     tool_calls.append(ev.tool)
+                    presentation_blocks.append({"type": "tool", "toolCall": ev.tool})
                     tool_name = ev.tool.get("name", "unknown") if isinstance(ev.tool, dict) else "unknown"
                     call_id = ev.tool_call_id or (ev.tool.get("id") if isinstance(ev.tool, dict) else None)
                     if call_id:
@@ -309,6 +374,11 @@ class CodexRuntimeHandler:
                     result = {"tool_call_id": ev.tool_call_id,
                               "status": ev.status or "success", "content": ev.content or ""}
                     tool_results.append(result)
+                    for block in reversed(presentation_blocks):
+                        call = block.get("toolCall") if block.get("type") == "tool" else None
+                        if isinstance(call, dict) and call.get("id") == ev.tool_call_id:
+                            block["result"] = result
+                            break
                     started = _tool_call_starts.pop(ev.tool_call_id, None)
                     if started is not None:
                         start_ts, tool_name = started
@@ -358,10 +428,15 @@ class CodexRuntimeHandler:
         # segments were already finalized before their interrupting block).
         if current_segment:
             await ctx.emit(RuntimeEvent.text(current_segment))
+        _flush_text_segment()
         if assistant_content or tool_calls or tool_results:
             self._store.append_message(
                 ctx.thread_id, "assistant", assistant_content,
-                tool_metadata={"tool_calls": tool_calls, "tool_results": tool_results})
+                tool_metadata={
+                    "tool_calls": tool_calls,
+                    "tool_results": tool_results,
+                    "blocks": presentation_blocks,
+                })
         # Persist external_thread_id ONLY on a completed turn (a failed turn must
         # not corrupt resume state).
         if completed and new_external_id and new_external_id != external_id:

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useMemo } from "react";
-import { User, Bot, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
+import { User, Bot, Sparkles, ChevronDown, ChevronRight, GitCompare, Info } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -108,6 +108,19 @@ function BlockView({ block, isStreaming = false }: {
 }) {
   if (block.type === "reasoning") return <ThinkingContent content={block.content} />;
   if (block.type === "plan") return <PlanContent content={block.content} />;
+  if (block.type === "diff") return (
+    <details className="rounded-md border border-border/60 bg-surface-2/40 p-2.5 text-xs">
+      <summary className="flex cursor-pointer items-center gap-1.5 font-medium text-muted-foreground">
+        <GitCompare className="h-3.5 w-3.5" /> Changes in this turn
+      </summary>
+      <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-foreground/80">{block.content}</pre>
+    </details>
+  );
+  if (block.type === "status") return (
+    <div className="flex items-start gap-1.5 rounded border border-border/60 bg-surface-2/40 px-2 py-1.5 text-xs text-muted-foreground">
+      <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {block.content}
+    </div>
+  );
   if (block.type === "text") return <MarkdownContent content={block.content} />;
   return <ToolCallCard toolCall={block.toolCall} result={block.result} isRunning={isStreaming && !block.result} />;
 }

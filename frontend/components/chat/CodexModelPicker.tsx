@@ -8,15 +8,9 @@ import type { ModelInfo } from "@/types";
 
 /**
  * Model picker for the CODEX agent — a separate component over a separately
- * curated registry (`codexModels`, from the backend's CODEX_CATALOG), NOT a
- * provider filter of the native picker's list. The Codex runtime runs on its
- * own model set, so the two pickers are maintained independently and can
- * diverge freely.
- *
- * Availability: the registry's `available` flag knows BYOK/env OpenAI keys
- * only. A connected ChatGPT account bypasses key resolution entirely
- * (codex_runtime.py: account auth wins over BYOK), so a connected account
- * makes every Codex model selectable here.
+ * model registry (`codexModels`), NOT a provider filter of the native picker.
+ * A curated catalog provides the initial fallback; once authenticated, the
+ * backend replaces it with the account-specific catalog returned by Codex.
  */
 export function CodexModelPicker() {
   const {
@@ -26,7 +20,9 @@ export function CodexModelPicker() {
     codexModels,
     codexDefaultModel,
     loadModels,
+    loadCodexModels,
     setActiveThreadModel,
+    setActiveThreadReasoningEffort,
     codexAccountConnected,
   } = useStore();
   const [open, setOpen] = useState(false);
@@ -34,11 +30,13 @@ export function CodexModelPicker() {
 
   useEffect(() => {
     void loadModels();
-  }, [loadModels]);
+    void loadCodexModels();
+  }, [loadModels, loadCodexModels]);
 
   useEffect(() => {
     if (!open) return;
     void loadModels();
+    void loadCodexModels(true);
     // Consume the Esc (see ThreadSwitcher) — handler only exists while open.
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -55,19 +53,18 @@ export function CodexModelPicker() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mousedown", onClick);
     };
-  }, [open, loadModels]);
+  }, [open, loadModels, loadCodexModels]);
 
-  const visibleModels = useMemo(
-    () =>
-      codexAccountConnected
-        ? codexModels.map((m) => ({ ...m, available: true }))
-        : codexModels,
-    [codexModels, codexAccountConnected]
-  );
+  const visibleModels = useMemo(() => codexModels, [codexModels]);
 
   const activeThread = threads.find((t) => t.id === activeThreadId);
   const currentId = activeThread?.model || codexDefaultModel || "";
   const currentLabel = visibleModels.find((m) => m.id === currentId)?.label || currentId || "Codex";
+  const currentModel = visibleModels.find((m) => m.id === currentId);
+  const reasoningOptions = currentModel?.reasoning_efforts ?? [];
+  const currentEffort = activeThread?.reasoning_effort
+    || currentModel?.default_reasoning_effort
+    || "medium";
 
   const pick = async (m: ModelInfo) => {
     if (!m.available) return;
@@ -150,6 +147,32 @@ export function CodexModelPicker() {
               </button>
             );
           })}
+          {reasoningOptions.length > 0 && (
+            <div className="mt-1 border-t border-border px-2 py-2">
+              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                Reasoning
+              </div>
+              <div className="flex flex-wrap gap-1" role="group" aria-label="Reasoning effort">
+                {reasoningOptions.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    title={option.description}
+                    aria-pressed={option.id === currentEffort}
+                    onClick={() => void setActiveThreadReasoningEffort(option.id)}
+                    className={cn(
+                      "rounded border px-1.5 py-1 text-[10px] capitalize",
+                      option.id === currentEffort
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-surface-2"
+                    )}
+                  >
+                    {option.id === "xhigh" ? "Extra high" : option.id}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="mt-1 border-t border-border px-2 py-1.5 text-[10px] leading-snug text-muted-foreground/70">
             {codexAccountConnected
               ? "Using your ChatGPT account."

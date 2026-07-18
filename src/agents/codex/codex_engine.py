@@ -62,6 +62,67 @@ class CodexTurnError(RuntimeError):
         self.message = message
 
 
+async def discover_codex_models(*, api_key: Optional[str] = None,
+                                account_home: Optional[str] = None,
+                                sqlite_home: Optional[str] = None) -> list[dict[str, Any]]:
+    """Return the authenticated app-server catalog in a UI-safe shape.
+
+    This intentionally starts a lightweight SDK client without SiliconCrew's
+    MCP configuration: model discovery does not need a workspace or tools.
+    """
+    import openai_codex
+
+    # Account auth must use its real CODEX_HOME so the SDK sees auth.json.
+    # BYOK discovery gets a caller-scoped home to avoid persisting one tenant's
+    # login into another tenant's discovery process.
+    discovery_root = sqlite_home or os.path.join(
+        os.path.expanduser("~"), ".siliconcrew", "codex-model-discovery")
+    home = account_home or os.path.join(discovery_root, "home")
+    sqlite_dir = sqlite_home or os.path.join(home, "sqlite")
+    _mkdir_private(Path(home))
+    _mkdir_private(Path(sqlite_dir))
+    config = openai_codex.CodexConfig(env={
+        "CODEX_HOME": home,
+        "CODEX_SQLITE_HOME": sqlite_dir,
+        "OPENAI_API_KEY": "",
+        "ANTHROPIC_API_KEY": "",
+        "GOOGLE_API_KEY": "",
+    })
+    async with openai_codex.AsyncCodex(config=config) as codex:
+        if api_key:
+            await codex.login_api_key(api_key)
+        response = await codex.models()
+
+    entries: list[dict[str, Any]] = []
+    for model in getattr(response, "data", response) or []:
+        efforts = []
+        for option in getattr(model, "supported_reasoning_efforts", None) or []:
+            value = _enum_value(getattr(option, "reasoning_effort", option))
+            if value:
+                efforts.append({
+                    "id": value,
+                    "description": str(getattr(option, "description", "") or ""),
+                })
+        modalities = [
+            _enum_value(value) for value in
+            (getattr(model, "input_modalities", None) or ["text", "image"])
+        ]
+        entries.append({
+            "id": str(getattr(model, "model", None) or getattr(model, "id", "")),
+            "label": str(getattr(model, "display_name", None) or getattr(model, "id", "")),
+            "provider": "openai",
+            "hint": str(getattr(model, "description", "") or ""),
+            "available": not bool(getattr(model, "hidden", False)),
+            "is_default": bool(getattr(model, "is_default", False)),
+            "default_reasoning_effort": _enum_value(
+                getattr(model, "default_reasoning_effort", "medium")),
+            "reasoning_efforts": efforts,
+            "input_modalities": modalities,
+            "upgrade": getattr(model, "upgrade", None),
+        })
+    return [entry for entry in entries if entry["id"] and entry["available"]]
+
+
 @dataclass(frozen=True)
 class CodexUsage:
     input_tokens: int = 0
@@ -77,6 +138,7 @@ class CodexEvent:
     status: Optional[str] = None
     usage: CodexUsage = field(default_factory=CodexUsage)
     external_thread_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -93,6 +155,8 @@ class CodexTurn:
     tier: Optional[str] = None
     codex_account_home: Optional[str] = None
     sandbox: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    images: Sequence[str] = field(default_factory=tuple)
     mcp_token: Optional[str] = None
     # Prior transcript (from codex_store, oldest-first: {"role","content",...}),
     # snapshotted BEFORE this turn's user message was appended. Used ONLY on the
@@ -217,7 +281,7 @@ def _format_plan(payload: Any) -> str:
 
 
 # A resume-failure fallback replays prior transcript into base_instructions
-# (see stream_turn) since the SDK (0.1.0b3) has no structured "seed with prior
+# (see stream_turn) since the SDK has no structured "seed with prior
 # messages" param on thread_start/thread_resume — only free-text
 # base_instructions/developer_instructions. Capped so a long-running chat's
 # cold-restart recovery doesn't blow up prompt size/cost on every fallback:
@@ -390,6 +454,29 @@ class CodexEngine:
             "approval_mode": self._sdk_approval_mode(openai_codex), "service_tier": turn.tier,
         }.items() if v is not None}
 
+    def _turn_kwargs(self, openai_codex: Any, turn: CodexTurn,
+                     allowed_models: Optional[frozenset] = None) -> Dict[str, Any]:
+        """Current per-turn controls. Reasoning effort moved from an opaque
+        config override to the typed SDK turn parameter in openai-codex 0.144."""
+        kwargs = self._thread_kwargs(openai_codex, turn, allowed_models)
+        effort = turn.reasoning_effort or os.environ.get("CODEX_MODEL_REASONING_EFFORT")
+        effort_cls = getattr(openai_codex, "ReasoningEffort", None) if openai_codex else None
+        if effort:
+            kwargs["effort"] = getattr(effort_cls, effort, effort) if effort_cls else effort
+        return kwargs
+
+    @staticmethod
+    def _turn_input(openai_codex: Any, turn: CodexTurn) -> Any:
+        if not turn.images:
+            return turn.message
+        if openai_codex is None:
+            return [{"type": "text", "text": turn.message}, *(
+                {"type": "image", "url": url} for url in turn.images
+            )]
+        text_cls = getattr(openai_codex, "TextInput")
+        image_cls = getattr(openai_codex, "ImageInput")
+        return [text_cls(turn.message), *(image_cls(url) for url in turn.images)]
+
     def _effective_model(self, turn: CodexTurn,
                          allowed_models: Optional[frozenset]) -> Optional[str]:
         """Which picked model id to actually pass to the SDK for this turn.
@@ -508,9 +595,10 @@ class CodexEngine:
                 )
                 yield CodexEvent(type="start", external_thread_id=worker.external_thread_id)
 
-                turn_kwargs = self._thread_kwargs(openai_codex, turn, worker.allowed_models)
+                turn_kwargs = self._turn_kwargs(openai_codex, turn, worker.allowed_models)
                 turn_issue_start = time.monotonic()
-                turn_handle = await worker.thread.turn(turn.message, **turn_kwargs)
+                turn_handle = await worker.thread.turn(
+                    self._turn_input(openai_codex, turn), **turn_kwargs)
                 print(
                     f"[CODEX-TIMING] thread={turn.thread_id} event=sdk_turn_issued "
                     f"elapsed={time.monotonic() - turn_issue_start:.2f}s",
@@ -681,8 +769,9 @@ class CodexEngine:
         )
 
     def _thread_config(self) -> Optional[dict[str, Any]]:
-        effort = os.environ.get("CODEX_MODEL_REASONING_EFFORT")
-        return {"model_reasoning_effort": effort} if effort else None
+        # Retained as a compatibility seam for existing tests/fakes. Modern SDK
+        # versions accept reasoning effort directly on each turn.
+        return None
 
     def _sdk_sandbox(self, openai_codex: Any, sandbox: Optional[str]) -> Any:
         if openai_codex is None:
@@ -751,6 +840,27 @@ class CodexEngine:
                 body = _format_plan(payload)
                 if body:
                     yield CodexEvent(type="plan", content=body)
+                continue
+
+            if method == "turn/diff/updated":
+                diff = _stringify_content(getattr(payload, "diff", ""))
+                if diff:
+                    yield CodexEvent(type="diff", content=diff)
+                continue
+
+            if method == "thread/compacted":
+                yield CodexEvent(type="compaction", content="Conversation context compacted")
+                continue
+
+            if method == "model/rerouted":
+                yield CodexEvent(
+                    type="model_rerouted",
+                    metadata={
+                        "from_model": str(getattr(payload, "from_model", "") or ""),
+                        "to_model": str(getattr(payload, "to_model", "") or ""),
+                        "reason": _enum_value(_root(getattr(payload, "reason", ""))),
+                    },
+                )
                 continue
 
             # SDK deprecation / config-warning notices — log so we hear about

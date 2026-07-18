@@ -200,6 +200,11 @@ def test_tool_call_turn_maps_and_persists(wiring):
     assistant = wiring.store.list_messages("th1")[-1]
     assert assistant["tool_metadata"]["tool_calls"][0]["name"] == "read_file"
     assert assistant["tool_metadata"]["tool_results"][0]["tool_call_id"] == "c1"
+    blocks = assistant["tool_metadata"]["blocks"]
+    assert [block["type"] for block in blocks] == ["tool", "text"]
+    assert blocks[0]["toolCall"]["name"] == "read_file"
+    assert blocks[0]["result"]["tool_call_id"] == "c1"
+    assert blocks[1]["content"] == "done reading"
 
 
 # --- server-side timing instrumentation (Cloud Run observability) -----------
@@ -241,6 +246,9 @@ def test_tool_call_turn_logs_timing_lines(wiring, capsys):
 
     # turn_start at the top, turn_end (with a real elapsed=...s) at the end.
     assert any("event=turn_start" in l for l in lines)
+    assert sum("event=first_model_response" in l for l in lines) == 1
+    assert sum("event=first_token" in l for l in lines) == 1
+    assert any("after_setup=" in l for l in lines if "event=first_token" in l)
     end_lines = [l for l in lines if "event=turn_end" in l]
     assert end_lines and "status=completed" in end_lines[0]
     assert "elapsed=" in end_lines[0] and end_lines[0].rstrip().endswith("s")

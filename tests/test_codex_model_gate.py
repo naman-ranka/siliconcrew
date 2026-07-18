@@ -13,9 +13,10 @@ set, and assert which model reaches ``thread.turn``. No live creds; the real
 beta-SDK ``model/list`` surface is the only thing they can't confirm.
 """
 import asyncio
+import sys
 import types
 
-from src.agents.codex.codex_engine import CodexEngine, CodexTurn
+from src.agents.codex.codex_engine import CodexEngine, CodexTurn, discover_codex_models
 from src.agents.codex.codex_warm import CodexWorkerPool
 
 
@@ -51,6 +52,7 @@ class _FakeThread:
         self.owner = owner
 
     async def turn(self, message, **kw):
+        self.owner.turn_inputs.append(message)
         self.owner.turn_kwargs.append(kw)
         return _FakeTurnHandle(_events())
 
@@ -60,6 +62,7 @@ class _FakeCodex:
         self._models = models
         self._models_raises = models_raises
         self.models_calls = 0
+        self.turn_inputs = []           # values passed as the SDK RunInput
         self.turn_kwargs = []          # kwargs passed to thread.turn()
         self.thread_start_kwargs = []  # kwargs passed to thread_start()
         self.thread = _FakeThread(self)
@@ -118,10 +121,11 @@ def _engine(factory, tmp_path, pool=None):
         state_dir=str(tmp_path / "state"), local_sqlite_dir=str(tmp_path / "sqlite"))
 
 
-def _turn(model_name, *, api_key=None, workspace="/tmp/ws"):
+def _turn(model_name, *, api_key=None, workspace="/tmp/ws", reasoning_effort=None, images=()):
     return CodexTurn(
         session_id="s1", thread_id="th1", message="hi", workspace=workspace,
-        user_id="alice", model_name=model_name, api_key=api_key)
+        user_id="alice", model_name=model_name, api_key=api_key,
+        reasoning_effort=reasoning_effort, images=images)
 
 
 def _run_turn(engine, turn):
@@ -199,6 +203,101 @@ def test_byok_passes_model_unchanged(tmp_path):
     fake = factory.instances[0]
     assert fake.turn_kwargs[-1].get("model") == "gpt-5.3-codex"
     assert fake.models_calls == 0
+
+
+def test_turn_passes_reasoning_effort_and_multimodal_input(tmp_path):
+    """Current SDK controls belong on Thread.turn, and image attachments use
+    the SDK's structured RunInput rather than being embedded in prompt text."""
+    factory = _Factory()
+    engine = _engine(factory, tmp_path)
+    _run_turn(engine, _turn(
+        "gpt-5.6-sol", api_key="sk-byok", reasoning_effort="high",
+        images=("data:image/png;base64,aA==",),
+    ))
+    fake = factory.instances[0]
+    assert fake.turn_kwargs[-1]["effort"] == "high"
+    assert fake.turn_kwargs[-1]["model"] == "gpt-5.6-sol"
+    assert fake.turn_inputs[-1] == [
+        {"type": "text", "text": "hi"},
+        {"type": "image", "url": "data:image/png;base64,aA=="},
+    ]
+
+
+def test_current_sdk_notifications_are_preserved_for_the_ui(tmp_path):
+    events = [
+        _ev("turn/diff/updated", diff="@@ -1 +1 @@"),
+        _ev("thread/compacted", thread_id="ext-1", turn_id="turn-1"),
+        _ev(
+            "model/rerouted", from_model="gpt-5.6-sol", to_model="gpt-5.6-terra",
+            reason=types.SimpleNamespace(root="highRiskCyberActivity"),
+        ),
+        _ev("turn/completed"),
+    ]
+    handle = _FakeTurnHandle(events)
+    engine = _engine(_Factory(), tmp_path)
+
+    async def collect():
+        return [event async for event in engine._stream_sdk_events(handle)]
+
+    translated = asyncio.run(collect())
+    assert [event.type for event in translated] == [
+        "diff", "compaction", "model_rerouted", "done",
+    ]
+    assert translated[2].metadata == {
+        "from_model": "gpt-5.6-sol",
+        "to_model": "gpt-5.6-terra",
+        "reason": "highRiskCyberActivity",
+    }
+
+
+def test_model_discovery_maps_sdk_capabilities(monkeypatch, tmp_path):
+    class DiscoveryClient:
+        logged_in = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def login_api_key(self, key):
+            self.logged_in = key
+
+        async def models(self):
+            effort = types.SimpleNamespace(reasoning_effort="high", description="Deep")
+            model = types.SimpleNamespace(
+                model="gpt-5.6-sol", id="gpt-5.6-sol", display_name="GPT-5.6 Sol",
+                description="Flagship", hidden=False, is_default=True,
+                default_reasoning_effort="high", supported_reasoning_efforts=[effort],
+                input_modalities=["text", "image"], upgrade=None,
+            )
+            hidden = types.SimpleNamespace(
+                model="internal", id="internal", display_name="Internal",
+                description="", hidden=True, is_default=False,
+                default_reasoning_effort="medium", supported_reasoning_efforts=[],
+                input_modalities=["text"], upgrade=None,
+            )
+            return types.SimpleNamespace(data=[model, hidden])
+
+    client = DiscoveryClient()
+    fake_module = types.SimpleNamespace(
+        CodexConfig=lambda **kwargs: kwargs,
+        AsyncCodex=lambda config=None: client,
+    )
+    monkeypatch.setitem(sys.modules, "openai_codex", fake_module)
+    catalog = asyncio.run(discover_codex_models(
+        api_key="sk-test", account_home=str(tmp_path / "home"),
+        sqlite_home=str(tmp_path / "sqlite"),
+    ))
+
+    assert client.logged_in == "sk-test"
+    assert catalog == [{
+        "id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "provider": "openai",
+        "hint": "Flagship", "available": True, "is_default": True,
+        "default_reasoning_effort": "high",
+        "reasoning_efforts": [{"id": "high", "description": "Deep"}],
+        "input_modalities": ["text", "image"], "upgrade": None,
+    }]
 
 
 # --- (e) the model list is cached per worker (queried once across turns) ------

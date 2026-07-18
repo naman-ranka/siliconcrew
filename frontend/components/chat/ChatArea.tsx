@@ -48,8 +48,13 @@ export function ChatArea({
   // so the cold start overlaps the user's read-and-type time instead of
   // blocking their first message. The action no-ops (and clears the chip) for
   // native threads; stale watches are superseded internally on every change.
+  // A short settle window prevents URL/session hydration from warming each
+  // transiently selected thread and churning the bounded pool on refresh.
   useEffect(() => {
-    void useStore.getState().prewarmAgentRuntime();
+    const timer = setTimeout(() => {
+      void useStore.getState().prewarmAgentRuntime();
+    }, 150);
+    return () => clearTimeout(timer);
   }, [agentRuntime, activeThreadId, currentSession?.id]);
 
   // Container-driven density: the same ChatArea is a ~350px IDE rail and the

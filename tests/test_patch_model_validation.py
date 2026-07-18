@@ -3,7 +3,8 @@
 The PATCH handler used to accept any string (only alias-normalized), so a
 stale/typo'd id failed at SEND time rather than PICK time. It now 422s early on
 an id outside the known set (catalogs + still-priced ids), while valid catalog
-ids AND aliases keep working.
+ids AND aliases keep working. Codex-owned threads additionally accept bounded,
+transport-safe ids from the SDK's account-specific model catalog.
 """
 import pytest
 
@@ -29,5 +30,18 @@ def test_patch_thread_rejects_unknown_model_accepts_known_and_alias():
         # A valid alias still normalizes and is accepted (not rejected).
         assert c.patch(f"/api/sessions/{sid}/threads/{tid}",
                        json={"model": "gemini-3-flash-preview"}).status_code == 200
+
+        # Codex model/list can advance between SiliconCrew deploys. Its dynamic
+        # ids are accepted only on Codex threads and remain syntax-bounded.
+        api.session_manager.set_thread_runtime(tid, "codex")
+        assert c.patch(f"/api/sessions/{sid}/threads/{tid}",
+                       json={"model": "gpt-future-account-model"}).status_code == 200
+        assert c.patch(f"/api/sessions/{sid}/threads/{tid}",
+                       json={"model": "gpt-invalid/id"}).status_code == 422
+        # Current Sol/Terra catalogs may expose ultra reasoning.
+        assert c.patch(f"/api/sessions/{sid}/threads/{tid}",
+                       json={"reasoning_effort": "ultra"}).status_code == 200
+        assert c.patch(f"/api/sessions/{sid}/threads/{tid}",
+                       json={"reasoning_effort": "impossible"}).status_code == 422
     finally:
         c.delete(f"/api/sessions/{sid}")

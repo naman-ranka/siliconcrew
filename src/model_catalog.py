@@ -23,8 +23,11 @@ PRICING = {
     "gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50},
     "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00},
     # OpenAI
+    "gpt-5.6-sol": {"input": 5.00, "output": 30.00},
+    "gpt-5.6-terra": {"input": 2.50, "output": 15.00},
+    "gpt-5.6-luna": {"input": 1.00, "output": 6.00},
+    "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
     "gpt-5.5": {"input": 5.00, "output": 30.00},
-    "gpt-5.4-mini": {"input": 0.30, "output": 2.50},
     "gpt-5.3-codex": {"input": 2.00, "output": 12.00},
     # Anthropic
     "claude-opus-4-8": {"input": 5.00, "output": 25.00},
@@ -58,12 +61,12 @@ CATALOG = [
     {"id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro", "provider": "gemini",
      "tier": "capable", "hint": "Deeper reasoning for tricky debugging / architecture."},
     # OpenAI
-    {"id": "gpt-5.5", "label": "GPT-5.5", "provider": "openai",
-     "tier": "capable", "hint": "OpenAI flagship; strong reasoning and coding."},
-    {"id": "gpt-5.4-mini", "label": "GPT-5.4 mini", "provider": "openai",
-     "tier": "fast", "hint": "Fast and inexpensive OpenAI option."},
-    {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex", "provider": "openai",
-     "tier": "capable", "hint": "Code-tuned; thorough on larger designs."},
+    {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "provider": "openai",
+     "tier": "capable", "hint": "OpenAI flagship for complex reasoning and coding."},
+    {"id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "provider": "openai",
+     "tier": "balanced", "hint": "Balanced intelligence, speed, and cost."},
+    {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "provider": "openai",
+     "tier": "fast", "hint": "Fast, economical option for clear repeatable work."},
     # Anthropic
     {"id": "claude-opus-4-8", "label": "Claude Opus 4.8", "provider": "anthropic",
      "tier": "capable", "hint": "Most capable; best for hard, multi-step work."},
@@ -81,15 +84,17 @@ PROVIDER_LABELS = {"anthropic": "Anthropic", "openai": "OpenAI", "gemini": "Goog
 # not every OpenAI API model is a sensible Codex model, so its picker gets its
 # own curated list rather than a provider filter over CATALOG. Ids stay in
 # PRICING so cost accounting works for threads pinned to them.
-CODEX_DEFAULT_MODEL = "gpt-5.3-codex"
+CODEX_DEFAULT_MODEL = "gpt-5.6-sol"
 
 CODEX_CATALOG = [
-    {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex", "provider": "openai",
-     "tier": "capable", "hint": "Code-tuned Codex default — best for RTL work."},
-    {"id": "gpt-5.5", "label": "GPT-5.5", "provider": "openai",
-     "tier": "capable", "hint": "OpenAI flagship; strongest general reasoning."},
+    {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "provider": "openai",
+     "tier": "capable", "hint": "Flagship default for difficult, open-ended RTL work."},
+    {"id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "provider": "openai",
+     "tier": "balanced", "hint": "Strong everyday coding and tool use at lower cost."},
+    {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "provider": "openai",
+     "tier": "fast", "hint": "Fast, cost-efficient work for clear and repeatable tasks."},
     {"id": "gpt-5.4-mini", "label": "GPT-5.4 mini", "provider": "openai",
-     "tier": "fast", "hint": "Fast and inexpensive for light edits."},
+     "tier": "fast", "hint": "Responsive coding model for light edits and focused tasks."},
 ]
 
 

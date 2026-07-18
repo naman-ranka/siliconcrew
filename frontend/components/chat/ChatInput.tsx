@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
-import { Send, Square, X, Clock, Loader2 } from "lucide-react";
+import { Send, Square, X, Clock, Loader2, Paperclip, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelPicker } from "./ModelPicker";
 import { CodexModelPicker } from "./CodexModelPicker";
@@ -13,7 +13,9 @@ export function ChatInput() {
   const { currentSession, isStreaming, stopPending, sendMessage, stopStreaming, queuedMessages, removeQueuedMessage, agentRuntime } = useStore();
   const compact = useChatCompact();
   const [input, setInput] = useState("");
+  const [images, setImages] = useState<{ name: string; url: string }[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const queueFull = queuedMessages.length >= MAX_QUEUED_MESSAGES;
 
   // Auto-resize textarea
@@ -25,14 +27,19 @@ export function ChatInput() {
     }
   }, [input]);
 
+  useEffect(() => {
+    if (agentRuntime !== "codex") setImages([]);
+  }, [agentRuntime]);
+
   const handleSubmit = () => {
     if (!input.trim() || !currentSession) return;
     // While a response is streaming, sendMessage queues the follow-up (shown
     // as a removable chip below) and dispatches it when the turn completes.
     // At the queue cap, keep the draft in the composer instead of dropping it.
     if (isStreaming && queueFull) return;
-    sendMessage(input);
+    sendMessage(input, images.map((image) => image.url));
     setInput("");
+    setImages([]);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -75,6 +82,19 @@ export function ChatInput() {
               container width, unlike the old absolute bottom-right overlay
               with a fixed padding reserve. */}
           <div className="rounded-xl border border-border bg-surface-1 shadow-sm focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary/50 transition-all">
+            {images.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 px-3 pt-2.5" data-testid="chat-image-attachments">
+                {images.map((image, index) => (
+                  <div key={`${image.name}-${index}`} className="flex items-center gap-1 rounded border border-border bg-surface-2 px-1.5 py-1 text-[10px] text-muted-foreground">
+                    <ImageIcon className="h-3 w-3" />
+                    <span className="max-w-32 truncate">{image.name}</span>
+                    <button type="button" aria-label={`Remove ${image.name}`} onClick={() => setImages((current) => current.filter((_, i) => i !== index))}>
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <textarea
               ref={textareaRef}
               value={input}
@@ -99,6 +119,42 @@ export function ChatInput() {
               rows={1}
             />
             <div className={cn("flex items-center justify-end gap-1.5", compact ? "px-2 pb-2" : "px-2.5 pb-2.5")}>
+              {agentRuntime === "codex" && (
+                <>
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      const files = Array.from(event.target.files ?? []).slice(0, 4 - images.length);
+                      const acceptedTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+                      files.filter((file) => file.size <= 5_000_000 && acceptedTypes.has(file.type)).forEach((file) => {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          if (typeof reader.result === "string") {
+                            setImages((current) => [...current, { name: file.name, url: reader.result as string }].slice(0, 4));
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      });
+                      event.target.value = "";
+                    }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    disabled={images.length >= 4 || isStreaming}
+                    onClick={() => imageInputRef.current?.click()}
+                    aria-label="Attach images"
+                    title="Attach up to four images (5 MB each)"
+                  >
+                    <Paperclip className="h-3.5 w-3.5" />
+                  </Button>
+                </>
+              )}
               {isStreaming && input.trim() && (
                 <Button
                   variant="secondary"

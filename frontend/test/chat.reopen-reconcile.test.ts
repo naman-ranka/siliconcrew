@@ -87,4 +87,44 @@ describe("reopen reconciliation of an interrupted trace (F4)", () => {
     const texts = last.blocks.filter((b: any) => b.type === "text");
     expect(texts.every((b: any) => !/connection was lost/i.test(b.content))).toBe(true);
   });
+
+  it("puts a legacy completed summary after its tool trace", async () => {
+    (chatApi.getHistory as any).mockResolvedValue([
+      {
+        role: "assistant",
+        content: "Built and verified the FIFO.",
+        tool_calls: [{ id: "t1", name: "simulation_tool", args: {} }],
+        tool_results: [{ tool_call_id: "t1", status: "success", content: "PASS" }],
+      },
+    ]);
+
+    await useStore.getState().loadChatHistory();
+
+    const blocks = useStore.getState().messages.at(-1)!.blocks;
+    expect(blocks.map((block: any) => block.type)).toEqual(["tool", "text"]);
+    expect((blocks.at(-1) as any).content).toBe("Built and verified the FIFO.");
+    expect((blocks.at(-1) as any).content).not.toMatch(/connection was lost/i);
+  });
+
+  it("uses the exact persisted block order when the server provides it", async () => {
+    (chatApi.getHistory as any).mockResolvedValue([
+      {
+        role: "assistant",
+        content: "Checking.Done.",
+        tool_calls: [{ id: "t1", name: "simulation_tool", args: {} }],
+        tool_results: [{ tool_call_id: "t1", status: "success", content: "PASS" }],
+        blocks: [
+          { type: "text", content: "Checking." },
+          { type: "tool", toolCall: { id: "t1", name: "simulation_tool", args: {} } },
+          { type: "text", content: "Done." },
+        ],
+      },
+    ]);
+
+    await useStore.getState().loadChatHistory();
+
+    const blocks = useStore.getState().messages.at(-1)!.blocks;
+    expect(blocks.map((block: any) => block.type)).toEqual(["text", "tool", "text"]);
+    expect((blocks[1] as any).result.content).toBe("PASS");
+  });
 });

@@ -47,6 +47,8 @@ const thread = (id: string, title: string, last = "2026-06-22T10:00:00Z") => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  (chatApi.getThreadHistory as any).mockResolvedValue([]);
+  (threadsApi.patch as any).mockResolvedValue({});
   useStore.setState({
     currentSession: SESSION as any,
     threads: [],
@@ -55,6 +57,8 @@ beforeEach(() => {
     ws: null,
     wsSessionId: null,
     wsThreadId: null,
+    codexModels: [],
+    agentRuntime: "langchain",
   } as any);
 });
 
@@ -95,6 +99,55 @@ describe("chat threads store", () => {
     expect(s.activeThreadId).toBe("t2");
     expect(chatApi.getThreadHistory).toHaveBeenCalledWith("s1", "t2");
     expect(s.messages[0].content).toBe("hi from t2");
+  });
+
+  it("a stale history response cannot overwrite the newly active thread", async () => {
+    let resolveOld!: (value: any[]) => void;
+    let resolveNew!: (value: any[]) => void;
+    (chatApi.getThreadHistory as any).mockImplementation((_sid: string, tid: string) => (
+      new Promise<any[]>((resolve) => {
+        if (tid === "t1") resolveOld = resolve;
+        else resolveNew = resolve;
+      })
+    ));
+    useStore.setState({
+      threads: [thread("t1", "Chat 1"), thread("t2", "Chat 2")],
+      activeThreadId: "t1",
+    } as any);
+
+    const oldLoad = useStore.getState().loadChatHistory();
+    useStore.setState({ activeThreadId: "t2" } as any);
+    const newLoad = useStore.getState().loadChatHistory();
+    resolveNew([{ role: "user", content: "current thread" }]);
+    await newLoad;
+    resolveOld([{ role: "user", content: "stale thread" }]);
+    await oldLoad;
+
+    expect(useStore.getState().messages.map((message) => message.content)).toEqual(["current thread"]);
+  });
+
+  it("new Codex chats use available Terra at low effort", async () => {
+    useStore.setState({
+      codexModels: [{
+        id: "gpt-5.6-terra", label: "GPT-5.6 Terra", provider: "openai",
+        available: true, reasoning_efforts: [{ id: "low" }, { id: "medium" }],
+      }],
+    } as any);
+    (threadsApi.create as any).mockResolvedValue({
+      ...thread("cx", "Codex chat"), runtime: "codex", model: "gpt-5.6-terra",
+    });
+
+    await useStore.getState().newThread("codex");
+
+    expect(threadsApi.create).toHaveBeenCalledWith(
+      "s1", undefined, "gpt-5.6-terra", "codex",
+    );
+    expect(threadsApi.patch).toHaveBeenCalledWith(
+      "s1", "cx", { reasoning_effort: "low" },
+    );
+    expect(useStore.getState().threads[0]).toMatchObject({
+      id: "cx", model: "gpt-5.6-terra", reasoning_effort: "low",
+    });
   });
 
   it("selectThread flips agentRuntime to FOLLOW the target thread (URL-selected Codex chat)", async () => {
