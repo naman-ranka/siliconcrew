@@ -238,3 +238,107 @@ def test_registered_in_single_tool_registry():
     from src.tools.wrappers import mcp_tools
 
     assert "build_interactive_sim" in {t.name for t in mcp_tools}
+
+
+# --- Security hardening: the native yosys child is a bespoke gated subprocess ---
+
+
+def test_scrubbed_env_omits_backend_secrets(monkeypatch, tmp_path):
+    """The load-bearing hosted gate: yosys parses attacker-controlled Verilog,
+    so the child must NOT inherit the backend's secrets (an inherited env +
+    a crafted `include` would surface a secret's bytes in the parser error)."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pw@host/db")
+    monkeypatch.setenv("HOSTED_GEMINI_KEY", "AIza-super-secret")
+    monkeypatch.setenv("SILICONCREW_MASTER_KEY", "master-secret")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    env = bis._scrubbed_env(str(tmp_path))
+
+    assert "DATABASE_URL" not in env
+    assert "HOSTED_GEMINI_KEY" not in env
+    assert "SILICONCREW_MASTER_KEY" not in env
+    assert "secret" not in json.dumps(env)
+    # yosys still needs PATH to find its own helpers; HOME points at the workspace.
+    assert env["PATH"] == "/usr/bin:/bin"
+    assert env["HOME"] == str(tmp_path)
+
+
+def test_posix_rlimits_returns_a_limiter_on_posix():
+    limiter = bis._posix_rlimits()
+    # POSIX (CI/Linux) → a callable preexec_fn; non-POSIX → None (documented).
+    if os.name == "posix":
+        assert callable(limiter)
+    else:
+        assert limiter is None
+
+
+class _FakePopen:
+    """Minimal Popen stand-in: records the kwargs it was constructed with and
+    lets a test choose whether communicate() succeeds or times out."""
+
+    def __init__(self, argv, **kwargs):
+        self.argv = argv
+        self.kwargs = kwargs
+        self.returncode = 0
+        self.pid = 4321
+        self._timeout = False
+        _FakePopen.last = self
+
+    def communicate(self, timeout=None):
+        if self._timeout:
+            raise __import__("subprocess").TimeoutExpired(self.argv, timeout)
+        # Emulate yosys writing the netlist the -p script asked for.
+        out = self.argv[2].rsplit("write_json ", 1)[1]
+        with open(os.path.join(self.kwargs["cwd"], out), "w") as f:
+            json.dump(COUNTER_NETLIST, f)
+        return "", ""
+
+    def poll(self):
+        return self.returncode
+
+
+def test_native_yosys_runs_scrubbed_and_rlimited(tmp_path, monkeypatch):
+    """The real _run_yosys native branch must construct its subprocess with the
+    scrubbed env AND a preexec_fn (rlimits) — proving the OOM/secret gates are
+    actually wired, not just defined. Fails on pre-fix code (bare inherited env,
+    no preexec_fn)."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://secret")
+    ws = str(tmp_path)
+    _write_source(ws)
+
+    monkeypatch.setattr(bis, "pick_engine", lambda: {"engine": "native"})
+    monkeypatch.setattr(bis.subprocess, "Popen", _FakePopen)
+
+    result = bis.build_websim_netlist(["counter.v"], "counter", cwd=ws)
+    assert result["success"], result
+    kw = _FakePopen.last.kwargs
+    assert "DATABASE_URL" not in kw["env"]  # scrubbed
+    assert kw["env"]["PATH"]                 # but still runnable
+    if os.name == "posix":
+        assert callable(kw["preexec_fn"])    # rlimits applied
+
+
+def test_native_yosys_timeout_kills_the_group(tmp_path, monkeypatch):
+    """On the wall timeout, the whole session must be killed (not just the
+    leader) — otherwise a yosys shell-out grandchild outlives the timeout and
+    keeps consuming CPU, the DoS this fix targets. Regression for the
+    PR-review finding that os.setsid() without killpg is dead weight."""
+    ws = str(tmp_path)
+    _write_source(ws)
+    killed = []
+
+    monkeypatch.setattr(bis, "pick_engine", lambda: {"engine": "native"})
+
+    def _timeout_popen(argv, **kwargs):
+        p = _FakePopen(argv, **kwargs)
+        p._timeout = True
+        p.returncode = None  # still "running" so the finally-guard also fires
+        return p
+
+    monkeypatch.setattr(bis.subprocess, "Popen", _timeout_popen)
+    monkeypatch.setattr(bis, "_kill_group", lambda proc: killed.append(getattr(proc, "pid", None)))
+
+    result = bis.build_websim_netlist(["counter.v"], "counter", cwd=ws)
+    assert result["success"] is False
+    assert "timed out" in result["error"]
+    assert killed and killed[0] == 4321  # the group was killed, by pid

@@ -30,6 +30,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -44,6 +45,85 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SAFE_MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 _YOSYS_TIMEOUT_SEC = 120
+# Accident/malice gates for the NATIVE yosys child (the hosted path). yosys
+# parses attacker-controlled Verilog on hosted, so this is a bespoke gated
+# subprocess in the same spirit as run_python.py — a scrubbed env and POSIX
+# rlimits, with yosys-appropriate ceilings (its wall budget is 120s, not 30s).
+_YOSYS_CPU_SECONDS = 120           # CPU rlimit, aligned with the wall timeout
+_YOSYS_AS_BYTES = 2 * 1024 * 1024 * 1024   # 2 GiB address-space cap → stops OOM
+_YOSYS_FSIZE_BYTES = 256 * 1024 * 1024     # bound the written netlist size
+_YOSYS_NPROC = 64                  # fork-bomb guard (if yosys ever shells out)
+
+
+def _scrubbed_env(workspace: str) -> dict:
+    """A minimal, EXPLICIT env for the yosys child — NEVER the backend process
+    env, which holds DATABASE_URL, HOSTED_GEMINI_KEY, and SILICONCREW_MASTER_KEY.
+
+    This is the load-bearing gate on hosted: yosys parses Verilog the caller
+    fully controls (they ``write_file`` it), and yosys honors `` `include ``, so
+    an inherited env would let a crafted include surface a secret's bytes in the
+    parser error we return. Native yosys needs only PATH (to find its own
+    helper binaries) plus HOME/LANG; HOME points at the workspace so yosys never
+    writes into the real backend home."""
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": workspace,
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+    }
+    # Windows: the binary needs a few system vars to even start; none are secrets.
+    for key in ("SYSTEMROOT", "SystemRoot", "WINDIR", "PATHEXT", "TEMP", "TMP", "COMSPEC"):
+        val = os.environ.get(key)
+        if val:
+            env[key] = val
+    return env
+
+
+def _posix_rlimits():
+    """``preexec_fn`` capping CPU + address space (a crafted netlist can no
+    longer OOM the shared instance) and starting a new session so a wall-timeout
+    kills the whole yosys tree. ``None`` on non-POSIX (Windows self-host)."""
+    try:
+        import resource  # POSIX-only
+    except ImportError:
+        return None
+
+    def _apply():
+        for res, limit in (
+            (resource.RLIMIT_CPU, _YOSYS_CPU_SECONDS),
+            (resource.RLIMIT_AS, _YOSYS_AS_BYTES),
+            (resource.RLIMIT_FSIZE, _YOSYS_FSIZE_BYTES),
+            (resource.RLIMIT_NPROC, _YOSYS_NPROC),
+        ):
+            try:
+                resource.setrlimit(res, (limit, limit))
+            except (ValueError, OSError):
+                pass
+        try:
+            os.setsid()
+        except OSError:
+            pass
+
+    return _apply
+
+
+def _kill_group(proc) -> None:
+    """SIGKILL the child's whole session/group, not just the leader.
+
+    ``_posix_rlimits`` puts the child in its own session via ``os.setsid()``, but
+    that only pays off if the timeout path kills the GROUP — CPython's
+    ``subprocess.run`` timeout does a bare ``proc.kill()`` on the leader pid, so
+    any grandchild (e.g. a future yosys shell-out to ``abc``) would be orphaned
+    and keep consuming CPU past the wall timeout. Mirrors run_python.py's
+    ``_kill``."""
+    if proc is None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 def _sha256_file(path: str) -> str:
@@ -96,17 +176,33 @@ def _yosys_script(
 def _run_yosys(script: str, cwd: str, engine: str) -> Dict[str, Any]:
     """Run one yosys -p script; returns {success, stderr}."""
     if engine == "native":
+        # Bespoke gates (see _scrubbed_env / _posix_rlimits): the child never
+        # inherits the backend's secrets, can't OOM/CPU-spin the shared hosted
+        # instance on crafted RTL, and — via Popen + killpg on timeout — a
+        # wall-timeout kills the whole session, not just the yosys leader.
+        proc = None
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 ["yosys", "-p", script],
                 cwd=cwd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=_YOSYS_TIMEOUT_SEC,
+                env=_scrubbed_env(cwd),
+                preexec_fn=_posix_rlimits(),
             )
+            stdout, stderr = proc.communicate(timeout=_YOSYS_TIMEOUT_SEC)
+            return {"success": proc.returncode == 0, "stderr": stderr or stdout}
         except subprocess.TimeoutExpired:
+            _kill_group(proc)
+            try:
+                proc.communicate(timeout=10)
+            except Exception:
+                pass
             return {"success": False, "stderr": f"yosys timed out after {_YOSYS_TIMEOUT_SEC}s"}
-        return {"success": proc.returncode == 0, "stderr": proc.stderr or proc.stdout}
+        finally:
+            if proc is not None and proc.poll() is None:
+                _kill_group(proc)
 
     from src.tools.run_docker import run_docker_command
 
