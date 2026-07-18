@@ -256,6 +256,10 @@ class CodexRuntimeHandler:
                                  # new text block after any non-text block).
         tool_calls: list = []
         tool_results: list = []
+        # Preserve the presentation sequence for refresh/reopen. The aggregate
+        # content/tool arrays remain for SDK-history compatibility, but cannot
+        # represent text -> tool -> text ordering on their own.
+        presentation_blocks: list = []
         in_tokens = 0
         out_tokens = 0
         completed = False
@@ -273,6 +277,12 @@ class CodexRuntimeHandler:
                 f"event={event} elapsed={elapsed:.2f}s after_setup={after_setup:.2f}s",
                 file=sys.stderr,
             )
+
+        def _flush_text_segment() -> None:
+            nonlocal current_segment
+            if current_segment:
+                presentation_blocks.append({"type": "text", "content": current_segment})
+                current_segment = ""
 
         try:
             async for ev in engine.stream_turn(CodexTurn(
@@ -309,22 +319,47 @@ class CodexRuntimeHandler:
                     assistant_content += ev.content
                     await ctx.emit(RuntimeEvent.text_delta(current_segment))
                 elif ev.type == "reasoning" and ev.content:
-                    current_segment = ""  # a new (non-text) block ends the segment
+                    _flush_text_segment()
+                    if presentation_blocks and presentation_blocks[-1].get("type") == "reasoning":
+                        presentation_blocks[-1]["content"] += ev.content
+                    else:
+                        presentation_blocks.append({"type": "reasoning", "content": ev.content})
                     await ctx.emit(RuntimeEvent.reasoning(ev.content))
                 elif ev.type == "plan" and ev.content:
-                    current_segment = ""
+                    _flush_text_segment()
+                    presentation_blocks[:] = [
+                        block for block in presentation_blocks if block.get("type") != "plan"
+                    ]
+                    presentation_blocks.append({"type": "plan", "content": ev.content})
                     await ctx.emit(RuntimeEvent.plan(ev.content))
                 elif ev.type == "diff" and ev.content:
-                    current_segment = ""
+                    _flush_text_segment()
+                    presentation_blocks[:] = [
+                        block for block in presentation_blocks if block.get("type") != "diff"
+                    ]
+                    presentation_blocks.append({"type": "diff", "content": ev.content})
                     await ctx.emit(RuntimeEvent("diff", {"content": ev.content}))
                 elif ev.type == "compaction":
-                    current_segment = ""
-                    await ctx.emit(RuntimeEvent("compaction", {"content": ev.content or "Conversation context compacted"}))
+                    _flush_text_segment()
+                    content = ev.content or "Conversation context compacted"
+                    presentation_blocks.append({"type": "status", "content": content})
+                    await ctx.emit(RuntimeEvent("compaction", {"content": content}))
                 elif ev.type == "model_rerouted":
+                    _flush_text_segment()
+                    from_model = ev.metadata.get("from_model") if ev.metadata else None
+                    to_model = ev.metadata.get("to_model") if ev.metadata else None
+                    presentation_blocks.append({
+                        "type": "status",
+                        "content": (
+                            f"Codex rerouted this turn from {from_model or 'the selected model'} "
+                            f"to {to_model or 'another model'}."
+                        ),
+                    })
                     await ctx.emit(RuntimeEvent("model_rerouted", ev.metadata))
                 elif ev.type == "tool_call" and ev.tool:
-                    current_segment = ""
+                    _flush_text_segment()
                     tool_calls.append(ev.tool)
+                    presentation_blocks.append({"type": "tool", "toolCall": ev.tool})
                     tool_name = ev.tool.get("name", "unknown") if isinstance(ev.tool, dict) else "unknown"
                     call_id = ev.tool_call_id or (ev.tool.get("id") if isinstance(ev.tool, dict) else None)
                     if call_id:
@@ -339,6 +374,11 @@ class CodexRuntimeHandler:
                     result = {"tool_call_id": ev.tool_call_id,
                               "status": ev.status or "success", "content": ev.content or ""}
                     tool_results.append(result)
+                    for block in reversed(presentation_blocks):
+                        call = block.get("toolCall") if block.get("type") == "tool" else None
+                        if isinstance(call, dict) and call.get("id") == ev.tool_call_id:
+                            block["result"] = result
+                            break
                     started = _tool_call_starts.pop(ev.tool_call_id, None)
                     if started is not None:
                         start_ts, tool_name = started
@@ -388,10 +428,15 @@ class CodexRuntimeHandler:
         # segments were already finalized before their interrupting block).
         if current_segment:
             await ctx.emit(RuntimeEvent.text(current_segment))
+        _flush_text_segment()
         if assistant_content or tool_calls or tool_results:
             self._store.append_message(
                 ctx.thread_id, "assistant", assistant_content,
-                tool_metadata={"tool_calls": tool_calls, "tool_results": tool_results})
+                tool_metadata={
+                    "tool_calls": tool_calls,
+                    "tool_results": tool_results,
+                    "blocks": presentation_blocks,
+                })
         # Persist external_thread_id ONLY on a completed turn (a failed turn must
         # not corrupt resume state).
         if completed and new_external_id and new_external_id != external_id:

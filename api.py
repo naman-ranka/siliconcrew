@@ -232,6 +232,7 @@ class MessageResponse(BaseModel):
     content: str
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_results: Optional[List[Dict[str, Any]]] = None
+    blocks: Optional[List[Dict[str, Any]]] = None
 
 
 class ThreadCreate(BaseModel):
@@ -1200,6 +1201,7 @@ async def _read_thread_history(thread_id: str, model_name: str, uid: Optional[st
                         "role": "assistant", "content": m["content"],
                         "tool_calls": meta.get("tool_calls", []),
                         "tool_results": meta.get("tool_results", []),
+                        "blocks": meta.get("blocks"),
                     })
             return history
 

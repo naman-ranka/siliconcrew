@@ -546,10 +546,24 @@ interface AppState {
 function buildBlocks(
   content: string,
   toolCalls?: ToolCall[],
-  toolResults?: ToolResult[]
+  toolResults?: ToolResult[],
+  persistedBlocks?: ContentBlock[],
 ): ContentBlock[] {
+  if (persistedBlocks?.length) {
+    return persistedBlocks.map((block) => {
+      if (block.type !== "tool" || block.result) return block;
+      return {
+        ...block,
+        result: toolResults?.find((result) => result.tool_call_id === block.toolCall.id),
+      };
+    });
+  }
+
+  // Legacy Codex rows predate ordered block persistence. A non-empty aggregate
+  // content field is the closing answer in the common tool-turn shape, so put
+  // it after the tools. Besides rendering more honestly, this prevents reopen
+  // reconciliation from treating a completed turn as a dropped tool tail.
   const blocks: ContentBlock[] = [];
-  if (content) blocks.push({ type: "text", content });
   for (const tc of toolCalls ?? []) {
     blocks.push({
       type: "tool",
@@ -557,6 +571,7 @@ function buildBlocks(
       result: toolResults?.find((r) => r.tool_call_id === tc.id),
     });
   }
+  if (content) blocks.push({ type: "text", content });
   return blocks;
 }
 
@@ -924,7 +939,7 @@ export const useStore = create<AppState>((set, get) => ({
         content: msg.content,
         tool_calls: msg.tool_calls,
         tool_results: msg.tool_results,
-        blocks: buildBlocks(msg.content ?? "", msg.tool_calls, msg.tool_results),
+        blocks: buildBlocks(msg.content ?? "", msg.tool_calls, msg.tool_results, msg.blocks),
       }));
       // Reopen reconciliation (F4): if the last assistant turn ends on a tool
       // call with no closing summary, the connection was lost before this

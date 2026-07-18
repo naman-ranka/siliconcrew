@@ -200,6 +200,11 @@ def test_tool_call_turn_maps_and_persists(wiring):
     assistant = wiring.store.list_messages("th1")[-1]
     assert assistant["tool_metadata"]["tool_calls"][0]["name"] == "read_file"
     assert assistant["tool_metadata"]["tool_results"][0]["tool_call_id"] == "c1"
+    blocks = assistant["tool_metadata"]["blocks"]
+    assert [block["type"] for block in blocks] == ["tool", "text"]
+    assert blocks[0]["toolCall"]["name"] == "read_file"
+    assert blocks[0]["result"]["tool_call_id"] == "c1"
+    assert blocks[1]["content"] == "done reading"
 
 
 # --- server-side timing instrumentation (Cloud Run observability) -----------
