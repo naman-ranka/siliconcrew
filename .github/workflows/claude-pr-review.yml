@@ -104,7 +104,7 @@ jobs:
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write      # implement: push a fix branch and open a PR
       pull-requests: write
       issues: write
       id-token: write
@@ -117,3 +117,9 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Implementation work runs on Opus 4.8 (the review job stays on the
+          # default tier). When asked to fix an issue: branch from main, commit
+          # with the repo's SSH-signed identity + Co-Authored-By trailer, and
+          # OPEN A PR — never push to main (main is fast-forward-push-only).
+          claude_args: |
+            --model claude-opus-4-8
