@@ -604,6 +604,19 @@ def test_worker_state_reports_honestly(wiring):
     assert ready == STATE_READY
 
 
+def test_warm_pool_defaults_on_locally_and_keeps_explicit_opt_out(monkeypatch):
+    """The app-server startup tax exists locally too, so unset means bounded
+    warm-keep ON; operators can still choose minimum memory with an explicit 0."""
+    monkeypatch.delenv("CODEX_WARM_KEEP", raising=False)
+    pool = CodexRuntimeHandler._build_pool()
+    assert isinstance(pool, CodexWorkerPool)
+    assert pool.max_workers == 3
+    assert pool.idle_sec == 900
+
+    monkeypatch.setenv("CODEX_WARM_KEEP", "0")
+    assert CodexRuntimeHandler._build_pool() is None
+
+
 # --- lifecycle bounds --------------------------------------------------------------
 
 def test_cap_evicts_least_recently_used_idle_worker(wiring):

@@ -72,9 +72,9 @@ class CodexRuntimeHandler:
         self._normalize_model = normalize_model
         self._enabled = enabled
         # TTFT warm-keep (plans/codex-ttft-remediation.md): one per-process pool
-        # of session/thread/user-bound workers. Default ON for hosted (where the
-        # ~8.5s per-turn rebuild was measured), opt-in for self-host via
-        # CODEX_WARM_KEEP=1, and CODEX_WARM_KEEP=0 disables everywhere.
+        # of session/thread/user-bound workers. Default ON everywhere: local
+        # app-server startup is the same multi-second tax as hosted startup.
+        # CODEX_WARM_KEEP=0 remains an explicit low-memory/diagnostic opt-out.
         # Injectable so tests share one pool between the handler and the
         # engines their explicit engine_factory builds.
         self._pool = warm_pool if warm_pool is not None else (
@@ -97,10 +97,8 @@ class CodexRuntimeHandler:
             return None
         if raw in ("1", "true", "yes", "on"):
             enabled = True
-        else:  # unset → hosted default-on, self-host default-off (untouched)
-            from src.platform_engines.settings import get_settings
-
-            enabled = get_settings().hosted
+        else:  # unset -> bounded warm-keep is the standard default
+            enabled = True
         if not enabled:
             return None
         from src.agents.codex.codex_warm import CodexWorkerPool
@@ -262,6 +260,19 @@ class CodexRuntimeHandler:
         out_tokens = 0
         completed = False
         new_external_id: Optional[str] = None
+        sdk_ready_at: Optional[float] = None
+        first_response_logged = False
+        first_text_logged = False
+
+        def _log_first(event: str) -> None:
+            now = time.monotonic()
+            elapsed = now - turn_start
+            after_setup = now - sdk_ready_at if sdk_ready_at is not None else elapsed
+            print(
+                f"[CODEX-TIMING] thread={ctx.thread_id} turn={ctx.turn_id} "
+                f"event={event} elapsed={elapsed:.2f}s after_setup={after_setup:.2f}s",
+                file=sys.stderr,
+            )
 
         try:
             async for ev in engine.stream_turn(CodexTurn(
@@ -280,8 +291,16 @@ class CodexRuntimeHandler:
                 history=prior_messages,
             )):
                 if ev.type == "start":
+                    sdk_ready_at = time.monotonic()
                     new_external_id = ev.external_thread_id or new_external_id
-                elif ev.type == "text" and ev.content:
+                    continue
+                if not first_response_logged:
+                    first_response_logged = True
+                    _log_first("first_model_response")
+                if ev.type == "text" and ev.content:
+                    if not first_text_logged:
+                        first_text_logged = True
+                        _log_first("first_token")
                     # Engine emits deltas as `text`; stream the CURRENT segment
                     # (cumulative within the block, not the whole turn) so a text
                     # segment after a tool/reasoning block doesn't repeat earlier

@@ -1465,7 +1465,7 @@ async def patch_thread(session_id: str, tid: str, data: ThreadPatch, identity: I
             raise HTTPException(status_code=422, detail=f"Unknown model id: {data.model!r}")
         session_manager.set_thread_model(tid, normalized, user_id=uid)
     if data.reasoning_effort is not None:
-        allowed_efforts = {"none", "low", "medium", "high", "xhigh", "max"}
+        allowed_efforts = {"none", "low", "medium", "high", "xhigh", "max", "ultra"}
         if data.reasoning_effort not in allowed_efforts:
             raise HTTPException(status_code=422, detail="Unsupported reasoning effort")
         session_manager.set_thread_reasoning_effort(

@@ -38,5 +38,10 @@ def test_patch_thread_rejects_unknown_model_accepts_known_and_alias():
                        json={"model": "gpt-future-account-model"}).status_code == 200
         assert c.patch(f"/api/sessions/{sid}/threads/{tid}",
                        json={"model": "gpt-invalid/id"}).status_code == 422
+        # Current Sol/Terra catalogs may expose ultra reasoning.
+        assert c.patch(f"/api/sessions/{sid}/threads/{tid}",
+                       json={"reasoning_effort": "ultra"}).status_code == 200
+        assert c.patch(f"/api/sessions/{sid}/threads/{tid}",
+                       json={"reasoning_effort": "impossible"}).status_code == 422
     finally:
         c.delete(f"/api/sessions/{sid}")

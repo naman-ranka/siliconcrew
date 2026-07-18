@@ -907,13 +907,17 @@ export const useStore = create<AppState>((set, get) => ({
     const { currentSession, activeThreadId } = get();
     if (!currentSession) return;
     const sid = currentSession.id;
+    const requestedThreadId = activeThreadId;
 
     try {
       const history = activeThreadId
         ? await chatApi.getThreadHistory(sid, activeThreadId)
         : await chatApi.getHistory(sid);
       // Stale-response guard: session switched while fetching (see loadThreads).
-      if (get().currentSession?.id !== sid) return;
+      if (
+        get().currentSession?.id !== sid
+        || get().activeThreadId !== requestedThreadId
+      ) return;
       const messages: Message[] = history.map((msg) => ({
         id: generateId(),
         role: msg.role as "user" | "assistant",
@@ -949,6 +953,10 @@ export const useStore = create<AppState>((set, get) => ({
       }
       set({ messages, chatError: null });
     } catch (error) {
+      if (
+        get().currentSession?.id !== sid
+        || get().activeThreadId !== requestedThreadId
+      ) return;
       // A fresh session with no history is NOT an error — the backend now
       // returns 200 [] for it. Treat "session not found"/empty-history failures
       // as a calm empty state (no messages, no red banner) rather than alarming
@@ -1411,13 +1419,36 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   newThread: async (runtime?: string) => {
-    const { currentSession, ws } = get();
+    const { currentSession, ws, codexModels } = get();
     if (!currentSession) return;
-    const thread = await threadsApi.create(currentSession.id, undefined, undefined, runtime);
+    // Routine Codex chats favor the balanced model at low effort. Apply this
+    // only to NEW chats and only when the authenticated SDK catalog reports
+    // the model as available; existing and explicitly pinned chats never move.
+    const routineModel = runtime === "codex"
+      ? codexModels.find((model) => model.available && model.id === "gpt-5.6-terra")
+        ?? codexModels.find((model) => model.available && model.id === "gpt-5.6-luna")
+      : undefined;
+    const thread = await threadsApi.create(
+      currentSession.id, undefined, routineModel?.id, runtime,
+    );
+    let activatedThread = thread;
+    const supportsLow = !routineModel?.reasoning_efforts?.length
+      || routineModel.reasoning_efforts.some((option) => option.id === "low");
+    if (routineModel && supportsLow) {
+      try {
+        const patched = await threadsApi.patch(
+          currentSession.id, thread.id, { reasoning_effort: "low" },
+        );
+        activatedThread = { ...thread, ...patched, reasoning_effort: "low" };
+      } catch {
+        // The chat itself was created successfully; keep it even if the
+        // optional speed preference could not be persisted.
+      }
+    }
     if (ws) ws.close();
     set((state) => ({
-      threads: [thread, ...state.threads],
-      activeThreadId: thread.id,
+      threads: [activatedThread, ...state.threads],
+      activeThreadId: activatedThread.id,
       messages: [],
       queuedMessages: [],
       ws: null,
