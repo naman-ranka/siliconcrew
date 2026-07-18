@@ -368,7 +368,7 @@ export const WELCOME_CARDS = [
     label: "Brief this workspace",
     hint: "what's designed, verified, built here",
     prompt:
-      "Brief me on this workspace before I touch anything. In plain language: what's being designed, does it actually pass its tests, and what are the best area and timing numbers so far? Then give me the single most useful next step. If it's empty, just say so and tell me how we'd start. Don't run anything yet.",
+      "Brief me on this workspace before I touch anything. Look at the files, the simulation runs, and the synthesis results first. In plain language: what's being designed, does it actually pass its tests, and what are the best area and timing numbers so far? Then give me the single most useful next step. If it's empty, just say so and tell me how we'd start. Don't run anything yet.",
   },
   {
     label: "Design a FIFO",
