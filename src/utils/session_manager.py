@@ -131,12 +131,21 @@ class SessionManager:
         except Exception:
             return not isinstance(self._store, SqliteMetadataStore)
 
-    def create_session(self, tag, model_name="gemini-3-flash-preview", project_id=None, user_id=None):
+    def create_session(self, tag, model_name=None, project_id=None, user_id=None):
         """Creates a new session directory owned by ``user_id`` (the tenant).
         If project_id given, the filesystem path is project_id/tag (maintains
         backward-compat with the slash-convention). project_id is also stored
         as metadata so the project is first-class.
+
+        model_name=None -> the catalog default. Callers that omit the model
+        (template forks, MCP create) must track the CURRENT default — a stale
+        literal here shipped forks pinned to a deprecated needs-key model
+        (live blind-test finding S1).
         """
+        if model_name is None:
+            from src.model_catalog import DEFAULT_MODEL
+
+            model_name = DEFAULT_MODEL
         if project_id:
             # Ensure the project exists in DB (within the tenant's scope).
             if not self.get_project(project_id, user_id=user_id):
@@ -174,8 +183,12 @@ class SessionManager:
         self.ensure_default_thread(session_id, user_id=user_id)
         return session_id
 
-    def ensure_session(self, tag, model_name="gemini-3-flash-preview", user_id=None):
+    def ensure_session(self, tag, model_name=None, user_id=None):
         """Ensure a session has both a workspace directory and metadata row."""
+        if model_name is None:
+            from src.model_catalog import DEFAULT_MODEL
+
+            model_name = DEFAULT_MODEL
         session_id = self._normalize_tag(tag)
         path = self._session_path(session_id)
         os.makedirs(path, exist_ok=True)
