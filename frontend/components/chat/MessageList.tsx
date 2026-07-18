@@ -413,7 +413,7 @@ function FailedTurnCard() {
     clearError();
     void useStore.getState().sendMessage(lastUser.content);
   };
-  const useFreeAndRetry = async () => {
+  const switchToFreeAndRetry = async () => {
     if (!freeModel) return;
     await useStore.getState().setActiveThreadModel(freeModel.id);
     retry();
@@ -436,7 +436,7 @@ function FailedTurnCard() {
             <button
               type="button"
               data-testid="failed-turn-use-free"
-              onClick={() => void useFreeAndRetry()}
+              onClick={() => void switchToFreeAndRetry()}
               className="h-6 rounded bg-primary px-2 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
             >
               Use {freeModel.label} (free) and retry
