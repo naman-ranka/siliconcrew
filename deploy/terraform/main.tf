@@ -411,33 +411,6 @@ resource "google_cloud_run_v2_service" "backend" {
         }
       }
       env {
-        name = "GOOGLE_API_KEY"
-        value_source {
-          secret_key_ref {
-            secret  = "hosted-gemini-key"
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "OPENAI_API_KEY"
-        value_source {
-          secret_key_ref {
-            secret  = "openai-api-key"
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "ANTHROPIC_API_KEY"
-        value_source {
-          secret_key_ref {
-            secret  = "anthropic-api-key"
-            version = "latest"
-          }
-        }
-      }
-      env {
         name = "SILICONCREW_TEST_BEARER_TOKEN"
         value_source {
           secret_key_ref {
