@@ -98,6 +98,9 @@ RUNS_DIRNAME = "synth_runs"
 INDEX_FILENAME = "index.json"
 LATEST_FILENAME = "LATEST"
 RUN_META_FILENAME = "run_meta.json"
+# Key the post-synth sim contract is stored under on each run_meta.json. The
+# schema/reader live in src/tools/sim_contract.py (see _attach_sim_contract).
+SIM_CONTRACT_KEY = "sim_contract"
 
 PD_STAGE_SEQUENCE = ["constraints", "synth", "floorplan", "place", "cts", "grt", "route", "finish"]
 PD_RETRYABLE_STAGES = ["floorplan", "place", "cts", "grt", "route", "finish"]
@@ -1433,7 +1436,9 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     signoff = _signoff_guardrail(run_dir, args["top_module"], docker_result)
     auto_checks.signoff = signoff["status"]
     run_meta["auto_checks"] = asdict(auto_checks)
-    run_meta["netlist_path"] = _find_netlist(run_dir, args["top_module"])
+    retry_netlist = _find_netlist(run_dir, args["top_module"])
+    run_meta["netlist_path"] = retry_netlist
+    _attach_sim_contract(run_meta, workspace, retry_netlist, args.get("platform"), args["top_module"])
     # Same shared finalization parser as the full-flow worker (see _job_worker).
     run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
     run_meta["status"] = "completed" if auto_checks.signoff == "pass" else "failed"
@@ -1751,6 +1756,33 @@ def _load_stdcell_manifest(workspace: str, platform: str) -> Dict[str, Any]:
         return {}
 
 
+def _attach_sim_contract(
+    run_meta: Dict[str, Any],
+    workspace: str,
+    netlist_abs: Optional[str],
+    platform: Optional[str],
+    top_module: Optional[str],
+) -> None:
+    """Stamp the post-synth *sim contract* onto the run record.
+
+    Synthesis is the authority on what a post-synth sim needs; this records the
+    gate netlist (workspace-relative), platform, top, and stdcell set into
+    run_meta so simulation can READ the contract instead of re-discovering state
+    (issue #52). Imported locally to avoid an import cycle: sim_contract reads
+    ``get_run_dir`` from this module.
+    """
+    from src.tools.sim_contract import build_sim_contract
+
+    manifest = _load_stdcell_manifest(workspace, platform) if platform else {}
+    run_meta[SIM_CONTRACT_KEY] = build_sim_contract(
+        workspace,
+        netlist_abs=netlist_abs,
+        platform=platform,
+        top=top_module,
+        stdcell_manifest_version=(manifest.get("updated_at") if manifest else None),
+    )
+
+
 def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str, Any]:
     start = time.time()
     run_id = args["run_id"]
@@ -1889,7 +1921,9 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         # artifacts (6_finish.rpt / 6_final.*), which a bounded run never
         # produces — record them as skipped instead of failing. The run is
         # completed exactly when the TARGET stage's completion artifact exists.
-        run_meta["netlist_path"] = _find_netlist(run_dir, top_module)
+        bounded_netlist = _find_netlist(run_dir, top_module)
+        run_meta["netlist_path"] = bounded_netlist
+        _attach_sim_contract(run_meta, workspace, bounded_netlist, platform, top_module)
         run_meta["auto_checks"] = asdict(auto_checks)  # signoff/equiv stay "skip"
         if args.get("run_equiv"):
             run_meta["equiv_note"] = (
@@ -1941,6 +1975,9 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
 
     netlist_path = _find_netlist(run_dir, top_module)
     run_meta["netlist_path"] = netlist_path
+    # Authoritative sim contract: record the gate netlist synthesis just
+    # produced (workspace-relative) so post-synth sim reads it, never re-hunts.
+    _attach_sim_contract(run_meta, workspace, netlist_path, platform, top_module)
 
     if args.get("run_equiv") and netlist_path:
         equiv = _run_equiv_check(copied_inputs, netlist_path, top_module)

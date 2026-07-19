@@ -23,7 +23,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.tools.run_simulation import run_simulation
-from src.tools.synthesis_manager import get_run_dir
 
 RUNS_DIRNAME = "sim_runs"
 INDEX_FILENAME = "index.json"
@@ -166,6 +165,61 @@ def _to_run_status(sim_status: str) -> str:
     return _RUN_STATUS.get(sim_status, "failed")
 
 
+def sim_status_to_outcome(sim_status: Optional[str]) -> Optional[str]:
+    """Fallback semantic outcome for a runner that predates the ``outcome`` field
+    (e.g. the test fakes). run_simulation itself now always sets ``outcome``."""
+    return sim_status
+
+
+def _persist_resolution_failure(
+    workspace: str,
+    sim_run_id: str,
+    run_dir: str,
+    top_module: str,
+    mode: str,
+    parent_run_id: Optional[str],
+    platform: Optional[str],
+    res_err: Any,
+) -> Dict[str, Any]:
+    """Persist a typed post-synth resolution failure as a SimRun card.
+
+    When the run record can't yield a netlist/platform, the caller gets a
+    structured, self-describing record (semantic ``outcome`` + optional
+    ``recovery``) — not an exception or a leaked traceback — so the IDE renders
+    a card and the agent can branch/recover.
+    """
+    sim_run: Dict[str, Any] = {
+        "id": sim_run_id,
+        "kind": "sim",
+        "status": "failed",
+        "createdAt": _now_iso(),
+        "top": top_module,
+        "pinned": False,
+        "parentRunId": parent_run_id,
+        "provenance": _provenance(platform),
+        "mode": mode,
+        "vcdPath": "",
+        "passMarkerFound": False,
+        "passMarker": "",
+        "failure": {"type": res_err.code, "firstFailureLine": res_err.message, "timeNs": None},
+        "resolvedRunId": None,
+        "resolvedNetlist": None,
+        "stdcellSource": None,
+        "outcome": res_err.code,
+        "recovery": res_err.recovery,
+        "compileCommand": "",
+        "simCommand": "",
+        "simStatus": "compile_failed",
+        "stdoutTail": "",
+        "stderrTail": res_err.message,
+        "logTruncated": False,
+    }
+    _persist_run_meta(run_dir, sim_run)
+    _append_to_index(workspace, sim_run)
+    _set_latest(workspace, sim_run_id)
+    return sim_run
+
+
 def run_sim_isolated(
     workspace: str,
     verilog_files: List[str],
@@ -199,31 +253,37 @@ def run_sim_isolated(
     if netlist_file:
         abs_netlist = netlist_file if os.path.isabs(netlist_file) else os.path.join(workspace, netlist_file)
 
-    # Resolve the synth run against the WORKSPACE root — not the isolated sim
-    # exec cwd. run_simulation resolves post_synth run_ids relative to its cwd
-    # (get_run_dir(cwd, run_id)); here cwd is the sim_runs/sim_NNNN run dir, so
-    # that lookup would search <sim_dir>/synth_runs and always miss. synth_runs
-    # actually lives under the workspace, so resolve it here and hand
-    # run_simulation the absolute netlist (+platform) so it never re-resolves
-    # under the exec cwd. cwd=run_dir stays purely for iverilog/vvp execution.
+    # Post-synth resolution reads the synthesis run's authoritative *sim
+    # contract* from the WORKSPACE run record (issue #52) — never re-discovered
+    # under the isolated exec cwd (run_dir). The one resolver serves both the
+    # isolated path (here) and the non-isolated run_simulation path. We resolve
+    # here and forward the ABSOLUTE netlist + platform so run_simulation does not
+    # re-resolve under cwd; cwd=run_dir stays purely for iverilog/vvp execution.
     forward_run_id = run_id
-    if mode == "post_synth" and (abs_netlist is None or not platform):
-        synth_run_dir = get_run_dir(workspace, run_id)
-        if synth_run_dir is not None:
-            synth_meta = _read_run_meta(synth_run_dir)
-            if abs_netlist is None:
-                netlist_path = synth_meta.get("netlist_path")
-                if netlist_path:
-                    abs_netlist = (
-                        netlist_path
-                        if os.path.isabs(netlist_path)
-                        else os.path.join(workspace, netlist_path)
-                    )
-            platform = platform or synth_meta.get("platform")
-            # Netlist resolved against the workspace: stop run_simulation from
-            # re-resolving run_id under its (sim) exec cwd.
-            if abs_netlist is not None:
-                forward_run_id = None
+    resolved_run_id: Optional[str] = None
+    resolved_netlist: Optional[str] = None
+    stdcell_source: Optional[str] = None
+    if mode == "post_synth":
+        from src.tools.sim_contract import resolve_post_synth
+
+        resolution, res_err = resolve_post_synth(
+            workspace=workspace,
+            run_id=run_id,
+            netlist_file=netlist_file,
+            platform=platform,
+        )
+        if res_err is not None:
+            # Typed, semantic failure — a SimRun card, never a leaked traceback.
+            return _persist_resolution_failure(
+                workspace, sim_run_id, run_dir, top_module, mode,
+                parent_run_id, platform, res_err,
+            )
+        abs_netlist = resolution.netlist_abs
+        platform = resolution.platform
+        resolved_run_id = resolution.resolved_run_id
+        resolved_netlist = resolution.resolved_netlist
+        stdcell_source = resolution.stdcell_source
+        forward_run_id = None  # already resolved; don't re-resolve under cwd
 
     created_at = _now_iso()
     sim_result = _runner(
@@ -265,6 +325,16 @@ def run_sim_isolated(
         "passMarkerFound": bool(sim_result.get("pass_marker_found")),
         "passMarker": sim_result.get("pass_marker") or pass_marker,
         "failure": failure,
+        # Honest echo of what post-synth resolution actually ran (invariant #4):
+        # which run, which gate netlist (workspace-relative), which stdcell set.
+        # The IDE renders it; the agent (which can't see the tree) reasons on it.
+        "resolvedRunId": resolved_run_id,
+        "resolvedNetlist": resolved_netlist,
+        "stdcellSource": stdcell_source,
+        # Semantic outcome + native recovery propagated from the run (e.g.
+        # stdcell_cache_missing -> a bootstrap action the IDE/agent can invoke).
+        "outcome": sim_result.get("outcome") or sim_status_to_outcome(sim_result.get("status")),
+        "recovery": sim_result.get("recovery"),
         "compileCommand": sim_result.get("compile_command") or "",
         "simCommand": sim_result.get("sim_command") or "",
         # raw log surfaces for the console (not part of the frozen RunBase, but
