@@ -84,11 +84,16 @@ def _collect_defined_modules(file_paths: List[str]) -> set[str]:
 
 
 def _stdcell_workspace(cwd: str) -> str:
+    # The stdcell cache is populated by the boot bootstrap (entrypoint.sh) and the
+    # image bake into RTL_WORKSPACE (default /workspace). Default here to the same
+    # location so resolver + bootstrap + bake agree by construction; the explicit
+    # RTL_STDCELL_WORKSPACE override still wins when set. Using repo_root/workspace
+    # (/app/workspace) instead reads an empty, gitignored dir and spuriously reports
+    # the cache as missing for post-synthesis simulation.
     env_path = os.environ.get("RTL_STDCELL_WORKSPACE")
     if env_path:
         return os.path.abspath(env_path)
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    return os.path.join(repo_root, "workspace")
+    return os.path.abspath(os.environ.get("RTL_WORKSPACE") or "/workspace")
 
 
 def _asap7_compat_stdcell_files(stdcells: List[str], netlist_path: str) -> List[str]:

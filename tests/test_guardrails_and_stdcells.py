@@ -7,6 +7,7 @@ import pytest
 from src.tools.search_logs import search_logs
 from src.tools import stdcells as std
 from src.tools.stdcells import resolve_stdcell_models
+from src.tools.run_simulation import _stdcell_workspace
 
 
 def test_search_logs_with_run_id_scope():
@@ -46,6 +47,40 @@ def test_resolve_stdcell_models_from_manifest_cache():
         files, manifest = resolve_stdcell_models(workspace, "asap7")
         assert [os.path.basename(x) for x in files] == ["a.v", "b.v"]
         assert manifest["platform"] == "asap7"
+
+
+def test_stdcell_workspace_defaults_to_rtl_workspace(monkeypatch):
+    # Regression: post_synth stdcell resolution must read the RTL_WORKSPACE cache
+    # (where entrypoint.sh + the image bake populate _stdcells) when the explicit
+    # RTL_STDCELL_WORKSPACE override is unset — not repo_root/workspace (/app/workspace),
+    # which is gitignored and ships empty, causing spurious "cache missing" errors.
+    monkeypatch.delenv("RTL_STDCELL_WORKSPACE", raising=False)
+    with tempfile.TemporaryDirectory() as rtl_workspace:
+        monkeypatch.setenv("RTL_WORKSPACE", rtl_workspace)
+
+        sim_dir = os.path.join(rtl_workspace, "_stdcells", "asap7", "sim")
+        os.makedirs(sim_dir, exist_ok=True)
+        with open(os.path.join(sim_dir, "a.v"), "w", encoding="utf-8") as f:
+            f.write("module a; endmodule")
+        with open(os.path.join(sim_dir, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"platform": "asap7", "files": [{"name": "a.v"}]}, f)
+
+        # cwd is deliberately unrelated to the cache location — resolution must not
+        # depend on the repo root / current working directory.
+        ws = _stdcell_workspace(cwd="/some/unrelated/cwd")
+        assert ws == os.path.abspath(rtl_workspace)
+
+        files, manifest = resolve_stdcell_models(ws, "asap7")
+        assert [os.path.basename(x) for x in files] == ["a.v"]
+        assert manifest["platform"] == "asap7"
+
+
+def test_stdcell_workspace_override_wins(monkeypatch):
+    # Explicit override still takes precedence over RTL_WORKSPACE.
+    with tempfile.TemporaryDirectory() as override_ws:
+        monkeypatch.setenv("RTL_STDCELL_WORKSPACE", override_ws)
+        monkeypatch.setenv("RTL_WORKSPACE", "/some/other/workspace")
+        assert _stdcell_workspace(cwd="/irrelevant") == os.path.abspath(override_ws)
 
 
 def test_bootstrap_stdcells_writes_manifest(monkeypatch):
