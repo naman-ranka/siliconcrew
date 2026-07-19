@@ -42,6 +42,7 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
     ],
     "verification": [
         "waveform_tool", "cocotb_tool", "sby_tool", "build_interactive_sim",
+        "bootstrap_stdcells_tool",
     ],
     "synthesis": [
         "start_synthesis", "retry_pd", "get_synthesis_status", "wait_for_synthesis",
@@ -76,6 +77,7 @@ PROTECTED_TOOLS = frozenset(TOOL_CATEGORIES["synthesis"]) | {
     "load_yaml_spec_file", "update_manifest",
     "save_metrics_tool", "generate_report_tool",
     "cocotb_tool", "sby_tool", "build_interactive_sim",
+    "bootstrap_stdcells_tool",
     "run_python_analysis",
     *TOOL_CATEGORIES["hls"],
 }
@@ -89,6 +91,7 @@ MUTATING_TOOLS = frozenset({
     "write_spec", "write_file", "apply_patch_tool", "edit_file_tool",
     "load_yaml_spec_file", "update_manifest",
     "simulation_tool", "run_isolated_simulation", "cocotb_tool", "sby_tool",
+    "bootstrap_stdcells_tool",
     "start_synthesis", "retry_pd",
     "save_metrics_tool", "generate_report_tool", "schematic_tool",
     "build_interactive_sim",

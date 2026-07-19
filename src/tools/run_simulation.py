@@ -5,7 +5,6 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 from src.tools.stdcells import get_asap7_compat_model_files, resolve_stdcell_models
-from src.tools.synthesis_manager import get_run_dir
 
 
 PASS_MARKER_DEFAULT = "TEST PASSED"
@@ -254,6 +253,7 @@ def run_simulation(
     pass_marker: str = PASS_MARKER_DEFAULT,
     max_lines_per_stream: int = 40,
     max_chars_per_stream: int = 4000,
+    workspace: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run RTL or post-synthesis simulation with strict status contract.
@@ -263,9 +263,18 @@ def run_simulation(
       - sim_failed
       - test_failed
       - test_passed
+
+    ``workspace`` is the run-record root (where ``synth_runs/`` lives). Post-synth
+    resolution — netlist + platform + stdcell set — is read from the synthesis
+    run's sim contract under this root, NOT re-discovered from ``cwd``. It
+    defaults to ``cwd`` so the non-isolated path (where cwd == workspace) is
+    unchanged; the isolated path passes its real workspace while ``cwd`` stays
+    the per-run exec dir.
     """
     if cwd is None:
         cwd = os.getcwd()
+    if workspace is None:
+        workspace = cwd
 
     verilog_files = verilog_files or []
     compile_files = [os.path.abspath(p) for p in verilog_files]
@@ -305,69 +314,52 @@ def run_simulation(
             "first_failure_snippet": None,
         }
     effective_sim_profile = sim_profile
+    # Honest echo of what post-synth resolution actually picked (invariant #4:
+    # no hidden magic). None for rtl mode.
+    resolved_run_id: Optional[str] = None
+    resolved_netlist: Optional[str] = None
+    stdcell_source: Optional[str] = None
 
     if mode == "post_synth":
-        resolved_netlist = netlist_file
-        run_dir = None
-        if run_id is not None or resolved_netlist is None or not platform:
-            run_dir = get_run_dir(cwd, run_id)
-            if run_dir is None and (resolved_netlist is None or not platform):
-                return {
-                    "status": "compile_failed",
-                    "compile_returncode": -1,
-                    "sim_returncode": None,
-                    "pass_marker_found": False,
-                    "stdout_tail": "",
-                    "stderr_tail": f"Unknown run_id '{run_id}' and no latest run available.",
-                    "log_truncated": False,
-                    "unresolved_cells": [],
-                    "success": False,
-                    "failure_type": "compile",
-                    "first_failure_line": f"Unknown run_id '{run_id}' and no latest run available.",
-                    "first_failure_snippet": None,
-                }
+        # Resolve the gate netlist + platform + stdcell set from the synthesis
+        # run's authoritative sim contract (read from the WORKSPACE run record),
+        # never by re-discovering state under the exec cwd (issue #52).
+        from src.tools.sim_contract import resolve_post_synth, stdcell_recovery_action
 
-        if resolved_netlist is None and run_dir is not None:
-            meta_path = os.path.join(run_dir, "run_meta.json")
-            if os.path.exists(meta_path):
-                import json
-
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-                resolved_netlist = meta.get("netlist_path")
-                platform = platform or meta.get("platform")
-
-        if not resolved_netlist or not os.path.exists(resolved_netlist):
+        resolution, res_err = resolve_post_synth(
+            workspace=workspace,
+            run_id=run_id,
+            netlist_file=netlist_file,
+            platform=platform,
+        )
+        if res_err is not None:
             return {
                 "status": "compile_failed",
                 "compile_returncode": -1,
                 "sim_returncode": None,
                 "pass_marker_found": False,
                 "stdout_tail": "",
-                "stderr_tail": "Post-synth mode requires a valid synthesized netlist (resolved from run_id or netlist_file).",
+                "stderr_tail": res_err.message,
                 "log_truncated": False,
                 "unresolved_cells": [],
                 "success": False,
+                "mode": mode,
+                "outcome": res_err.code,
+                "recovery": res_err.recovery,
+                "resolved_run_id": None,
+                "resolved_netlist": None,
+                "stdcell_source": None,
                 "failure_type": "compile",
-                "first_failure_line": "Post-synth mode requires a valid synthesized netlist.",
+                "first_failure_line": res_err.message,
                 "first_failure_snippet": None,
             }
 
-        if not platform:
-            return {
-                "status": "compile_failed",
-                "compile_returncode": -1,
-                "sim_returncode": None,
-                "pass_marker_found": False,
-                "stdout_tail": "",
-                "stderr_tail": "Post-synth mode requires platform metadata to resolve stdcell models.",
-                "log_truncated": False,
-                "unresolved_cells": [],
-                "success": False,
-                "failure_type": "compile",
-                "first_failure_line": "Post-synth mode requires platform metadata to resolve stdcell models.",
-                "first_failure_snippet": None,
-            }
+        resolved_netlist_abs = resolution.netlist_abs
+        platform = resolution.platform
+        resolved_run_id = resolution.resolved_run_id
+        resolved_netlist = resolution.resolved_netlist
+        stdcell_source = resolution.stdcell_source
+
         if effective_sim_profile == "auto":
             effective_sim_profile = "compat" if platform == "asap7" else "pinned"
 
@@ -375,7 +367,8 @@ def run_simulation(
             stdcells, manifest = resolve_stdcell_models(_stdcell_workspace(cwd), platform)
         except Exception as exc:
             stdcells = []
-            hint = _stdcell_bootstrap_hint(cwd, platform) if _is_stdcell_cache_error(exc) else ""
+            is_cache_err = _is_stdcell_cache_error(exc)
+            hint = _stdcell_bootstrap_hint(cwd, platform) if is_cache_err else ""
             msg = str(exc)
             if hint:
                 msg = f"{msg}\n{hint}"
@@ -389,6 +382,14 @@ def run_simulation(
                 "log_truncated": False,
                 "unresolved_cells": [],
                 "success": False,
+                "mode": mode,
+                # Semantic outcome + a native recovery the IDE (button) and the
+                # agent (tool call) can both invoke — not a shell command.
+                "outcome": "stdcell_cache_missing" if is_cache_err else "compile_failed",
+                "recovery": stdcell_recovery_action(platform) if is_cache_err else None,
+                "resolved_run_id": resolved_run_id,
+                "resolved_netlist": resolved_netlist,
+                "stdcell_source": stdcell_source,
                 "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
                 "stdcell_bootstrap_result": stdcell_bootstrap_result,
                 "failure_type": "compile",
@@ -397,11 +398,27 @@ def run_simulation(
             }
 
         stdcells_for_compile = list(stdcells)
-        netlist_abs = os.path.abspath(resolved_netlist)
+        netlist_abs = resolved_netlist_abs
         if platform == "asap7" and effective_sim_profile == "compat":
             stdcells_for_compile = _asap7_compat_stdcell_files(stdcells_for_compile, netlist_abs)
 
-        compile_files = compile_files + [netlist_abs] + stdcells_for_compile
+        # Drop the design RTL the gate netlist replaces. The manifest's simulate
+        # set is [design RTL, testbench]; compiling that RTL beside the gate
+        # netlist declares the design module twice ("already declared") — the
+        # exact failure post_synth exists to avoid. Keep only sources the
+        # netlist does NOT itself define: the testbench (and any helper module
+        # the netlist doesn't provide). The netlist is authoritative for every
+        # module it declares.
+        netlist_modules = _collect_defined_modules([netlist_abs])
+        if netlist_modules:
+            tb_files = [
+                p for p in compile_files
+                if not (_collect_defined_modules([p]) & netlist_modules)
+            ]
+        else:
+            tb_files = list(compile_files)
+
+        compile_files = tb_files + [netlist_abs] + stdcells_for_compile
 
         if platform == "sky130hd":
             required = set(_extract_sky130_required_modules(netlist_abs))
@@ -412,7 +429,7 @@ def run_simulation(
                     if mod_name in required:
                         selected.append(fpath)
                 if selected:
-                    compile_files = compile_files[: len(verilog_files) + 1] + selected
+                    compile_files = compile_files[: len(tb_files) + 1] + selected
 
     output_exec = os.path.join(cwd, f"{top_module}.out")
     comp = _compile(compile_files=compile_files, output_executable=output_exec, cwd=cwd, timeout=timeout, top_module=top_module)
@@ -433,6 +450,11 @@ def run_simulation(
             "unresolved_cells": unresolved_cells,
             "success": False,
             "mode": mode,
+            "outcome": "compile_failed",
+            "recovery": None,
+            "resolved_run_id": resolved_run_id,
+            "resolved_netlist": resolved_netlist,
+            "stdcell_source": stdcell_source,
             "sim_profile": effective_sim_profile,
             "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
             "stdcell_bootstrap_result": stdcell_bootstrap_result,
@@ -466,6 +488,13 @@ def run_simulation(
         "unresolved_cells": unresolved_cells,
         "success": status == "test_passed",
         "mode": mode,
+        # Semantic outcome the agent branches on / the IDE renders; mirrors the
+        # status enum on the happy path.
+        "outcome": status,
+        "recovery": None,
+        "resolved_run_id": resolved_run_id,
+        "resolved_netlist": resolved_netlist,
+        "stdcell_source": stdcell_source,
         "sim_profile": effective_sim_profile,
         "stdcell_bootstrap_attempted": stdcell_bootstrap_attempted,
         "stdcell_bootstrap_result": stdcell_bootstrap_result,
