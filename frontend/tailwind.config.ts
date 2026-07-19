@@ -143,10 +143,11 @@ const config: Config = {
         },
       },
       boxShadow: {
-        // Cool-tinted elevation scale (Midnight Clay) — calm depth.
-        e1: "0 1px 2px hsl(224 40% 3% / 0.30), 0 1px 1px hsl(224 40% 3% / 0.22)",
-        e2: "0 2px 6px hsl(224 40% 3% / 0.34), 0 1px 2px hsl(224 40% 3% / 0.24)",
-        e3: "0 8px 24px hsl(224 40% 3% / 0.40), 0 2px 6px hsl(224 40% 3% / 0.28)",
+        // Elevation scale driven by the per-theme --shadow token (cool deep in
+        // dark, soft warm in light) — calm depth.
+        e1: "0 1px 2px hsl(var(--shadow) / 0.30), 0 1px 1px hsl(var(--shadow) / 0.22)",
+        e2: "0 2px 6px hsl(var(--shadow) / 0.34), 0 1px 2px hsl(var(--shadow) / 0.24)",
+        e3: "0 8px 24px hsl(var(--shadow) / 0.40), 0 2px 6px hsl(var(--shadow) / 0.28)",
         glow: "0 0 0 1px hsl(var(--primary) / 0.35), 0 0 18px hsl(var(--primary) / 0.18)",
       },
     },

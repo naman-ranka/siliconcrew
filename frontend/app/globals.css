@@ -97,7 +97,7 @@
     --popover: 40 26% 98.5%;
     --popover-foreground: 40 16% 15%;
 
-    --primary: 204 90% 46%;            /* Clay blue, deepened for AA on light */
+    --primary: 204 90% 38%;            /* Clay blue — L=38% so white text clears AA (~5.1:1) */
     --primary-foreground: 0 0% 100%;
 
     --secondary: 40 26% 92%;
@@ -127,7 +127,7 @@
 
     --border: 40 28% 83%;              /* warm, visible against bright cards */
     --input: 40 26% 92%;
-    --ring: 204 90% 46%;
+    --ring: 204 90% 38%;
 
     --radius: 0.5rem;
 
