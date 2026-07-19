@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.tools.run_simulation import run_simulation
+from src.tools.synthesis_manager import get_run_dir
 
 RUNS_DIRNAME = "sim_runs"
 INDEX_FILENAME = "index.json"
@@ -198,13 +199,39 @@ def run_sim_isolated(
     if netlist_file:
         abs_netlist = netlist_file if os.path.isabs(netlist_file) else os.path.join(workspace, netlist_file)
 
+    # Resolve the synth run against the WORKSPACE root — not the isolated sim
+    # exec cwd. run_simulation resolves post_synth run_ids relative to its cwd
+    # (get_run_dir(cwd, run_id)); here cwd is the sim_runs/sim_NNNN run dir, so
+    # that lookup would search <sim_dir>/synth_runs and always miss. synth_runs
+    # actually lives under the workspace, so resolve it here and hand
+    # run_simulation the absolute netlist (+platform) so it never re-resolves
+    # under the exec cwd. cwd=run_dir stays purely for iverilog/vvp execution.
+    forward_run_id = run_id
+    if mode == "post_synth" and (abs_netlist is None or not platform):
+        synth_run_dir = get_run_dir(workspace, run_id)
+        if synth_run_dir is not None:
+            synth_meta = _read_run_meta(synth_run_dir)
+            if abs_netlist is None:
+                netlist_path = synth_meta.get("netlist_path")
+                if netlist_path:
+                    abs_netlist = (
+                        netlist_path
+                        if os.path.isabs(netlist_path)
+                        else os.path.join(workspace, netlist_path)
+                    )
+            platform = platform or synth_meta.get("platform")
+            # Netlist resolved against the workspace: stop run_simulation from
+            # re-resolving run_id under its (sim) exec cwd.
+            if abs_netlist is not None:
+                forward_run_id = None
+
     created_at = _now_iso()
     sim_result = _runner(
         verilog_files=abs_files,
         top_module=top_module,
         cwd=run_dir,
         mode=mode,
-        run_id=run_id,
+        run_id=forward_run_id,
         netlist_file=abs_netlist,
         platform=platform,
         sim_profile=sim_profile,
