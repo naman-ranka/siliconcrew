@@ -98,3 +98,84 @@ def test_list_and_get_and_pin(tmp_path):
 
 def test_no_runs_dir_returns_empty(tmp_path):
     assert sm.list_sim_runs(str(tmp_path)) == []
+
+
+def _make_synth_run(ws, run_id="synth_0001", platform="sky130hd", netlist_name="6_final.v"):
+    """Create a workspace synth_runs/<run_id>/ with run_meta.json + netlist."""
+    run_dir = os.path.join(ws, "synth_runs", run_id)
+    os.makedirs(run_dir, exist_ok=True)
+    netlist_abs = os.path.join(run_dir, netlist_name)
+    with open(netlist_abs, "w", encoding="utf-8") as f:
+        f.write("module top(); endmodule\n")
+    import json
+
+    with open(os.path.join(run_dir, "run_meta.json"), "w", encoding="utf-8") as f:
+        json.dump({"netlist_path": netlist_abs, "platform": platform}, f)
+    return netlist_abs
+
+
+def test_post_synth_resolves_run_against_workspace_not_sim_dir(tmp_path):
+    """Regression: run_sim_isolated must resolve the synth run against the
+    workspace root, not the isolated sim exec cwd.
+
+    Before the fix, run_sim_isolated forwarded ``run_id`` and no netlist to
+    run_simulation, whose ``get_run_dir(cwd, run_id)`` searched
+    ``<sim_run_dir>/synth_runs/<run_id>`` — which never exists — and failed
+    with "Unknown run_id". The netlist actually lives under
+    ``<workspace>/synth_runs/<run_id>``.
+    """
+    ws = str(tmp_path)
+    open(os.path.join(ws, "tb.v"), "w").close()
+    netlist_abs = _make_synth_run(ws, run_id="synth_0001")
+
+    captured = {}
+
+    def spy_runner(verilog_files, top_module, cwd, mode, run_id, netlist_file,
+                   platform, sim_profile, pass_marker, timeout):
+        captured.update(
+            run_id=run_id, netlist_file=netlist_file, platform=platform, cwd=cwd
+        )
+        with open(os.path.join(cwd, f"{top_module}.out"), "w") as f:
+            f.write("bin")
+        return {"status": "test_passed", "pass_marker_found": True,
+                "compile_command": "iverilog", "sim_command": "vvp",
+                "stdout_tail": "", "stderr_tail": "", "log_truncated": False,
+                "failure_type": None, "first_failure_line": None}
+
+    sm.run_sim_isolated(
+        ws, ["tb.v"], "tb", mode="post_synth", run_id="synth_0001",
+        _runner=spy_runner,
+    )
+
+    # Netlist resolved to the WORKSPACE synth run, not under the sim dir.
+    assert captured["netlist_file"] == netlist_abs
+    assert os.path.isabs(captured["netlist_file"])
+    assert os.path.exists(captured["netlist_file"])
+    assert "sim_runs" not in captured["netlist_file"]
+    # Platform pulled from the synth run_meta.
+    assert captured["platform"] == "sky130hd"
+    # run_id already resolved upstream — don't let run_simulation re-resolve it
+    # under the (sim) exec cwd.
+    assert captured["run_id"] is None
+    # Execution cwd is still the isolated sim dir (for iverilog/vvp).
+    assert captured["cwd"].endswith(os.path.join("sim_runs", "sim_0001"))
+
+
+def test_post_synth_gets_past_run_resolution_with_real_runner(tmp_path):
+    """End-to-end: with the real run_simulation, post_synth via the isolated
+    path resolves a workspace synth run and proceeds PAST run resolution
+    (it may still fail later at stdcell/compile, but never with the
+    unresolved-run_id / missing-netlist errors)."""
+    ws = str(tmp_path)
+    open(os.path.join(ws, "tb.v"), "w").close()
+    _make_synth_run(ws, run_id="synth_0001")
+
+    # Default _runner is the real run_simulation.
+    r = sm.run_sim_isolated(
+        ws, ["tb.v"], "tb", mode="post_synth", run_id="synth_0001",
+    )
+
+    blob = f"{r.get('stderrTail', '')}\n{r.get('stdoutTail', '')}"
+    assert "Unknown run_id" not in blob
+    assert "no latest run available" not in blob
+    assert "requires a valid synthesized netlist" not in blob
