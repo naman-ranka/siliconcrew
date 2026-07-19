@@ -620,6 +620,14 @@ class CloudWorkspaceProvider:
         key = self._key(session_id)
         scratch = self._scratch(session_id)
         with self._lock_for(session_id):
+            # A missing scratch dir means the session was deleted (or never
+            # materialized on this instance) — NOT an empty workspace. Syncing
+            # it would commit an empty-but-adoptable manifest, resurrecting a
+            # session whose delete/fork-rollback just purged the durable
+            # manifest on purpose (the D7 guarantee). A background flush racing
+            # a delete lands here. An empty-but-EXISTING scratch still syncs.
+            if not os.path.isdir(scratch):
+                return
             if not self._store_supports_files():
                 # Minimal store surface (tar-only fakes): previous behavior.
                 self._store.put_tree(key, scratch)
