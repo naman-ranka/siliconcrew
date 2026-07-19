@@ -148,7 +148,7 @@ def test_post_synth_resolves_run_against_workspace_not_sim_dir(tmp_path):
     )
 
     # Netlist resolved to the WORKSPACE synth run, not under the sim dir.
-    assert captured["netlist_file"] == netlist_abs
+    assert os.path.normpath(captured["netlist_file"]) == os.path.normpath(netlist_abs)
     assert os.path.isabs(captured["netlist_file"])
     assert os.path.exists(captured["netlist_file"])
     assert "sim_runs" not in captured["netlist_file"]
@@ -211,8 +211,10 @@ def test_isolated_post_synth_echoes_resolved_contract(tmp_path):
                             run_id="synth_0001", _runner=spy_runner)
 
     assert r["status"] == "passed"
-    # Gate netlist resolved from the contract, not the RTL.
-    assert captured["netlist_file"] == gate_abs
+    # Gate netlist resolved from the contract, not the RTL. normpath both sides:
+    # the contract path is workspace-relative POSIX, so on Windows the resolved
+    # absolute is mixed-separator vs a native gate_abs.
+    assert os.path.normpath(captured["netlist_file"]) == os.path.normpath(gate_abs)
     assert "top.v" not in os.path.relpath(captured["netlist_file"], ws)
     assert captured["run_id"] is None  # resolved upstream; not re-resolved
     # Echoes on the persisted record.

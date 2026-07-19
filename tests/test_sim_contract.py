@@ -68,7 +68,9 @@ def test_resolve_reads_gate_netlist_from_contract_not_rtl(tmp_path):
 
     resolution, err = sc.resolve_post_synth(ws, run_id="synth_0001")
     assert err is None
-    assert resolution.netlist_abs == gate_abs
+    # normpath both sides: contract paths are workspace-relative POSIX, so on
+    # Windows the resolved absolute is mixed-separator vs a native gate_abs.
+    assert os.path.normpath(resolution.netlist_abs) == os.path.normpath(gate_abs)
     assert resolution.resolved_netlist == "synth_runs/synth_0001/orfs_results/sky130hd/top/base/6_final.v"
     assert "top.v" not in resolution.resolved_netlist  # not the RTL
     assert resolution.resolved_run_id == "synth_0001"
@@ -86,7 +88,7 @@ def test_resolve_latest_when_run_id_omitted(tmp_path):
     resolution, err = sc.resolve_post_synth(ws)  # no run_id -> LATEST
     assert err is None
     assert resolution.resolved_run_id == "synth_0002"
-    assert resolution.netlist_abs == gate_abs
+    assert os.path.normpath(resolution.netlist_abs) == os.path.normpath(gate_abs)
 
 
 def test_resolve_legacy_netlist_path_fallback(tmp_path):
@@ -100,7 +102,7 @@ def test_resolve_legacy_netlist_path_fallback(tmp_path):
 
     resolution, err = sc.resolve_post_synth(ws, run_id="synth_0001")
     assert err is None
-    assert resolution.netlist_abs == gate_abs
+    assert os.path.normpath(resolution.netlist_abs) == os.path.normpath(gate_abs)
     assert resolution.source == "legacy_netlist_path"
 
 
