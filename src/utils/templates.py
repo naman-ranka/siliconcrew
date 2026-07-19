@@ -273,13 +273,13 @@ def _split_binaries_paths(ws: str) -> List[str]:
 def _run_has_split_out_netlist(ws: str, run_dir: str, binaries_paths: List[str]) -> bool:
     """True when a synthesized gate netlist for THIS run is split-out + absent.
 
-    A15: a real bundle keeps ``synth_runs/*/inputs/*.v`` (pre-synthesis RTL) in
-    git, and ``_find_netlist`` scans BOTH ``orfs_results`` and ``inputs`` — so a
-    binary-less fork would otherwise re-derive ``netlist_path`` to the RTL input,
-    claiming a "netlist" that is actually pre-synthesis source (dishonest for
-    gate-level sim). When the run's ``.sc_binaries.json`` lists an
-    ``orfs_results/**/*.v`` that isn't on disk, the gate netlist was split out
-    (not merely never produced), so the fork forces ``netlist_path=None``.
+    A15: ``_find_netlist`` now scans ONLY ``orfs_results`` (never ``inputs/``),
+    so a binary-less fork already re-derives ``netlist_path=None`` — it can no
+    longer mistake the pre-synthesis RTL in ``inputs/`` for a gate netlist. This
+    explicit check is therefore belt-and-suspenders: when the run's
+    ``.sc_binaries.json`` lists an ``orfs_results/**/*.v`` that isn't on disk, the
+    gate netlist was split out (not merely never produced), and the fork forces
+    ``netlist_path=None`` — the same result ``_find_netlist`` gives on its own.
     """
     run_rel = os.path.relpath(run_dir, ws).replace(os.sep, "/")
     prefix = "" if run_rel == "." else run_rel + "/"
@@ -302,7 +302,8 @@ def _rewrite_run_meta_netlists(ws: str) -> None:
     ``_find_netlist`` re-derives the fork-local absolute path exactly as the
     original synthesis did (A2). A run with no netlist (failed synth) resolves to
     None, same as it was. A15: a run whose gate netlist was split out to GCS and
-    not fetched resolves to None rather than the ``inputs/`` RTL source.
+    not fetched resolves to None (``_find_netlist`` scans only ``orfs_results``,
+    never the ``inputs/`` RTL source).
     """
     from src.tools.synthesis_manager import _find_netlist
 

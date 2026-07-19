@@ -255,8 +255,7 @@ def test_isolated_post_synth_missing_cache_recovery_propagates(tmp_path):
             f.write("bin")
         return {"status": "compile_failed", "pass_marker_found": False,
                 "outcome": "stdcell_cache_missing",
-                "recovery": {"action": "bootstrap_stdcells_tool",
-                             "params": {"platform": "sky130hd"}, "label": "x"},
+                "recovery": {"kind": "infra", "label": "x", "detail": "y"},
                 "compile_command": "iverilog", "sim_command": None,
                 "stdout_tail": "", "stderr_tail": "cache missing", "log_truncated": False,
                 "failure_type": "compile", "first_failure_line": "cache missing"}
@@ -266,7 +265,7 @@ def test_isolated_post_synth_missing_cache_recovery_propagates(tmp_path):
 
     assert r["status"] == "failed"
     assert r["outcome"] == "stdcell_cache_missing"
-    assert r["recovery"]["action"] == "bootstrap_stdcells_tool"
+    assert r["recovery"]["kind"] == "infra"
 
 
 def test_post_synth_gets_past_run_resolution_with_real_runner(tmp_path):

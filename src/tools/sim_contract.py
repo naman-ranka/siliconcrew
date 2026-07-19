@@ -31,7 +31,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
-from src.tools.synthesis_manager import get_run_dir
+from src.tools.synthesis_manager import _find_netlist, get_run_dir
 
 SIM_CONTRACT_VERSION = 1
 SIM_CONTRACT_KEY = "sim_contract"
@@ -214,13 +214,17 @@ def resolve_post_synth(
             platform = platform or contract.get("platform")
             top = contract.get("top")
         else:
-            # Legacy fallback: the pre-contract absolute netlist_path. Kept so
-            # runs produced before the sim contract shipped still resolve.
-            source = "explicit" if explicit_netlist_abs else "legacy_netlist_path"
-            if netlist_abs is None:
-                netlist_abs = _abs_netlist(workspace, meta.get("netlist_path"))
-            platform = platform or meta.get("platform")
+            # Legacy fallback (pre-contract runs): resolve the gate netlist from
+            # the ORFS output tree via _find_netlist — the SAME authoritative
+            # source the contract uses — not the recorded ``netlist_path``, which
+            # older synth code sometimes set to the RTL input. Only if the output
+            # tree is gone do we fall back to the recorded path.
+            source = "explicit" if explicit_netlist_abs else "legacy_find_netlist"
             top = meta.get("top_module")
+            if netlist_abs is None:
+                found = _find_netlist(run_dir, top or "")
+                netlist_abs = found or _abs_netlist(workspace, meta.get("netlist_path"))
+            platform = platform or meta.get("platform")
 
     if not netlist_abs or not os.path.exists(netlist_abs):
         return None, ResolutionError(
@@ -257,19 +261,24 @@ def resolve_post_synth(
 
 
 def stdcell_recovery_action(platform: Optional[str]) -> Dict[str, Any]:
-    """A native, invokable recovery for a missing/incomplete stdcell cache.
+    """Honest guidance for the rare ``stdcell_cache_missing`` outcome.
 
-    Both surfaces can act on this without a shell: the IDE renders a button and
-    POSTs the bootstrap action; the agent calls the ``bootstrap_stdcells`` tool.
-    This replaces the old ``python scripts/bootstrap_stdcells.py ...`` hint —
-    a command the platform can't run for the user.
+    The cache is infrastructure, not a per-run action: on hosted it is baked
+    into the backend image (so it should never be missing), and on self-host it
+    bootstraps at boot — and ``run_simulation`` already retries the bootstrap
+    internally on a cache miss. So this is an infra/boot condition we DESCRIBE;
+    we deliberately do NOT add a first-class tool to the one registry for a path
+    that is baked away on hosted and auto-handled on self-host (keeping the
+    agent's action space small — invariant #2).
     """
-    pf = platform or "<platform>"
+    pf = platform or "the target platform"
     return {
-        # Names the single registered tool both surfaces invoke (invariant #2,
-        # one registry): the agent calls it in the agent loop; the IDE invokes
-        # it from the Command Surface. No shell command, no REST drift.
-        "action": "bootstrap_stdcells_tool",
-        "params": {"platform": platform} if platform else {},
-        "label": f"Download {pf} standard-cell simulation models",
+        "kind": "infra",
+        "label": f"Standard-cell simulation models for {pf} are missing.",
+        "detail": (
+            "Hosted: they are baked into the backend image and should never be "
+            "missing (report it). Self-host: they bootstrap at boot — restart "
+            "the backend, or the next post_synth run retries the bootstrap "
+            "internally."
+        ),
     }
