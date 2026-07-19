@@ -85,6 +85,10 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Implementation runs on Opus 4.8. When asked to fix an issue: branch
-          # from main, open a PR against main — never push to main directly.
+          # from main, push a fix branch — never push to main directly.
+          # allowedTools grants edit + git + test-running so the agent can
+          # RUN the tests it writes (pytest for backend, npm/npx for frontend)
+          # and self-verify before pushing, instead of pushing unrun tests.
           claude_args: |
             --model claude-opus-4-8
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh:*),Bash(python:*),Bash(python3:*),Bash(pytest:*),Bash(pip:*),Bash(pip3:*),Bash(npm:*),Bash(npx:*),Bash(ls:*),Bash(cat:*),Bash(mkdir:*)"
