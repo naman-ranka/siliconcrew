@@ -108,6 +108,51 @@ def _make_stale_run(tmp_path, run_id="synth_0001", dispatched_ago=2000.0, timeou
     return workspace, run_dir, meta
 
 
+def test_reconciled_completed_run_gets_sim_contract_and_netlist(tmp_path):
+    """#52 gap: a run adopted as completed after its worker died must still be
+    simulatable. _finalize_completed attaches the sim_contract (netlist resolved
+    under orfs_results) + netlist_path, so post-synth sim reads the contract
+    instead of failing netlist_not_found on a run whose gate netlist is on disk."""
+    workspace = str(tmp_path)
+    run_dir = os.path.join(workspace, "synth_runs", "synth_0001")
+    # Full-flow completion marker (6_finish.rpt) proves the flow finished...
+    reports = os.path.join(run_dir, "orfs_reports", "sky130hd", "counter", "base")
+    os.makedirs(reports, exist_ok=True)
+    with open(os.path.join(reports, "6_finish.rpt"), "w", encoding="utf-8") as f:
+        f.write("finish\n")
+    # ...and the gate netlist it produced is on disk under orfs_results.
+    results = os.path.join(run_dir, "orfs_results", "sky130hd", "counter", "base")
+    os.makedirs(results, exist_ok=True)
+    gate_abs = os.path.join(results, "6_final.v")
+    with open(gate_abs, "w", encoding="utf-8") as f:
+        f.write("module counter(); endmodule\n")
+    meta = {
+        "run_id": "synth_0001",
+        "status": "running",  # worker died before writing the terminal status
+        "top_module": "counter",
+        "platform": "sky130hd",
+    }
+    with open(os.path.join(run_dir, "run_meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+
+    out = sm._reconcile_stale_status(run_dir, dict(meta), workspace=workspace, has_live_future=False)
+
+    assert out["status"] == "completed"
+    # netlist_path now set to the on-disk gate netlist.
+    assert out["netlist_path"] == gate_abs
+    # And the authoritative sim contract points at it (workspace-relative).
+    contract = out[sm.SIM_CONTRACT_KEY]
+    assert contract["platform"] == "sky130hd"
+    assert contract["top"] == "counter"
+    gate_rel = os.path.relpath(gate_abs, workspace).replace(os.sep, "/")
+    assert contract["netlist"] == gate_rel
+    # Persisted durably so a later post-synth sim resolves it off disk.
+    with open(os.path.join(run_dir, sm.RUN_META_FILENAME), "r", encoding="utf-8") as f:
+        persisted = json.load(f)
+    assert persisted[sm.SIM_CONTRACT_KEY]["netlist"] == gate_rel
+    assert persisted["netlist_path"] == gate_abs
+
+
 def test_death_verdict_tombstones_expired_silent_run(tmp_path):
     workspace, run_dir, meta = _make_stale_run(tmp_path)
 

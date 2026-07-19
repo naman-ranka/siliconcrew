@@ -2648,6 +2648,21 @@ def _reconcile_stale_status(
         if not m.get("finished_at"):
             m["finished_at"] = _now_iso()
         m = _refresh_stage_metadata(run_dir, m, terminal_status="completed")
+        # A run adopted here (its worker died before writing the terminal
+        # status) never ran the normal finalize legs, so it carries no
+        # netlist_path / sim_contract — and post-synth sim would then fail with
+        # netlist_not_found even though the gate netlist is on disk (issue #52).
+        # Stamp the contract from the netlist under orfs_results so an adopted
+        # "completed" run is simulatable exactly like a normally-finalized one.
+        if not m.get(SIM_CONTRACT_KEY) or not m.get("netlist_path"):
+            ws = workspace or _workspace_from_run_dir(run_dir)
+            adopt_top = m.get("top_module")
+            adopt_platform = m.get("platform")
+            adopt_netlist = _find_netlist(run_dir, adopt_top) if adopt_top else None
+            if adopt_netlist and not m.get("netlist_path"):
+                m["netlist_path"] = adopt_netlist
+            if not m.get(SIM_CONTRACT_KEY):
+                _attach_sim_contract(m, ws, adopt_netlist, adopt_platform, adopt_top)
         try:
             _persist_run_meta_durable(run_dir, m)
         except Exception:

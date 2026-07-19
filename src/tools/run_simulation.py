@@ -5,7 +5,6 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 from src.tools.stdcells import get_asap7_compat_model_files, resolve_stdcell_models
-from src.tools.synthesis_manager import get_run_dir
 
 
 PASS_MARKER_DEFAULT = "TEST PASSED"
@@ -403,7 +402,23 @@ def run_simulation(
         if platform == "asap7" and effective_sim_profile == "compat":
             stdcells_for_compile = _asap7_compat_stdcell_files(stdcells_for_compile, netlist_abs)
 
-        compile_files = compile_files + [netlist_abs] + stdcells_for_compile
+        # Drop the design RTL the gate netlist replaces. The manifest's simulate
+        # set is [design RTL, testbench]; compiling that RTL beside the gate
+        # netlist declares the design module twice ("already declared") — the
+        # exact failure post_synth exists to avoid. Keep only sources the
+        # netlist does NOT itself define: the testbench (and any helper module
+        # the netlist doesn't provide). The netlist is authoritative for every
+        # module it declares.
+        netlist_modules = _collect_defined_modules([netlist_abs])
+        if netlist_modules:
+            tb_files = [
+                p for p in compile_files
+                if not (_collect_defined_modules([p]) & netlist_modules)
+            ]
+        else:
+            tb_files = list(compile_files)
+
+        compile_files = tb_files + [netlist_abs] + stdcells_for_compile
 
         if platform == "sky130hd":
             required = set(_extract_sky130_required_modules(netlist_abs))
@@ -414,7 +429,7 @@ def run_simulation(
                     if mod_name in required:
                         selected.append(fpath)
                 if selected:
-                    compile_files = compile_files[: len(verilog_files) + 1] + selected
+                    compile_files = compile_files[: len(tb_files) + 1] + selected
 
     output_exec = os.path.join(cwd, f"{top_module}.out")
     comp = _compile(compile_files=compile_files, output_executable=output_exec, cwd=cwd, timeout=timeout, top_module=top_module)

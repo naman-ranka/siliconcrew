@@ -74,6 +74,52 @@ def test_post_synth_resolves_gate_netlist_from_contract_and_echoes(monkeypatch):
         assert result["stdcell_source"] == "sky130hd"
 
 
+def test_post_synth_excludes_design_rtl_from_compile_set(monkeypatch):
+    """#52 double-declaration guard: given the REAL manifest simulate set
+    [design RTL, testbench], post_synth compiles the testbench + gate netlist +
+    stdcells only — never the design RTL the netlist replaces (which would
+    re-declare the design module, 'already declared')."""
+    from collections import Counter
+
+    with tempfile.TemporaryDirectory() as ws:
+        tb, gate_abs, gate_rel = _make_synth_run_with_contract(ws)
+        rtl = os.path.join(ws, "top.v")  # the design source the netlist replaces
+        stdcell = os.path.join(ws, "_stdcells", "sky130hd", "sim", "dummy.v")
+        os.makedirs(os.path.dirname(stdcell), exist_ok=True)
+        open(stdcell, "w").write("module dummy; endmodule")
+
+        monkeypatch.setattr(rs, "resolve_stdcell_models",
+                            lambda workspace_arg, platform_arg: ([stdcell], {"files": []}))
+        captured = {}
+
+        def fake_compile(**kwargs):
+            captured["compile_files"] = kwargs["compile_files"]
+            return {"returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"}
+
+        monkeypatch.setattr(rs, "_compile", fake_compile)
+        monkeypatch.setattr(rs, "_simulate",
+                            lambda **kwargs: {"returncode": 0, "stdout": "TEST PASSED\n", "stderr": "", "command": "vvp"})
+
+        result = rs.run_simulation(
+            verilog_files=[rtl, tb], top_module="tb", cwd=ws, workspace=ws,
+            mode="post_synth", run_id="synth_0001",
+        )
+
+        assert result["status"] == "test_passed"
+        compiled = captured["compile_files"]
+        # (a) The design RTL source is NOT compiled; the gate netlist + testbench are.
+        assert rtl not in compiled
+        assert gate_abs in compiled
+        assert tb in compiled
+        # (b) No double-declaration: the design module 'top' is declared by exactly
+        # one compiled source (the gate netlist), not also by the RTL.
+        mod_counts: Counter = Counter()
+        for f in compiled:
+            for mod in rs._collect_defined_modules([f]):
+                mod_counts[mod] += 1
+        assert mod_counts["top"] == 1
+
+
 def test_post_synth_missing_cache_yields_semantic_recoverable_outcome(monkeypatch):
     """A missing stdcell cache is a typed, recoverable outcome that names a
     native platform action — not a raw traceback."""
@@ -173,7 +219,6 @@ def test_simulation_compile_failed_reports_unresolved_cells(monkeypatch):
         open(tb, "w", encoding="utf-8").write("module tb; endmodule")
         open(stdcell, "w", encoding="utf-8").write("module dummy; endmodule")
 
-        monkeypatch.setattr(rs, "get_run_dir", lambda cwd, run_id: run_dir)
         monkeypatch.setattr(rs, "resolve_stdcell_models", lambda workspace, platform: ([stdcell], {"updated_at": "now", "files": []}))
         monkeypatch.setattr(
             rs,
