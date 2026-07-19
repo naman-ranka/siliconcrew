@@ -29,6 +29,10 @@ numpy
 cocotb
 cocotb-test
 pytest
+# Async test support: only tests decorated @pytest.mark.asyncio run as async
+# (asyncio_mode = strict in pytest.ini). Keeps the marker honest and silences
+# the PytestUnknownMarkWarning.
+pytest-asyncio>=1.0.0
 psycopg[binary]>=3.1.8
 google-cloud-storage
 google-cloud-kms

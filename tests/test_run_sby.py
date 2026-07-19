@@ -2,10 +2,20 @@ import os
 import sys
 import shutil
 
+import pytest
+
 # Ensure src is in path
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
 from tools.run_sby import run_sby
+
+# Runs the real `sby` binary end-to-end. Deselected from the fast PR job (marker);
+# also skips cleanly on a bare run when SymbiYosys isn't installed. Runs for real
+# in the nightly/local EDA lane.
+pytestmark = [
+    pytest.mark.requires_eda,
+    pytest.mark.skipif(shutil.which("sby") is None, reason="sby (SymbiYosys) not installed"),
+]
 
 def test_run_sby_pass():
     # 1. Create a dummy design

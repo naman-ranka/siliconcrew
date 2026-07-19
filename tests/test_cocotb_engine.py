@@ -94,6 +94,7 @@ def _cocotb_native_available() -> bool:
         return False
 
 
+@pytest.mark.requires_eda
 @pytest.mark.skipif(not _cocotb_native_available(),
                     reason="native cocotb smoke needs iverilog + cocotb (like the ORFS real-run gate)")
 def test_native_cocotb_end_to_end(tmp_path):  # pragma: no cover - runs only where the toolchain exists
