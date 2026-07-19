@@ -84,9 +84,19 @@ def _collect_defined_modules(file_paths: List[str]) -> set[str]:
 
 
 def _stdcell_workspace(cwd: str) -> str:
+    # The stdcell cache is populated by the boot bootstrap (entrypoint.sh) and the
+    # image bake into RTL_WORKSPACE (default /workspace in the hosted/self-host
+    # container). Default here to RTL_WORKSPACE so resolver + bootstrap + bake agree
+    # by construction; the explicit RTL_STDCELL_WORKSPACE override still wins when set.
+    # When RTL_WORKSPACE is unset (e.g. CI, which bootstraps into repo_root/workspace),
+    # fall back to repo_root/workspace rather than a hardcoded /workspace so that
+    # environment continues to resolve its bootstrapped cache.
     env_path = os.environ.get("RTL_STDCELL_WORKSPACE")
     if env_path:
         return os.path.abspath(env_path)
+    rtl_workspace = os.environ.get("RTL_WORKSPACE")
+    if rtl_workspace:
+        return os.path.abspath(rtl_workspace)
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     return os.path.join(repo_root, "workspace")
 
