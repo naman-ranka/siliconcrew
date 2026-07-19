@@ -1021,7 +1021,12 @@ def _pd_parameters_from_run(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str,
 
 
 def _find_netlist(run_dir: str, top_module: str) -> Optional[str]:
-    roots = [os.path.join(run_dir, "orfs_results"), os.path.join(run_dir, "inputs")]
+    # ONLY the ORFS output tree holds a gate-level netlist. ``inputs/`` is the
+    # pre-synthesis RTL source and must never be picked as "the netlist" — doing
+    # so was the netlist-vs-RTL trap (post-synth then compiled the RTL, declaring
+    # the design module twice). Return None if orfs_results has none; the caller
+    # errors cleanly rather than falling back to RTL.
+    roots = [os.path.join(run_dir, "orfs_results")]
     ranked = []
     for base in roots:
         if not os.path.exists(base):

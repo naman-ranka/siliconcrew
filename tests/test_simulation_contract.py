@@ -65,9 +65,11 @@ def test_post_synth_resolves_gate_netlist_from_contract_and_echoes(monkeypatch):
 
         assert result["status"] == "test_passed"
         assert result["outcome"] == "test_passed"
-        # The GATE netlist was compiled, not the RTL top.v.
-        assert gate_abs in captured["compile_files"]
-        assert os.path.join(ws, "top.v") not in captured["compile_files"]
+        # The GATE netlist was compiled, not the RTL top.v (normpath: the netlist
+        # arrives workspace-relative POSIX from the contract).
+        _compiled = [os.path.normpath(p) for p in captured["compile_files"]]
+        assert os.path.normpath(gate_abs) in _compiled
+        assert os.path.normpath(os.path.join(ws, "top.v")) not in _compiled
         # Honest echo of what was resolved.
         assert result["resolved_run_id"] == "synth_0001"
         assert result["resolved_netlist"] == gate_rel
@@ -106,11 +108,13 @@ def test_post_synth_excludes_design_rtl_from_compile_set(monkeypatch):
         )
 
         assert result["status"] == "test_passed"
-        compiled = captured["compile_files"]
+        # normpath every path: the gate netlist arrives workspace-relative POSIX
+        # from the contract, so on Windows it's mixed-separator vs native inputs.
+        compiled = [os.path.normpath(p) for p in captured["compile_files"]]
         # (a) The design RTL source is NOT compiled; the gate netlist + testbench are.
-        assert rtl not in compiled
-        assert gate_abs in compiled
-        assert tb in compiled
+        assert os.path.normpath(rtl) not in compiled
+        assert os.path.normpath(gate_abs) in compiled
+        assert os.path.normpath(tb) in compiled
         # (b) No double-declaration: the design module 'top' is declared by exactly
         # one compiled source (the gate netlist), not also by the RTL.
         mod_counts: Counter = Counter()
@@ -140,8 +144,8 @@ def test_post_synth_missing_cache_yields_semantic_recoverable_outcome(monkeypatc
 
         assert result["status"] == "compile_failed"
         assert result["outcome"] == "stdcell_cache_missing"
-        assert result["recovery"]["action"] == "bootstrap_stdcells_tool"
-        assert result["recovery"]["params"] == {"platform": "sky130hd"}
+        assert result["recovery"]["kind"] == "infra"
+        assert "action" not in result["recovery"]
         # Still echoes what it did resolve (run + netlist) before the cache miss.
         assert result["resolved_run_id"] == "synth_0001"
         assert result["resolved_netlist"] == gate_rel

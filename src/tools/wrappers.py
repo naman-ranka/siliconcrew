@@ -286,31 +286,6 @@ def run_isolated_simulation(
 
 
 @tool
-def bootstrap_stdcells_tool(platform: str = "sky130hd") -> str:
-    """
-    Populate the standard-cell simulation model cache for a platform so
-    post-synthesis simulation can elaborate the gate-level netlist. This is the
-    native recovery for a 'stdcell_cache_missing' simulation outcome: call it,
-    then re-run the post_synth simulation. Downloads pinned models (no cloud
-    dependency; self-host-safe). Supported platforms: sky130hd, asap7.
-    Args:
-        platform: 'sky130hd' (default) or 'asap7'.
-    """
-    from src.tools.run_simulation import _stdcell_workspace
-    from src.tools.stdcells import bootstrap_stdcells
-
-    workspace = get_workspace_path()
-    stdcell_ws = _stdcell_workspace(workspace)
-    try:
-        result = bootstrap_stdcells(stdcell_ws, platform)
-    except Exception as exc:
-        return json.dumps(
-            {"status": "failed", "platform": platform, "error": str(exc)}, indent=2
-        )
-    return json.dumps({"status": "ok", **result}, indent=2)
-
-
-@tool
 def start_synthesis(
     verilog_files: list[str],
     top_module: str,
@@ -1336,7 +1311,6 @@ mcp_tools = [
     linter_tool,
     simulation_tool,
     run_isolated_simulation,
-    bootstrap_stdcells_tool,
     waveform_tool,
     cocotb_tool,
     sby_tool,
