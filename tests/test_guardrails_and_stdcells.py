@@ -75,6 +75,18 @@ def test_stdcell_workspace_defaults_to_rtl_workspace(monkeypatch):
         assert manifest["platform"] == "asap7"
 
 
+def test_stdcell_workspace_defaults_to_repo_root_when_rtl_workspace_unset(monkeypatch):
+    # Regression: when neither RTL_STDCELL_WORKSPACE nor RTL_WORKSPACE is set (e.g. CI,
+    # which bootstraps stdcells into repo_root/workspace), resolution must fall back to
+    # repo_root/workspace — NOT a hardcoded /workspace, which would read an empty dir and
+    # break the post-synth smoke test.
+    monkeypatch.delenv("RTL_STDCELL_WORKSPACE", raising=False)
+    monkeypatch.delenv("RTL_WORKSPACE", raising=False)
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(std.__file__), "..", ".."))
+    expected = os.path.join(repo_root, "workspace")
+    assert _stdcell_workspace(cwd="/irrelevant") == expected
+
+
 def test_stdcell_workspace_override_wins(monkeypatch):
     # Explicit override still takes precedence over RTL_WORKSPACE.
     with tempfile.TemporaryDirectory() as override_ws:
