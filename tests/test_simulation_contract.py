@@ -217,3 +217,83 @@ def test_post_synth_asap7_auto_profile_defaults_to_compat(monkeypatch):
         assert result["status"] == "test_passed"
         assert result["sim_profile"] == "compat"
 
+
+def test_find_netlist_resolves_orfs_gate_netlist_not_inputs_rtl():
+    """#51: with both orfs_results/**/6_final.v (gate netlist) and inputs/<top>.v
+    (pre-synthesis RTL) present, _find_netlist resolves the gate netlist — never
+    the RTL input, which would double-declare the design module in post_synth."""
+    from src.tools.synthesis_manager import _find_netlist
+
+    with tempfile.TemporaryDirectory() as run_dir:
+        gate_dir = os.path.join(run_dir, "orfs_results", "sky130hd", "top", "base")
+        os.makedirs(gate_dir, exist_ok=True)
+        gate = os.path.join(gate_dir, "6_final.v")
+        open(gate, "w", encoding="utf-8").write("module top(); endmodule // gate\n")
+
+        inputs_dir = os.path.join(run_dir, "inputs")
+        os.makedirs(inputs_dir, exist_ok=True)
+        rtl = os.path.join(inputs_dir, "top.v")
+        # RTL input name-matches the top module — the exact A15 trap. It must
+        # never be resolved as the netlist.
+        open(rtl, "w", encoding="utf-8").write("module top(); endmodule // rtl\n")
+
+        resolved = _find_netlist(run_dir, "top")
+        assert resolved == gate
+        assert "inputs" not in os.path.relpath(resolved, run_dir).split(os.sep)
+
+
+def test_find_netlist_returns_none_without_orfs_results():
+    """#51: no synthesized netlist under orfs_results/ resolves to None (caller
+    errors cleanly) rather than falling back to an inputs/ RTL source."""
+    from src.tools.synthesis_manager import _find_netlist
+
+    with tempfile.TemporaryDirectory() as run_dir:
+        inputs_dir = os.path.join(run_dir, "inputs")
+        os.makedirs(inputs_dir, exist_ok=True)
+        open(os.path.join(inputs_dir, "top.v"), "w", encoding="utf-8").write("module top(); endmodule\n")
+
+        assert _find_netlist(run_dir, "top") is None
+
+
+def test_post_synth_compile_excludes_design_rtl(monkeypatch):
+    """#51: post_synth compiles testbench + gate netlist + stdcell models and
+    EXCLUDES the design RTL the netlist replaces — otherwise the design module is
+    declared twice (once by the RTL source, once by the netlist)."""
+    with tempfile.TemporaryDirectory() as workspace:
+        netlist = os.path.join(workspace, "6_final.v")
+        design_rtl = os.path.join(workspace, "top.v")
+        tb = os.path.join(workspace, "tb.v")
+        stdcell = os.path.join(workspace, "_stdcells", "nangate45", "sim", "dummy.v")
+        os.makedirs(os.path.dirname(stdcell), exist_ok=True)
+        open(netlist, "w", encoding="utf-8").write("module top(); endmodule // gate netlist\n")
+        open(design_rtl, "w", encoding="utf-8").write("module top(); endmodule // pre-synth RTL\n")
+        open(tb, "w", encoding="utf-8").write("module tb; top u0(); endmodule\n")
+        open(stdcell, "w", encoding="utf-8").write("module dummy; endmodule\n")
+
+        captured = {}
+
+        def fake_compile(**kwargs):
+            captured["compile_files"] = kwargs["compile_files"]
+            return {"returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"}
+
+        monkeypatch.setattr(rs, "resolve_stdcell_models", lambda ws, platform: ([stdcell], {"files": []}))
+        monkeypatch.setattr(rs, "_compile", fake_compile)
+        monkeypatch.setattr(rs, "_simulate", lambda **kwargs: {"returncode": 0, "stdout": "TEST PASSED\n", "stderr": "", "command": "vvp"})
+
+        result = rs.run_simulation(
+            verilog_files=[design_rtl, tb],
+            top_module="tb",
+            cwd=workspace,
+            mode="post_synth",
+            netlist_file=netlist,
+            platform="nangate45",
+            pass_marker="TEST PASSED",
+        )
+
+        assert result["status"] == "test_passed"
+        compile_files = captured["compile_files"]
+        assert os.path.abspath(netlist) in compile_files        # gate netlist compiled
+        assert os.path.abspath(tb) in compile_files             # testbench kept
+        assert os.path.abspath(design_rtl) not in compile_files  # design RTL dropped
+        assert stdcell in compile_files                         # stdcell models compiled
+

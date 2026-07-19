@@ -1018,26 +1018,39 @@ def _pd_parameters_from_run(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str,
 
 
 def _find_netlist(run_dir: str, top_module: str) -> Optional[str]:
-    roots = [os.path.join(run_dir, "orfs_results"), os.path.join(run_dir, "inputs")]
+    """Resolve the ORFS gate-level netlist for a post_synth run.
+
+    Only ``orfs_results/`` is a valid netlist source. ``inputs/`` holds the
+    pre-synthesis RTL — its ``<top>.v`` name-matches the top module, so treating
+    it as a netlist candidate makes post_synth compile the RTL source alongside
+    the gate netlist and double-declare the design module. So this scans
+    ``orfs_results/`` only, prefers the final synthesis stage (``6_final.v``),
+    and returns ``None`` when no synthesized netlist exists (the caller then
+    errors cleanly instead of silently falling back to the RTL input).
+    """
+    base = os.path.join(run_dir, "orfs_results")
+    if not os.path.exists(base):
+        return None
     ranked = []
-    for base in roots:
-        if not os.path.exists(base):
-            continue
-        for root, _, files in os.walk(base):
-            for name in files:
-                if not name.endswith(".v"):
-                    continue
-                path = os.path.join(root, name)
-                score = 0
-                lname = name.lower()
-                if "final" in lname:
-                    score += 4
-                if "yosys" in lname:
-                    score += 3
-                if top_module.lower() in lname:
-                    score += 2
-                score += int(os.path.getmtime(path) / 1000)
-                ranked.append((score, path))
+    for root, _, files in os.walk(base):
+        for name in files:
+            if not name.endswith(".v"):
+                continue
+            path = os.path.join(root, name)
+            score = 0
+            lname = name.lower()
+            if "6_final" in lname:
+                score += 8
+            elif "final" in lname:
+                score += 4
+            if "yosys" in lname:
+                score += 3
+            if top_module.lower() in lname:
+                score += 2
+            # (name score, mtime) so the final-stage netlist wins on name and
+            # mtime is only a tiebreaker among equally-named candidates — the
+            # raw mtime must never dominate the name ranking.
+            ranked.append(((score, os.path.getmtime(path)), path))
     if not ranked:
         return None
     return sorted(ranked, key=lambda x: x[0], reverse=True)[0][1]

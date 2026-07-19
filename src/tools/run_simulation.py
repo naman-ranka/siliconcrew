@@ -401,7 +401,17 @@ def run_simulation(
         if platform == "asap7" and effective_sim_profile == "compat":
             stdcells_for_compile = _asap7_compat_stdcell_files(stdcells_for_compile, netlist_abs)
 
-        compile_files = compile_files + [netlist_abs] + stdcells_for_compile
+        # The gate-level netlist REPLACES the design RTL — it re-declares the same
+        # design modules. Compiling both double-declares them ("already declared
+        # in this scope"), so drop every source whose module the netlist provides
+        # and keep only the testbench (+ any non-design support source). The
+        # netlist + stdcell models then supply the design.
+        netlist_modules = _collect_defined_modules([netlist_abs])
+        tb_sources = [
+            src for src in compile_files
+            if not (_collect_defined_modules([src]) & netlist_modules)
+        ]
+        compile_files = tb_sources + [netlist_abs] + stdcells_for_compile
 
         if platform == "sky130hd":
             required = set(_extract_sky130_required_modules(netlist_abs))
@@ -412,7 +422,7 @@ def run_simulation(
                     if mod_name in required:
                         selected.append(fpath)
                 if selected:
-                    compile_files = compile_files[: len(verilog_files) + 1] + selected
+                    compile_files = tb_sources + [netlist_abs] + selected
 
     output_exec = os.path.join(cwd, f"{top_module}.out")
     comp = _compile(compile_files=compile_files, output_executable=output_exec, cwd=cwd, timeout=timeout, top_module=top_module)
