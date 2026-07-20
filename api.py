@@ -40,6 +40,7 @@ from src.utils.session_manager import SessionManager
 from src.utils.session_context import SessionContext, set_current_session, session_scope
 from src.utils.paths import is_within
 from src.platform_engines.workspace_provider import get_workspace_provider
+from src.platform_engines.workspace_flusher import get_workspace_flusher
 from src.platform_engines.identity import Action, AuthError, Identity
 from src.platform_engines import auth as auth_engine
 from src.platform_engines.llm_keys import (
@@ -491,6 +492,22 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("[API] Shutting down...")
+    # Drain pending workspace flushes FIRST — this is the deploy-drain path.
+    # Budget (Amendment A4): uvicorn cancels live turns at 3s
+    # (--timeout-graceful-shutdown in entrypoint.sh), leaving ~5s of Cloud
+    # Run's ~10s grace for this drain. Off the loop: flush_now blocks.
+    try:
+        _flush_results = await asyncio.to_thread(
+            get_workspace_flusher().flush_all, 5.0
+        )
+        _unflushed = [sid for sid, ok in _flush_results.items() if not ok]
+        if _unflushed:
+            # Honest loss report — named sessions, never a silent drop.
+            print(f"[ERROR] shutdown drain could not flush workspaces: {_unflushed}")
+        elif _flush_results:
+            print(f"[API] shutdown drain flushed {len(_flush_results)} workspace(s)")
+    except Exception as exc:
+        print(f"[ERROR] shutdown workspace drain failed: {exc}")
     await close_checkpointer()
     if hasattr(app.state, "mcp_task"):
         print("[API] Stopping remote MCP server...")
@@ -1505,6 +1522,11 @@ async def delete_thread(session_id: str, tid: str, identity: Identity = Depends(
 async def delete_session(session_id: str, identity: Identity = Depends(require_signed_in)):
     """Delete a session (owner only)."""
     uid = _require_owned(session_id, identity)
+    # Drop any pending background flush FIRST: a queued/retrying flush racing
+    # this delete must not re-commit the just-purged durable manifest (the
+    # provider's missing-scratch guard is the backstop; this stops the retry
+    # loop at the source).
+    get_workspace_flusher().discard(session_id)
     session_manager.delete_session(session_id, user_id=uid)
     return {"status": "deleted", "session_id": session_id}
 
@@ -1789,6 +1811,13 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
                 async def _ext_send(frame: dict) -> None:
                     nonlocal _ext_client_gone
+                    # Durability mark BEFORE the client-gone gate: the runtime
+                    # emits every frame through here even when the socket is
+                    # dead (headless turns), and a tool boundary means writes
+                    # are sitting on local scratch. The flusher syncs them
+                    # incrementally in the background — a deploy draining this
+                    # instance mid-turn no longer loses the whole turn.
+                    get_workspace_flusher().note_agent_frame(session_id, frame)
                     if _ext_client_gone:
                         return
                     frame.setdefault("turn_id", turn_id)
@@ -1878,22 +1907,16 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 if _ext_stopped:
                     await _ext_send({"type": "stopped", "tokens": {"input": 0, "output": 0}})
 
-                # Persist workspace changes once per turn, in the background —
-                # the SAME cadence and mechanism as the native path below. The
-                # Codex MCP subprocess defers its per-tool workspace sync to
-                # this turn-level sync (SILICONCREW_MCP_DEFER_WORKSPACE_SYNC),
-                # so a mutating tool result no longer blocks on a full-tree
-                # upload. Fires for completed, stopped, and headless turns
-                # alike, so whatever was written so far is persisted.
-                _ext_sync = getattr(_ws_provider, "sync", None)
-                if callable(_ext_sync):
-                    async def _ext_background_sync() -> None:
-                        try:
-                            await asyncio.to_thread(_ext_sync, session_id)
-                        except Exception as exc:
-                            print(f"[WARN] workspace sync failed: {exc}")
-
-                    _run_in_background(_ext_background_sync())
+                # Turn-end flush through the write-behind flusher — still
+                # non-blocking (the terminal frame never waits on an upload;
+                # 4B lock), but the work is now TRACKED: the lifespan drain
+                # can see and finish it, which a fire-and-forget task could
+                # not guarantee. Mid-turn durability came from the per-frame
+                # marks in _ext_send; this covers the tail after the last
+                # tool frame. Fires for completed, stopped, and headless
+                # turns alike. The Codex MCP subprocess still defers its
+                # per-tool sync (SILICONCREW_MCP_DEFER_WORKSPACE_SYNC).
+                get_workspace_flusher().flush_soon(session_id)
                 continue
             # --- native LangChain turn (unchanged) ----------------------------
 
@@ -2092,6 +2115,11 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                                     tool_call_id=tc_id or None,
                                 )
                                 frames.append({"type": "tool_call", "tool": format_tool_call_for_api(tc)})
+                            # Tool boundary → unsynced scratch writes (at
+                            # minimum the attempt-log append above). Mark for
+                            # the background incremental flush so a mid-turn
+                            # instance drain can't lose the turn's files.
+                            get_workspace_flusher().mark_dirty(session_id)
                     elif "tools" in update:
                         msg = update["tools"]["messages"][-1]
                         result = format_tool_result_for_api(msg.content)
@@ -2107,6 +2135,9 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             arguments=call_meta.get("args", {}),
                         )
                         frames.append({"type": "tool_result", "tool_call_id": msg.tool_call_id, **result})
+                        # The tool has RUN by the time its ToolMessage streams
+                        # — its workspace writes are on scratch now; flush.
+                        get_workspace_flusher().mark_dirty(session_id)
                     return frames
 
                 agent_error: Optional[Exception] = None
@@ -2296,23 +2327,14 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     output_tokens=total_output_tokens,
                 )
 
-                # Persist workspace changes to durable storage in hosted mode
-                # (no-op locally) as a background task — this is the ONE slow,
-                # non-critical step (a real network upload). Awaiting it before
-                # the terminal frame made the UI sit on "Stop" for as long as
-                # the upload took (observed up to ~1 minute) even though the
-                # reply had fully rendered. It doesn't touch the checkpoint
-                # connection (already closed by then), so it's safe to outlive
-                # this turn.
-                _sync = getattr(_ws_provider, "sync", None)
-                if callable(_sync):
-                    async def _background_sync() -> None:
-                        try:
-                            await asyncio.to_thread(_sync, session_id)
-                        except Exception as exc:
-                            print(f"[WARN] workspace sync failed: {exc}")
-
-                    _run_in_background(_background_sync())
+                # Turn-end flush through the write-behind flusher (no-op in
+                # self-host). Still non-blocking — awaiting an upload before
+                # the terminal frame once held the UI on "Stop" for up to a
+                # minute — but now tracked, so the lifespan shutdown drain can
+                # finish it. Mid-turn durability came from the per-tool-
+                # boundary marks in _handle_updates; this covers the tail
+                # after the last tool call (final assistant text, logs).
+                get_workspace_flusher().flush_soon(session_id)
 
                 if client_gone:
                     # The socket is dead; nothing more can be received on it.
