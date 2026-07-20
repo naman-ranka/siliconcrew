@@ -227,26 +227,32 @@ docker pull openroad/orfs:latest
 
 ### First-Run Standard-Cell Bootstrap (Required for Post-Synthesis Simulation)
 
-Post-synthesis simulation needs managed standard-cell model caches under:
-- `workspace/_stdcells/asap7/sim`
-- `workspace/_stdcells/sky130hd/sim`
+The Docker image bakes these standard-cell (PDK) models in at build time, so
+hosted and self-host deployments need no bootstrap — they resolve from the
+install root and should never report a missing cache. This step is only for a
+**local checkout running post-synth outside the image**.
+
+Post-synthesis simulation needs managed standard-cell model caches under the
+repo root (the install-global location the resolver reads, `stdcells.stdcell_root`):
+- `_stdcells/asap7/sim`
+- `_stdcells/sky130hd/sim`
 
 Bootstrap uses pinned upstream sources (not ORFS Docker extraction), so Docker is not required for this step.
 
-Run this once after clone (or whenever you clear `workspace/_stdcells`):
+Run this once after clone (or whenever you clear `_stdcells`):
 
 ```bash
 # from repo root
-PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace workspace --platform asap7
-PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace workspace --platform sky130hd
+PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace . --platform asap7
+PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace . --platform sky130hd
 ```
 
 PowerShell:
 
 ```powershell
 $env:PYTHONPATH='.'
-python scripts/bootstrap_stdcells.py --workspace workspace --platform asap7
-python scripts/bootstrap_stdcells.py --workspace workspace --platform sky130hd
+python scripts/bootstrap_stdcells.py --workspace . --platform asap7
+python scripts/bootstrap_stdcells.py --workspace . --platform sky130hd
 ```
 
 If post-synthesis simulation reports missing stdcells, run the same commands and see this section.

@@ -1,14 +1,16 @@
 #!/bin/bash
 set -e
 
-# Bootstrap standard-cell models if not already present
-# These persist on the host via the /workspace bind mount
+# Bootstrap standard-cell models if not already present.
+# The PDK models resolve from the install root /app (stdcells.stdcell_root), not
+# a workspace pointer (issue #59). Default images bake them here at build time,
+# so this loop is a no-op then; it only does work for lean BAKE_STDCELLS=0 images.
 for platform in asap7 sky130hd; do
-    cache="/workspace/_stdcells/${platform}/sim"
+    cache="/app/_stdcells/${platform}/sim"
     if [ ! -d "$cache" ] || [ -z "$(ls -A "$cache" 2>/dev/null)" ]; then
         echo "Bootstrapping stdcells for ${platform}..."
         PYTHONPATH=/app python /app/scripts/bootstrap_stdcells.py \
-            --workspace /workspace --platform "$platform" || \
+            --workspace /app --platform "$platform" || \
             echo "Warning: stdcell bootstrap for ${platform} failed (non-fatal)"
     fi
 done

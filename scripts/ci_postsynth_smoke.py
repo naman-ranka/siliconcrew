@@ -4,7 +4,20 @@ import os
 import tempfile
 
 from src.tools.run_simulation import run_simulation
-from src.tools.stdcells import bootstrap_stdcells
+from src.tools.stdcells import bootstrap_stdcells, resolve_stdcell_models, stdcell_root
+
+
+def _ensure_stdcells(platform: str) -> None:
+    """Provision the PDK models exactly where post-synth resolution reads them —
+    the install root (stdcells.stdcell_root), the one location every caller
+    shares by construction (issue #59). Skips the download when the image
+    already baked them there."""
+    root = stdcell_root()
+    try:
+        resolve_stdcell_models(root, platform)
+        return
+    except Exception:
+        bootstrap_stdcells(workspace=root, platform=platform)
 
 
 def _write(path: str, text: str) -> None:
@@ -31,8 +44,8 @@ def _run_case(workspace: str, platform: str, netlist_text: str, tb_text: str) ->
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="ci_postsynth_") as workspace:
-        bootstrap_stdcells(workspace=workspace, platform="asap7")
-        bootstrap_stdcells(workspace=workspace, platform="sky130hd")
+        _ensure_stdcells("asap7")
+        _ensure_stdcells("sky130hd")
 
         asap7 = _run_case(
             workspace=workspace,

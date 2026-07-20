@@ -302,7 +302,11 @@ def test_post_synth_missing_cache_includes_bootstrap_hint(monkeypatch):
 
         assert result["status"] == "compile_failed"
         assert "bootstrap_stdcells.py" in result["stderr_tail"]
-        assert "First-Run Standard-Cell Bootstrap" in result["stderr_tail"]
+        # The hint points at the install root (stdcell_root), and is honest that
+        # a hosted/self-host deploy bakes the models so this should never happen.
+        from src.tools.stdcells import stdcell_root
+        assert stdcell_root() in result["stderr_tail"]
+        assert "baked into the backend image" in result["stderr_tail"]
 
 
 def test_post_synth_asap7_compat_profile_uses_compat_selection(monkeypatch):
@@ -373,4 +377,63 @@ def test_post_synth_asap7_auto_profile_defaults_to_compat(monkeypatch):
 
         assert result["status"] == "test_passed"
         assert result["sim_profile"] == "compat"
+
+
+def test_post_synth_stdcells_resolve_when_agent_repoints_rtl_workspace(monkeypatch):
+    """Issue #59 regression — the AGENT/SUBPROCESS path, which four prior fixes
+    never covered because every one verified through /mcp (the leg that worked).
+
+    An agent turn spawns the MCP server subprocess with RTL_WORKSPACE re-pointed
+    to the per-session scratch *base* — codex_engine.py does exactly
+    ``env["RTL_WORKSPACE"] = _workspace_base(turn.workspace, turn.session_id)``,
+    which strips the session id ("/tmp/siliconcrew-scratch/pwm-generator" ->
+    "/tmp/siliconcrew-scratch"). That base holds session workspaces, NOT the PDK.
+    Standard-cell resolution must not follow it: the models are install-global,
+    resolved from the code root every caller shares by construction.
+
+    This drives the real ``run_simulation`` post_synth path and captures the
+    workspace it hands to ``resolve_stdcell_models``. Tree-agnostic on purpose so
+    the SAME assertion runs pre- and post-fix: PRE-FIX that workspace was exactly
+    the re-pointed RTL_WORKSPACE and the assertion FAILS (the live symptom was
+    ``outcome: stdcell_cache_missing`` naming the scratch root); post-fix it is
+    the install root and the assertion passes.
+    """
+    from src.agents.codex.codex_engine import _workspace_base
+
+    with tempfile.TemporaryDirectory() as ws:
+        tb, gate_abs, gate_rel = _make_synth_run_with_contract(ws)
+
+        # Reproduce the agent turn's env verbatim (codex_engine.py:650, :687).
+        session_workspace = os.path.join("/tmp", "siliconcrew-scratch", "pwm-generator")
+        scratch_base = _workspace_base(session_workspace, "pwm-generator")
+        assert scratch_base == os.path.join("/tmp", "siliconcrew-scratch")
+        monkeypatch.setenv("RTL_WORKSPACE", scratch_base)
+
+        captured = {}
+
+        def fake_resolve(workspace_arg, platform_arg):
+            captured["workspace"] = workspace_arg
+            model = os.path.join(ws, "_stdcells", "sky130hd", "sim", "dummy.v")
+            os.makedirs(os.path.dirname(model), exist_ok=True)
+            open(model, "w").write("module dummy; endmodule")
+            return ([model], {"files": []})
+
+        monkeypatch.setattr(rs, "resolve_stdcell_models", fake_resolve)
+        monkeypatch.setattr(rs, "_compile", lambda **k: {"returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"})
+        monkeypatch.setattr(rs, "_simulate", lambda **k: {"returncode": 0, "stdout": "TEST PASSED\n", "stderr": "", "command": "vvp"})
+
+        result = rs.run_simulation(
+            verilog_files=[tb], top_module="tb", cwd=ws, workspace=ws,
+            mode="post_synth", run_id="synth_0001",
+        )
+
+        # The defect: post-synth stdcell resolution followed the re-pointed
+        # RTL_WORKSPACE (the scratch base), so the subprocess looked for
+        # <scratch_base>/_stdcells and never found the baked PDK.
+        assert captured["workspace"] != os.path.abspath(scratch_base)
+        # It must resolve from the install-global PDK root instead.
+        from src.tools.stdcells import stdcell_root
+        assert captured["workspace"] == stdcell_root()
+        assert result["status"] == "test_passed"
+        assert result["outcome"] == "test_passed"
 
