@@ -26,17 +26,15 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Unit tests for stdcells + simulation contract + session context
+    # The fast set is selected by MARKER, not a filename list — a new dep-light
+    # test gates automatically, with nothing to remember to wire up here.
+    # Heavy tests (requires_eda / requires_services / slow) keep their skipif
+    # guards and run in the local/nightly lane. See docs/TESTING.md.
+    - name: Fast unit tests (pure-Python; selected by marker)
       env:
         PYTHONPATH: .
       run: |
-        pytest -q tests/test_guardrails_and_stdcells.py tests/test_simulation_contract.py tests/test_session_context.py tests/test_session_context_propagation.py
-
-    - name: Auth + tenancy red-team tests
-      env:
-        PYTHONPATH: .
-      run: |
-        pytest -q tests/test_auth.py tests/test_tenancy_redteam.py
+        pytest -m 'not requires_eda and not slow and not requires_services' -q
 
     - name: First-run stdcell bootstrap
       env:
