@@ -1,8 +1,6 @@
 {
   "run_id": "synth_0001",
-  "dispatched_at": "2026-07-20T00:00:47.509242+00:00",
-  "timeout_sec": 1200,
-  "created_at": "2026-07-20T00:00:47.511703+00:00",
+  "created_at": "2026-07-02T22:57:02.943847+00:00",
   "backend": "remote",
   "status": "completed",
   "current_stage": "finish",
@@ -73,7 +71,7 @@
     "repo_commit": "unknown",
     "orfs_image_digest": null,
     "pdk": "sky130hd",
-    "iverilog_version": null,
+    "iverilog_version": "12.0",
     "num_cores": 4
   },
   "docker_command": "fake",
@@ -81,16 +79,6 @@
   "docker_stdout_tail": "ok",
   "docker_stderr_tail": "",
   "netlist_path": "/home/user/siliconcrew/tests/fixtures/manager_runtime_workspace/synth_runs/synth_0001/orfs_results/sky130hd/counter_stage_status/base/6_final.v",
-  "sim_contract": {
-    "schema_version": 1,
-    "mode": "post_synth",
-    "platform": "sky130hd",
-    "top": "counter_stage_status",
-    "netlist": "synth_runs/synth_0001/orfs_results/sky130hd/counter_stage_status/base/6_final.v",
-    "netlist_origin": "synthesis",
-    "stdcell_platform": "sky130hd",
-    "stdcell_manifest_version": null
-  },
   "stdcell_manifest_version": null,
   "stdcell_files_used": [],
   "summary_metrics": {
@@ -103,6 +91,6 @@
     "fmax_mhz": 100.1
   },
   "next_action": "Use search_logs_tool for detailed PPA/error verification.",
-  "finished_at": "2026-07-20T00:00:47.512903+00:00",
+  "finished_at": "2026-07-02T22:57:02.944746+00:00",
   "elapsed_sec": 0.0
 }
