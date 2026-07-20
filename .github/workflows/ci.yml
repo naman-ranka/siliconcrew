@@ -40,8 +40,8 @@ jobs:
       env:
         PYTHONPATH: .
       run: |
-        python scripts/bootstrap_stdcells.py --workspace workspace --platform asap7
-        python scripts/bootstrap_stdcells.py --workspace workspace --platform sky130hd
+        python scripts/bootstrap_stdcells.py --workspace . --platform asap7
+        python scripts/bootstrap_stdcells.py --workspace . --platform sky130hd
 
     - name: Post-synth smoke (one per platform)
       env:
