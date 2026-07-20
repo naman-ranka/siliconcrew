@@ -1,7 +1,18 @@
 import os
+import shutil
 import tempfile
 
+import pytest
+
 from src.tools.wrappers import linter_tool
+
+# The linter shells out to the real iverilog binary. Deselected from the fast PR
+# job (marker); also skips cleanly on a bare run without iverilog. Runs for real
+# in the nightly/local EDA lane.
+pytestmark = [
+    pytest.mark.requires_eda,
+    pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed"),
+]
 
 
 def test_linter_tool_supports_multi_file_workspace_inputs():

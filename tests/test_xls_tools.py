@@ -118,6 +118,7 @@ def test_get_workspace_path_respects_isolated_workspace(isolated_workspace):
     assert get_workspace_path() == os.path.abspath(str(isolated_workspace))
 
 
+@pytest.mark.requires_eda
 def test_run_xls_flow_combinational_lints_generated_verilog(
     isolated_workspace,
     require_xls_image,
@@ -169,6 +170,7 @@ fn test_sat_add() {
     assert "output wire [7:0] out" in content
 
 
+@pytest.mark.requires_eda
 def test_run_xls_flow_can_drop_intermediates(
     isolated_workspace,
     require_xls_image,

@@ -1,4 +1,6 @@
 """SBY routes through the ToolEngine with a cwd-relative command (slice 3)."""
+import re
+
 import pytest
 
 import src.platform_engines.tool_engine as te
@@ -34,7 +36,10 @@ def test_routes_with_relative_command(tmp_path):
     te.set_tool_engine(eng)
     res = run_sby(_sby(tmp_path), cwd=str(tmp_path), timeout=42)
     call = eng.calls[-1]
-    assert call["command"] == "sby -f proof.sby"      # cwd-relative basename, no /workspace
+    # run_sby runs a normalized *copy* named _sc_sby_<rand>.sby (never mutates the
+    # agent's original), so the command is `sby -f <that basename>` — cwd-relative,
+    # no /workspace path.
+    assert re.fullmatch(r"sby -f _sc_sby_\w+\.sby", call["command"])
     assert "/workspace" not in call["command"]
     assert call["cwd"] == str(tmp_path)               # runs in the .sby's own dir
     assert call["timeout"] == 42 and call["name_prefix"] == "sc_sby"

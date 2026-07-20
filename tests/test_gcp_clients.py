@@ -129,6 +129,8 @@ def test_end_to_end_behind_cloud_job_orfs_runner(tmp_path):
     assert staged["in"] and staged["out"]  # staged in, ran, staged artifacts back
 
 
+@pytest.mark.requires_services
+@pytest.mark.slow
 @pytest.mark.skipif(
     os.environ.get("RUN_REAL_CLOUD_RUN") != "1",
     reason="real Cloud Run Job submission costs money; set RUN_REAL_CLOUD_RUN=1 + GCP creds",

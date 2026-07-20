@@ -205,6 +205,7 @@ def test_action_writes_persist_through_workspace_provider(tmp_path):
         assert f.read() == DUT
 
 
+@pytest.mark.requires_eda
 @pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed")
 def test_lint_and_simulate_end_to_end(client):
     c, ws = client

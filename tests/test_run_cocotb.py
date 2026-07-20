@@ -8,6 +8,13 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 
 from tools.run_cocotb import run_cocotb
 
+# Runs cocotb end-to-end against iverilog. Deselected from the fast PR job (marker);
+# also skips cleanly on a bare run without iverilog. Runs for real in nightly/local.
+pytestmark = [
+    pytest.mark.requires_eda,
+    pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed"),
+]
+
 def test_run_cocotb_simple():
     # 1. Create a dummy design
     design_v = os.path.abspath("workspace/test_cocotb_design.v")

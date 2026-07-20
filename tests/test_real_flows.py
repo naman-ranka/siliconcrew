@@ -14,7 +14,10 @@ from src.tools import manifest as mf
 from src.tools.run_linter import run_linter
 from src.tools.sim_manager import run_sim_isolated
 
-pytestmark = pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed")
+pytestmark = [
+    pytest.mark.requires_eda,  # deselected from the fast PR job; runs in nightly/local with iverilog
+    pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed"),
+]
 
 
 def _w(ws, name, text):

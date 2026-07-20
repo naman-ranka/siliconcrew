@@ -186,6 +186,8 @@ def test_backends_are_interchangeable_for_equivalent_request():
 # ---- Heavy / nightly (owner) ----------------------------------------------
 
 
+@pytest.mark.requires_eda
+@pytest.mark.slow
 @pytest.mark.skipif(
     os.environ.get("RUN_REAL_ORFS") != "1",
     reason="real ORFS run is heavy/nightly; set RUN_REAL_ORFS=1 inside the EDA image",

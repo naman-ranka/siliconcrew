@@ -7,6 +7,10 @@ import pytest
 from src.tools.run_xls import XLS_IMAGE
 from src.tools.wrappers import run_xls_flow, simulation_tool
 
+# End-to-end XLS→Verilog→sim: needs the XLS docker image + iverilog. Deselected
+# from the fast PR job; runs in the nightly/local EDA lane.
+pytestmark = pytest.mark.requires_eda
+
 
 def _docker_image_available(image: str) -> bool:
     if not shutil.which("docker"):

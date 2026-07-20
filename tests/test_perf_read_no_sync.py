@@ -39,25 +39,28 @@ def test_reads_do_not_sync_writes_do(tmp_path):
     with open(os.path.join(ws, "counter.v"), "w") as f:
         f.write(DUT)
 
-    # --- reads: NO sync ---
+    # --- pure reads: NO sync ---
     assert c.get(f"/api/workspace/{SID}/manifest").status_code == 200
     assert c.get(f"/api/workspace/{SID}/runs").status_code == 200
-    assert c.post(f"/api/workspace/{SID}/lint").status_code in (200, 400)  # no toolchain → 400 ok
-    assert synced == [], f"a read uploaded the workspace: {synced}"
+    assert synced == [], f"a pure read uploaded the workspace: {synced}"
 
-    # --- writes: sync exactly once per call ---
-    c.get(f"/api/workspace/{SID}/manifest")  # seed manifest (still a read)
-    assert synced == []
+    # --- lint records itself in the activity log (a write), so it MUST sync ---
+    assert c.post(f"/api/workspace/{SID}/lint").status_code in (200, 400)  # no toolchain → 400 ok
+    assert synced == [SID]
+
+    # --- further writes: sync exactly once more per mutating call ---
+    c.get(f"/api/workspace/{SID}/manifest")  # a pure read, no new sync
+    assert synced == [SID]
 
     r = c.put(f"/api/workspace/{SID}/manifest", json={"platform": "asap7"})
-    assert r.status_code == 200 and synced == [SID]
+    assert r.status_code == 200 and synced == [SID, SID]
 
     files = [("files", ("top.v", DUT, "text/plain"))]
     assert c.post(f"/api/workspace/{SID}/files", files=files).status_code == 200
-    assert synced == [SID, SID]
+    assert synced == [SID, SID, SID]
 
     assert c.put(f"/api/workspace/{SID}/code/top.v", json={"content": DUT}).status_code == 200
-    assert synced == [SID, SID, SID]
+    assert synced == [SID, SID, SID, SID]
 
 
 def test_workbench_snapshot_hydrates_once_no_sync(tmp_path):

@@ -21,11 +21,20 @@ from src.platform_engines.llm_keys import (
 
 
 class ReversibleCipher:
+    """Test double with UNAMBIGUOUS framing.
+
+    This used to frame as ``key + b"||" + plaintext`` and split on the first
+    ``b"||"``. The DEK is random bytes, so ~12% of DEKs contain a ``|`` and some
+    of those split in the wrong place — a real, silent flake. Length-prefix the
+    key instead: no byte value in the DEK can confuse the boundary.
+    """
+
     def encrypt(self, key: bytes, plaintext: bytes) -> bytes:
-        return key + b"||" + plaintext
+        return len(key).to_bytes(4, "big") + key + plaintext
 
     def decrypt(self, key: bytes, token: bytes) -> bytes:
-        k, _, pt = token.partition(b"||")
+        n = int.from_bytes(token[:4], "big")
+        k, pt = token[4:4 + n], token[4 + n:]
         assert k == key
         return pt
 

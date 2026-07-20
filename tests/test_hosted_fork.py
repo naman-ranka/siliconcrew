@@ -231,11 +231,15 @@ def test_binary_less_fork_forces_netlist_none_not_inputs_rtl(sm, tmp_path):
     split_root = os.path.join(tmp_path, "examples")
     _make_split_bundle(split_root, "demo_fifo", "fifo", with_inputs_rtl=True)
     run_dir = os.path.join(split_root, "demo_fifo", "workspace", "synth_runs", "synth_0001")
-    # Sanity: the gate netlist was split out, the RTL input remains, and
-    # _find_netlist WOULD (pre-A15) latch onto that RTL — the rule is what bites.
+    # Sanity: the gate netlist was split out and the RTL input remains.
     assert not os.path.exists(os.path.join(run_dir, "orfs_results", "sky130hd", "fifo", "base", "6_final.v"))
     assert os.path.isfile(os.path.join(run_dir, "inputs", "fifo.v"))
-    assert _find_netlist(run_dir, "fifo") is not None  # inputs/fifo.v — the trap
+    # This assertion used to read `is not None` — it documented "the trap": pre-#56,
+    # _find_netlist scanned inputs/ too and WOULD latch onto that RTL, so A15's rule
+    # was the only thing standing between a fork and an RTL-as-netlist. #56 removed
+    # the trap at its source (only the ORFS output tree holds a gate netlist), so the
+    # two guards are now independent — defense in depth, not one rule carrying it.
+    assert _find_netlist(run_dir, "fifo") is None
 
     # Self-host fork (examples_dir → local source); A15 runs regardless of engine.
     fid = T.fork_from_template(sm, "demo_fifo", examples_dir=split_root)

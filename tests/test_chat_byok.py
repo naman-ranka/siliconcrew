@@ -25,11 +25,15 @@ from src.platform_engines.llm_keys import (
 
 # --- reversible envelope fakes (mirror test_llm_keys) -----------------------
 class ReversibleCipher:
+    """Test double with UNAMBIGUOUS framing (length-prefixed, not delimited) —
+    a random DEK can contain the delimiter byte. See test_byok_endpoints.py."""
+
     def encrypt(self, key: bytes, plaintext: bytes) -> bytes:
-        return key + b"||" + plaintext
+        return len(key).to_bytes(4, "big") + key + plaintext
 
     def decrypt(self, key: bytes, token: bytes) -> bytes:
-        k, _, pt = token.partition(b"||")
+        n = int.from_bytes(token[:4], "big")
+        k, pt = token[4:4 + n], token[4 + n:]
         assert k == key
         return pt
 
