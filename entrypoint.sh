@@ -27,8 +27,9 @@ if [ "$SILICONCREW_HOSTED" = "1" ]; then
     # --timeout-graceful-shutdown: on SIGTERM (deploy drain), stop waiting on
     # live WebSocket turns after 3s so the lifespan shutdown's workspace
     # flush drain actually runs inside Cloud Run's ~10s grace window
-    # (3s cancel + 5s drain < 10s SIGKILL). Without it, uvicorn waits on an
-    # open WS forever and the drain never runs.
+    # (3s cancel + 4s drain + ~3s slack for checkpointer/MCP teardown
+    # < 10s SIGKILL). Without it, uvicorn waits on an open WS forever and
+    # the drain never runs.
     exec uvicorn api:app --host 0.0.0.0 --port "${PORT:-8080}" --timeout-graceful-shutdown 3
 else
     # Start backend, frontend, and MCP server (Streamable HTTP)

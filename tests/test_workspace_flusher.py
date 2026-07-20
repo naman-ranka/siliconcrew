@@ -214,6 +214,62 @@ def test_discard_drops_dirty_state_and_stops_retries():
         f.close()
 
 
+def test_idle_entries_are_pruned_so_state_stays_bounded():
+    """A session that went clean and quiet (including a deleted session
+    re-marked by a late frame) must not hold a _state entry forever."""
+    provider = _RecordingProvider()
+    f = _flusher(provider)
+    f._idle_prune_sec = 0.01
+    try:
+        # A deleted-then-late-marked session: discard, then a stray mark.
+        f.mark_dirty("dead")
+        assert f.flush_now("dead", timeout=5.0)
+        f.discard("dead")
+        f.mark_dirty("dead")  # late frame after delete
+        assert f.flush_now("dead", timeout=5.0)
+        time.sleep(0.05)
+        # Another session's sync runs the prune sweep.
+        f.mark_dirty("live")
+        assert f.flush_now("live", timeout=5.0)
+        with f._cond:
+            assert "dead" not in f._state, "idle entry survived the prune sweep"
+    finally:
+        f.close()
+
+
+def test_delete_session_endpoint_discards_pending_flush(monkeypatch):
+    """The DELETE route must drop the session's pending flush state (after a
+    successful delete) so a retrying flush doesn't outlive the session."""
+    import pytest
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+    import api
+
+    provider = _RecordingProvider(fail_times=1000)
+    flusher = _flusher(provider, retry_base_sec=0.01, retry_max_sec=0.01)
+    monkeypatch.setattr(api, "get_workspace_flusher", lambda: flusher)
+    try:
+        c = TestClient(api.app)
+        sid = c.post("/api/sessions", json={"name": "flushdel"}).json()["id"]
+        flusher.mark_dirty(sid)  # pending (and failing → retrying) flush
+        time.sleep(0.03)
+        assert c.delete(f"/api/sessions/{sid}").status_code == 200
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            with flusher._cond:
+                st = flusher._state.get(sid)
+                if st is None or st["in_flight"] is False and not st["dirty"]:
+                    break
+            time.sleep(0.01)
+        with flusher._cond:
+            st = flusher._state.get(sid)
+            assert st is None or (not st["dirty"] and not st["in_flight"]), (
+                "DELETE left a dirty/retrying flush behind"
+            )
+    finally:
+        flusher.close()
+
+
 # --- the provider-side resurrection guard (Amendment A1) --------------------
 
 

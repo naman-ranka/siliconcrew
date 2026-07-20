@@ -63,6 +63,9 @@ class WorkspaceFlusher:
         self._base_cooldown = base_cooldown_sec
         self._retry_base = retry_base_sec
         self._retry_max = retry_max_sec
+        # Idle entries (clean, no flush in a long while) are pruned so the
+        # state map stays bounded on long-lived instances.
+        self._idle_prune_sec = 600.0
 
         self._cond = threading.Condition()
         # session_id -> state dict; existence == "the flusher tracks this
@@ -248,6 +251,7 @@ class WorkspaceFlusher:
             except BaseException as exc:  # the worker must survive anything
                 error = exc
 
+            warn: Optional[str] = None
             with self._cond:
                 st = self._state.get(sid)
                 if st is None:
@@ -267,13 +271,31 @@ class WorkspaceFlusher:
                     )
                     st["dirty"] = True
                     st["due"] = time.monotonic() + backoff
-                    print(
+                    warn = (
                         f"[WARN] workspace flush failed for '{sid}' "
                         f"(attempt {st['fail_streak']}, retry in {backoff:.0f}s): {error}"
                     )
                 else:
                     st["fail_streak"] = 0
+                # Bound _state: drop entries idle past the prune horizon
+                # (clean, not in flight, last sync long ago). Covers the
+                # deleted-then-late-marked session whose entry would
+                # otherwise linger forever; for a live-but-quiet session the
+                # loss is only cached cooldown stats, and its next mark is
+                # leading-edge (immediate flush) anyway.
+                horizon = time.monotonic() - self._idle_prune_sec
+                for other, ost in list(self._state.items()):
+                    if (
+                        not ost["dirty"] and not ost["in_flight"]
+                        and ost["last_start"] is not None
+                        and ost["last_start"] < horizon
+                    ):
+                        del self._state[other]
                 self._cond.notify_all()
+            if warn:
+                # Outside the lock: stdout can be a slow pipe and must never
+                # stall mark_dirty on the WS hot path.
+                print(warn)
 
 
 # ---------------------------------------------------------------------------

@@ -494,11 +494,12 @@ async def lifespan(app: FastAPI):
     print("[API] Shutting down...")
     # Drain pending workspace flushes FIRST — this is the deploy-drain path.
     # Budget (Amendment A4): uvicorn cancels live turns at 3s
-    # (--timeout-graceful-shutdown in entrypoint.sh), leaving ~5s of Cloud
-    # Run's ~10s grace for this drain. Off the loop: flush_now blocks.
+    # (--timeout-graceful-shutdown in entrypoint.sh); 3s + 4s drain leaves
+    # ~3s of Cloud Run's ~10s grace for close_checkpointer + MCP teardown
+    # below. Off the loop: flush_now blocks.
     try:
         _flush_results = await asyncio.to_thread(
-            get_workspace_flusher().flush_all, 5.0
+            get_workspace_flusher().flush_all, 4.0
         )
         _unflushed = [sid for sid, ok in _flush_results.items() if not ok]
         if _unflushed:
