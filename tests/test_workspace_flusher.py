@@ -143,6 +143,29 @@ def test_failed_sync_retries_until_success():
         f.close()
 
 
+def test_marks_do_not_defeat_retry_backoff():
+    """Regression (fails pre-fix): during a store outage an active turn keeps
+    marking; those marks must NOT pull the retry due earlier, or the flusher
+    hammers the failing store every cooldown and the backoff never engages."""
+    provider = _RecordingProvider(fail_times=1000)
+    f = _flusher(provider, base_cooldown_sec=0.01,
+                 retry_base_sec=10.0, retry_max_sec=10.0)
+    try:
+        f.mark_dirty("s1")
+        # Let the first attempt fail; the retry is now ~10s out.
+        assert _wait_for(lambda: provider.fail_times < 1000)
+        attempts_after_first = 1000 - provider.fail_times
+        # An active turn: rapid marks for a while.
+        for _ in range(30):
+            f.mark_dirty("s1")
+            time.sleep(0.005)
+        assert 1000 - provider.fail_times == attempts_after_first, (
+            "ordinary marks pulled the retry due forward past the backoff"
+        )
+    finally:
+        f.close()
+
+
 def test_note_agent_frame_marks_only_tool_frames():
     provider = _RecordingProvider()
     f = _flusher(provider)

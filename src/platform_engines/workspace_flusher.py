@@ -118,9 +118,21 @@ class WorkspaceFlusher:
             else:
                 cooldown = max(self._base_cooldown, 2.0 * st["last_duration"])
                 desired = max(now, st["last_start"] + cooldown)
-            # An already-pending earlier due wins; a stale due from a past
-            # cycle (was clean) must not — it would defeat the cooldown.
-            st["due"] = min(st["due"], desired) if was_dirty else desired
+            if was_dirty:
+                if st["fail_streak"] and not immediate:
+                    # A pending RETRY due embodies the backoff after a store
+                    # failure — an ordinary mark must not pull it earlier, or
+                    # an active turn hammers a failing store every cooldown
+                    # and the 2s→30s escalation never engages. flush_soon /
+                    # flush_now (immediate) stay deliberate overrides.
+                    pass
+                else:
+                    # An already-pending earlier due wins.
+                    st["due"] = min(st["due"], desired)
+            else:
+                # A stale due from a past clean cycle must not defeat the
+                # cooldown — take the freshly computed one.
+                st["due"] = desired
             self._ensure_worker()
             self._cond.notify_all()
 

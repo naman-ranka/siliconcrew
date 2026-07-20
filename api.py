@@ -1522,12 +1522,13 @@ async def delete_thread(session_id: str, tid: str, identity: Identity = Depends(
 async def delete_session(session_id: str, identity: Identity = Depends(require_signed_in)):
     """Delete a session (owner only)."""
     uid = _require_owned(session_id, identity)
-    # Drop any pending background flush FIRST: a queued/retrying flush racing
-    # this delete must not re-commit the just-purged durable manifest (the
-    # provider's missing-scratch guard is the backstop; this stops the retry
-    # loop at the source).
-    get_workspace_flusher().discard(session_id)
     session_manager.delete_session(session_id, user_id=uid)
+    # Only after a SUCCESSFUL delete: drop any pending/retrying background
+    # flush so the retry loop stops at the source. Discarding first would
+    # silently orphan the session's unsynced writes if the delete raised.
+    # The purge→discard window is covered by the provider's missing-scratch
+    # guard (sync and delete_workspace share the per-session lock).
+    get_workspace_flusher().discard(session_id)
     return {"status": "deleted", "session_id": session_id}
 
 
@@ -1613,17 +1614,6 @@ class _ActiveTurn:
 # on the same thread — two writers interleaving on one checkpoint (SQLite lock
 # stalls, no reply to the new message, terminal frames never sent).
 _ACTIVE_TURNS: Dict[str, _ActiveTurn] = {}
-
-# Fire-and-forget background tasks (post-turn bookkeeping) need a strong
-# reference or the event loop may garbage-collect them mid-flight; this set
-# holds them until they finish, then a done-callback removes themselves.
-_BACKGROUND_TASKS: set = set()
-
-
-def _run_in_background(coro) -> None:
-    task = asyncio.create_task(coro)
-    _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _pending_tool_call_ids(messages) -> list:
