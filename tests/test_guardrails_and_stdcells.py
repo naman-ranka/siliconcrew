@@ -6,8 +6,7 @@ import pytest
 
 from src.tools.search_logs import search_logs
 from src.tools import stdcells as std
-from src.tools.stdcells import resolve_stdcell_models
-from src.tools.run_simulation import _stdcell_workspace
+from src.tools.stdcells import resolve_stdcell_models, stdcell_root
 
 
 def test_search_logs_with_run_id_scope():
@@ -49,50 +48,28 @@ def test_resolve_stdcell_models_from_manifest_cache():
         assert manifest["platform"] == "asap7"
 
 
-def test_stdcell_workspace_defaults_to_rtl_workspace(monkeypatch):
-    # Regression: post_synth stdcell resolution must read the RTL_WORKSPACE cache
-    # (where entrypoint.sh + the image bake populate _stdcells) when the explicit
-    # RTL_STDCELL_WORKSPACE override is unset — not repo_root/workspace (/app/workspace),
-    # which is gitignored and ships empty, causing spurious "cache missing" errors.
-    monkeypatch.delenv("RTL_STDCELL_WORKSPACE", raising=False)
-    with tempfile.TemporaryDirectory() as rtl_workspace:
-        monkeypatch.setenv("RTL_WORKSPACE", rtl_workspace)
-
-        sim_dir = os.path.join(rtl_workspace, "_stdcells", "asap7", "sim")
-        os.makedirs(sim_dir, exist_ok=True)
-        with open(os.path.join(sim_dir, "a.v"), "w", encoding="utf-8") as f:
-            f.write("module a; endmodule")
-        with open(os.path.join(sim_dir, "manifest.json"), "w", encoding="utf-8") as f:
-            json.dump({"platform": "asap7", "files": [{"name": "a.v"}]}, f)
-
-        # cwd is deliberately unrelated to the cache location — resolution must not
-        # depend on the repo root / current working directory.
-        ws = _stdcell_workspace(cwd="/some/unrelated/cwd")
-        assert ws == os.path.abspath(rtl_workspace)
-
-        files, manifest = resolve_stdcell_models(ws, "asap7")
-        assert [os.path.basename(x) for x in files] == ["a.v"]
-        assert manifest["platform"] == "asap7"
-
-
-def test_stdcell_workspace_defaults_to_repo_root_when_rtl_workspace_unset(monkeypatch):
-    # Regression: when neither RTL_STDCELL_WORKSPACE nor RTL_WORKSPACE is set (e.g. CI,
-    # which bootstraps stdcells into repo_root/workspace), resolution must fall back to
-    # repo_root/workspace — NOT a hardcoded /workspace, which would read an empty dir and
-    # break the post-synth smoke test.
-    monkeypatch.delenv("RTL_STDCELL_WORKSPACE", raising=False)
-    monkeypatch.delenv("RTL_WORKSPACE", raising=False)
+def test_stdcell_root_is_the_code_anchored_install_root():
+    # The PDK location is a property of the install, anchored on the code
+    # (repo root, from __file__) — the fixed path every caller shares by
+    # construction. The cache lives at <repo_root>/_stdcells/<platform>/sim.
     repo_root = os.path.abspath(os.path.join(os.path.dirname(std.__file__), "..", ".."))
-    expected = os.path.join(repo_root, "workspace")
-    assert _stdcell_workspace(cwd="/irrelevant") == expected
+    assert stdcell_root() == repo_root
+    assert std.stdcell_cache_dir(stdcell_root(), "asap7") == os.path.join(
+        repo_root, "_stdcells", "asap7", "sim"
+    )
 
 
-def test_stdcell_workspace_override_wins(monkeypatch):
-    # Explicit override still takes precedence over RTL_WORKSPACE.
-    with tempfile.TemporaryDirectory() as override_ws:
-        monkeypatch.setenv("RTL_STDCELL_WORKSPACE", override_ws)
-        monkeypatch.setenv("RTL_WORKSPACE", "/some/other/workspace")
-        assert _stdcell_workspace(cwd="/irrelevant") == os.path.abspath(override_ws)
+def test_stdcell_root_ignores_rtl_workspace_and_legacy_override(monkeypatch):
+    # Issue #59: RTL_WORKSPACE means "where session workspaces live" and is
+    # legitimately re-pointed per session (the codex agent does this). It — and
+    # the removed RTL_STDCELL_WORKSPACE escape hatch — must have ZERO influence
+    # on where the immutable PDK models resolve from.
+    baseline = stdcell_root()
+    monkeypatch.setenv("RTL_WORKSPACE", "/tmp/siliconcrew-scratch")
+    monkeypatch.setenv("RTL_STDCELL_WORKSPACE", "/some/legacy/override")
+    assert stdcell_root() == baseline
+    monkeypatch.setenv("RTL_WORKSPACE", "/completely/different")
+    assert stdcell_root() == baseline
 
 
 def test_bootstrap_stdcells_writes_manifest(monkeypatch):

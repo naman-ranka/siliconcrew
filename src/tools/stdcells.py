@@ -55,6 +55,28 @@ def _clear_cached_sim_models(cache_dir: str) -> None:
                 pass
 
 
+def stdcell_root() -> str:
+    """Install-global location of the standard-cell simulation models.
+
+    Standard-cell models are the PDK: read-only, identical bytes for every
+    session and every user, pure toolchain infrastructure baked into the image.
+    Their location is therefore a property of the *install*, not of any
+    per-session workspace — so it is anchored on the code itself (the repo root,
+    from ``__file__``), which every caller shares by construction: the main
+    process, the agent's MCP subprocess, REST ``/invoke`` and the Command
+    Surface all import this module from the same install and compute the same
+    path. There is no env var to set, forget, or re-point.
+
+    This is the fix for issue #59: ``RTL_WORKSPACE`` means "where session
+    workspaces live" and is legitimately re-pointed per session (the codex agent
+    turn does this correctly for its own purpose). Deriving the stdcell location
+    from it silently broke post-synth simulation on the agent path. The cache
+    lives at ``<repo_root>/_stdcells/<platform>/sim`` — baked there in the image,
+    populated there by CI, never reachable through a workspace-shaped pointer.
+    """
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
 def stdcell_cache_dir(workspace: str, platform: str) -> str:
     return os.path.join(workspace, STDROOT, platform, "sim")
 

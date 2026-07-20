@@ -155,6 +155,11 @@ workspace_new/*
 !workspace/README.md
 workspace_tmp_refresh/
 
+# Baked/bootstrapped PDK standard-cell models — the install-global cache the
+# resolver reads from the repo root (stdcells.stdcell_root); downloaded, never
+# committed (issue #59).
+/_stdcells/
+
 # Simulation outputs
 *.out
 *.vcd
