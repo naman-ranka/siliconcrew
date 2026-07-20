@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional
 
-from src.tools.stdcells import get_asap7_compat_model_files, resolve_stdcell_models
+from src.tools.stdcells import get_asap7_compat_model_files, resolve_stdcell_models, stdcell_root
 
 
 PASS_MARKER_DEFAULT = "TEST PASSED"
@@ -15,13 +15,15 @@ def _is_stdcell_cache_error(exc: Exception) -> bool:
     return ("Standard-cell cache missing" in msg) or ("No stdcell model files found" in msg)
 
 
-def _stdcell_bootstrap_hint(cwd: str, platform: Optional[str]) -> str:
+def _stdcell_bootstrap_hint(platform: Optional[str]) -> str:
     pf = platform or "<platform>"
-    stdcell_ws = _stdcell_workspace(cwd)
+    root = stdcell_root()
     return (
-        "Standard-cell cache is missing or incomplete for post-synthesis simulation. "
-        f"Bootstrap with: PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace \"{stdcell_ws}\" --platform {pf}. "
-        'See README section "First-Run Standard-Cell Bootstrap".'
+        "Standard-cell models are missing for post-synthesis simulation. They ship "
+        "baked into the backend image at the install root, so on a hosted or "
+        "self-host deploy this should never happen — report it. For a local "
+        "checkout, populate them with: "
+        f'PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace "{root}" --platform {pf}.'
     )
 
 
@@ -80,24 +82,6 @@ def _collect_defined_modules(file_paths: List[str]) -> set[str]:
         for m in pat.finditer(txt):
             mods.add(m.group(1))
     return mods
-
-
-def _stdcell_workspace(cwd: str) -> str:
-    # The stdcell cache is populated by the boot bootstrap (entrypoint.sh) and the
-    # image bake into RTL_WORKSPACE (default /workspace in the hosted/self-host
-    # container). Default here to RTL_WORKSPACE so resolver + bootstrap + bake agree
-    # by construction; the explicit RTL_STDCELL_WORKSPACE override still wins when set.
-    # When RTL_WORKSPACE is unset (e.g. CI, which bootstraps into repo_root/workspace),
-    # fall back to repo_root/workspace rather than a hardcoded /workspace so that
-    # environment continues to resolve its bootstrapped cache.
-    env_path = os.environ.get("RTL_STDCELL_WORKSPACE")
-    if env_path:
-        return os.path.abspath(env_path)
-    rtl_workspace = os.environ.get("RTL_WORKSPACE")
-    if rtl_workspace:
-        return os.path.abspath(rtl_workspace)
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    return os.path.join(repo_root, "workspace")
 
 
 def _asap7_compat_stdcell_files(stdcells: List[str], netlist_path: str) -> List[str]:
@@ -364,11 +348,11 @@ def run_simulation(
             effective_sim_profile = "compat" if platform == "asap7" else "pinned"
 
         try:
-            stdcells, manifest = resolve_stdcell_models(_stdcell_workspace(cwd), platform)
+            stdcells, manifest = resolve_stdcell_models(stdcell_root(), platform)
         except Exception as exc:
             stdcells = []
             is_cache_err = _is_stdcell_cache_error(exc)
-            hint = _stdcell_bootstrap_hint(cwd, platform) if is_cache_err else ""
+            hint = _stdcell_bootstrap_hint(platform) if is_cache_err else ""
             msg = str(exc)
             if hint:
                 msg = f"{msg}\n{hint}"
