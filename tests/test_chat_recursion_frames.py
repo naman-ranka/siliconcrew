@@ -17,12 +17,21 @@ from src.platform_engines.llm_keys import (
 
 
 class ReversibleCipher:
+    """Test double with UNAMBIGUOUS framing (length-prefixed, not delimited).
+
+    The delimiter version was worse here than elsewhere: with no ``assert``, a
+    DEK containing ``|`` silently returned a CORRUPTED plaintext (a stray byte
+    prepended to the API key) instead of failing loudly. See
+    test_byok_endpoints.py.
+    """
+
     def encrypt(self, key, plaintext):
-        return key + b"||" + plaintext
+        return len(key).to_bytes(4, "big") + key + plaintext
 
     def decrypt(self, key, token):
-        k, _, pt = token.partition(b"||")
-        return pt
+        n = int.from_bytes(token[:4], "big")
+        assert token[4:4 + n] == key
+        return token[4 + n:]
 
 
 class FakeKek:
