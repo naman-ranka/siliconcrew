@@ -307,6 +307,10 @@ def start_synthesis(
     constraints|synth|floorplan|place|cts|grt|route|finish. Stages after
     max_stage are recorded as "skipped". Continue a partial run toward GDS
     later with retry_pd starting from the next stage.
+    clock_period_ns is ALWAYS nanoseconds, on every platform — it is
+    converted internally to the platform's SDC time unit (e.g. ps on asap7),
+    and reported metrics (wns_ns/tns_ns/fmax_mhz/power_mw) are always in the
+    units their names say.
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)

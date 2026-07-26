@@ -11,6 +11,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from src.tools.pdk_units import platform_time_unit, ns_to_platform_time, time_unit_to_ns
 from src.tools.run_docker import run_docker_command
 from src.tools.spec_manager import load_yaml_file
 from src.platform_engines.orfs_runner import OrfsRequest, get_orfs_runner
@@ -547,16 +548,26 @@ def _copy_active_spec(workspace: str, run_dir: str) -> Optional[str]:
     return dst
 
 
-def _write_default_sdc(sdc_path: str, clock_period_ns: float, clock_port: str = "clk") -> None:
+def _write_default_sdc(
+    sdc_path: str, clock_period_ns: float, clock_port: str = "clk", platform: Optional[str] = None
+) -> float:
+    """Write the per-run SDC, converting the canonical ns period into the
+    platform's SDC time unit (asap7 liberty is ps — issue #63). Returns the
+    period value actually written."""
+    unit = platform_time_unit(platform)
+    period = ns_to_platform_time(clock_period_ns, platform)
+    header = f"# {clock_period_ns} ns expressed in the platform SDC time unit ({unit}).\n" if unit != "ns" else ""
     # Guarded SDC so missing ports do not hard-fail synthesis scripts.
     content = (
+        f"{header}"
         f"set _sc_clk_ports [get_ports {{{clock_port}}}]\n"
         f"if {{[llength $_sc_clk_ports] > 0}} {{\n"
-        f"  create_clock -period {clock_period_ns} $_sc_clk_ports\n"
+        f"  create_clock -period {period} $_sc_clk_ports\n"
         "}\n"
     )
     with open(sdc_path, "w", encoding="utf-8") as f:
         f.write(content)
+    return period
 
 
 def _constraints_guardrail(
@@ -565,6 +576,7 @@ def _constraints_guardrail(
     top_module: str,
     fallback_clock_period_ns: Optional[float],
     constraints_mode: str = "auto",
+    platform: Optional[str] = None,
 ) -> Dict[str, Any]:
     result = {
         "status": "fail",
@@ -574,6 +586,10 @@ def _constraints_guardrail(
         "effective_clock_period_ns": fallback_clock_period_ns,
         "clock_period_ns": fallback_clock_period_ns,
         "clock_source": "requested" if fallback_clock_period_ns and fallback_clock_period_ns > 0 else None,
+        # Unit the SDC period (and hence this run's STA reports) is expressed
+        # in. Persisted to run_meta as the marker that gates read-side
+        # normalization — runs without it predate per-platform unit handling.
+        "sdc_time_unit": platform_time_unit(platform),
     }
     constraints_mode = (constraints_mode or "auto").lower().strip()
     if constraints_mode not in {"auto", "strict", "bypass"}:
@@ -585,7 +601,9 @@ def _constraints_guardrail(
             result["note"] = "No spec file and no valid clock period provided."
             return result
         sdc_path = os.path.join(run_dir, "constraints.sdc")
-        _write_default_sdc(sdc_path=sdc_path, clock_period_ns=fallback_clock_period_ns, clock_port="clk")
+        _write_default_sdc(
+            sdc_path=sdc_path, clock_period_ns=fallback_clock_period_ns, clock_port="clk", platform=platform
+        )
         result.update({
             "status": "pass",
             "note": "No spec found; generated fallback constraints.sdc from explicit clock period.",
@@ -619,7 +637,7 @@ def _constraints_guardrail(
             spec.clock_period_ns if spec.clock_period_ns > 0 else 10.0
         )
         sdc_path = os.path.join(run_dir, "constraints.sdc")
-        _write_default_sdc(sdc_path=sdc_path, clock_period_ns=period, clock_port=fallback_port)
+        _write_default_sdc(sdc_path=sdc_path, clock_period_ns=period, clock_port=fallback_port, platform=platform)
         result.update({
             "status": "pass",
             "note": (
@@ -642,7 +660,7 @@ def _constraints_guardrail(
     requested_clock = fallback_clock_period_ns if fallback_clock_period_ns and fallback_clock_period_ns > 0 else None
     if requested_clock is not None:
         clock_port = clock_ports[0]
-        _write_default_sdc(sdc_path=sdc_path, clock_period_ns=requested_clock, clock_port=clock_port)
+        _write_default_sdc(sdc_path=sdc_path, clock_period_ns=requested_clock, clock_port=clock_port, platform=platform)
         result.update({
             "status": "pass",
             "note": f"Explicit requested clock override applied on spec clock port '{clock_port}'.",
@@ -653,13 +671,15 @@ def _constraints_guardrail(
         })
         return result
 
-    sdc_content = spec.generate_sdc()
-    if "create_clock" not in sdc_content:
-        result["note"] = "Generated SDC missing create_clock."
-        return result
-
-    with open(sdc_path, "w", encoding="utf-8") as f:
-        f.write(sdc_content)
+    # Spec-driven period goes through the same single SDC writer as every
+    # other branch — the one place canonical ns is converted to the platform
+    # SDC unit (spec.generate_sdc would write the raw ns value; issue #63).
+    _write_default_sdc(
+        sdc_path=sdc_path,
+        clock_period_ns=spec.clock_period_ns,
+        clock_port=clock_ports[0],
+        platform=platform,
+    )
 
     result.update({
         "status": "pass",
@@ -1490,6 +1510,9 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
         "effective_clock_period_ns": parent_meta.get("effective_clock_period_ns"),
         "clock_period_ns": parent_meta.get("clock_period_ns"),
         "clock_source": parent_meta.get("clock_source"),
+        # A retry reuses the parent's constraints.sdc verbatim, so it inherits
+        # the parent's SDC time unit (legacy parent -> no marker, by design).
+        "sdc_time_unit": parent_meta.get("sdc_time_unit"),
         "constraints_mode": parent_meta.get("constraints_mode", "auto"),
         "utilization": args["utilization"],
         "aspect_ratio": args["aspect_ratio"],
@@ -1964,6 +1987,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         top_module,
         args.get("clock_period_ns"),
         constraints_mode=args.get("constraints_mode", "auto"),
+        platform=platform,
     )
     auto_checks = GuardrailSummary(constraints=constraints["status"], signoff="skip", equiv="skip")
 
@@ -1989,6 +2013,9 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         "effective_clock_period_ns": constraints.get("effective_clock_period_ns"),
         "clock_period_ns": constraints.get("clock_period_ns"),
         "clock_source": constraints.get("clock_source"),
+        # Marker: the SDC/report time unit for THIS run. Gates read-side
+        # normalization of report times back to ns; absent on legacy runs.
+        "sdc_time_unit": constraints.get("sdc_time_unit"),
         "constraints_mode": args.get("constraints_mode", "auto"),
         "utilization": args["utilization"],
         "aspect_ratio": args["aspect_ratio"],
@@ -3219,6 +3246,10 @@ def get_cts_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, A
         except Exception:
             return None
 
+    # Report times are in the platform liberty unit (ps on asap7); the *_ns
+    # fields are normalized to canonical ns below. clock_fmax_mhz needs no
+    # scaling — ORFS prints that line in MHz on every platform — and the
+    # counts/ratio are dimensionless.
     summary = {
         "wns_ns": _mfloat(r"^\s*wns\s+max\s+([0-9.eE+-]+)"),
         "tns_ns": _mfloat(r"^\s*tns\s+max\s+([0-9.eE+-]+)"),
@@ -3235,6 +3266,16 @@ def get_cts_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, A
         "critical_path_slack_ns": _mfloat(r"critical\s+path\s+slack\s*-+\s*([0-9.eE+-]+)"),
         "slack_over_delay_ratio": _mfloat(r"slack\s+div\s+critical\s+path\s+delay\s*-+\s*([0-9.eE+-]+)"),
     }
+    for key in (
+        "wns_ns",
+        "tns_ns",
+        "worst_slack_ns",
+        "clock_period_min_ns",
+        "setup_skew_ns",
+        "critical_path_delay_ns",
+        "critical_path_slack_ns",
+    ):
+        summary[key] = _normalize_report_time_ns(summary[key], run_meta)
 
     startpoints = re.findall(r"^Startpoint:\s+(.+)$", text, re.MULTILINE)
     endpoints = re.findall(r"^Endpoint:\s+(.+)$", text, re.MULTILINE)
@@ -3692,6 +3733,22 @@ def _derive_fmax_mhz(clock_period_ns: Optional[float], wns_ns: Optional[float]) 
         return None
 
 
+def _normalize_report_time_ns(value: Optional[float], run_meta: Dict[str, Any]) -> Optional[float]:
+    """A time value parsed from THIS run's STA reports -> canonical ns.
+
+    Reports are written in the platform's liberty time unit (ps on asap7),
+    recorded per-run as the ``sdc_time_unit`` marker at dispatch. Legacy runs
+    have no marker and are returned UNSCALED: their persisted values were
+    produced under the old behavior and must not be silently reinterpreted
+    (issue #63).
+    """
+    unit = (run_meta or {}).get("sdc_time_unit")
+    if value is None or not unit or unit == "ns":
+        return value
+    ns = time_unit_to_ns(value, unit)
+    return round(ns, 6) if ns is not None else None
+
+
 def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, Any]:
     """Parse PPA from on-disk ORFS reports into the canonical summary_metrics shape.
 
@@ -3708,7 +3765,7 @@ def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str
     finish_data = _parse_finish_report(finish_path) if finish_path else {}
     stat_data = _parse_synth_stat(stat_path) if stat_path else {}
 
-    wns_ns = finish_data.get("wns_ns")
+    wns_ns = _normalize_report_time_ns(finish_data.get("wns_ns"), run_meta)
     clock_period_ns = (
         run_meta.get("effective_clock_period_ns")
         or run_meta.get("clock_period_ns")
@@ -3721,7 +3778,7 @@ def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str
         "area_um2": stat_data.get("area_um2"),
         "cell_count": stat_data.get("cell_count"),
         "wns_ns": wns_ns,
-        "tns_ns": finish_data.get("tns_ns"),
+        "tns_ns": _normalize_report_time_ns(finish_data.get("tns_ns"), run_meta),
         "power_uw": power_uw,
         "power_mw": power_mw,
         "fmax_mhz": _derive_fmax_mhz(clock_period_ns, wns_ns),
@@ -3750,12 +3807,12 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
         or run_meta.get("requested_clock_period_ns")
     )
     power_uw = finish_data.get("power_uw")
-    wns_ns = finish_data.get("wns_ns")
+    wns_ns = _normalize_report_time_ns(finish_data.get("wns_ns"), run_meta)
     metrics = {
         "area_um2": stat_data.get("area_um2"),
         "cell_count": stat_data.get("cell_count"),
         "wns_ns": wns_ns,
-        "tns_ns": finish_data.get("tns_ns"),
+        "tns_ns": _normalize_report_time_ns(finish_data.get("tns_ns"), run_meta),
         "power_uw": power_uw,
         "power_mw": round(power_uw / 1000.0, 6) if power_uw is not None else None,
         "fmax_mhz": _derive_fmax_mhz(clock_period_ns, wns_ns),
