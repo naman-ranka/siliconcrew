@@ -57,11 +57,17 @@ fi
 
 # Snapshot the ORFS logs/ tree to <handle>/logs_partial.tar.gz. The backend reads
 # it via store.get_tree("<handle>/logs_partial", ...), which resolves to exactly
-# this .tar.gz key. Best-effort; never fails the run.
+# this .tar.gz key. Best-effort; never fails the run. Uses a UNIQUE temp file so
+# the periodic loop and the final finalize() sync can never clobber each other's
+# in-flight tar (→ a truncated upload).
 sync_partial_logs() {
   [ -d "$LOGS_DIR" ] || return 0
-  tar -czf /tmp/logs_partial.tar.gz -C "$LOGS_DIR" . 2>/dev/null || return 0
-  gcloud storage cp /tmp/logs_partial.tar.gz "${RUN_PREFIX}/logs_partial.tar.gz" 2>/dev/null || true
+  local tmp
+  tmp="$(mktemp)" || return 0
+  if tar -czf "$tmp" -C "$LOGS_DIR" . 2>/dev/null; then
+    gcloud storage cp "$tmp" "${RUN_PREFIX}/logs_partial.tar.gz" 2>/dev/null || true
+  fi
+  rm -f "$tmp"
 }
 
 # Map ORFS container outputs to a run-dir-relative tree and upload out.tar.gz.
@@ -84,8 +90,12 @@ stage_out_results() {
     done
   fi
   echo "[orfs-job] uploading results"
-  tar -czf /tmp/out.tar.gz -C "$OUT_DIR" . 2>/dev/null || return 0
-  gcloud storage cp /tmp/out.tar.gz "${RUN_PREFIX}/out.tar.gz" 2>/dev/null || true
+  local tmp
+  tmp="$(mktemp)" || return 0
+  if tar -czf "$tmp" -C "$OUT_DIR" . 2>/dev/null; then
+    gcloud storage cp "$tmp" "${RUN_PREFIX}/out.tar.gz" 2>/dev/null || true
+  fi
+  rm -f "$tmp"
 }
 
 # On ANY exit (normal, ORFS error, or SIGTERM from the task timeout): stop the
@@ -93,7 +103,12 @@ stage_out_results() {
 # upload. SIGKILL can't be trapped — the background loop below is that safety net.
 finalize() {
   trap - EXIT TERM INT
-  [ -n "${SYNC_PID:-}" ] && kill "$SYNC_PID" 2>/dev/null || true
+  # Stop the periodic sync AND reap it before our own final sync, so an in-flight
+  # background tar/upload can't interleave with the finalize one.
+  if [ -n "${SYNC_PID:-}" ]; then
+    kill "$SYNC_PID" 2>/dev/null || true
+    wait "$SYNC_PID" 2>/dev/null || true
+  fi
   sync_partial_logs || true
   stage_out_results || true
 }
@@ -105,14 +120,28 @@ trap finalize EXIT TERM INT
 SYNC_PID=$!
 
 # Run ORFS. config.mk references /workspace/... exactly as in local mode.
+# Run it in the BACKGROUND and `wait` on it: a foreground child would defer any
+# trapped signal until it exits, so a Cloud Run task-timeout SIGTERM (grace, then
+# SIGKILL) would never fire finalize() — defeating the graceful flush of partial
+# logs and produced artifacts. `wait` IS interruptible by trapped signals.
 echo "[orfs-job] running ORFS"
 cd "$FLOW_DIR"
 set +e
-bash -c "$ORFS_COMMAND"
+bash -c "$ORFS_COMMAND" &
+orfs_pid=$!
+wait "$orfs_pid"
 rc=$?
+# A signal that interrupts `wait` before ORFS exits makes it return >128 (and
+# finalize() has already run via the trap). Re-wait to reap ORFS's real exit
+# status if it is in fact still running; stop once it's gone.
+while [ "$rc" -gt 128 ] && kill -0 "$orfs_pid" 2>/dev/null; do
+  wait "$orfs_pid"
+  rc=$?
+done
 set -e
 echo "[orfs-job] ORFS exit code: $rc"
 
 # finalize() runs via the EXIT trap (stops the loop, final partial sync, result
-# upload). Propagate the real ORFS exit code so the Job execution succeeds/fails.
+# upload) unless a trapped signal already ran it. Propagate the real ORFS exit
+# code so the Job execution succeeds/fails correctly.
 exit $rc
