@@ -59,7 +59,8 @@ def test_dispatch_writes_queued_meta_before_submit(tmp_path):
         assert started["run_id"] == "synth_0001"
         assert started["status"] == "queued"
         assert "job_id" not in started
-        assert started["timeout_sec"] == sm.SYNTH_HARD_TIMEOUT_SEC
+        # Full-flow default: the stage-aware ceiling for "finish" (the long budget).
+        assert started["timeout_sec"] == sm._stage_ceiling_sec("finish")
         assert started["poll_after_sec"] == sm.POLL_BACKOFF_START_SEC
 
         # run_meta.json exists IMMEDIATELY (worker never ran: HeldExecutor).
@@ -69,7 +70,7 @@ def test_dispatch_writes_queued_meta_before_submit(tmp_path):
             meta = json.load(f)
         assert meta["status"] == "queued"
         assert meta["dispatched_at"]
-        assert meta["timeout_sec"] == sm.SYNTH_HARD_TIMEOUT_SEC
+        assert meta["timeout_sec"] == sm._stage_ceiling_sec("finish")
         assert meta["top_module"] == "counter"
         assert meta["platform"] == "sky130hd"
         assert meta["max_stage"] == "finish"

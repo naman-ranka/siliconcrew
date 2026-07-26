@@ -104,13 +104,55 @@ SIM_CONTRACT_KEY = "sim_contract"
 
 PD_STAGE_SEQUENCE = ["constraints", "synth", "floorplan", "place", "cts", "grt", "route", "finish"]
 PD_RETRYABLE_STAGES = ["floorplan", "place", "cts", "grt", "route", "finish"]
+# Snapshot of the `make` targets the pinned ORFS image actually provides. Used
+# to guard our stage->target maps against image drift (the image renamed the
+# synth do-target: there is NO `do-synth`, only `do-yosys-canonicalize` +
+# `do-yosys`, which is what broke every hosted synth-only run — see
+# plans/hosted-orfs-reliability.md). Derived by running against the pinned image:
+#
+#   docker run --rm openroad/orfs:latest bash -lc \
+#     "grep -oE '^(do-[a-z0-9-]+|[a-z]+):' \
+#      /OpenROAD-flow-scripts/flow/Makefile | sort -u"
+#
+# Refresh this set (and the maps below) whenever ORFS_IMAGE is re-pinned.
+KNOWN_IMAGE_TARGETS = frozenset({
+    "all", "bash", "clean", "cts", "do-cts", "do-final", "do-finish",
+    "do-floorplan", "do-gds-merged", "do-gds", "do-grt", "do-klayout",
+    "do-place", "do-route", "do-synth-report", "do-yosys-canonicalize",
+    "do-yosys", "drc", "elapsed", "final", "finish", "floorplan",
+    "globalroute", "grt", "klayout", "lvs", "memory", "nuke", "place",
+    "route", "run", "synth", "yosys",
+})
+
+# PD retries redo one stage inside an EXISTING run dir (checkpoints already
+# staged in), so they drive ORFS by its per-stage ``do-*`` targets. synth is not
+# retry-able (PD_RETRYABLE_STAGES) but is mapped for completeness/validation: the
+# image has no ``do-synth`` — the two yosys steps are the synth do-targets, run
+# as one make invocation.
 PD_STAGE_TARGETS = {
+    "synth": "do-yosys-canonicalize do-yosys",
     "floorplan": "do-floorplan",
     "place": "do-place",
     "cts": "do-cts",
     "grt": "do-grt",
     "route": "do-route",
     "finish": "do-finish",
+}
+
+# First runs start from an EMPTY run dir, so they use the dependency-tracked
+# phony stage targets: ``make <stage>`` builds every prerequisite up to that
+# stage via make's own dependency graph — the standard, version-stable way to
+# run "everything up to stage X" without hand-building a ``do-*`` chain (the old
+# chain led with the now-nonexistent ``do-synth``). Each value is verified
+# present in KNOWN_IMAGE_TARGETS; the phony name equals the stage name.
+FIRST_RUN_STAGE_TARGETS = {
+    "synth": "synth",
+    "floorplan": "floorplan",
+    "place": "place",
+    "cts": "cts",
+    "grt": "grt",
+    "route": "route",
+    "finish": "finish",
 }
 PD_PREREQ_FILES = {
     "floorplan": [("1_synth.odb", "1_synth.odb"), ("1_synth.sdc", "1_synth.sdc")],
@@ -338,7 +380,52 @@ _ORFS_OVERRIDE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 POLL_MIN_INTERVAL_SEC = 1.0
 POLL_BACKOFF_START_SEC = 30
 POLL_BACKOFF_MAX_SEC = 600
-SYNTH_HARD_TIMEOUT_SEC = 1200
+
+# Stage-aware run ceilings replace the old flat 1200s cap, which killed healthy
+# full-flow runs at 20 min even though RTL->GDS for a few-thousand-cell design
+# needs longer (root cause 1, plans/hosted-orfs-reliability.md). Defaults back
+# the settings knobs (ORFS_TIMEOUT_SYNTH_SEC / ORFS_TIMEOUT_FULL_SEC) so a build
+# without settings still has sane bounds. The chosen ceiling is persisted per run
+# as timeout_sec; every reconciling read judges a run by the value it was
+# DISPATCHED with (invariant #5), never by a newer default.
+DEFAULT_TIMEOUT_SYNTH_SEC = 900
+DEFAULT_TIMEOUT_FULL_SEC = 3600
+MIN_TIMEOUT_SEC = 60
+
+
+def _timeout_budgets() -> tuple:
+    """(synth_budget, full_budget) in seconds, from settings (with fallbacks)."""
+    try:
+        from src.platform_engines.settings import get_settings
+
+        s = get_settings()
+        return int(s.orfs_timeout_synth_sec), int(s.orfs_timeout_full_sec)
+    except Exception:
+        return DEFAULT_TIMEOUT_SYNTH_SEC, DEFAULT_TIMEOUT_FULL_SEC
+
+
+def _stage_ceiling_sec(max_stage: Optional[str]) -> int:
+    """Run ceiling for a bound at ``max_stage``.
+
+    constraints/synth are the fast synth-only path (short budget); floorplan and
+    later — including the full RTL->GDS flow (max_stage="finish") — pay
+    place-and-route and get the long budget.
+    """
+    synth_sec, full_sec = _timeout_budgets()
+    stage = (max_stage or "finish").strip().lower()
+    if stage in PD_STAGE_SEQUENCE and PD_STAGE_SEQUENCE.index(stage) <= PD_STAGE_SEQUENCE.index("synth"):
+        return max(MIN_TIMEOUT_SEC, synth_sec)
+    return max(MIN_TIMEOUT_SEC, full_sec)
+
+
+def _resolve_timeout_sec(max_stage: Optional[str], requested: Optional[int]) -> int:
+    """Dispatch-time ceiling: the stage budget, optionally lowered (never raised)
+    by an explicit caller ``requested`` value. ``None``/non-positive = use the
+    stage budget as-is."""
+    ceiling = _stage_ceiling_sec(max_stage)
+    if requested is None or int(requested) <= 0:
+        return max(MIN_TIMEOUT_SEC, ceiling)
+    return max(MIN_TIMEOUT_SEC, min(int(requested), ceiling))
 
 
 @dataclass
@@ -610,8 +697,7 @@ def _tail_lines(path: str, max_lines: int = 40) -> List[str]:
         return []
 
 
-def _collect_log_tail(run_dir: str, max_lines: int = 40) -> List[str]:
-    logs_root = os.path.join(run_dir, "orfs_logs")
+def _tail_from_logs_root(logs_root: str, max_lines: int = 40) -> List[str]:
     if not os.path.exists(logs_root):
         return []
     candidates = []
@@ -624,6 +710,10 @@ def _collect_log_tail(run_dir: str, max_lines: int = 40) -> List[str]:
         return []
     _, latest = sorted(candidates, key=lambda x: x[0], reverse=True)[0]
     return _tail_lines(latest, max_lines=max_lines)
+
+
+def _collect_log_tail(run_dir: str, max_lines: int = 40) -> List[str]:
+    return _tail_from_logs_root(os.path.join(run_dir, "orfs_logs"), max_lines=max_lines)
 
 
 def _extract_summary_metrics(run_dir: str) -> Dict[str, Any]:
@@ -1216,20 +1306,21 @@ def _stage_range(start_stage: str, max_stage: str) -> List[str]:
 
 
 def _first_run_targets(max_stage: str) -> List[str]:
-    """ORFS make targets for a first run bounded at ``max_stage`` (< finish).
+    """ORFS make target(s) for a first run bounded at ``max_stage`` (< finish).
 
-    Mirrors the retry path's target-based execution (_run_orfs_targets with the
-    same do-* targets): do-synth builds 1_synth.* from the copied inputs, then
-    each downstream do-<stage> consumes the previous stage's checkpoint,
-    stopping after the target stage. The unbounded first run keeps using the
-    full-flow ``make -B`` command in _run_orfs, unchanged.
+    A first run has an EMPTY run dir, so it drives ORFS by the single
+    dependency-tracked phony target for the bound (``make cts`` builds
+    synth->floorplan->place->cts through make's own dependency graph). This
+    replaces the old hand-built ``do-*`` chain, whose lead target ``do-synth``
+    does not exist in the current image (the yosys steps were renamed) — the
+    bug that made every hosted synth-only run fail with "No rule to make target
+    'do-synth'". The unbounded first run keeps the full-flow ``make -B`` command
+    in _run_orfs, unchanged.
     """
-    targets = ["do-synth"]
-    if max_stage == "synth":
-        return targets
-    end_idx = PD_RETRYABLE_STAGES.index(max_stage)
-    targets.extend(PD_STAGE_TARGETS[stage] for stage in PD_RETRYABLE_STAGES[: end_idx + 1])
-    return targets
+    # constraints is handled before ORFS ever runs; finish uses _run_orfs. The
+    # phony name equals the stage name for every ORFS stage (verified against
+    # KNOWN_IMAGE_TARGETS), so the fallback is a safe identity.
+    return [FIRST_RUN_STAGE_TARGETS.get(max_stage, max_stage)]
 
 
 def _parse_orfs_overrides(orfs_overrides_json: Optional[str]) -> Dict[str, Any]:
@@ -1633,32 +1724,53 @@ def _pull_durable_run_meta(run_dir: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+# Monotonic run-status ordering. The durable meta is the cross-instance truth
+# (invariant #9); a reader must move a run only FORWARD along this order, never
+# backward (a stale local "queued" must not shadow a durable "running", and no
+# read ever regresses "running" back to "queued"). queued < running < terminal.
+_RUN_STATUS_RANK = {"queued": 0, "running": 1, "completed": 2, "failed": 2}
+
+
+def _status_rank(status: Optional[str]) -> int:
+    return _RUN_STATUS_RANK.get((status or "").strip().lower(), 0)
+
+
 def _maybe_adopt_remote_run_meta(
     run_dir: str, meta: Dict[str, Any], workspace: Optional[str], run_id: str
 ) -> Dict[str, Any]:
-    """C2 precedence rule: prefer the durable remote meta when the local one
-    is MISSING, or when the remote status is terminal and the local one isn't.
+    """C2 precedence rule: adopt the durable remote meta whenever it is strictly
+    MORE ADVANCED than the local one (missing/queued < running < terminal).
 
-    Adopting a terminal remote meta IS a terminal-transition write (allowed
-    for the reconciler) — persist it locally and announce the completion.
-    The announcing instance's own event may have died with its scratch (the
-    attempt log is per-session scratch synced by tarball), so emitting here is
-    correct; the O_EXCL marker dedupes locally and the deterministic
-    tool_call_id ("completion:<run_id>") dedupes cross-instance at read time.
+    The durable copy is the cross-instance truth (invariant #9). The old rule
+    adopted ONLY a terminal remote, so a reader on another instance whose local
+    scratch held the dispatch-time "queued" snapshot kept serving "queued" long
+    after the dispatching instance pushed a "running" milestone — status
+    regressed backward AND the dead run was then handed the queued double-grace
+    in the ceiling check, so it read as alive for ~2x its timeout (invariant #5
+    violated). Adopting the fresher "running" meta gives the reconciler the real
+    created_at + status, so a past-ceiling run is declared failed on this read.
+
+    A TERMINAL adoption is a terminal-transition write: persist it locally and
+    announce the completion (the announcing instance's own event may have died
+    with its scratch; the O_EXCL marker dedupes locally and the deterministic
+    tool_call_id "completion:<run_id>" dedupes cross-instance at read time). A
+    non-terminal ("running") adoption is handed to the reconciler WITHOUT a local
+    write — it persists the terminal verdict itself if the run is past ceiling.
     Callers must have already established there is NO live local future.
     """
     remote = _pull_durable_run_meta(run_dir)
     if not remote:
         return meta
-    remote_terminal = remote.get("status") in _TERMINAL_SYNTH_STATES
-    local_terminal = meta.get("status") in _TERMINAL_SYNTH_STATES
-    if meta and not (remote_terminal and not local_terminal):
+    # Never adopt a remote that is the same or less advanced than local — that is
+    # the no-regress guard (and keeps a fresher local milestone authoritative).
+    local_rank = _status_rank(meta.get("status")) if meta else -1
+    if _status_rank(remote.get("status")) <= local_rank:
         return meta
-    try:
-        _persist_run_meta(run_dir, remote)
-    except Exception:
-        pass
-    if remote_terminal:
+    if remote.get("status") in _TERMINAL_SYNTH_STATES:
+        try:
+            _persist_run_meta(run_dir, remote)
+        except Exception:
+            pass
         _emit_completion_event(workspace, run_dir, run_id, remote)
     return remote
 
@@ -1696,6 +1808,51 @@ def _try_adopt_cloud_outputs(run_dir: str, meta: Dict[str, Any]) -> bool:
         return True
     except Exception:
         return False
+
+
+PARTIAL_LOGS_DIRNAME = "orfs_logs_partial"
+
+
+def _partial_logs_dir(run_dir: str) -> str:
+    return os.path.join(run_dir, PARTIAL_LOGS_DIRNAME)
+
+
+def stage_partial_logs_for_read(run_dir: str) -> Optional[float]:
+    """Best-effort pull of a live/killed hosted run's partial ORFS logs.
+
+    The Cloud Run Job periodically snapshots its ``logs/`` tree to
+    ``<handle>/logs_partial`` (see deploy/orfs_job/entrypoint.sh) so a run is
+    inspectable BEFORE — or entirely without — a final ``out.tar.gz``: a job
+    killed by the task timeout used to leave zero platform-visible logs. This
+    stages that snapshot into ``<run_dir>/orfs_logs_partial`` for the log
+    readers.
+
+    Prefers final logs: if the run already has staged-back logs under
+    ``orfs_logs`` there is nothing to fall back to, so this is a no-op. Cloud
+    mode only (no durable store → None). Returns the age in seconds of the
+    freshest partial log line — a staleness hint for honest labeling — or None
+    when nothing was staged. Never raises.
+    """
+    try:
+        # Final logs win: never shadow a completed run's real logs with partial.
+        if _tail_from_logs_root(os.path.join(run_dir, "orfs_logs"), max_lines=1):
+            return None
+        store = _durable_run_store()
+        if store is None:
+            return None
+        handle = _compute_run_handle(run_dir)
+        if not handle:
+            return None
+        if not store.exists(f"{handle}/logs_partial"):
+            return None
+        dest = _partial_logs_dir(run_dir)
+        store.get_tree(f"{handle}/logs_partial", dest)
+        newest = _latest_file_activity_ts(dest)
+        if newest is None:
+            return None
+        return max(0.0, time.time() - newest)
+    except Exception:
+        return None
 
 
 def _append_index(workspace: str, run_id: str, status: str) -> None:
@@ -2037,7 +2194,7 @@ def start_synthesis_job(
     utilization: int = 5,
     aspect_ratio: float = 1.0,
     core_margin: float = 2.0,
-    timeout: int = SYNTH_HARD_TIMEOUT_SEC,
+    timeout: Optional[int] = None,
     run_equiv: bool = False,
     constraints_mode: str = "auto",
     max_stage: str = "finish",
@@ -2061,8 +2218,9 @@ def start_synthesis_job(
     _ensure_dir(workspace)
     run_id, run_dir = _allocate_run_dir(workspace)
 
-    # Enforce global safety cap so synthesis jobs do not run unbounded.
-    timeout_sec = max(60, min(int(timeout), SYNTH_HARD_TIMEOUT_SEC))
+    # Stage-aware run ceiling: synth-only gets the fast budget, place-and-route /
+    # full flow the long one. Persisted below as timeout_sec at dispatch.
+    timeout_sec = _resolve_timeout_sec(max_stage, timeout)
 
     args = {
         "run_id": run_id,
@@ -2109,7 +2267,7 @@ def retry_pd_job(
     start_stage: str,
     max_stage: str = "finish",
     orfs_overrides_json: str = "",
-    timeout: int = SYNTH_HARD_TIMEOUT_SEC,
+    timeout: Optional[int] = None,
 ) -> Dict[str, Any]:
     start_stage = (start_stage or "").strip().lower()
     max_stage = (max_stage or "").strip().lower()
@@ -2175,7 +2333,8 @@ def retry_pd_job(
 
     pd_parameters = _pd_parameters_from_run(parent_run_dir, parent_meta)
     run_id, run_dir = _allocate_run_dir(workspace)
-    timeout_sec = max(60, min(int(timeout), SYNTH_HARD_TIMEOUT_SEC))
+    # A retry is bounded at max_stage (floorplan..finish → the full P&R budget).
+    timeout_sec = _resolve_timeout_sec(max_stage, timeout)
     args = {
         "run_id": run_id,
         "source_run_id": source_run_id,
@@ -2271,6 +2430,18 @@ def _build_status_response(
     workspace: Optional[str] = None,
 ) -> Dict[str, Any]:
     last_log_lines = _collect_log_tail(run_dir)
+    # Honest-state log source. Final (staged-back) logs win. When there are none
+    # — a live hosted run mid-flight, or one killed before out.tar.gz — fall back
+    # to the Job's partial log snapshot and LABEL it as partial + how stale, so a
+    # reader never mistakes an in-progress tail for the complete record.
+    last_log_source = "final" if last_log_lines else "none"
+    if not last_log_lines:
+        partial_age = stage_partial_logs_for_read(run_dir)
+        if partial_age is not None:
+            partial_lines = _tail_from_logs_root(_partial_logs_dir(run_dir))
+            if partial_lines:
+                last_log_lines = partial_lines
+                last_log_source = f"partial (updated {int(partial_age)}s ago)"
     # Stage truth from the deterministic file trail (Wave 9 Item 1) — the log
     # tail stays as detail, never as the stage source.
     progress = stage_progress_from_files(run_dir, meta)
@@ -2344,6 +2515,7 @@ def _build_status_response(
         # once persisted at finalization. So the UI always has a running timer.
         "elapsed_sec": _elapsed_seconds(meta, status),
         "last_log_lines": last_log_lines,
+        "last_log_source": last_log_source,
         "artifacts_found": _collect_artifacts(run_dir),
         "summary_metrics": meta.get("summary_metrics"),
         "auto_checks": meta.get("auto_checks", {"constraints": "skip", "signoff": "skip", "equiv": "skip"}),
@@ -2692,7 +2864,10 @@ def _reconcile_stale_status(
         return _finalize_completed(meta)
 
     # ---- death verdict ----
-    timeout_sec = meta.get("timeout_sec") or SYNTH_HARD_TIMEOUT_SEC
+    # Persisted timeout_sec is authoritative (the ceiling the run was DISPATCHED
+    # with — invariant #5). A legacy meta without one is judged by its own stage
+    # bound, not a flat default, so an old full-flow run isn't failed early.
+    timeout_sec = meta.get("timeout_sec") or _stage_ceiling_sec(_run_stage_bound(meta))
     if meta.get("status") == "queued":
         # Worker never started: queue backlog is legitimate wait, so the
         # ceiling gets a full extra timeout past dispatch before a silent

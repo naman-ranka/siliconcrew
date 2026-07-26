@@ -109,12 +109,13 @@ def test_invalid_max_stage_rejected_before_any_work(tmp_path):
     assert not os.path.exists(os.path.join(workspace, "synth_runs"))
 
 
-def test_first_run_targets_cover_synth_through_bound():
-    assert sm._first_run_targets("synth") == ["do-synth"]
-    assert sm._first_run_targets("cts") == ["do-synth", "do-floorplan", "do-place", "do-cts"]
-    assert sm._first_run_targets("route") == [
-        "do-synth", "do-floorplan", "do-place", "do-cts", "do-grt", "do-route",
-    ]
+def test_first_run_targets_use_dependency_tracked_phony_stage():
+    # A first run drives ORFS by the single phony stage target; make's own
+    # dependency graph builds every prerequisite up to it (no hand-built
+    # do-* chain, no now-removed do-synth).
+    assert sm._first_run_targets("synth") == ["synth"]
+    assert sm._first_run_targets("cts") == ["cts"]
+    assert sm._first_run_targets("route") == ["route"]
 
 
 # ---- bounded first run end-to-end ---------------------------------------------
@@ -138,7 +139,7 @@ def test_synth_only_run_completes_with_skipped_downstream(tmp_path, monkeypatch)
 
     final = _wait_for_terminal(started["run_id"], workspace)
     assert final["status"] == "completed"
-    assert calls["targets"] == ["do-synth"]
+    assert calls["targets"] == ["synth"]
 
     # auto-checks that need finish artifacts are skipped with an explicit note.
     assert final["auto_checks"]["constraints"] == "pass"

@@ -2,7 +2,11 @@ import glob
 import os
 from typing import List, Optional
 
-from src.tools.synthesis_manager import get_run_dir
+from src.tools.synthesis_manager import (
+    PARTIAL_LOGS_DIRNAME,
+    get_run_dir,
+    stage_partial_logs_for_read,
+)
 
 
 def _collect_search_dirs(workspace_dir: str, run_id: Optional[str]) -> List[str]:
@@ -10,10 +14,15 @@ def _collect_search_dirs(workspace_dir: str, run_id: Optional[str]) -> List[str]
         run_dir = get_run_dir(workspace_dir, run_id)
         if not run_dir:
             return []
+        # Hosted fallback: a live/killed run has no staged-back orfs_logs yet, so
+        # pull the Job's partial log snapshot into orfs_logs_partial and include
+        # it. No-op locally / when final logs exist (see the helper).
+        stage_partial_logs_for_read(run_dir)
         return [
             os.path.join(run_dir, "orfs_reports"),
             os.path.join(run_dir, "orfs_logs"),
             os.path.join(run_dir, "orfs_results"),
+            os.path.join(run_dir, PARTIAL_LOGS_DIRNAME),
         ]
 
     # Backward-compatible default roots

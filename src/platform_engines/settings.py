@@ -103,6 +103,15 @@ class PlatformSettings:
     # Determinism
     num_cores: int            # pinned NUM_CORES for ORFS P&R
 
+    # Stage-aware ORFS run ceilings (seconds). A synth-only run is the fast PPA
+    # path and gets the short budget; any run reaching place-and-route (floorplan
+    # and later, including the full RTL->GDS flow) gets the long one. The chosen
+    # ceiling is persisted per run as timeout_sec so a reconciling read judges an
+    # old run by the ceiling it was dispatched with (invariant #5). Tunable per
+    # deploy without a code change — see synthesis_manager._stage_ceiling_sec.
+    orfs_timeout_synth_sec: int
+    orfs_timeout_full_sec: int
+
     # Chat agent step budget per turn (LangGraph recursion_limit).
     chat_recursion_limit: int
 
@@ -253,6 +262,8 @@ def get_settings() -> PlatformSettings:
         synth_max_concurrent_per_user=_int_env("SYNTH_MAX_CONCURRENT_PER_USER", 5),
         synth_queue_global_workers=_int_env("SYNTH_QUEUE_GLOBAL_WORKERS", 16),
         num_cores=_int_env("ORFS_NUM_CORES", 4),
+        orfs_timeout_synth_sec=_int_env("ORFS_TIMEOUT_SYNTH_SEC", 900),
+        orfs_timeout_full_sec=_int_env("ORFS_TIMEOUT_FULL_SEC", 3600),
         chat_recursion_limit=_int_env("CHAT_RECURSION_LIMIT", 80),
         hosted_tier_tokens_per_day=_int_env("HOSTED_TIER_TOKENS_PER_DAY", 2_000_000),
         hosted_tier_cost_ceiling_usd=float(_env("HOSTED_TIER_COST_CEILING_USD", "50.0")),
