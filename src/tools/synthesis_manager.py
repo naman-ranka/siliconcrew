@@ -1724,32 +1724,53 @@ def _pull_durable_run_meta(run_dir: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+# Monotonic run-status ordering. The durable meta is the cross-instance truth
+# (invariant #9); a reader must move a run only FORWARD along this order, never
+# backward (a stale local "queued" must not shadow a durable "running", and no
+# read ever regresses "running" back to "queued"). queued < running < terminal.
+_RUN_STATUS_RANK = {"queued": 0, "running": 1, "completed": 2, "failed": 2}
+
+
+def _status_rank(status: Optional[str]) -> int:
+    return _RUN_STATUS_RANK.get((status or "").strip().lower(), 0)
+
+
 def _maybe_adopt_remote_run_meta(
     run_dir: str, meta: Dict[str, Any], workspace: Optional[str], run_id: str
 ) -> Dict[str, Any]:
-    """C2 precedence rule: prefer the durable remote meta when the local one
-    is MISSING, or when the remote status is terminal and the local one isn't.
+    """C2 precedence rule: adopt the durable remote meta whenever it is strictly
+    MORE ADVANCED than the local one (missing/queued < running < terminal).
 
-    Adopting a terminal remote meta IS a terminal-transition write (allowed
-    for the reconciler) — persist it locally and announce the completion.
-    The announcing instance's own event may have died with its scratch (the
-    attempt log is per-session scratch synced by tarball), so emitting here is
-    correct; the O_EXCL marker dedupes locally and the deterministic
-    tool_call_id ("completion:<run_id>") dedupes cross-instance at read time.
+    The durable copy is the cross-instance truth (invariant #9). The old rule
+    adopted ONLY a terminal remote, so a reader on another instance whose local
+    scratch held the dispatch-time "queued" snapshot kept serving "queued" long
+    after the dispatching instance pushed a "running" milestone — status
+    regressed backward AND the dead run was then handed the queued double-grace
+    in the ceiling check, so it read as alive for ~2x its timeout (invariant #5
+    violated). Adopting the fresher "running" meta gives the reconciler the real
+    created_at + status, so a past-ceiling run is declared failed on this read.
+
+    A TERMINAL adoption is a terminal-transition write: persist it locally and
+    announce the completion (the announcing instance's own event may have died
+    with its scratch; the O_EXCL marker dedupes locally and the deterministic
+    tool_call_id "completion:<run_id>" dedupes cross-instance at read time). A
+    non-terminal ("running") adoption is handed to the reconciler WITHOUT a local
+    write — it persists the terminal verdict itself if the run is past ceiling.
     Callers must have already established there is NO live local future.
     """
     remote = _pull_durable_run_meta(run_dir)
     if not remote:
         return meta
-    remote_terminal = remote.get("status") in _TERMINAL_SYNTH_STATES
-    local_terminal = meta.get("status") in _TERMINAL_SYNTH_STATES
-    if meta and not (remote_terminal and not local_terminal):
+    # Never adopt a remote that is the same or less advanced than local — that is
+    # the no-regress guard (and keeps a fresher local milestone authoritative).
+    local_rank = _status_rank(meta.get("status")) if meta else -1
+    if _status_rank(remote.get("status")) <= local_rank:
         return meta
-    try:
-        _persist_run_meta(run_dir, remote)
-    except Exception:
-        pass
-    if remote_terminal:
+    if remote.get("status") in _TERMINAL_SYNTH_STATES:
+        try:
+            _persist_run_meta(run_dir, remote)
+        except Exception:
+            pass
         _emit_completion_event(workspace, run_dir, run_id, remote)
     return remote
 
