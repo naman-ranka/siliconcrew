@@ -380,7 +380,52 @@ _ORFS_OVERRIDE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 POLL_MIN_INTERVAL_SEC = 1.0
 POLL_BACKOFF_START_SEC = 30
 POLL_BACKOFF_MAX_SEC = 600
-SYNTH_HARD_TIMEOUT_SEC = 1200
+
+# Stage-aware run ceilings replace the old flat 1200s cap, which killed healthy
+# full-flow runs at 20 min even though RTL->GDS for a few-thousand-cell design
+# needs longer (root cause 1, plans/hosted-orfs-reliability.md). Defaults back
+# the settings knobs (ORFS_TIMEOUT_SYNTH_SEC / ORFS_TIMEOUT_FULL_SEC) so a build
+# without settings still has sane bounds. The chosen ceiling is persisted per run
+# as timeout_sec; every reconciling read judges a run by the value it was
+# DISPATCHED with (invariant #5), never by a newer default.
+DEFAULT_TIMEOUT_SYNTH_SEC = 900
+DEFAULT_TIMEOUT_FULL_SEC = 3600
+MIN_TIMEOUT_SEC = 60
+
+
+def _timeout_budgets() -> tuple:
+    """(synth_budget, full_budget) in seconds, from settings (with fallbacks)."""
+    try:
+        from src.platform_engines.settings import get_settings
+
+        s = get_settings()
+        return int(s.orfs_timeout_synth_sec), int(s.orfs_timeout_full_sec)
+    except Exception:
+        return DEFAULT_TIMEOUT_SYNTH_SEC, DEFAULT_TIMEOUT_FULL_SEC
+
+
+def _stage_ceiling_sec(max_stage: Optional[str]) -> int:
+    """Run ceiling for a bound at ``max_stage``.
+
+    constraints/synth are the fast synth-only path (short budget); floorplan and
+    later — including the full RTL->GDS flow (max_stage="finish") — pay
+    place-and-route and get the long budget.
+    """
+    synth_sec, full_sec = _timeout_budgets()
+    stage = (max_stage or "finish").strip().lower()
+    if stage in PD_STAGE_SEQUENCE and PD_STAGE_SEQUENCE.index(stage) <= PD_STAGE_SEQUENCE.index("synth"):
+        return max(MIN_TIMEOUT_SEC, synth_sec)
+    return max(MIN_TIMEOUT_SEC, full_sec)
+
+
+def _resolve_timeout_sec(max_stage: Optional[str], requested: Optional[int]) -> int:
+    """Dispatch-time ceiling: the stage budget, optionally lowered (never raised)
+    by an explicit caller ``requested`` value. ``None``/non-positive = use the
+    stage budget as-is."""
+    ceiling = _stage_ceiling_sec(max_stage)
+    if requested is None or int(requested) <= 0:
+        return max(MIN_TIMEOUT_SEC, ceiling)
+    return max(MIN_TIMEOUT_SEC, min(int(requested), ceiling))
 
 
 @dataclass
@@ -2080,7 +2125,7 @@ def start_synthesis_job(
     utilization: int = 5,
     aspect_ratio: float = 1.0,
     core_margin: float = 2.0,
-    timeout: int = SYNTH_HARD_TIMEOUT_SEC,
+    timeout: Optional[int] = None,
     run_equiv: bool = False,
     constraints_mode: str = "auto",
     max_stage: str = "finish",
@@ -2104,8 +2149,9 @@ def start_synthesis_job(
     _ensure_dir(workspace)
     run_id, run_dir = _allocate_run_dir(workspace)
 
-    # Enforce global safety cap so synthesis jobs do not run unbounded.
-    timeout_sec = max(60, min(int(timeout), SYNTH_HARD_TIMEOUT_SEC))
+    # Stage-aware run ceiling: synth-only gets the fast budget, place-and-route /
+    # full flow the long one. Persisted below as timeout_sec at dispatch.
+    timeout_sec = _resolve_timeout_sec(max_stage, timeout)
 
     args = {
         "run_id": run_id,
@@ -2152,7 +2198,7 @@ def retry_pd_job(
     start_stage: str,
     max_stage: str = "finish",
     orfs_overrides_json: str = "",
-    timeout: int = SYNTH_HARD_TIMEOUT_SEC,
+    timeout: Optional[int] = None,
 ) -> Dict[str, Any]:
     start_stage = (start_stage or "").strip().lower()
     max_stage = (max_stage or "").strip().lower()
@@ -2218,7 +2264,8 @@ def retry_pd_job(
 
     pd_parameters = _pd_parameters_from_run(parent_run_dir, parent_meta)
     run_id, run_dir = _allocate_run_dir(workspace)
-    timeout_sec = max(60, min(int(timeout), SYNTH_HARD_TIMEOUT_SEC))
+    # A retry is bounded at max_stage (floorplan..finish → the full P&R budget).
+    timeout_sec = _resolve_timeout_sec(max_stage, timeout)
     args = {
         "run_id": run_id,
         "source_run_id": source_run_id,
@@ -2735,7 +2782,10 @@ def _reconcile_stale_status(
         return _finalize_completed(meta)
 
     # ---- death verdict ----
-    timeout_sec = meta.get("timeout_sec") or SYNTH_HARD_TIMEOUT_SEC
+    # Persisted timeout_sec is authoritative (the ceiling the run was DISPATCHED
+    # with — invariant #5). A legacy meta without one is judged by its own stage
+    # bound, not a flat default, so an old full-flow run isn't failed early.
+    timeout_sec = meta.get("timeout_sec") or _stage_ceiling_sec(_run_stage_bound(meta))
     if meta.get("status") == "queued":
         # Worker never started: queue backlog is legitimate wait, so the
         # ceiling gets a full extra timeout past dispatch before a silent

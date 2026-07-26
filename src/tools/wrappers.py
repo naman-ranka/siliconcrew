@@ -340,12 +340,14 @@ def retry_pd(
     start_stage: str,
     max_stage: str = "finish",
     orfs_overrides_json: str = "",
-    timeout_sec: int = 1200,
+    timeout_sec: int = 0,
 ) -> str:
     """
     Creates a child PD retry run from an existing synthesis run.
     Validates the required checkpoint for start_stage, copies prerequisites into a new run,
     and reruns only the requested downstream ORFS do-* stages.
+    timeout_sec=0 (default) uses the stage-aware ceiling for the run; pass a
+    positive value only to LOWER it (a larger request is capped at the ceiling).
     """
     workspace = get_workspace_path()
     result = retry_pd_job(
