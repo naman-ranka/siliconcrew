@@ -697,8 +697,7 @@ def _tail_lines(path: str, max_lines: int = 40) -> List[str]:
         return []
 
 
-def _collect_log_tail(run_dir: str, max_lines: int = 40) -> List[str]:
-    logs_root = os.path.join(run_dir, "orfs_logs")
+def _tail_from_logs_root(logs_root: str, max_lines: int = 40) -> List[str]:
     if not os.path.exists(logs_root):
         return []
     candidates = []
@@ -711,6 +710,10 @@ def _collect_log_tail(run_dir: str, max_lines: int = 40) -> List[str]:
         return []
     _, latest = sorted(candidates, key=lambda x: x[0], reverse=True)[0]
     return _tail_lines(latest, max_lines=max_lines)
+
+
+def _collect_log_tail(run_dir: str, max_lines: int = 40) -> List[str]:
+    return _tail_from_logs_root(os.path.join(run_dir, "orfs_logs"), max_lines=max_lines)
 
 
 def _extract_summary_metrics(run_dir: str) -> Dict[str, Any]:
@@ -1786,6 +1789,51 @@ def _try_adopt_cloud_outputs(run_dir: str, meta: Dict[str, Any]) -> bool:
         return False
 
 
+PARTIAL_LOGS_DIRNAME = "orfs_logs_partial"
+
+
+def _partial_logs_dir(run_dir: str) -> str:
+    return os.path.join(run_dir, PARTIAL_LOGS_DIRNAME)
+
+
+def stage_partial_logs_for_read(run_dir: str) -> Optional[float]:
+    """Best-effort pull of a live/killed hosted run's partial ORFS logs.
+
+    The Cloud Run Job periodically snapshots its ``logs/`` tree to
+    ``<handle>/logs_partial`` (see deploy/orfs_job/entrypoint.sh) so a run is
+    inspectable BEFORE — or entirely without — a final ``out.tar.gz``: a job
+    killed by the task timeout used to leave zero platform-visible logs. This
+    stages that snapshot into ``<run_dir>/orfs_logs_partial`` for the log
+    readers.
+
+    Prefers final logs: if the run already has staged-back logs under
+    ``orfs_logs`` there is nothing to fall back to, so this is a no-op. Cloud
+    mode only (no durable store → None). Returns the age in seconds of the
+    freshest partial log line — a staleness hint for honest labeling — or None
+    when nothing was staged. Never raises.
+    """
+    try:
+        # Final logs win: never shadow a completed run's real logs with partial.
+        if _tail_from_logs_root(os.path.join(run_dir, "orfs_logs"), max_lines=1):
+            return None
+        store = _durable_run_store()
+        if store is None:
+            return None
+        handle = _compute_run_handle(run_dir)
+        if not handle:
+            return None
+        if not store.exists(f"{handle}/logs_partial"):
+            return None
+        dest = _partial_logs_dir(run_dir)
+        store.get_tree(f"{handle}/logs_partial", dest)
+        newest = _latest_file_activity_ts(dest)
+        if newest is None:
+            return None
+        return max(0.0, time.time() - newest)
+    except Exception:
+        return None
+
+
 def _append_index(workspace: str, run_id: str, status: str) -> None:
     # One key: run_id. The legacy "jobs" mapping is no longer written (old
     # dirs may still carry it; readers key by run_id and never need it).
@@ -2361,6 +2409,18 @@ def _build_status_response(
     workspace: Optional[str] = None,
 ) -> Dict[str, Any]:
     last_log_lines = _collect_log_tail(run_dir)
+    # Honest-state log source. Final (staged-back) logs win. When there are none
+    # — a live hosted run mid-flight, or one killed before out.tar.gz — fall back
+    # to the Job's partial log snapshot and LABEL it as partial + how stale, so a
+    # reader never mistakes an in-progress tail for the complete record.
+    last_log_source = "final" if last_log_lines else "none"
+    if not last_log_lines:
+        partial_age = stage_partial_logs_for_read(run_dir)
+        if partial_age is not None:
+            partial_lines = _tail_from_logs_root(_partial_logs_dir(run_dir))
+            if partial_lines:
+                last_log_lines = partial_lines
+                last_log_source = f"partial (updated {int(partial_age)}s ago)"
     # Stage truth from the deterministic file trail (Wave 9 Item 1) — the log
     # tail stays as detail, never as the stage source.
     progress = stage_progress_from_files(run_dir, meta)
@@ -2434,6 +2494,7 @@ def _build_status_response(
         # once persisted at finalization. So the UI always has a running timer.
         "elapsed_sec": _elapsed_seconds(meta, status),
         "last_log_lines": last_log_lines,
+        "last_log_source": last_log_source,
         "artifacts_found": _collect_artifacts(run_dir),
         "summary_metrics": meta.get("summary_metrics"),
         "auto_checks": meta.get("auto_checks", {"constraints": "skip", "signoff": "skip", "equiv": "skip"}),
