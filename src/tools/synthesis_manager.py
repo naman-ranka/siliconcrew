@@ -104,13 +104,55 @@ SIM_CONTRACT_KEY = "sim_contract"
 
 PD_STAGE_SEQUENCE = ["constraints", "synth", "floorplan", "place", "cts", "grt", "route", "finish"]
 PD_RETRYABLE_STAGES = ["floorplan", "place", "cts", "grt", "route", "finish"]
+# Snapshot of the `make` targets the pinned ORFS image actually provides. Used
+# to guard our stage->target maps against image drift (the image renamed the
+# synth do-target: there is NO `do-synth`, only `do-yosys-canonicalize` +
+# `do-yosys`, which is what broke every hosted synth-only run — see
+# plans/hosted-orfs-reliability.md). Derived by running against the pinned image:
+#
+#   docker run --rm openroad/orfs:latest bash -lc \
+#     "grep -oE '^(do-[a-z0-9-]+|[a-z]+):' \
+#      /OpenROAD-flow-scripts/flow/Makefile | sort -u"
+#
+# Refresh this set (and the maps below) whenever ORFS_IMAGE is re-pinned.
+KNOWN_IMAGE_TARGETS = frozenset({
+    "all", "bash", "clean", "cts", "do-cts", "do-final", "do-finish",
+    "do-floorplan", "do-gds-merged", "do-gds", "do-grt", "do-klayout",
+    "do-place", "do-route", "do-synth-report", "do-yosys-canonicalize",
+    "do-yosys", "drc", "elapsed", "final", "finish", "floorplan",
+    "globalroute", "grt", "klayout", "lvs", "memory", "nuke", "place",
+    "route", "run", "synth", "yosys",
+})
+
+# PD retries redo one stage inside an EXISTING run dir (checkpoints already
+# staged in), so they drive ORFS by its per-stage ``do-*`` targets. synth is not
+# retry-able (PD_RETRYABLE_STAGES) but is mapped for completeness/validation: the
+# image has no ``do-synth`` — the two yosys steps are the synth do-targets, run
+# as one make invocation.
 PD_STAGE_TARGETS = {
+    "synth": "do-yosys-canonicalize do-yosys",
     "floorplan": "do-floorplan",
     "place": "do-place",
     "cts": "do-cts",
     "grt": "do-grt",
     "route": "do-route",
     "finish": "do-finish",
+}
+
+# First runs start from an EMPTY run dir, so they use the dependency-tracked
+# phony stage targets: ``make <stage>`` builds every prerequisite up to that
+# stage via make's own dependency graph — the standard, version-stable way to
+# run "everything up to stage X" without hand-building a ``do-*`` chain (the old
+# chain led with the now-nonexistent ``do-synth``). Each value is verified
+# present in KNOWN_IMAGE_TARGETS; the phony name equals the stage name.
+FIRST_RUN_STAGE_TARGETS = {
+    "synth": "synth",
+    "floorplan": "floorplan",
+    "place": "place",
+    "cts": "cts",
+    "grt": "grt",
+    "route": "route",
+    "finish": "finish",
 }
 PD_PREREQ_FILES = {
     "floorplan": [("1_synth.odb", "1_synth.odb"), ("1_synth.sdc", "1_synth.sdc")],
@@ -1216,20 +1258,21 @@ def _stage_range(start_stage: str, max_stage: str) -> List[str]:
 
 
 def _first_run_targets(max_stage: str) -> List[str]:
-    """ORFS make targets for a first run bounded at ``max_stage`` (< finish).
+    """ORFS make target(s) for a first run bounded at ``max_stage`` (< finish).
 
-    Mirrors the retry path's target-based execution (_run_orfs_targets with the
-    same do-* targets): do-synth builds 1_synth.* from the copied inputs, then
-    each downstream do-<stage> consumes the previous stage's checkpoint,
-    stopping after the target stage. The unbounded first run keeps using the
-    full-flow ``make -B`` command in _run_orfs, unchanged.
+    A first run has an EMPTY run dir, so it drives ORFS by the single
+    dependency-tracked phony target for the bound (``make cts`` builds
+    synth->floorplan->place->cts through make's own dependency graph). This
+    replaces the old hand-built ``do-*`` chain, whose lead target ``do-synth``
+    does not exist in the current image (the yosys steps were renamed) — the
+    bug that made every hosted synth-only run fail with "No rule to make target
+    'do-synth'". The unbounded first run keeps the full-flow ``make -B`` command
+    in _run_orfs, unchanged.
     """
-    targets = ["do-synth"]
-    if max_stage == "synth":
-        return targets
-    end_idx = PD_RETRYABLE_STAGES.index(max_stage)
-    targets.extend(PD_STAGE_TARGETS[stage] for stage in PD_RETRYABLE_STAGES[: end_idx + 1])
-    return targets
+    # constraints is handled before ORFS ever runs; finish uses _run_orfs. The
+    # phony name equals the stage name for every ORFS stage (verified against
+    # KNOWN_IMAGE_TARGETS), so the fallback is a safe identity.
+    return [FIRST_RUN_STAGE_TARGETS.get(max_stage, max_stage)]
 
 
 def _parse_orfs_overrides(orfs_overrides_json: Optional[str]) -> Dict[str, Any]:
