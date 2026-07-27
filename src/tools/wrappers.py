@@ -404,26 +404,53 @@ def _wait_for_synthesis_job(
     start = time.time()
     max_wait = max(1, min(int(max_wait_sec), WAIT_MAX_WAIT_SEC))
     poll_interval = max(1, int(poll_interval_sec))
+    # The cap is on the WALL CLOCK of this call, not on the sleeping alone. A
+    # status read is real work (object-store pulls in hosted mode), so the
+    # deadline is checked around the reads too — checking it only between
+    # iterations let a 120s wait run 300s when each read took 150s.
+    deadline = start + max_wait
 
-    while (time.time() - start) < max_wait:
-        status = collect_synthesis_status(run_id, workspace=workspace)
+    status: dict[str, Any] | None = None
+    # Worst observed read cost, used to reserve room for the final full read so
+    # that read cannot itself push the call past the cap.
+    read_cost = 0.0
+
+    while True:
+        before = time.time()
+        if before >= deadline:
+            break
+        # Intermediate polls are CHEAP reads: a wait loop only needs "is it done
+        # yet", not the full partial-log/artifact pull. The read below is full.
+        status = collect_synthesis_status(run_id, workspace=workspace, cheap=True)
+        read_cost = max(read_cost, time.time() - before)
         if status.get("status") in {"completed", "failed"}:
-            status["waited_sec"] = round(time.time() - start, 2)
-            status["timed_out"] = False
-            return status
+            break
 
         suggested = status.get("retry_after_sec")
         if suggested is None:
             suggested = status.get("poll_after_sec", poll_interval)
-        sleep_s = max(1, int(round(float(suggested))))
-        remaining = max_wait - (time.time() - start)
+        try:
+            sleep_s = max(1.0, float(suggested))
+        except (TypeError, ValueError):
+            sleep_s = float(poll_interval)
+        remaining = deadline - read_cost - time.time()
         if remaining <= 0:
             break
-        time.sleep(min(sleep_s, max(1, int(remaining))))
+        time.sleep(min(sleep_s, remaining))
 
-    # One final sample after the wait loop: the run may have gone terminal
-    # during the last sleep — report that, not a stale pre-sleep snapshot.
-    last = collect_synthesis_status(run_id, workspace=workspace)
+    if time.time() + read_cost <= deadline:
+        # Budget remains: take one FULL sample. It is also the "don't return a
+        # stale pre-sleep snapshot" read — a run that went terminal during the
+        # last sleep is reported from here.
+        last = collect_synthesis_status(run_id, workspace=workspace)
+    elif status is not None:
+        # Budget spent: return the last cheap sample rather than blow the cap on
+        # another read. It is labelled as a cheap read, so nothing is claimed
+        # that was not actually looked at.
+        last = status
+    else:
+        last = collect_synthesis_status(run_id, workspace=workspace, cheap=True)
+
     last["waited_sec"] = round(time.time() - start, 2)
     if last.get("status") in {"completed", "failed"}:
         last["timed_out"] = False

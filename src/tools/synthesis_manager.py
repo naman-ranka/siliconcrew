@@ -2571,6 +2571,7 @@ def _build_status_response(
     meta: Dict[str, Any],
     recovered: bool = False,
     workspace: Optional[str] = None,
+    cheap: bool = False,
 ) -> Dict[str, Any]:
     last_log_lines = _collect_log_tail(run_dir)
     # Honest-state log source. Final (staged-back) logs win. When there are none
@@ -2579,12 +2580,19 @@ def _build_status_response(
     # reader never mistakes an in-progress tail for the complete record.
     last_log_source = "final" if last_log_lines else "none"
     if not last_log_lines:
-        partial_age = stage_partial_logs_for_read(run_dir)
-        if partial_age is not None:
-            partial_lines = _tail_from_logs_root(_partial_logs_dir(run_dir))
-            if partial_lines:
-                last_log_lines = partial_lines
-                last_log_source = f"partial (updated {int(partial_age)}s ago)"
+        if cheap:
+            # Cheap read (opt-in, see get_synthesis_status): the partial-log
+            # pull is a whole remote tree fetch. Skipped — and LABELLED as
+            # skipped, never reported as "none" (which would mean "there are no
+            # logs", a different claim).
+            last_log_source = "not read (cheap poll)"
+        else:
+            partial_age = stage_partial_logs_for_read(run_dir)
+            if partial_age is not None:
+                partial_lines = _tail_from_logs_root(_partial_logs_dir(run_dir))
+                if partial_lines:
+                    last_log_lines = partial_lines
+                    last_log_source = f"partial (updated {int(partial_age)}s ago)"
     # Stage truth from the deterministic file trail (Wave 9 Item 1) — the log
     # tail stays as detail, never as the stage source.
     progress = stage_progress_from_files(run_dir, meta)
@@ -2700,24 +2708,41 @@ def _with_rate_limit_fields(resp: Dict[str, Any], retry_after_sec: float) -> Dic
     return out
 
 
-def _maybe_cache_poll_response(run_id: str, response: Dict[str, Any], workspace: Optional[str] = None) -> None:
+def _maybe_cache_poll_response(
+    run_id: str, response: Dict[str, Any], workspace: Optional[str] = None, cheap: bool = False
+) -> None:
     key = _job_key(workspace, run_id)
     status = response.get("status")
     if status in {"running", "queued"}:
-        _POLL_CACHE[key] = {"ts": time.time(), "response": dict(response)}
+        # A cheap response is never cached: the rate limiter would then serve it
+        # back to a normal caller that asked for the full payload. Cheap polls
+        # still READ the cache (a cached full response is strictly better).
+        if not cheap:
+            _POLL_CACHE[key] = {"ts": time.time(), "response": dict(response)}
     elif key in _POLL_CACHE:
         del _POLL_CACHE[key]
     if status not in {"running", "queued"} and key in _POLL_BACKOFF_STATE:
         del _POLL_BACKOFF_STATE[key]
 
 
-def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[str, Any]:
+def get_synthesis_status(
+    run_id: str, workspace: Optional[str] = None, cheap: bool = False
+) -> Dict[str, Any]:
     """Self-healing status by the ONE durable key (run_id).
 
     Lookup order: in-process memory (live queued/running detail from the
     dispatching process) -> run_meta.json on disk -> reconcile (adopt
     artifacts as completed, or declare an expired silent run failed). The
     payload shape is identical from every source.
+
+    ``cheap`` (opt-in, default OFF — every existing caller is unchanged) drops
+    the two object-store TREE pulls a read can trigger in hosted mode: the
+    partial-log staging and cloud-output adoption. Both cost a full remote tree
+    fetch and neither is needed to answer "is it done yet", which is the only
+    question ``wait_for_synthesis``'s intermediate polls ask; that loop always
+    takes a FULL read before it returns. A cheap response is honestly labelled
+    (``last_log_source: "not read (cheap poll)"``), never dressed up as a
+    complete one.
     """
     # All in-memory bookkeeping is keyed by workspace+run_id: run_ids
     # (synth_NNNN) are unique per WORKSPACE, not globally, so the same id in a
@@ -2733,7 +2758,9 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
             meta = _read_run_meta(run_dir)
             # Self-healing read: no live future in ANY process path here —
             # adopt on-disk completion, or tombstone an expired silent run.
-            meta = _reconcile_stale_status(run_dir, meta, workspace=workspace, has_live_future=False)
+            meta = _reconcile_stale_status(
+                run_dir, meta, workspace=workspace, has_live_future=False, cheap=cheap
+            )
             status = meta.get("status", "running")
             return _build_status_response(
                 run_id=run_id,
@@ -2742,6 +2769,7 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
                 meta=meta,
                 recovered=True,
                 workspace=workspace,
+                cheap=cheap,
             )
         return {"run_id": run_id, "status": "failed", "error": "unknown_run", "check_notes": "Unknown run_id", "next_action": "Start a new synthesis run."}
 
@@ -2762,15 +2790,15 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
     if future.running():
         if not meta.get("check_notes"):
             meta["check_notes"] = "Synthesis in progress."
-        resp = _build_status_response(run_id, run_dir, "running", meta, workspace=workspace)
-        _maybe_cache_poll_response(run_id, resp, workspace=workspace)
+        resp = _build_status_response(run_id, run_dir, "running", meta, workspace=workspace, cheap=cheap)
+        _maybe_cache_poll_response(run_id, resp, workspace=workspace, cheap=cheap)
         return resp
 
     if not future.done():
         if not meta.get("check_notes"):
             meta["check_notes"] = "Queued."
-        resp = _build_status_response(run_id, run_dir, "queued", meta, workspace=workspace)
-        _maybe_cache_poll_response(run_id, resp, workspace=workspace)
+        resp = _build_status_response(run_id, run_dir, "queued", meta, workspace=workspace, cheap=cheap)
+        _maybe_cache_poll_response(run_id, resp, workspace=workspace, cheap=cheap)
         return resp
 
     try:
@@ -2805,13 +2833,13 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
             pass
         if not meta.get("check_notes"):
             meta["check_notes"] = f"Job execution error: {exc}"
-        resp = _build_status_response(run_id, run_dir, "failed", meta, workspace=workspace)
-        _maybe_cache_poll_response(run_id, resp, workspace=workspace)
+        resp = _build_status_response(run_id, run_dir, "failed", meta, workspace=workspace, cheap=cheap)
+        _maybe_cache_poll_response(run_id, resp, workspace=workspace, cheap=cheap)
         return resp
 
     final_status = final.get("status", "failed")
-    resp = _build_status_response(run_id, run_dir, final_status, final, workspace=workspace)
-    _maybe_cache_poll_response(run_id, resp, workspace=workspace)
+    resp = _build_status_response(run_id, run_dir, final_status, final, workspace=workspace, cheap=cheap)
+    _maybe_cache_poll_response(run_id, resp, workspace=workspace, cheap=cheap)
     return resp
 
 
@@ -2905,6 +2933,7 @@ def _reconcile_stale_status(
     meta: Dict[str, Any],
     workspace: Optional[str] = None,
     has_live_future: Optional[bool] = None,
+    cheap: bool = False,
 ) -> Dict[str, Any]:
     """Adopt on-disk artifacts as the source of truth for a run stuck at a
     non-terminal status.
@@ -3003,8 +3032,13 @@ def _reconcile_stale_status(
     # its outputs (orchestrating instance died between execute and stage_out),
     # pull them in and finalize COMPLETED on this very read instead of leaving
     # the run "running" until the timeout ceiling expires.
+    # A cheap read skips it anyway: adoption pulls the whole output tarball, and
+    # the caller (a wait loop) will take a FULL read before it returns. The
+    # durable-meta read-back above stays — it is one small object and it is the
+    # cross-instance "is it done yet" signal a wait loop exists for.
     if (
-        _try_adopt_cloud_outputs(run_dir, meta)
+        not cheap
+        and _try_adopt_cloud_outputs(run_dir, meta)
         and _find_stage_completion_marker(run_dir, _run_stage_bound(meta)) is not None
     ):
         return _finalize_completed(meta)

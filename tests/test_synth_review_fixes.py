@@ -381,7 +381,7 @@ def test_wait_takes_final_sample_and_catches_terminal_run(monkeypatch, tmp_path)
     clock = _fake_clock(monkeypatch)
     calls = {"n": 0}
 
-    def _fake_status(run_id, workspace=None):
+    def _fake_status(run_id, workspace=None, cheap=False):
         calls["n"] += 1
         # Completes DURING the final sleep — only a post-loop sample sees it.
         if clock["t"] >= 5:
@@ -400,7 +400,7 @@ def test_wait_takes_final_sample_and_catches_terminal_run(monkeypatch, tmp_path)
 def test_wait_final_sample_still_running_reports_timed_out(monkeypatch, tmp_path):
     _fake_clock(monkeypatch)
 
-    def _fake_status(run_id, workspace=None):
+    def _fake_status(run_id, workspace=None, cheap=False):
         return {"run_id": run_id, "status": "running", "poll_after_sec": 10}
 
     monkeypatch.setattr(wrappers, "collect_synthesis_status", _fake_status)
