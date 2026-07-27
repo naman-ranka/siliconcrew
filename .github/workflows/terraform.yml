@@ -18,6 +18,12 @@ permissions:
   contents: read
   id-token: write   # keyless Workload Identity Federation
 
+# Two concurrent applies would contend on the shared GCS remote state; queue
+# them instead. Never cancel a run that may be mid-apply.
+concurrency:
+  group: terraform
+  cancel-in-progress: false
+
 jobs:
   terraform:
     runs-on: ubuntu-latest

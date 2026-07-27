@@ -16,6 +16,16 @@ on:
     types: [completed]
     branches: [main]
 
+# Serialize rollouts. cancel-in-progress stays FALSE on purpose: backend and
+# frontend deploy sequentially, and cancelling between the two ships a
+# version-skewed pair — worse than being one commit behind. GitHub keeps only
+# the newest pending run per group, so a burst of merges collapses to at most
+# one queued deploy behind the running one; the tip guard below makes a stale
+# queued run a no-op.
+concurrency:
+  group: deploy-app
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write   # required for keyless Workload Identity Federation
@@ -36,19 +46,40 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      # Parallel CI runs from a multi-push merge each trigger a deploy; without
+      # this guard the LAST writer wins regardless of commit order (raced on
+      # 2026-07-18 and shipped a stale image). A superseded run self-skips.
+      - name: Bail out if this commit is no longer main's tip
+        id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TIP=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+          if [ "$TIP" != "$SHA" ]; then
+            echo "::notice::${SHA} superseded by ${TIP}; skipping deploy."
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Authenticate to Google Cloud (keyless / WIF)
+        if: steps.tip.outputs.stale != 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
 
       - name: Set up gcloud
+        if: steps.tip.outputs.stale != 'true'
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
+        if: steps.tip.outputs.stale != 'true'
         run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
 
       - name: Build & push images (tagged with the commit SHA)
+        if: steps.tip.outputs.stale != 'true'
         run: |
           set -euo pipefail
           IMG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
@@ -58,6 +89,7 @@ jobs:
           docker push "$IMG/frontend:${SHA}"
 
       - name: Deploy to Cloud Run (image-only update; preserves env/secrets)
+        if: steps.tip.outputs.stale != 'true'
         run: |
           set -euo pipefail
           IMG="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
@@ -67,6 +99,7 @@ jobs:
             --image "$IMG/frontend:${SHA}" --region "${REGION}" --quiet
 
       - name: Summary
+        if: steps.tip.outputs.stale != 'true'
         run: |
           echo "Deployed backend + frontend @ ${SHA}" >> "$GITHUB_STEP_SUMMARY"
           gcloud run services describe siliconcrew-frontend --region "${REGION}" \
