@@ -255,6 +255,7 @@ describe("applyRunStatus", () => {
       stage_history: [{ stage: "synth", status: "completed", ended_at: "2026-07-04T10:00:00Z" }],
       dispatched_at: "2026-07-04T09:50:00Z",
       last_log_lines: ["Placement 42% done"],
+      last_log_source: "partial (updated 16s ago)",
       elapsed_sec: 600,
       backend: "local_docker",
     });
@@ -270,6 +271,10 @@ describe("applyRunStatus", () => {
     });
     expect(job?.stageHistory).toHaveLength(1);
     expect(job?.lastLogLines).toEqual(["Placement 42% done"]);
+    // The backend's honest tail provenance must survive normalization…
+    expect(job?.lastLogSource).toBe("partial (updated 16s ago)");
+    // …and applyRunStatus stamps WHEN we received it (that age is a snapshot).
+    expect(Date.parse(job?.statusFetchedAt ?? "")).toBeGreaterThan(Date.now() - 60_000);
   });
 
   it("a completed payload flips the row to passed and runs the transition detector", () => {

@@ -432,6 +432,9 @@ function installMocks(page: Page) {
       top_module: "alu",
       elapsed_sec: 42,
       last_log_lines: ["Finished 6_report"],
+      // Mirror the real payload: the tail always ships with its provenance
+      // label ("final" | "none" | "partial (updated Ns ago)").
+      last_log_source: "final",
       artifacts_found: status === "completed",
       summary_metrics: { wns_ns: 0.85 },
       auto_checks: {},

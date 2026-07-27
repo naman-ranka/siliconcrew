@@ -214,6 +214,8 @@ describe("ReportArtifact", () => {
         runId: "synth_0003",
         status: "failed",
         lastLogLines: ["ERROR: 12 DRC violations", "route stage failed"],
+        lastLogSource: "final",
+        statusFetchedAt: new Date(Date.now() - 30_000).toISOString(),
       } as any,
       // Keep the effect's load a no-op so the panel is what we assert on.
       loadReportArtifact: (async () => {}) as any,
@@ -223,5 +225,69 @@ describe("ReportArtifact", () => {
     expect(screen.getByText(/Synthesis failed at route/)).toBeInTheDocument();
     expect(screen.getByText("detailed routing hit DRC violations")).toBeInTheDocument();
     expect(screen.getByText(/12 DRC violations/)).toBeInTheDocument();
+    // The tail now carries its provenance + when we received it (invariant 4).
+    expect(screen.getByText(/final/)).toBeInTheDocument();
+    expect(screen.getByText(/as of 30s ago/)).toBeInTheDocument();
+  });
+
+  it("running run whose status slice is THIS run tails the live logs with a staleness label", () => {
+    useStore.setState({
+      runs: [
+        {
+          id: "synth_0004",
+          kind: "synth",
+          status: "running",
+          createdAt: new Date().toISOString(),
+          top: "decoder",
+          pinned: false,
+        },
+      ] as any,
+      synthJob: {
+        runId: "synth_0004",
+        status: "running",
+        currentStage: "place",
+        lastLogLines: ["[INFO] Placement 42% done", "[INFO] legalizing"],
+        lastLogSource: "partial (updated 16s ago)",
+        statusFetchedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+      } as any,
+      loadReportArtifact: (async () => {}) as any,
+    });
+
+    render(<ReportArtifact runId="synth_0004" />);
+    // Spinner header stays…
+    expect(screen.getByText("Synthesizing…")).toBeInTheDocument();
+    // …but the tail the backend already serves is no longer dropped.
+    expect(screen.getByText("Last log lines")).toBeInTheDocument();
+    expect(screen.getByText(/Placement 42% done/)).toBeInTheDocument();
+    // Honest staleness: the backend's own label + when WE received it.
+    expect(screen.getByText(/partial \(updated 16s ago\) · as of 2m ago/)).toBeInTheDocument();
+  });
+
+  it("running run that does NOT own the status slot says so instead of pretending", () => {
+    useStore.setState({
+      runs: [
+        {
+          id: "synth_0005",
+          kind: "synth",
+          status: "running",
+          createdAt: new Date().toISOString(),
+          top: "decoder",
+          pinned: false,
+        },
+      ] as any,
+      // Single-slot store: a DIFFERENT run owns the last-known status slice.
+      synthJob: {
+        runId: "synth_0006",
+        status: "running",
+        lastLogLines: ["[INFO] not this run's logs"],
+      } as any,
+      loadReportArtifact: (async () => {}) as any,
+    });
+
+    render(<ReportArtifact runId="synth_0005" />);
+    expect(screen.getByText("Synthesizing…")).toBeInTheDocument();
+    expect(screen.getByText(/Live logs appear after the next status refresh/)).toBeInTheDocument();
+    expect(screen.queryByText("Last log lines")).not.toBeInTheDocument();
+    expect(screen.queryByText(/not this run's logs/)).not.toBeInTheDocument();
   });
 });

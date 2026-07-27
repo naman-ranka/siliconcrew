@@ -2210,7 +2210,12 @@ export const useStore = create<AppState>((set, get) => ({
     if (!runId) return;
     // Last-known live status first, so the transition detector below can pick
     // up check_notes for its failure toast.
-    set({ synthJob: toSynthJobStatus(runId, job) });
+    // The backend's last_log_source ("partial (updated 16s ago)") is a snapshot
+    // computed at RESPONSE time — stamp when we applied it so the viewer can say
+    // "as of 2m ago" instead of implying the age is live (invariant 4).
+    set({
+      synthJob: { ...toSynthJobStatus(runId, job), statusFetchedAt: new Date().toISOString() },
+    });
     const jobStatus = String(job.status ?? "").toLowerCase();
     // Map the run lifecycle onto the runs-list vocabulary.
     const rowStatus: RunSummary["status"] =
@@ -2606,6 +2611,7 @@ export function toSynthJobStatus(runId: string, job: Record<string, unknown>): S
     lastLogLines: Array.isArray(job.last_log_lines)
       ? (job.last_log_lines as unknown[]).filter((l): l is string => typeof l === "string")
       : undefined,
+    lastLogSource: str(job.last_log_source),
     elapsedSec: num(job.elapsed_sec),
     checkNotes: str(job.check_notes),
     backend: str(job.backend),

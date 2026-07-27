@@ -315,6 +315,10 @@ export interface SynthJobStatus {
   stageHistory?: { stage: string; status: string; ended_at?: string | null }[];
   dispatchedAt?: string | null;
   lastLogLines?: string[];
+  /** Backend's honest label for the tail: "final" | "none" | "partial (updated Ns ago)". */
+  lastLogSource?: string | null;
+  /** Client stamp of WHEN this status payload was applied (staleness, invariant 4). */
+  statusFetchedAt?: string | null;
   elapsedSec?: number | null;
   checkNotes?: string | null;
   backend?: string | null;
