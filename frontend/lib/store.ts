@@ -179,6 +179,16 @@ const emptyActivity = (): ActivitySlice => ({
 // Local start clocks for WS tool calls → durationMs on the synthetic events.
 const _wsToolStart = new Map<string, number>();
 
+// Tool-call failure vocabulary for LIVE ws frames, which carry the tool's raw
+// domain status (e.g. "test_failed"). Must stay a superset-match of the
+// backend's _TOOL_FAILURE_STATUSES (api.py) so a live card never renders
+// green and then flips red when the durable log reconciles.
+const TOOL_FAILURE_STATUSES = new Set([
+  "error", "fail", "failed", "test_failed", "sim_failed",
+  "compile_failed", "lint_failed", "timeout", "timed_out",
+  "cancelled", "canceled",
+]);
+
 // Which dirCache prefixes a completed WS tool invalidates ("" = root only).
 const TOOL_DIR_INVALIDATION: Record<string, string[]> = {
   write_spec: [""],
@@ -1213,7 +1223,7 @@ export const useStore = create<AppState>((set, get) => ({
             source: "agent",
             tool: toolCall?.name ?? prevLocal?.tool ?? "unknown",
             args: toolCall?.args ?? prevLocal?.args ?? {},
-            status: ["error", "fail", "failed"].includes(resultStatus) ? "error" : "ok",
+            status: TOOL_FAILURE_STATUSES.has(resultStatus) ? "error" : "ok",
             resultSummary: typeof data.content === "string" ? data.content.slice(0, 200) : "",
             durationMs: startedAt != null ? Date.now() - startedAt : null,
             runId: null,
