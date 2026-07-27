@@ -536,6 +536,17 @@ class CloudWorkspaceProvider:
 
     # -- the WorkspaceProvider surface ----------------------------------------
 
+    def describe_workspace(self, session_id: str) -> str:
+        """Where this session's workspace lives — WITHOUT materializing it.
+
+        The honest answer for "what path do my tools act on": the local scratch
+        dir this provider stages into. Purely a path computation — no manifest
+        GET, no download, no ``makedirs`` — so a caller that only wants to
+        *report* a location (a session-switch message, an activity log target)
+        never pays for, or triggers, a hydration.
+        """
+        return self._scratch(session_id)
+
     def workspace_for(self, session_id: str) -> str:
         scratch = self._scratch(session_id)
         key = self._key(session_id)
@@ -833,6 +844,39 @@ def get_workspace_provider():
         )
         _PROVIDER = LocalWorkspaceProvider(base)
     return _PROVIDER
+
+
+def describe_workspace(session_id: str, provider=None) -> str:
+    """The path a session's workspace occupies, WITHOUT materializing it.
+
+    ``workspace_for`` is the *materializing* accessor (hosted: hydrate from
+    object storage into scratch). Callers that only need to name the location —
+    "Workspace: …" in an MCP response, the directory an activity event belongs
+    to — must not pay a download, so they ask here instead.
+
+    It answers through the provider seam, never through ``SessionManager``:
+    ``session_manager.get_workspace_path`` returns ``RTL_WORKSPACE/<sid>``,
+    which in hosted is a directory nothing ever writes to (the real workspace
+    is the cloud provider's scratch). Reporting that path is the #43 class of
+    bug — a path that isn't where work happens.
+
+    Resolution: the provider's own ``describe_workspace`` when it has one
+    (``CloudWorkspaceProvider``), else its ``base_dir`` joined with the session
+    id (``LocalWorkspaceProvider``, whose workspaces ARE ``base_dir/<sid>``).
+    A provider offering neither cannot be described without materializing, and
+    saying so loudly beats guessing a path.
+    """
+    if provider is None:
+        provider = get_workspace_provider()
+    describe = getattr(provider, "describe_workspace", None)
+    if callable(describe):
+        return describe(session_id)
+    base_dir = getattr(provider, "base_dir", None)
+    if base_dir:
+        return os.path.join(base_dir, session_id)
+    raise TypeError(
+        f"{type(provider).__name__} cannot describe a workspace path without materializing it"
+    )
 
 
 def set_workspace_provider(provider) -> None:
