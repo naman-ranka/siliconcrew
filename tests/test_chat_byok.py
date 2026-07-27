@@ -182,23 +182,31 @@ def test_hosted_tier_exhausted_emits_structured_error(harness):
 
 
 @pytest.mark.anyio
-async def test_history_read_tolerates_no_key(monkeypatch):
-    """Reading history never 500s when no key is configured — resolve best-effort,
-    pass api_key=None, return empty history."""
+async def test_history_read_never_needs_a_key(monkeypatch):
+    """Reading history is a checkpoint read, not an agent run (#27): it must not
+    resolve a key at all — so a keyless user's transcripts stay readable and a
+    hosted request never pays a BYOK connect + KMS decrypt to render old text."""
     class _NoKeyProvider:
         def resolve(self, uid, model_name):
-            raise ValueError("No key available")
+            raise AssertionError("history read must not resolve an LLM key")
+
+    def _no_agent(**kwargs):
+        raise AssertionError("history read must not build the agent graph")
 
     monkeypatch.setattr(api, "_LLM_KEY_PROVIDER", _NoKeyProvider())
-    monkeypatch.setattr(api, "create_architect_agent", lambda **k: _FakeAgent())
+    monkeypatch.setattr(api, "create_architect_agent", _no_agent)
+
+    class _EmptyCheckpointer:
+        async def aget_tuple(self, config):
+            return None
 
     @asynccontextmanager
     async def fake_ckpt(_path):
-        yield object()
+        yield _EmptyCheckpointer()
 
     monkeypatch.setattr(api, "open_checkpointer", fake_ckpt)
 
-    hist = await api._read_thread_history("t1", "claude-sonnet-4-6", uid=None)
+    hist = await api._read_thread_history("t1", uid=None)
     assert hist == []
 
 

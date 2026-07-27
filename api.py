@@ -1223,22 +1223,44 @@ async def list_models(identity: Identity = Depends(get_identity)):
 # CHAT ENDPOINTS
 # =============================================================================
 
-async def _read_thread_history(thread_id: str, model_name: str, uid: Optional[str] = None) -> List[Dict[str, Any]]:
+_THREAD_ROW_UNFETCHED = object()
+
+
+async def _read_thread_history(
+    thread_id: str,
+    uid: Optional[str] = None,
+    thread_row: Any = _THREAD_ROW_UNFETCHED,
+) -> List[Dict[str, Any]]:
     """Read one LangGraph thread's messages as API history (keyed by thread_id).
 
     Shared by the legacy /api/chat/{session_id}/history (thread_id == session_id =
     Chat 1) and the per-thread history endpoint. Workspace is irrelevant here —
-    this only reads conversation state (no LLM call is made).
+    this only reads conversation state.
 
-    Building the agent constructs an LLM client, which needs a key — but a user
-    may have none yet. Resolve best-effort and tolerate failure (api_key=None);
-    if construction still fails for lack of a key the callers treat it as "no
-    history" so viewing never 500s.
+    This is a CHECKPOINT READ, not an agent run (issue #27). It goes straight to
+    the checkpointer's ``aget_tuple`` — the same lightweight idiom as
+    ``src/utils/transcript.read_thread_messages`` — so it builds no graph, binds
+    no tools, reads no prompt from disk, and needs no LLM key (which on hosted
+    meant an un-pooled BYOK connect + a synchronous KMS decrypt, per request,
+    for a client that was never invoked).
+
+    Honest limitation of reading the checkpoint directly: LangGraph's
+    ``aget_state`` also folds in a superstep's *pending* writes. Those exist only
+    while a turn is mid-superstep or after a crash between supersteps; a
+    completed turn is fully committed to ``channel_values``. A live turn streams
+    over the WS anyway, and the WS's own stop path repairs dangling tool calls
+    into the checkpoint explicitly — so the durable checkpoint is the honest
+    transcript here.
+
+    ``thread_row`` lets a caller that already fetched the row pass it down
+    instead of paying a second identical query.
     """
     # Codex threads persist their own transcript (no checkpointer). Read it from
     # the codex store and return the same history shape the native path yields.
     if _CODEX_STORE is not None:
-        _row = session_manager.get_thread(thread_id, user_id=uid)
+        _row = thread_row
+        if _row is _THREAD_ROW_UNFETCHED:
+            _row = await asyncio.to_thread(session_manager.get_thread, thread_id, user_id=uid)
         if _row and _row.get("runtime") == "codex":
             history: List[Dict[str, Any]] = []
             for m in _CODEX_STORE.list_messages(thread_id):
@@ -1254,25 +1276,14 @@ async def _read_thread_history(thread_id: str, model_name: str, uid: Optional[st
                     })
             return history
 
-    api_key: Optional[str] = None
-    try:
-        api_key = _LLM_KEY_PROVIDER.resolve(uid, model_name).api_key
-    except Exception:
-        # No key resolvable. This path never calls the LLM — it only reads the
-        # checkpoint — but client CONSTRUCTION demands a key string, and with
-        # api_key=None the factory falls back to env vars that a hardened
-        # hosted deployment no longer carries (E5). A placeholder keeps a
-        # keyless user's old transcripts readable instead of silently blank.
-        api_key = "history-read-only"
     async with open_checkpointer(DB_PATH) as memory:
-        agent_graph = create_architect_agent(checkpointer=memory, model_name=model_name, api_key=api_key)
         config = {"configurable": {"thread_id": thread_id}}
-        current_state = await agent_graph.aget_state(config)
-
-        if not current_state.values or "messages" not in current_state.values:
+        saved = await memory.aget_tuple(config)
+        checkpoint = getattr(saved, "checkpoint", None) if saved else None
+        messages = ((checkpoint or {}).get("channel_values") or {}).get("messages") or []
+        if not messages:
             return []
 
-        messages = current_state.values["messages"]
         history: List[Dict[str, Any]] = []
         for msg in messages:
             if isinstance(msg, SystemMessage):
@@ -1293,46 +1304,17 @@ async def _read_thread_history(thread_id: str, model_name: str, uid: Optional[st
         return history
 
 
-def _session_model(session_id: str, uid: Optional[str]) -> str:
-    meta = session_manager.get_session_metadata(session_id, user_id=uid)
-    return normalize_model_name(meta.get("model_name", DEFAULT_MODEL) if meta else DEFAULT_MODEL)
-
-
-def _is_missing_llm_error(exc: Exception) -> bool:
-    """True when reading history failed only because no LLM is configured.
-
-    A brand-new session legitimately has no history, and reading conversation
-    state should not need a live model — but the agent graph is built with one,
-    so the absence of an API key / provider package surfaces here. Treat that as
-    "no history" (empty), never as a server error. Any other failure is real and
-    must still propagate.
-    """
-    msg = str(exc).lower()
-    signatures = (
-        "missing api key",
-        "no module named 'langchain_google_genai'",
-        "no module named 'langchain_anthropic'",
-        "no module named 'langchain_openai'",
-        "api key",
-        "api_key",
-    )
-    return any(s in msg for s in signatures)
-
-
 @app.get("/api/chat/{session_id:path}/history")
 async def get_chat_history(session_id: str, identity: Identity = Depends(get_identity)) -> List[Dict[str, Any]]:
     """Get chat history for a session's default thread (Chat 1; owner only)."""
-    uid = _require_owned(session_id, identity)
+    # The ownership query is a blocking metadata read — off the event loop (#27).
+    uid = await asyncio.to_thread(_require_owned, session_id, identity)
     # History is checkpoint-DB-backed, not in the workspace dir — ownership above
     # (metadata store) is the gate; do NOT 404 on ephemeral local-disk absence.
     try:
         # Back-compat: the default thread id == session_id.
-        return await _read_thread_history(session_id, _session_model(session_id, uid), uid=uid)
+        return await _read_thread_history(session_id, uid=uid)
     except Exception as e:
-        # A fresh session with no LLM key has no history — return empty, not 500.
-        if _is_missing_llm_error(e):
-            print(f"[INFO] No history (no LLM configured) for {session_id}: {e}")
-            return []
         print(f"[ERROR] Loading history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1370,17 +1352,27 @@ async def create_thread(session_id: str, data: ThreadCreate, identity: Identity 
 
 @app.get("/api/sessions/{session_id:path}/threads/{tid}/history")
 async def get_thread_history(session_id: str, tid: str, identity: Identity = Depends(get_identity)) -> List[Dict[str, Any]]:
-    """History for one thread (owner-checked; thread must belong to the session)."""
-    uid = _require_owned(session_id, identity)
-    if not session_manager.thread_belongs_to_session(tid, session_id, user_id=uid):
+    """History for one thread (owner-checked; thread must belong to the session).
+
+    The two gate queries are blocking metadata reads, so they run off the event
+    loop in ONE hop, and the thread row they fetch is handed to the reader
+    instead of being queried a second time (#27).
+    """
+    uid = _uid(identity)
+
+    def _gate() -> tuple[bool, Optional[Dict[str, Any]]]:
+        if not session_manager.owns_session(session_id, uid):
+            return False, None
+        return True, session_manager.get_thread(tid, user_id=uid)
+
+    owned, row = await asyncio.to_thread(_gate)
+    if not owned:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not (row and row.get("session_id") == session_id):
         raise HTTPException(status_code=404, detail="Thread not found")
     try:
-        return await _read_thread_history(tid, _session_model(session_id, uid), uid=uid)
+        return await _read_thread_history(tid, uid=uid, thread_row=row)
     except Exception as e:
-        # A thread with no LLM key configured has no readable history — empty, not 500.
-        if _is_missing_llm_error(e):
-            print(f"[INFO] No thread history (no LLM configured) for {tid}: {e}")
-            return []
         print(f"[ERROR] Loading thread history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
