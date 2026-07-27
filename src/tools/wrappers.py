@@ -443,9 +443,13 @@ def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0, end_ti
     """
     Reads a VCD waveform file to inspect signal values.
     Use this when simulation fails to understand WHY.
+    Signal naming: full hierarchical paths are accepted ('tb.dut.count'); a bare
+    leaf name ('count') works whenever it is unique in the file. An ambiguous
+    bare name is reported with its candidates instead of being guessed.
     Args:
         vcd_file: Name of the .vcd file (e.g., 'dump.vcd').
-        signals: List of signal names to inspect (e.g., ['clk', 'rst', 'count']).
+        signals: Signal names to inspect — hierarchical ('tb.dut.count') or bare
+            when unique (e.g., ['clk', 'rst', 'count']).
         start_time: Start time to view.
         end_time: End time to view.
     """
