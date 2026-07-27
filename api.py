@@ -389,6 +389,25 @@ def format_tool_result_for_api(content: str) -> dict:
     }
 
 
+_TOOL_FAILURE_STATUSES = frozenset({
+    "error", "fail", "failed", "test_failed", "sim_failed",
+    "compile_failed", "lint_failed", "timeout", "timed_out",
+    "cancelled", "canceled",
+})
+
+
+def tool_call_status(result: dict) -> str:
+    """Whether the tool CALL succeeded, judged from the tool's domain status.
+
+    Denylist, never an allowlist: no SiliconCrew tool returns the literal
+    "success" (they return "test_passed", "queued", "ok", "passed", ...), so
+    anything not explicitly a failure is a completed call. Same posture as the
+    failure sets in ``src/api/activity.py`` and ``frontend/lib/store.ts``
+    (a superset of those two, which only know error/fail/failed).
+    """
+    return "error" if str(result.get("status", "")).strip().lower() in _TOOL_FAILURE_STATUSES else "success"
+
+
 def resolve_report_path(workspace: str, run_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
     if run_id:
         run_dir = get_run_dir(workspace, run_id)
@@ -2121,7 +2140,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             source="api_ws",
                             tool=call_meta.get("name", "unknown"),
                             result=msg.content,
-                            status="success" if result.get("status") == "success" else "error",
+                            status=tool_call_status(result),
                             tool_call_id=msg.tool_call_id,
                             arguments=call_meta.get("args", {}),
                         )
