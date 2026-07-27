@@ -625,7 +625,71 @@ def _constraints_guardrail(
         return result
 
     if spec.module_name != top_module:
-        result["note"] = f"Spec module '{spec.module_name}' does not match top module '{top_module}'."
+        if constraints_mode != "bypass":
+            result["note"] = (
+                f"Spec module '{spec.module_name}' does not match top module '{top_module}'. "
+                f"If '{top_module}' is a synthesis-only top (a wrapper the spec does not "
+                "describe), rerun start_synthesis with constraints_mode='bypass' and an "
+                "explicit clock_period_ns."
+            )
+            return result
+
+        # bypass: the user asserts the spec does not describe this top. Nothing
+        # in a DIFFERENT module's spec can be trusted to describe this top's
+        # ports, so constrain from the explicit clock period on the default
+        # clock port — the same shape as the no-spec fallback branch — and say
+        # exactly what was assumed. The generated SDC is guarded
+        # (``if {[llength $_sc_clk_ports] > 0}``), so a port name that does not
+        # exist on the real top degrades to "no clock constraint", never a hard
+        # ORFS failure.
+        requested_clock = (
+            fallback_clock_period_ns if fallback_clock_period_ns and fallback_clock_period_ns > 0 else None
+        )
+        spec_clock_ports = [
+            p.name for p in spec.ports
+            if p.direction == "input" and p.name.lower() in {"clk", "clock", "clk_i"}
+        ]
+        clock_port = spec_clock_ports[0] if spec_clock_ports else "clk"
+        if requested_clock is not None:
+            period = requested_clock
+            source_note = f"constrained from the explicit clock_period_ns ({period} ns) on port '{clock_port}'"
+            clock_source = "requested"
+        elif spec.clock_period_ns > 0:
+            period = spec.clock_period_ns
+            source_note = (
+                f"NO explicit clock_period_ns was given, so the period ({period} ns) was taken "
+                f"from the spec of a DIFFERENT module ('{spec.module_name}'); applied on port "
+                f"'{clock_port}'"
+            )
+            clock_source = "spec_other_module"
+        else:
+            result["note"] = (
+                f"constraints_mode='bypass': spec module '{spec.module_name}' does not describe "
+                f"top module '{top_module}', and neither an explicit clock_period_ns nor a usable "
+                "spec clock period is available to constrain from."
+            )
+            return result
+
+        sdc_path = os.path.join(run_dir, "constraints.sdc")
+        _write_default_sdc(
+            sdc_path=sdc_path, clock_period_ns=period, clock_port=clock_port, platform=platform
+        )
+        caveat = (
+            f"constraints_mode='bypass': spec module '{spec.module_name}' does not describe top "
+            f"module '{top_module}'; {source_note}"
+        )
+        result.update({
+            "status": "pass",
+            "note": caveat + ".",
+            # Carried into run_meta and appended to the TERMINAL check_notes: a
+            # run constrained under a bypassed spec must keep saying so after it
+            # completes, not only in its dispatch-time note (invariant #4).
+            "caveat": caveat,
+            "sdc_path": sdc_path,
+            "effective_clock_period_ns": period,
+            "clock_period_ns": period,
+            "clock_source": clock_source,
+        })
         return result
 
     clock_ports = [p.name for p in spec.ports if p.direction == "input" and p.name.lower() in {"clk", "clock", "clk_i"}]
@@ -696,6 +760,12 @@ def _constraints_guardrail(
         "clock_source": "spec",
     })
     return result
+
+
+def _compose_check_notes(*parts: Optional[str]) -> str:
+    """Join the terminal note's parts, dropping empties. One separator, so a
+    reader never has to guess which verdict a clause belongs to."""
+    return " · ".join(p for p in parts if p)
 
 
 def _infer_stage(lines: List[str]) -> str:
@@ -1527,6 +1597,10 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
         # the parent's SDC time unit (legacy parent -> no marker, by design).
         "sdc_time_unit": parent_meta.get("sdc_time_unit"),
         "constraints_mode": parent_meta.get("constraints_mode", "auto"),
+        # A retry reuses the parent's constraints.sdc verbatim, so any caveat
+        # about HOW that SDC was produced (e.g. a bypassed spec/top mismatch)
+        # is still true of this run and keeps being disclosed.
+        "constraints_caveat": parent_meta.get("constraints_caveat"),
         "utilization": args["utilization"],
         "aspect_ratio": args["aspect_ratio"],
         "core_margin": args["core_margin"],
@@ -1583,7 +1657,9 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     base_note = signoff["note"] if auto_checks.signoff != "pass" else retry_completed_note
     # Timing rides alongside the artifact verdict instead of being swallowed by
     # it: a retry that closed the flow with negative slack says so (issue #64).
-    run_meta["check_notes"] = f"{base_note} · {timing_note}"
+    run_meta["check_notes"] = _compose_check_notes(
+        base_note, timing_note, run_meta.get("constraints_caveat")
+    )
     run_meta["next_action"] = (
         "Inspect stage summaries and continue tuning." if run_meta["status"] == "completed"
         else "Inspect retry stage logs and adjust parameters."
@@ -2051,6 +2127,10 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         },
         "auto_checks": asdict(auto_checks),
         "check_notes": constraints["note"],
+        # Durable caveat from the constraints guardrail (currently: a bypassed
+        # spec/top mismatch). Appended to EVERY terminal check_notes below so a
+        # completed run keeps disclosing how it was constrained.
+        "constraints_caveat": constraints.get("caveat"),
         "stages": _init_stage_metadata(),
         # Reproducibility stamp: repo commit, pinned ORFS image digest, PDK,
         # iverilog version, and the pinned NUM_CORES used for this run.
@@ -2073,6 +2153,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         return run_meta
 
     run_meta["stages"]["constraints"]["status"] = "completed"
+    caveat = constraints.get("caveat")
 
     if max_stage == "constraints":
         # Constraints-only dry run: validate the SDC guardrail and stop before
@@ -2080,8 +2161,9 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         run_meta["status"] = "completed"
         run_meta["current_stage"] = "constraints"
         run_meta["auto_checks"] = asdict(auto_checks)  # signoff/equiv stay "skip"
-        run_meta["check_notes"] = (
-            "Constraints validated; partial flow (max_stage=constraints): ORFS stages skipped."
+        run_meta["check_notes"] = _compose_check_notes(
+            "Constraints validated; partial flow (max_stage=constraints): ORFS stages skipped.",
+            caveat,
         )
         run_meta["next_action"] = (
             "Rerun start_synthesis with a later max_stage (e.g. 'synth') to execute the flow."
@@ -2152,9 +2234,10 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         if target_marker:
             run_meta["status"] = "completed"
             run_meta["current_stage"] = max_stage
-            run_meta["check_notes"] = (
+            run_meta["check_notes"] = _compose_check_notes(
                 f"Partial flow completed through '{max_stage}'; signoff/equiv/timing "
-                f"checks skipped: partial flow (max_stage={max_stage})."
+                f"checks skipped: partial flow (max_stage={max_stage}).",
+                caveat,
             )
             next_stage = _next_stage_after(max_stage)
             if next_stage in PD_RETRYABLE_STAGES:
@@ -2169,9 +2252,10 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         else:
             run_meta["status"] = "failed"
             run_meta["current_stage"] = _infer_stage(_collect_log_tail(run_dir))
-            run_meta["check_notes"] = (
+            run_meta["check_notes"] = _compose_check_notes(
                 f"Partial flow failed: target stage '{max_stage}' produced no "
-                "completion artifact."
+                "completion artifact.",
+                caveat,
             )
             run_meta["next_action"] = (
                 "Use search_logs_tool with error/timing queries and fix RTL/constraints."
@@ -2230,7 +2314,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         else "Artifact/log guardrails passed"
     )
     base_note = signoff["note"] if auto_checks.signoff != "pass" else completed_note
-    run_meta["check_notes"] = f"{base_note} · {timing_note}"
+    run_meta["check_notes"] = _compose_check_notes(base_note, timing_note, caveat)
     run_meta["next_action"] = (
         "Use search_logs_tool for detailed PPA/error verification." if run_meta["status"] == "completed"
         else "Use search_logs_tool with error/timing queries and fix RTL/constraints."

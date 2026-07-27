@@ -270,6 +270,150 @@ def test_constraints_guardrail_strict_can_fail_on_missing_clock(monkeypatch):
         assert "constraints_mode='auto'" in final["check_notes"] or "constraints_mode='bypass'" in final["check_notes"]
 
 
+# ---------------------------------------------------------------------------
+# Issue #73: constraints_mode="bypass" was accepted and advertised but checked
+# NOWHERE — the spec-module vs top-module equality rejection ran in every mode,
+# so a synthesis-only top (a wrapper the spec does not describe) could not be
+# synthesized at all and "bypass" behaved exactly like "strict".
+# ---------------------------------------------------------------------------
+
+
+def _bypass_workspace(workspace: str) -> str:
+    """Design whose top is GCN_synth while the only spec describes GCN."""
+    design = os.path.join(workspace, "gcn_synth.v")
+    _write_file(
+        design,
+        "module GCN_synth(input clk, input rst, output reg [3:0] q); "
+        "always @(posedge clk) if(rst) q<=0; else q<=q+1; endmodule",
+    )
+    spec = DesignSpec(
+        module_name="GCN",
+        description="graph conv core",
+        clock_period_ns=10.0,
+        ports=[PortSpec(name="clk", direction="input"), PortSpec(name="rst", direction="input")],
+    )
+    save_yaml_file(spec, os.path.join(workspace, "gcn_spec.yaml"))
+    return design
+
+
+def _poll_terminal(run_id: str, workspace: str):
+    for _ in range(40):
+        status = sm.get_synthesis_status(run_id, workspace=workspace)
+        if status["status"] in {"completed", "failed"}:
+            return status
+        time.sleep(0.05)
+    raise AssertionError("run did not reach a terminal status")
+
+
+def test_constraints_bypass_allows_synthesis_only_top(monkeypatch):
+    with tempfile.TemporaryDirectory() as workspace:
+        design = _bypass_workspace(workspace)
+        called = {"value": False}
+
+        def fake_orfs(**kwargs):
+            called["value"] = True
+            run_dir = kwargs["run_dir"]
+            reports = os.path.join(run_dir, "orfs_reports", "sky130hd", "GCN_synth", "base")
+            results = os.path.join(run_dir, "orfs_results", "sky130hd", "GCN_synth", "base")
+            os.makedirs(reports, exist_ok=True)
+            os.makedirs(results, exist_ok=True)
+            _write_file(
+                os.path.join(reports, "6_finish.rpt"),
+                "wns max 0.31\ntns max 0.00\nsetup violation count 0\nhold violation count 0\n"
+                "Total  1.23e-04  2.34e-05  1.11e-06  1.50e-04  100.0%\n",
+            )
+            _write_file(
+                os.path.join(reports, "synth_stat.txt"),
+                "Chip area for module '\\GCN_synth': 116.362\n42 116.362 cells\n",
+            )
+            _write_file(os.path.join(results, "6_final.v"), "module GCN_synth(); endmodule")
+            _write_file(os.path.join(results, "6_final.gds"), "gds")
+            return {"success": True, "stdout": "ok", "stderr": "", "command": "fake"}
+
+        monkeypatch.setattr(sm, "_run_orfs", fake_orfs)
+
+        started = sm.start_synthesis_job(
+            workspace=workspace,
+            verilog_files=[design],
+            top_module="GCN_synth",
+            platform="sky130hd",
+            clock_period_ns=4.0,
+            constraints_mode="bypass",
+        )
+        final = _poll_terminal(started["run_id"], workspace)
+
+        # The mismatch no longer blocks the run...
+        assert final["status"] == "completed"
+        assert final["auto_checks"]["constraints"] == "pass"
+        assert called["value"] is True
+
+        run_dir = os.path.join(workspace, "synth_runs", started["run_id"])
+        with open(os.path.join(run_dir, "run_meta.json"), "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        # ...it is constrained from the EXPLICIT clock period, not the spec's.
+        assert meta["effective_clock_period_ns"] == 4.0
+        assert meta["clock_source"] == "requested"
+        with open(os.path.join(run_dir, "constraints.sdc"), "r", encoding="utf-8") as f:
+            assert "-period 4.0" in f.read()
+
+        # ...and the run keeps disclosing the mismatch after it completes.
+        for text in (meta["constraints_caveat"], final["check_notes"]):
+            assert "bypass" in text
+            assert "GCN" in text and "GCN_synth" in text
+
+
+def test_constraints_bypass_without_explicit_clock_says_where_the_period_came_from(monkeypatch):
+    """No explicit clock_period_ns: fall back to the spec period, loudly — it
+    came from a module this run is not synthesizing."""
+    with tempfile.TemporaryDirectory() as workspace:
+        design = _bypass_workspace(workspace)
+        run_dir = os.path.join(workspace, "run")
+        os.makedirs(run_dir, exist_ok=True)
+
+        result = sm._constraints_guardrail(
+            workspace,
+            run_dir,
+            "GCN_synth",
+            None,
+            constraints_mode="bypass",
+            platform="sky130hd",
+        )
+
+        assert result["status"] == "pass"
+        assert result["clock_period_ns"] == 10.0
+        assert result["clock_source"] == "spec_other_module"
+        assert "NO explicit clock_period_ns" in result["note"]
+        assert "DIFFERENT module" in result["note"]
+
+
+def test_spec_top_mismatch_still_blocks_in_auto_mode(monkeypatch):
+    """Default (auto) mode is unchanged — the mismatch is still a hard stop —
+    but the rejection now names the remedy."""
+    with tempfile.TemporaryDirectory() as workspace:
+        design = _bypass_workspace(workspace)
+        called = {"value": False}
+
+        def fake_orfs(**kwargs):
+            called["value"] = True
+            return {"success": True, "stdout": "", "stderr": "", "command": "fake"}
+
+        monkeypatch.setattr(sm, "_run_orfs", fake_orfs)
+
+        started = sm.start_synthesis_job(
+            workspace=workspace,
+            verilog_files=[design],
+            top_module="GCN_synth",
+            platform="sky130hd",
+        )
+        final = _poll_terminal(started["run_id"], workspace)
+
+        assert final["status"] == "failed"
+        assert final["auto_checks"]["constraints"] == "fail"
+        assert called["value"] is False
+        assert "constraints_mode='bypass'" in final["check_notes"]
+        assert "clock_period_ns" in final["check_notes"]
+
+
 def _write_clean_final_orfs_outputs(run_dir: str, top_module: str, dirty_route_drc: bool = False) -> None:
     report_dir = os.path.join(run_dir, "orfs_reports", "sky130hd", top_module, "base")
     result_dir = os.path.join(run_dir, "orfs_results", "sky130hd", top_module, "base")
