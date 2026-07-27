@@ -86,6 +86,12 @@ Use waveform_tool on the .vcd to identify x/z propagation, output cycle misalign
 reset behavior at the point of divergence. For post-synth failures where RTL sim passed,
 uninitialized gate-level FFs (x states) are the most common root cause — check reset coverage
 before concluding the RTL is wrong.
+- Pass convention: a testbench must $display("TEST PASSED") on success. Status is an EXACT
+  substring match on that marker — no marker means failed, however clean the log looks. Use a
+  different string only by passing pass_marker explicitly.
+- Icarus gotcha: an unpacked-array output port received as `logic` in the parent reads x
+  forever, silently (no error). Receive unpacked-array ports as `wire` (nets). Suspect this
+  first whenever the DUT's internals look correct but the parent-side values are all x.
 
 Iteration policy (mandatory when goals are unmet):
 1. If any of the following fail, run optimization iterations:

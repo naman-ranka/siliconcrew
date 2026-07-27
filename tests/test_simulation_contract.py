@@ -163,6 +163,30 @@ def test_post_synth_unknown_run_is_typed_outcome():
         assert result["recovery"] is None
 
 
+def test_pass_marker_default_has_one_definition():
+    """F11: the pass marker is a contract. Every entry point that exposes a
+    default must reach PASS_MARKER_DEFAULT rather than re-literal it, so the
+    agent-facing schemas can never drift from what run_simulation greps for."""
+    import inspect
+
+    from src.tools import wrappers
+
+    assert rs.PASS_MARKER_DEFAULT == "TEST PASSED"
+
+    defaults = {
+        "run_simulation": inspect.signature(rs.run_simulation).parameters["pass_marker"].default,
+        "run_sim_isolated": inspect.signature(sm.run_sim_isolated).parameters["pass_marker"].default,
+        "simulation_tool": wrappers.simulation_tool.args["pass_marker"]["default"],
+        "run_isolated_simulation": wrappers.run_isolated_simulation.args["pass_marker"]["default"],
+    }
+    assert set(defaults.values()) == {rs.PASS_MARKER_DEFAULT}, defaults
+
+    # …and the wrapper docstrings state the value, since that is all the agent
+    # sees when it writes a testbench.
+    for fn in (wrappers.simulation_tool, wrappers.run_isolated_simulation):
+        assert rs.PASS_MARKER_DEFAULT in (fn.description or ""), fn.name
+
+
 def test_simulation_requires_explicit_pass_marker(monkeypatch):
     monkeypatch.setattr(rs, "_compile", lambda **kwargs: {"returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"})
     monkeypatch.setattr(rs, "_simulate", lambda **kwargs: {"returncode": 0, "stdout": "PASS generic\n", "stderr": "", "command": "vvp"})

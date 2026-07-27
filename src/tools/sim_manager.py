@@ -22,7 +22,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from src.tools.run_simulation import run_simulation
+from src.tools.run_simulation import PASS_MARKER_DEFAULT, run_simulation
 
 RUNS_DIRNAME = "sim_runs"
 INDEX_FILENAME = "index.json"
@@ -229,7 +229,7 @@ def run_sim_isolated(
     netlist_file: Optional[str] = None,
     platform: Optional[str] = None,
     sim_profile: str = "auto",
-    pass_marker: str = "TEST PASSED",
+    pass_marker: str = PASS_MARKER_DEFAULT,
     timeout: int = 60,
     parent_run_id: Optional[str] = None,
     _runner=run_simulation,

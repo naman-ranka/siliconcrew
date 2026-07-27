@@ -444,6 +444,11 @@ endmodule
 5. Re-run linter to verify fix
 
 ### When Simulation Fails
+0. Pass convention: the testbench must `$display("TEST PASSED")` on success — status is an
+   exact substring match on that marker (or an explicit `pass_marker`); no marker = failed.
+   Icarus gotcha: an unpacked-array output port received as `logic` in the parent reads x
+   forever — receive such ports as `wire` (nets). Suspect this when DUT internals look
+   correct but parent-side values are all x.
 1. **DO NOT GUESS** at the fix
 2. Check the testbench output for error messages
 3. Use `waveform_tool` to inspect signals:

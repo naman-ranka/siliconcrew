@@ -5,7 +5,7 @@ from typing import Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from src.tools.run_linter import run_linter
-from src.tools.run_simulation import run_simulation
+from src.tools.run_simulation import PASS_MARKER_DEFAULT, run_simulation
 from src.tools.read_waveform import read_waveform
 from src.tools.run_cocotb import run_cocotb
 from src.tools.run_sby import run_sby
@@ -170,10 +170,14 @@ def simulation_tool(
     netlist_file: str = None,
     platform: str = None,
     sim_profile: str = "auto",
-    pass_marker: str = "TEST PASSED",
+    pass_marker: str = PASS_MARKER_DEFAULT,
 ) -> str:
     """
     Runs RTL or post-synthesis simulation with strict status contracts.
+    Pass convention: a testbench must $display("TEST PASSED") on success — the
+    status is decided by an EXACT substring match on that marker, nothing else
+    (a silent run is a failure, never a pass). Use a different marker only by
+    passing pass_marker explicitly.
     Args:
         verilog_files: List of filenames to compile (usually includes testbench).
         top_module: Name of the top-level module in the testbench.
@@ -256,12 +260,16 @@ def run_isolated_simulation(
     mode: str = "rtl",
     run_id: str = None,
     sim_profile: str = "auto",
-    pass_marker: str = "TEST PASSED",
+    pass_marker: str = PASS_MARKER_DEFAULT,
 ) -> str:
     """
     Runs a manifest-driven simulation in an isolated sim_runs/sim_NNNN/ directory
     (its own VCD, persisted run record + provenance). Prefer this over simulation_tool
     so runs stay comparable and waveforms never collide.
+    Pass convention: a testbench must $display("TEST PASSED") on success — the
+    status is decided by an EXACT substring match on that marker, nothing else
+    (a silent run is a failure, never a pass). Use a different marker only by
+    passing pass_marker explicitly.
     Args:
         sim_top: testbench top module; defaults to the manifest's simTop.
         mode: 'rtl' or 'post_synth'.
