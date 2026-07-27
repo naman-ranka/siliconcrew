@@ -9,7 +9,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.tools.pdk_units import platform_time_unit, ns_to_platform_time, time_unit_to_ns
 from src.tools.run_docker import run_docker_command
@@ -434,6 +434,12 @@ class GuardrailSummary:
     constraints: str = "skip"
     signoff: str = "skip"
     equiv: str = "skip"
+    # Timing closure, judged from the canonical-ns summary_metrics. Deliberately
+    # a SEPARATE axis from signoff (which only answers "did ORFS produce clean
+    # artifacts/logs"): a run can hand back a complete GDS with WNS = -1137 ns.
+    # It never feeds the run status — the flow really did complete — it just
+    # stops the notes from claiming everything passed when timing did not.
+    timing: str = "skip"
 
 
 def _now_iso() -> str:
@@ -864,7 +870,9 @@ def _find_stage_artifacts(run_dir: str) -> Dict[str, Dict[str, str]]:
     return found
 
 
-def _orfs_final_artifacts_are_clean(run_dir: str, top_module: str) -> Dict[str, str]:
+def _orfs_final_artifacts_are_clean(
+    run_dir: str, top_module: str, run_meta: Optional[Dict[str, Any]] = None
+) -> Dict[str, str]:
     finish_report = _find_report_file(run_dir, "6_finish.rpt")
     if not finish_report:
         return {"status": "fail", "note": "6_finish.rpt not found"}
@@ -883,7 +891,12 @@ def _orfs_final_artifacts_are_clean(run_dir: str, top_module: str) -> Dict[str, 
     if wns is None or tns is None:
         return {"status": "fail", "note": "final timing metrics could not be parsed"}
     if wns < 0 or tns != 0:
-        return {"status": "fail", "note": f"final timing is not clean: WNS={wns}, TNS={tns}"}
+        # The sign comparisons above are unit-invariant, but the NOTE is read by
+        # humans and agents, so print canonical ns (raw asap7 report values are
+        # ps — "WNS=-1137.59" unlabeled reads as ns and is off by 1000x, #63).
+        wns_ns = _normalize_report_time_ns(wns, run_meta or {})
+        tns_ns = _normalize_report_time_ns(tns, run_meta or {})
+        return {"status": "fail", "note": f"final timing is not clean: WNS={wns_ns} ns, TNS={tns_ns} ns"}
 
     violations = finish_data.get("violations", {})
     for key in ("setup", "hold", "max_slew", "max_cap", "max_fanout"):
@@ -1552,21 +1565,25 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     run_meta["docker_stdout_tail"] = (docker_result.get("stdout") or "")[-1200:]
     run_meta["docker_stderr_tail"] = (docker_result.get("stderr") or "")[-1200:]
 
-    signoff = _signoff_guardrail(run_dir, args["top_module"], docker_result)
+    signoff = _signoff_guardrail(run_dir, args["top_module"], docker_result, run_meta)
     auto_checks.signoff = signoff["status"]
-    run_meta["auto_checks"] = asdict(auto_checks)
     retry_netlist = _find_netlist(run_dir, args["top_module"])
     run_meta["netlist_path"] = retry_netlist
     _attach_sim_contract(run_meta, workspace, retry_netlist, args.get("platform"), args["top_module"])
     # Same shared finalization parser as the full-flow worker (see _job_worker).
     run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
+    auto_checks.timing, timing_note = _timing_verdict(run_meta["summary_metrics"])
+    run_meta["auto_checks"] = asdict(auto_checks)
     run_meta["status"] = "completed" if auto_checks.signoff == "pass" else "failed"
     retry_completed_note = (
         signoff["note"]
         if signoff["note"].startswith("ORFS command returned nonzero")
         else "PD retry completed"
     )
-    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else retry_completed_note
+    base_note = signoff["note"] if auto_checks.signoff != "pass" else retry_completed_note
+    # Timing rides alongside the artifact verdict instead of being swallowed by
+    # it: a retry that closed the flow with negative slack says so (issue #64).
+    run_meta["check_notes"] = f"{base_note} · {timing_note}"
     run_meta["next_action"] = (
         "Inspect stage summaries and continue tuning." if run_meta["status"] == "completed"
         else "Inspect retry stage logs and adjust parameters."
@@ -1581,14 +1598,19 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     return run_meta
 
 
-def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, Any]) -> Dict[str, str]:
+def _signoff_guardrail(
+    run_dir: str,
+    top_module: str,
+    docker_result: Dict[str, Any],
+    run_meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
     artifacts = _collect_artifacts(run_dir)
     if artifacts["reports"] == 0:
         return {"status": "fail", "note": "No ORFS reports found"}
 
     recovered = False
     if not docker_result.get("success"):
-        recovery = _orfs_final_artifacts_are_clean(run_dir, top_module)
+        recovery = _orfs_final_artifacts_are_clean(run_dir, top_module, run_meta)
         if recovery["status"] != "pass":
             return {"status": "fail", "note": f"ORFS command failed; {recovery['note']}"}
         recovered = True
@@ -1604,7 +1626,9 @@ def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, A
     if recovered:
         return {"status": "pass", "note": "ORFS command returned nonzero, but final artifacts and reports are clean"}
 
-    return {"status": "pass", "note": "Signoff artifact/log checks passed"}
+    # Name the COVERAGE honestly: this guardrail is artifact/log-only. Timing
+    # closure is a separate axis (auto_checks.timing / _timing_verdict).
+    return {"status": "pass", "note": "Artifact/log checks passed (timing evaluated separately)"}
 
 
 def _persist_run_meta(run_dir: str, meta: Dict[str, Any]) -> None:
@@ -2129,8 +2153,8 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
             run_meta["status"] = "completed"
             run_meta["current_stage"] = max_stage
             run_meta["check_notes"] = (
-                f"Partial flow completed through '{max_stage}'; signoff/equiv checks "
-                f"skipped: partial flow (max_stage={max_stage})."
+                f"Partial flow completed through '{max_stage}'; signoff/equiv/timing "
+                f"checks skipped: partial flow (max_stage={max_stage})."
             )
             next_stage = _next_stage_after(max_stage)
             if next_stage in PD_RETRYABLE_STAGES:
@@ -2159,7 +2183,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         _append_index(workspace, run_id, run_meta["status"])
         return run_meta
 
-    signoff = _signoff_guardrail(run_dir, top_module, docker_result)
+    signoff = _signoff_guardrail(run_dir, top_module, docker_result, run_meta)
     auto_checks.signoff = signoff["status"]
 
     netlist_path = _find_netlist(run_dir, top_module)
@@ -2190,15 +2214,23 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
     # scan missed both cell_count and the "wns max" format, leaving them null.
     run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
 
+    # Timing verdict from the metrics just computed. Recorded as its own axis and
+    # deliberately NOT part of final_ok: a run that produced a clean GDS with
+    # negative slack genuinely completed — it just did not close timing, and the
+    # notes must say so instead of "All guardrails passed" (issue #64).
+    auto_checks.timing, timing_note = _timing_verdict(run_meta["summary_metrics"])
+    run_meta["auto_checks"] = asdict(auto_checks)
+
     final_ok = auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
     run_meta["status"] = "completed" if final_ok else "failed"
     run_meta["current_stage"] = "finish" if final_ok else _infer_stage(_collect_log_tail(run_dir))
     completed_note = (
         signoff["note"]
         if signoff["note"].startswith("ORFS command returned nonzero")
-        else "All guardrails passed"
+        else "Artifact/log guardrails passed"
     )
-    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else completed_note
+    base_note = signoff["note"] if auto_checks.signoff != "pass" else completed_note
+    run_meta["check_notes"] = f"{base_note} · {timing_note}"
     run_meta["next_action"] = (
         "Use search_logs_tool for detailed PPA/error verification." if run_meta["status"] == "completed"
         else "Use search_logs_tool with error/timing queries and fix RTL/constraints."
@@ -2545,7 +2577,9 @@ def _build_status_response(
         "last_log_source": last_log_source,
         "artifacts_found": _collect_artifacts(run_dir),
         "summary_metrics": meta.get("summary_metrics"),
-        "auto_checks": meta.get("auto_checks", {"constraints": "skip", "signoff": "skip", "equiv": "skip"}),
+        "auto_checks": meta.get(
+            "auto_checks", {"constraints": "skip", "signoff": "skip", "equiv": "skip", "timing": "skip"}
+        ),
         "check_notes": meta.get("check_notes", ""),
         "next_action": next_action,
         "poll_after_sec": poll_after,
@@ -2671,7 +2705,8 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
                 meta["status"] = "failed"
                 meta["check_notes"] = f"Job execution error: {exc}"
                 meta["auto_checks"] = meta.get(
-                    "auto_checks", {"constraints": "fail", "signoff": "fail", "equiv": "skip"}
+                    "auto_checks",
+                    {"constraints": "fail", "signoff": "fail", "equiv": "skip", "timing": "skip"},
                 )
                 if not meta.get("finished_at"):
                     meta["finished_at"] = _now_iso()
@@ -3731,6 +3766,26 @@ def _derive_fmax_mhz(clock_period_ns: Optional[float], wns_ns: Optional[float]) 
         return round(1000.0 / achieved_period, 2)
     except Exception:
         return None
+
+
+def _timing_verdict(summary_metrics: Optional[Dict[str, Any]]) -> Tuple[str, str]:
+    """Timing closure from canonical-ns summary_metrics -> (verdict, note).
+
+    Verdicts: ``pass`` (WNS >= 0), ``fail`` (WNS < 0), ``skip`` (no WNS in the
+    reports — a partial flow, or a run whose STA never produced one). Reads the
+    SAME numbers the caller already sees in summary_metrics, so the note can
+    never disagree with the metrics; it interprets nothing else.
+    """
+    metrics = summary_metrics or {}
+    wns = metrics.get("wns_ns")
+    try:
+        wns_f = float(wns)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "skip", "timing not evaluated (no WNS in reports)"
+    tns = metrics.get("tns_ns")
+    if wns_f < 0:
+        return "fail", f"TIMING NOT MET: WNS {wns} ns, TNS {tns} ns"
+    return "pass", f"timing met (WNS {wns} ns)"
 
 
 def _normalize_report_time_ns(value: Optional[float], run_meta: Dict[str, Any]) -> Optional[float]:
