@@ -205,6 +205,9 @@ export interface DesignManifest {
   testbenches?: { file: string; module: string }[];
   /** User-maintained fnmatch globs (workspace-relative) excluded from scans. */
   ignore?: string[];
+  /** Derived by the backend on each reconcile: modules declared by more than
+   *  one rtl/tb file (auto-discovery collisions). Reported, never auto-fixed. */
+  moduleCollisions?: { module: string; files: string[] }[];
 }
 
 // --- Unified run model ------------------------------------------------------

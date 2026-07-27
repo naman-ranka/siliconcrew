@@ -197,6 +197,70 @@ def test_role_change_updates_testbenches(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Derived module collisions (auto-discovery clashes)
+# --------------------------------------------------------------------------- #
+
+def test_module_collisions_reported_across_dirs(tmp_path):
+    """given/ + solution/ copies of the same module are a real clash — report it
+    (never auto-demote a role; the manifest stays the source of truth)."""
+    ws = str(tmp_path)
+    _write(ws, "given/counter.v", DUT)
+    _write(ws, "solution/counter.v", DUT)
+    _write(ws, "tb/counter_tb.v", TB)
+
+    manifest = m.read_manifest(ws)
+    assert manifest.moduleCollisions == [
+        {"module": "counter", "files": ["given/counter.v", "solution/counter.v"]}
+    ]
+    # Roles are untouched — both stay rtl.
+    assert {f.path: f.role for f in manifest.files}["given/counter.v"] == "rtl"
+
+
+def test_no_collision_when_modules_are_unique(tmp_path):
+    ws = str(tmp_path)
+    _write(ws, "rtl/counter.v", DUT)
+    _write(ws, "tb/counter_tb.v", TB)
+    assert m.read_manifest(ws).moduleCollisions == []
+
+
+def test_ignore_clears_module_collisions_and_synth_set(tmp_path):
+    ws = str(tmp_path)
+    _write(ws, "given/counter.v", DUT)
+    _write(ws, "solution/counter.v", DUT)
+    _write(ws, "tb/counter_tb.v", TB)
+    m.read_manifest(ws)
+
+    out = m.write_manifest(ws, {"ignore": ["given/**"]})
+    assert out.moduleCollisions == []
+    assert "given/counter.v" not in m.files_for_stage(out, "synthesize")
+    assert "solution/counter.v" in m.files_for_stage(out, "synthesize")
+
+
+def test_module_collisions_is_derived_user_edit_overwritten(tmp_path):
+    ws = str(tmp_path)
+    _write(ws, "given/counter.v", DUT)
+    _write(ws, "solution/counter.v", DUT)
+    m.read_manifest(ws)
+
+    out = m.write_manifest(ws, {"moduleCollisions": [{"module": "nope", "files": []}]})
+    assert [c["module"] for c in out.moduleCollisions] == ["counter"]
+
+
+def test_spec_clock_period_honors_ignore(tmp_path):
+    """An excluded reference dir must not dictate the design's clock period."""
+    pytest.importorskip("yaml")
+    ws = str(tmp_path)
+    _write(ws, "solution/design_spec.yaml", "clock_period_ns: 4.0\n")
+    _write(ws, "given/reference_spec.yaml", "clock_period_ns: 99.0\n")
+    # Make the ignored spec the newest so mtime ordering would otherwise pick it.
+    os.utime(os.path.join(ws, "given/reference_spec.yaml"), (2_000_000_000, 2_000_000_000))
+
+    assert m._spec_clock_period(ws) == 99.0            # unfiltered: the clash
+    assert m._spec_clock_period(ws, ["given/**"]) == 4.0
+    assert m.build_manifest(ws, ignore=["given/**"]).clockPeriodNs == 4.0
+
+
+# --------------------------------------------------------------------------- #
 # Legacy manifests + role updates by path / basename
 # --------------------------------------------------------------------------- #
 

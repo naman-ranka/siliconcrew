@@ -221,6 +221,8 @@ def get_manifest() -> str:
     """
     Returns the design manifest (files + roles + synthTop/simTop + clock + platform).
     The manifest is the single source of truth shared with the UI; auto-derived if absent.
+    Also carries derived fields: testbenches, and moduleCollisions (modules declared
+    in more than one file — resolve with update_manifest's `ignore` globs).
     """
     workspace = get_workspace_path()
     m = manifest_mod.read_manifest(workspace)
@@ -233,6 +235,9 @@ def update_manifest(updates_json: str) -> str:
     Upserts manifest fields. Pass a JSON object with any of:
     synthTop, simTop, clockPeriodNs, platform, or files: [{name, role}] to override roles.
     Roles: rtl | tb | sdc | include | other.
+    ignore: fnmatch globs (workspace-relative) excluded from auto-discovery —
+    e.g. {"ignore": ["given/**"]} drops that directory from the design set.
+    Use it when moduleCollisions reports the same module in two directories.
     """
     workspace = get_workspace_path()
     try:

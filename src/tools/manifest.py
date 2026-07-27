@@ -82,6 +82,12 @@ class DesignManifest(BaseModel):
     # ``simTop`` keeps its meaning as the *default* TB (what one-click Simulate
     # runs); it is still inferred from the first tb file when unset.
     testbenches: List[Dict[str, str]] = Field(default_factory=list)
+    # DERIVED, never user-maintained: modules declared in more than one design
+    # file (role rtl/tb), as {"module": <name>, "files": [<paths>]}. Auto-
+    # discovery cannot know which copy is wanted (e.g. `given/` vs `solution/`),
+    # so this only REPORTS the collision — roles are never auto-demoted. Silence
+    # the noise by adding an ``ignore`` glob. Recomputed on every reconcile.
+    moduleCollisions: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -261,14 +267,43 @@ def _derive_testbenches(workspace: str, files: List[DesignFile]) -> List[Dict[st
     return out
 
 
-def _spec_clock_period(workspace: str) -> Optional[float]:
-    """Best-effort clock period from the latest spec file (non-fatal)."""
+def _derive_module_collisions(
+    workspace: str, files: List[DesignFile]
+) -> List[Dict[str, Any]]:
+    """DERIVED: modules declared by more than one rtl/tb file.
+
+    Auto-discovery is recursive, so a workspace holding both ``given/adder.v``
+    and ``solution/adder.v`` silently feeds two definitions of ``adder`` to lint
+    /sim/synth. We cannot know which one the designer means — reporting the
+    clash (and pointing at ``ignore``) is honest; auto-demoting a role would
+    violate "the manifest is the single source of truth".
+    """
+    by_module: Dict[str, List[str]] = {}
+    for f in files:
+        if f.role not in ("rtl", "tb"):
+            continue
+        text = _read_text(os.path.join(workspace, f.path))
+        for mod in dict.fromkeys(_modules_in(text)):  # dedupe within one file
+            by_module.setdefault(mod, []).append(f.path)
+    return [
+        {"module": mod, "files": paths}
+        for mod, paths in sorted(by_module.items())
+        if len(paths) > 1
+    ]
+
+
+def _spec_clock_period(workspace: str, ignore: Optional[List[str]] = None) -> Optional[float]:
+    """Best-effort clock period from the latest spec file (non-fatal).
+
+    Honors the manifest's ``ignore`` globs so an excluded directory (a vendored
+    or reference copy) cannot dictate the design's clock period.
+    """
     try:
         import yaml  # local import keeps manifest importable without pyyaml
     except Exception:
         return None
     specs = sorted(
-        [f for f in iter_workspace_files(workspace) if f.endswith("_spec.yaml")],
+        [f for f in iter_workspace_files(workspace, ignore) if f.endswith("_spec.yaml")],
         key=lambda x: os.path.getmtime(os.path.join(workspace, x)),
         reverse=True,
     )
@@ -284,15 +319,22 @@ def _spec_clock_period(workspace: str) -> Optional[float]:
     return None
 
 
-def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
-    """Construct a fresh manifest from the files on disk (no persistence)."""
+def build_manifest(
+    workspace: str, session_id: str = "", ignore: Optional[List[str]] = None
+) -> DesignManifest:
+    """Construct a fresh manifest from the files on disk (no persistence).
+
+    ``ignore`` (fnmatch globs) is applied to BOTH the file scan and the spec
+    scan that seeds ``clockPeriodNs``.
+    """
+    ignore = list(ignore or [])
     files: List[DesignFile] = []
-    for rel in _list_source_files(workspace):
+    for rel in _list_source_files(workspace, ignore):
         text = _read_text(os.path.join(workspace, rel)) if rel.lower().endswith((".v", ".sv")) else ""
         files.append(DesignFile(name=os.path.basename(rel), role=derive_role(rel, text), path=rel))
 
     synth_top, sim_top = _infer_tops(workspace, files)
-    clock = _spec_clock_period(workspace) or 10.0
+    clock = _spec_clock_period(workspace, ignore) or 10.0
     return DesignManifest(
         sessionId=session_id,
         files=files,
@@ -300,7 +342,9 @@ def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
         simTop=sim_top,
         clockPeriodNs=clock,
         platform="sky130hd",
+        ignore=ignore,
         testbenches=_derive_testbenches(workspace, files),
+        moduleCollisions=_derive_module_collisions(workspace, files),
     )
 
 
@@ -336,8 +380,9 @@ def _reconcile(workspace: str, stored: DesignManifest) -> DesignManifest:
     files keep their (possibly user-overridden) role. Tops are filled in if they
     became empty or point at a now-missing module. Files are keyed by their
     workspace-relative ``path`` (at the root ``path == name``, so legacy
-    root-only manifests reconcile unchanged). The derived ``testbenches`` list
-    is always recomputed here — user edits to it do not survive.
+    root-only manifests reconcile unchanged). The derived ``testbenches`` and
+    ``moduleCollisions`` lists are always recomputed here — user edits to them
+    do not survive.
     """
     on_disk = _list_source_files(workspace, stored.ignore)
     by_path = {f.path: f for f in stored.files}
@@ -357,6 +402,7 @@ def _reconcile(workspace: str, stored: DesignManifest) -> DesignManifest:
         stored.synthTop = stored.synthTop or synth_top
         stored.simTop = stored.simTop or sim_top
     stored.testbenches = _derive_testbenches(workspace, merged)
+    stored.moduleCollisions = _derive_module_collisions(workspace, merged)
     return stored
 
 
@@ -374,7 +420,11 @@ def read_manifest(workspace: str, session_id: str = "") -> DesignManifest:
     try:
         stored = DesignManifest(**raw)
     except Exception:
-        stored = build_manifest(workspace, session_id=session_id)
+        # Salvage the user's ignore globs even when the rest is unparseable —
+        # otherwise a rebuild re-ingests the very files they excluded.
+        raw_ignore = raw.get("ignore") if isinstance(raw, dict) else None
+        salvaged = [p for p in (raw_ignore or []) if isinstance(p, str) and p]
+        stored = build_manifest(workspace, session_id=session_id, ignore=salvaged)
     if session_id and not stored.sessionId:
         stored.sessionId = session_id
     stored = _reconcile(workspace, stored)
@@ -391,7 +441,8 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
     across the manifest); an ambiguous name-only update is a logged no-op —
     callers that can see nested files must address them by path.
 
-    ``testbenches`` is derived and cannot be set here (silently recomputed).
+    ``testbenches`` and ``moduleCollisions`` are derived and cannot be set here
+    (silently recomputed).
     """
     current = read_manifest(workspace, session_id=session_id)
 
@@ -432,8 +483,9 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
         # New exclusions take effect immediately (drops newly-ignored files).
         current = _reconcile(workspace, current)
 
-    # testbenches is derived — recompute so role edits above are reflected.
+    # Derived lists — recompute so role edits above are reflected.
     current.testbenches = _derive_testbenches(workspace, current.files)
+    current.moduleCollisions = _derive_module_collisions(workspace, current.files)
 
     _persist(workspace, current)
     return current
