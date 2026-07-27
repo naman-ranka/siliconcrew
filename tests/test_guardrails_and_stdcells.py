@@ -49,6 +49,29 @@ def test_resolve_stdcell_models_from_manifest_cache():
         assert manifest["platform"] == "asap7"
 
 
+def test_sky130_lpflow_bleeder_model_is_excluded():
+    """siliconcrew-dev#38: sky130_fd_sc_hd__lpflow_bleeder.v is a syntax error for
+    iverilog 12.0, and post-synth compile pulls in the whole cached cell set — so
+    that one file halts the entire simulation. Excluded at READ time so existing
+    caches are repaired; every other hd cell (lpflow included) still compiles."""
+    assert std._is_sim_model_file("sky130hd", "sky130_fd_sc_hd__lpflow_bleeder.v") is False
+    assert std._is_sim_model_file("sky130hd", "sky130_fd_sc_hd__lpflow_inputiso0p_1.v") is True
+    assert std._is_sim_model_file("sky130hd", "sky130_fd_sc_hd__inv_1.v") is True
+
+
+def test_sky130_excluded_model_dropped_from_resolution():
+    """The exclusion is applied when resolving a cache that already holds it."""
+    with tempfile.TemporaryDirectory() as workspace:
+        sim_dir = os.path.join(workspace, "_stdcells", "sky130hd", "sim")
+        os.makedirs(sim_dir, exist_ok=True)
+        for name in ("sky130_fd_sc_hd__inv_1.v", "sky130_fd_sc_hd__lpflow_bleeder.v"):
+            with open(os.path.join(sim_dir, name), "w", encoding="utf-8") as f:
+                f.write("module x; endmodule")
+
+        files, _ = resolve_stdcell_models(workspace, "sky130hd")
+        assert [os.path.basename(x) for x in files] == ["sky130_fd_sc_hd__inv_1.v"]
+
+
 def test_stdcell_workspace_defaults_to_rtl_workspace(monkeypatch):
     # Regression: post_synth stdcell resolution must read the RTL_WORKSPACE cache
     # (where entrypoint.sh + the image bake populate _stdcells) when the explicit

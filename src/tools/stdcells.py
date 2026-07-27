@@ -104,10 +104,22 @@ def resolve_stdcell_models(workspace: str, platform: str) -> Tuple[List[str], Di
     return files, manifest
 
 
+# sky130 cells whose shipped behavioral model Icarus cannot parse. Post-synth
+# compile pulls in the WHOLE cached cell set, so one unparseable model halts the
+# entire simulation — an exclusion here is what keeps the flow alive, and it is
+# applied at READ time so caches bootstrapped earlier are repaired too.
+#   sky130_fd_sc_hd__lpflow_bleeder.v: iverilog 12.0 syntax error
+#   (siliconcrew-dev#38). Deliberately narrow — excluding a cell the netlist
+#   really instantiates only converts a parse error into an unresolved module.
+_SKY130_UNPARSEABLE_MODELS = {"sky130_fd_sc_hd__lpflow_bleeder.v"}
+
+
 def _is_sim_model_file(platform: str, filename: str) -> bool:
     if not filename.endswith(".v"):
         return False
     if platform == "sky130hd":
+        if filename in _SKY130_UNPARSEABLE_MODELS:
+            return False
         return filename.startswith("sky130_fd_sc_hd__")
     if platform == "asap7":
         # ORFS dff/empty collide with definitions already present in ASAP7 SEQ views for Icarus runs.
