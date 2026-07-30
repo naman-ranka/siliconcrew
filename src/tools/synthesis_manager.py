@@ -1601,7 +1601,12 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     # here — _retry_pd_worker builds equiv="skip" and no path in a retry ever
     # assigns it (the check runs on the finish-stage netlist of a first run), so
     # it is neither gated on nor blamed.
-    final_ok = auto_checks.signoff == "pass" and auto_checks.constraints == "pass"
+    # ``constraints`` is three-valued and INHERITED here: a parent adopted by
+    # _finalize_completed legitimately carries "skip" (its worker died before
+    # the check ran — not "the check failed"). Gate on an explicit failure, the
+    # same idiom the full-flow worker uses for equiv, or a retry that produced
+    # its GDS, passed signoff and MET timing gets declared failed.
+    final_ok = auto_checks.signoff == "pass" and auto_checks.constraints != "fail"
     run_meta["status"] = "completed" if final_ok else "failed"
     retry_completed_note = (
         signoff["note"]
@@ -1681,21 +1686,23 @@ def _timing_guardrail(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, str]:
     if not finish_path:
         return {"status": "skip", "note": ""}
     data = _parse_finish_report(finish_path)
-    if data.get("timing_unconstrained"):
-        return {
-            "status": "skip",
-            "note": "timing not evaluated: the design has no constrained timing paths",
-        }
+    unconstrained = bool(data.get("timing_unconstrained"))
 
-    slack = _normalize_report_time_ns(data.get("worst_slack_ns"), run_meta)
-    if slack is None:
-        wns = _normalize_report_time_ns(data.get("wns_ns"), run_meta)
-        if wns is not None and wns < 0:
-            slack = wns
+    slack = None
+    if not unconstrained:
+        slack = _normalize_report_time_ns(data.get("worst_slack_ns"), run_meta)
+        if slack is None:
+            wns = _normalize_report_time_ns(data.get("wns_ns"), run_meta)
+            if wns is not None and wns < 0:
+                slack = wns
     violations = data.get("violations") or {}
     setup_count = violations.get("setup") or 0
     hold_count = violations.get("hold") or 0
 
+    # Violation counts are checked BEFORE any skip: ORFS counted them, so they
+    # are evidence in their own right — an "unconstrained" or slack-less report
+    # that nonetheless reports violations must never be summarized as "no
+    # timing data".
     reasons: List[str] = []
     if slack is not None and slack < 0:
         reasons.append(f"setup slack {slack:.2f} ns")
@@ -1705,6 +1712,11 @@ def _timing_guardrail(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, str]:
         reasons.append(f"{hold_count} hold violations")
     if reasons:
         return {"status": "fail", "note": f"timing NOT met: {', '.join(reasons)}"}
+    if unconstrained:
+        return {
+            "status": "skip",
+            "note": "timing not evaluated: the design has no constrained timing paths",
+        }
     if slack is not None:
         return {"status": "pass", "note": f"timing met (worst slack {slack:+.2f} ns)"}
     return {"status": "skip", "note": ""}
@@ -3188,10 +3200,29 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
                 ):
                     meta["summary_metrics"] = recomputed
                 else:
-                    # Nothing on disk left to re-derive from (reports pruned):
-                    # keep the stored values, but stamp them so this read stops
-                    # rewriting run_meta forever.
-                    meta["summary_metrics"] = dict(stored, metrics_schema_version=METRICS_SCHEMA_VERSION)
+                    # Nothing on disk left to re-derive from (reports pruned).
+                    # Stamp so this read stops rewriting run_meta forever — but
+                    # a v1 snapshot cannot be stamped as v2 wholesale: its
+                    # fmax_mhz IS the target echo this wave removed, and
+                    # freezing it under a v2 stamp would make that lie
+                    # permanently unhealable. Keep what a v1 snapshot genuinely
+                    # justifies (area, cells, the raw wns/tns/power it parsed),
+                    # null what it cannot, and say why.
+                    meta["summary_metrics"] = dict(
+                        stored,
+                        fmax_mhz=None,
+                        worst_slack_ns=None,
+                        clock_period_min_ns=None,
+                        timing_met=None,
+                        timing_corner=None,
+                        timing_note=(
+                            "legacy snapshot (metrics schema v1); this run's reports are no "
+                            "longer on disk, so the real worst slack and achieved Fmax cannot "
+                            "be recovered — the v1 fmax was derived from ORFS's clamped wns "
+                            "and has been dropped rather than kept as a target echo"
+                        ),
+                        metrics_schema_version=METRICS_SCHEMA_VERSION,
+                    )
                 try:
                     _persist_run_meta(run_dir, meta)
                 except Exception:
@@ -3716,6 +3747,10 @@ def compare_pd_runs(
     child_values = child_metrics.get("metrics", {})
     metric_preferences = {
         "wns_ns": "higher",
+        # The real margin: two runs that both MET timing have the same clamped
+        # wns (0.00), so without this a retry that gained 1.5 ns of slack
+        # compared as "unchanged" on the only number that moved.
+        "worst_slack_ns": "higher",
         "tns_ns": "higher",
         "area_um2": "lower",
         "cell_count": "lower",
@@ -3853,6 +3888,8 @@ def _parse_finish_report(path: str) -> Dict[str, Any]:
         "clock_period_min_ns": None,
         "clock_fmax_mhz": None,
         "timing_unconstrained": False,
+        "clock_fmax_unbounded": False,
+        "clock_count": 0,
         "power_uw": None,
         "violations": {
             "setup": None,
@@ -3907,18 +3944,24 @@ def _parse_finish_report(path: str) -> Dict[str, Any]:
     # report, right next to the clamped wns (report_wns clamps positive slack to
     # 0 BY DESIGN — OpenSTA search/Search.tcl). Regexes lifted from
     # get_cts_summary, which has parsed these three lines since Wave sc#63.
-    # ``INF`` on either line means the design has NO constrained timing paths
-    # (OpenROAD #4425) — a distinct fact from "unknown", recorded as such.
-    # Single-clock assumption: the regex takes the first clock's line.
+    # The two INF cases are DIFFERENT facts and must not be conflated:
+    #   * ``worst slack max INF`` — the design has no constrained timing paths
+    #     at all (OpenROAD #4425), so there is no slack to judge;
+    #   * ``fmax = inf`` — no register-to-register path (a combinational block),
+    #     which says nothing about the IO-constrained paths: their slack is
+    #     finite, possibly negative, and ORFS still counts their violations.
+    # Keying "unconstrained" off the fmax line silently downgraded a failing
+    # combinational design to "no timing data".
+    # Single-clock assumption: the regexes take the FIRST clock's line, and
+    # clock_count lets the caller disclose that when there are more.
     slack_token = _mtoken(r"^\s*worst\s+slack\s+max\s+(\S+)")
     fmax_token = _mtoken(r"fmax\s*=\s*(\S+)")
-    out["timing_unconstrained"] = bool(
-        (slack_token is not None and _INF_TOKEN_RE.match(slack_token))
-        or (fmax_token is not None and _INF_TOKEN_RE.match(fmax_token))
-    )
+    out["timing_unconstrained"] = bool(slack_token is not None and _INF_TOKEN_RE.match(slack_token))
+    out["clock_fmax_unbounded"] = bool(fmax_token is not None and _INF_TOKEN_RE.match(fmax_token))
     out["worst_slack_ns"] = _tofloat(slack_token)
     out["clock_fmax_mhz"] = _tofloat(fmax_token)
     out["clock_period_min_ns"] = _mfloat(r"period_min\s*=\s*([0-9.eE+-]+)")
+    out["clock_count"] = len(re.findall(r"period_min\s*=", text, re.IGNORECASE))
 
     out["violations"]["setup"] = _mint(r"setup\s+violation\s+count\s+([0-9]+)")
     out["violations"]["hold"] = _mint(r"hold\s+violation\s+count\s+([0-9]+)")
@@ -4010,14 +4053,28 @@ METRICS_SCHEMA_VERSION = 2
 # An unlabelled 8-GHz figure from a best-case corner is its own kind of lie, so
 # the label travels with the number. Platforms whose default corner we have not
 # confirmed from ORFS's own config stay unlabelled rather than guessed.
+# Keyed platform -> (ORFS corner code, human label).
 _PLATFORM_TIMING_CORNER = {
-    "asap7": "BC/FF (best-case)",
-    "sky130hd": "TT (typical)",
+    "asap7": ("BC", "BC/FF (best-case)"),
+    "sky130hd": ("TT", "TT (typical)"),
 }
 
 
-def _timing_corner_label(platform: Optional[str]) -> Optional[str]:
-    return _PLATFORM_TIMING_CORNER.get((platform or "").strip().lower())
+def _timing_corner_label(platform: Optional[str], run_meta: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """The corner this run's timing was measured at, or None if unknown.
+
+    A retry can pass ``orfs_overrides={"CORNER": "WC"}``, which _write_config_mk
+    genuinely exports — so the platform DEFAULT would be a wrong label, which is
+    worse than no label. An override that disagrees with the default is reported
+    as the override; one that matches keeps the readable label.
+    """
+    entry = _PLATFORM_TIMING_CORNER.get((platform or "").strip().lower())
+    override = ((run_meta or {}).get("orfs_overrides") or {}).get("CORNER")
+    if override is not None:
+        override = str(override).strip()
+        if override and (entry is None or override.upper() != entry[0]):
+            return f"overridden: {override}"
+    return entry[1] if entry else None
 
 
 def _timing_metric_fields(
@@ -4059,6 +4116,16 @@ def _timing_metric_fields(
             "no constrained timing paths (the report reads INF): slack and Fmax are "
             "undefined for this design, not merely unknown"
         )
+    elif finish_data.get("clock_fmax_unbounded"):
+        # No register-to-register path (combinational block): there is no
+        # maximum frequency to state, and deriving one from the IO-path slack
+        # would invent a number ORFS explicitly declined to give. The slack
+        # itself is still real and still governs timing_met below.
+        fmax_mhz = None
+        notes.append(
+            "no maximum frequency: ORFS reports fmax = INF (no register-to-register "
+            "paths); any timing here comes from IO-constrained paths"
+        )
     elif fmax_mhz is None and effective_slack is not None and clock_period_ns:
         fmax_mhz = _derive_fmax_mhz(clock_period_ns, effective_slack)
         if fmax_mhz is not None:
@@ -4074,12 +4141,19 @@ def _timing_metric_fields(
             "achieved frequency"
         )
 
+    clock_count = finish_data.get("clock_count") or 0
+    if clock_count > 1:
+        notes.append(
+            f"this report covers {clock_count} clocks; clock_period_min_ns and "
+            "fmax_mhz are the FIRST clock's, not the design's worst"
+        )
+
     return {
         "worst_slack_ns": worst_slack_ns,
         "clock_period_min_ns": clock_period_min_ns,
         "fmax_mhz": fmax_mhz,
         "timing_met": None if effective_slack is None else effective_slack >= 0,
-        "timing_corner": _timing_corner_label(run_meta.get("platform")),
+        "timing_corner": _timing_corner_label(run_meta.get("platform"), run_meta),
         "notes": notes,
     }
 
@@ -4179,8 +4253,11 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
         "clock_period_min_ns": finish,
         "timing_met": finish,
         # Not parsed from an artifact: the corner is a property of the platform
-        # config ORFS ran with.
-        "timing_corner": f"platform config ({run_meta.get('platform')})",
+        # config ORFS ran with. Named only when a label was actually derived —
+        # claiming a source for a value we don't have is its own small lie.
+        "timing_corner": (
+            f"platform config ({run_meta.get('platform')})" if metrics["timing_corner"] else None
+        ),
     }
     # Completeness is judged on the core PPA fields; fmax/power_mw are derived
     # and may legitimately be absent without the run being "incomplete".
