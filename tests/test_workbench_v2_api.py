@@ -300,13 +300,26 @@ def test_runs_card_and_run_detail_agree_on_the_timing_fields(client):
     card = next(r for r in c.get(f"/api/workspace/{SID}/runs?kind=synth").json()["runs"]
                 if r["id"] == "synth_0001")["ppa"]
     detail = c.get(f"/api/workspace/{SID}/runs/synth_0001").json()["run"]["ppa"]
+    # The third surface: the poll payload the Report tab and agents read. It
+    # served the stored snapshot verbatim, so on staging it answered 100.0 MHz
+    # for the run the other two already reported at 8109.8.
+    job = c.get(f"/api/workspace/{SID}/runs/synth_0001/status").json()["job"]
+    status_metrics = job["summary_metrics"]
 
     for field in ("fmaxMhz", "wnsNs", "worstSlackNs", "timingMet", "timingCorner"):
         assert card[field] == detail[field], f"{field}: card {card[field]} vs detail {detail[field]}"
+    for api_field, metric_field in (
+        ("fmaxMhz", "fmax_mhz"), ("wnsNs", "wns_ns"), ("worstSlackNs", "worst_slack_ns"),
+        ("timingMet", "timing_met"), ("timingCorner", "timing_corner"),
+    ):
+        assert card[api_field] == status_metrics[metric_field], (
+            f"{metric_field}: card {card[api_field]} vs status {status_metrics[metric_field]}"
+        )
     assert card["fmaxMhz"] == pytest.approx(8109.80)
     assert card["worstSlackNs"] == pytest.approx(9.87669)
     assert card["timingMet"] is True
     assert card["timingCorner"] == "BC/FF (best-case)"
+    assert job["auto_checks"]["timing"] == "pass"
 
 
 def test_runs_compare_reads_the_nested_metrics_dict(client):

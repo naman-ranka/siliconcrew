@@ -266,9 +266,15 @@ def test_instance_b_adopts_terminal_meta_pushed_by_instance_a(
     with session_scope(SessionContext(session_id, ws_b)):
         resp = sm.get_synthesis_status(run_id, workspace=ws_b)
 
-    # Terminal answer from the durable meta, persisted locally.
+    # Terminal answer from the durable meta, persisted locally. The adopted
+    # snapshot predates the current metrics schema and this instance's scratch
+    # holds no reports to recompute from, so the read-side heal keeps what that
+    # snapshot justifies and stamps it (Wave C) — the values that crossed
+    # instances are what this assertion is about.
     assert resp["status"] == "completed"
-    assert resp["summary_metrics"] == {"wns_ns": 0.12, "cell_count": 10}
+    assert resp["summary_metrics"]["wns_ns"] == 0.12
+    assert resp["summary_metrics"]["cell_count"] == 10
+    assert resp["summary_metrics"]["metrics_schema_version"] == sm.METRICS_SCHEMA_VERSION
     on_disk = json.loads(open(os.path.join(run_dir_b, "run_meta.json")).read())
     assert on_disk["status"] == "completed"
 

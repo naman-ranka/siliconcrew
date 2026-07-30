@@ -2633,6 +2633,14 @@ def _build_status_response(
     recovered: bool = False,
     workspace: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # A terminal run's persisted snapshot may predate the current metrics
+    # schema. Heal it HERE too, not only in the runs list: this payload is what
+    # the Report tab and every polling agent read, and serving the stored v1
+    # fmax here while get_synthesis_metrics recomputed the honest one had the
+    # two agent-facing surfaces disagreeing about the same run (found live on
+    # staging, run synth_0003: 100.0 MHz here vs 8109.8 there). The stamp keeps
+    # repeat polls write-free.
+    _ensure_current_summary_metrics(run_dir, meta)
     last_log_lines = _collect_log_tail(run_dir)
     # Honest-state log source. Final (staged-back) logs win. When there are none
     # — a live hosted run mid-flight, or one killed before out.tar.gz — fall back
@@ -2723,9 +2731,7 @@ def _build_status_response(
         "last_log_source": last_log_source,
         "artifacts_found": _collect_artifacts(run_dir),
         "summary_metrics": meta.get("summary_metrics"),
-        "auto_checks": meta.get(
-            "auto_checks", {"constraints": "skip", "signoff": "skip", "equiv": "skip", "timing": "skip"}
-        ),
+        "auto_checks": _auto_checks_for_read(run_dir, meta),
         "check_notes": meta.get("check_notes", ""),
         # How this run's clock constraint was chosen; sources in
         # _UNVERIFIED_CLOCK_SOURCES mean the port was guessed, so the timing in
@@ -3151,6 +3157,93 @@ def _reconcile_stale_status(
     return meta
 
 
+def _ensure_current_summary_metrics(run_dir: str, meta: Dict[str, Any]) -> bool:
+    """Bring a TERMINAL run's persisted summary_metrics up to the current schema.
+
+    Self-healing read (invariant #5: the run directory is the database, process
+    and snapshot state are caches). Called from every surface that serves the
+    PERSISTED snapshot — the runs list and the status payload — so a run card,
+    a poll response and get_synthesis_metrics can never disagree about the same
+    run. Returns True when the snapshot was rewritten.
+
+    The trigger is the schema STAMP, not "some field is None" (B1): the old
+    condition (``cell_count is None or fmax_mhz is None``) never fired for a
+    completed full-flow run — fmax was always populated, because populating it
+    with the clock TARGET was the bug — and it fired on EVERY read for partial
+    runs, whose fmax is legitimately None forever. Stamping is therefore also
+    what makes repeat reads write-free, which matters most here: statuses are
+    polled hard.
+
+    Non-terminal runs are left alone: their metrics are still being written, and
+    a poll must never freeze a half-finished snapshot under a current stamp.
+    """
+    if meta.get("status") not in _TERMINAL_SYNTH_STATES:
+        return False
+    stored = meta.get("summary_metrics") or {}
+    try:
+        stamp = int(stored.get("metrics_schema_version") or 0)
+    except (TypeError, ValueError):
+        stamp = 0
+    if stamp >= METRICS_SCHEMA_VERSION:
+        return False
+
+    recomputed = _compute_summary_metrics(run_dir, meta)
+    if any(
+        recomputed.get(k) is not None
+        for k in ("area_um2", "cell_count", "wns_ns", "worst_slack_ns", "power_uw", "fmax_mhz")
+    ):
+        meta["summary_metrics"] = recomputed
+    else:
+        # Nothing on disk left to re-derive from (reports pruned). Stamp so this
+        # read stops rewriting run_meta forever — but a v1 snapshot cannot be
+        # stamped as v2 wholesale: its fmax_mhz IS the target echo this wave
+        # removed, and freezing it under a v2 stamp would make that lie
+        # permanently unhealable. Keep what a v1 snapshot genuinely justifies
+        # (area, cells, the raw wns/tns/power it parsed), null what it cannot,
+        # and say why.
+        meta["summary_metrics"] = dict(
+            stored,
+            fmax_mhz=None,
+            worst_slack_ns=None,
+            clock_period_min_ns=None,
+            timing_met=None,
+            timing_corner=None,
+            timing_note=(
+                "legacy snapshot (metrics schema v1); this run's reports are no "
+                "longer on disk, so the real worst slack and achieved Fmax cannot "
+                "be recovered — the v1 fmax was derived from ORFS's clamped wns "
+                "and has been dropped rather than kept as a target echo"
+            ),
+            metrics_schema_version=METRICS_SCHEMA_VERSION,
+        )
+    try:
+        _persist_run_meta(run_dir, meta)
+    except Exception:
+        pass
+    return True
+
+
+def _auto_checks_for_read(run_dir: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The persisted auto_checks, with the timing term filled in read-side.
+
+    Runs finalized before Wave C carry no ``timing`` key at all, and B3's rule
+    is that the term is never ABSENT for a run that has timing evidence on
+    disk. Derived here from that same evidence rather than written back: the
+    stored dict is what that run's finalizer actually recorded, and the honest
+    place to correct the omission is the answer, not the history.
+    """
+    checks = dict(meta.get("auto_checks") or {})
+    for name in _FINAL_OK_CHECKS:
+        checks.setdefault(name, "skip")
+    if "timing" not in checks:
+        checks["timing"] = (
+            _timing_guardrail(run_dir, meta)["status"]
+            if meta.get("status") in _TERMINAL_SYNTH_STATES
+            else "skip"
+        )
+    return checks
+
+
 def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
     index = _load_index(workspace)
     items: List[Dict[str, Any]] = []
@@ -3174,59 +3267,7 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
         # after the response returned) using on-disk finish artifacts, so a
         # finished run doesn't read as "running" forever.
         meta = _reconcile_stale_status(run_dir, meta, workspace=workspace)
-        # Self-heal: re-finalize PPA for completed runs whose stored
-        # summary_metrics predate the current finalizer. This repairs historical
-        # runs on read without a migration, so the runs list shows correct PPA
-        # for old + new runs alike.
-        #
-        # The trigger is the schema STAMP, not "some field is None" (B1): the
-        # old condition (`cell_count is None or fmax_mhz is None`) never fired
-        # for a completed full-flow run — fmax was always populated, because
-        # populating it with the clock target WAS the bug — so a card kept
-        # showing 100.0 MHz while the detail panel recomputed 8109.8. The same
-        # condition also fired on EVERY list read for partial runs, whose fmax
-        # is legitimately None forever, rewriting run_meta each time.
-        if meta.get("status") == "completed":
-            stored = meta.get("summary_metrics") or {}
-            try:
-                stamp = int(stored.get("metrics_schema_version") or 0)
-            except (TypeError, ValueError):
-                stamp = 0
-            if stamp < METRICS_SCHEMA_VERSION:
-                recomputed = _compute_summary_metrics(run_dir, meta)
-                if any(
-                    recomputed.get(k) is not None
-                    for k in ("area_um2", "cell_count", "wns_ns", "worst_slack_ns", "power_uw", "fmax_mhz")
-                ):
-                    meta["summary_metrics"] = recomputed
-                else:
-                    # Nothing on disk left to re-derive from (reports pruned).
-                    # Stamp so this read stops rewriting run_meta forever — but
-                    # a v1 snapshot cannot be stamped as v2 wholesale: its
-                    # fmax_mhz IS the target echo this wave removed, and
-                    # freezing it under a v2 stamp would make that lie
-                    # permanently unhealable. Keep what a v1 snapshot genuinely
-                    # justifies (area, cells, the raw wns/tns/power it parsed),
-                    # null what it cannot, and say why.
-                    meta["summary_metrics"] = dict(
-                        stored,
-                        fmax_mhz=None,
-                        worst_slack_ns=None,
-                        clock_period_min_ns=None,
-                        timing_met=None,
-                        timing_corner=None,
-                        timing_note=(
-                            "legacy snapshot (metrics schema v1); this run's reports are no "
-                            "longer on disk, so the real worst slack and achieved Fmax cannot "
-                            "be recovered — the v1 fmax was derived from ORFS's clamped wns "
-                            "and has been dropped rather than kept as a target echo"
-                        ),
-                        metrics_schema_version=METRICS_SCHEMA_VERSION,
-                    )
-                try:
-                    _persist_run_meta(run_dir, meta)
-                except Exception:
-                    pass
+        _ensure_current_summary_metrics(run_dir, meta)
         report_path = os.path.join(run_dir, "design_report.md")
         items.append(
             {
@@ -3239,7 +3280,9 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
                 "platform": meta.get("platform"),
                 "elapsed_sec": meta.get("elapsed_sec"),
                 "summary_metrics": meta.get("summary_metrics"),
-                "auto_checks": meta.get("auto_checks"),
+                # Same read-side fill as the status payload: the card and the
+                # poll response must not differ on whether timing was judged.
+                "auto_checks": _auto_checks_for_read(run_dir, meta) if meta.get("auto_checks") else None,
                 # Failing stage + reason so a failed run is legible in the list
                 # without opening logs (F12). Absent in run_meta → null.
                 "current_stage": meta.get("current_stage"),
