@@ -441,6 +441,16 @@ class GuardrailSummary:
     constraints: str = "skip"
     signoff: str = "skip"
     equiv: str = "skip"
+    # Setup-slack sign + the setup/hold violation counts (sc#64). Deliberately
+    # NOT part of final_ok: a run that produced its GDS completed, and missing
+    # timing is a design verdict, not a flow failure. See _FINAL_OK_CHECKS.
+    timing: str = "skip"
+
+
+# The checks that decide whether a run is "completed" — and, therefore, the only
+# ones a rollup may blame when it is not. Explicit rather than an asdict() sweep
+# so a new advisory check (timing) can never leak into failure attribution.
+_FINAL_OK_CHECKS = ("constraints", "signoff", "equiv")
 
 
 def _now_iso() -> str:
@@ -1628,13 +1638,21 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     _attach_sim_contract(run_meta, workspace, retry_netlist, args.get("platform"), args["top_module"])
     # Same shared finalization parser as the full-flow worker (see _job_worker).
     run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
+    # ...and the same timing term (B3): a retry that reaches finish has exactly
+    # the same timing evidence on disk as a first run.
+    retry_timing = _timing_guardrail(run_dir, run_meta)
+    auto_checks.timing = retry_timing["status"]
+    run_meta["auto_checks"] = asdict(auto_checks)
     run_meta["status"] = "completed" if auto_checks.signoff == "pass" else "failed"
     retry_completed_note = (
         signoff["note"]
         if signoff["note"].startswith("ORFS command returned nonzero")
         else "PD retry completed"
     )
-    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else retry_completed_note
+    check_notes = signoff["note"] if auto_checks.signoff != "pass" else retry_completed_note
+    if retry_timing["note"]:
+        check_notes += f" | {retry_timing['note']}"
+    run_meta["check_notes"] = check_notes
     run_meta["next_action"] = (
         "Inspect stage summaries and continue tuning." if run_meta["status"] == "completed"
         else "Inspect retry stage logs and adjust parameters."
@@ -1673,6 +1691,57 @@ def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, A
         return {"status": "pass", "note": "ORFS command returned nonzero, but final artifacts and reports are clean"}
 
     return {"status": "pass", "note": "Signoff artifact/log checks passed"}
+
+
+def _timing_guardrail(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, str]:
+    """Did this run's design actually close timing? (sc#64)
+
+    Reads the ONE authoritative artifact (6_finish.rpt) so every finalization
+    path — full flow, partial flow, PD retry, and the adoption path in
+    _finalize_completed — gets the same verdict from the same evidence:
+
+    * ``fail``  — real worst slack < 0, or setup/hold violations were counted;
+    * ``pass``  — real worst slack >= 0 and both counts are 0;
+    * ``skip``  — no slack data (partial flow, or a report with no constrained
+      paths). ORFS's clamped ``wns max 0.00`` is NOT slack data: it is exactly
+      what "positive slack" looks like after clamping, so it can never prove
+      timing met. A NEGATIVE wns is unclamped and does count.
+
+    ``note`` names the failing MODE, or the margin when timing was met; it is
+    empty when the check is skipped, so callers can tell "not evaluated" apart
+    from "evaluated and fine".
+    """
+    finish_path = _find_report_file(run_dir, "6_finish.rpt")
+    if not finish_path:
+        return {"status": "skip", "note": ""}
+    data = _parse_finish_report(finish_path)
+    if data.get("timing_unconstrained"):
+        return {
+            "status": "skip",
+            "note": "timing not evaluated: the design has no constrained timing paths",
+        }
+
+    slack = _normalize_report_time_ns(data.get("worst_slack_ns"), run_meta)
+    if slack is None:
+        wns = _normalize_report_time_ns(data.get("wns_ns"), run_meta)
+        if wns is not None and wns < 0:
+            slack = wns
+    violations = data.get("violations") or {}
+    setup_count = violations.get("setup") or 0
+    hold_count = violations.get("hold") or 0
+
+    reasons: List[str] = []
+    if slack is not None and slack < 0:
+        reasons.append(f"setup slack {slack:.2f} ns")
+    if setup_count > 0:
+        reasons.append(f"{setup_count} setup violations")
+    if hold_count > 0:
+        reasons.append(f"{hold_count} hold violations")
+    if reasons:
+        return {"status": "fail", "note": f"timing NOT met: {', '.join(reasons)}"}
+    if slack is not None:
+        return {"status": "pass", "note": f"timing met (worst slack {slack:+.2f} ns)"}
+    return {"status": "skip", "note": ""}
 
 
 def _persist_run_meta(run_dir: str, meta: Dict[str, Any]) -> None:
@@ -2195,6 +2264,12 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         run_meta["stdcell_manifest_version"] = manifest.get("updated_at") if manifest else None
         run_meta["stdcell_files_used"] = manifest.get("files", []) if manifest else []
         run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
+        # A bounded run produces no 6_finish.rpt, so timing normally reads
+        # "skip" here — but the term must be PRESENT either way (B3), and a
+        # bound that does reach finish artifacts gets a real verdict.
+        partial_timing = _timing_guardrail(run_dir, run_meta)
+        auto_checks.timing = partial_timing["status"]
+        run_meta["auto_checks"] = asdict(auto_checks)
 
         target_marker = _find_stage_completion_marker(run_dir, max_stage)
         if target_marker:
@@ -2204,6 +2279,8 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
                 f"Partial flow completed through '{max_stage}'; signoff/equiv checks "
                 f"skipped: partial flow (max_stage={max_stage})."
             )
+            if partial_timing["note"]:
+                run_meta["check_notes"] += f" | {partial_timing['note']}"
             # Same rule as full-flow finalization: an unverified default clock
             # changes how any timing read from this run must be interpreted —
             # the rollup carries the warning, never replaces it.
@@ -2267,23 +2344,33 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
     # scan missed both cell_count and the "wns max" format, leaving them null.
     run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
 
+    # The timing verdict (sc#64) reads the same 6_finish.rpt the metrics came
+    # from. It is advisory — see _FINAL_OK_CHECKS — so it is computed AFTER the
+    # auto_checks assignment above and re-persisted, never folded into final_ok.
+    timing = _timing_guardrail(run_dir, run_meta)
+    auto_checks.timing = timing["status"]
+    run_meta["auto_checks"] = asdict(auto_checks)
+
     final_ok = auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
     run_meta["status"] = "completed" if final_ok else "failed"
     run_meta["current_stage"] = "finish" if final_ok else _infer_stage(_collect_log_tail(run_dir))
-    # Honest rollup. These guardrails check artifacts, logs and the netlist —
-    # there is NO timing term, so "All guardrails passed" read as a verdict on a
-    # design that closed nothing (WNS -1137 ns). State the scope instead, and
-    # never summarize a run the flow marked FAILED as one where everything
+    # Honest rollup. The signoff guardrails check artifacts, logs and the
+    # netlist; timing is now a separate term, so the rollup names the margin (or
+    # the failing mode) instead of disclaiming that timing was never looked at.
+    # And never summarize a run the flow marked FAILED as one where everything
     # passed: signoff can pass while constraints or equivalence did not.
+    scope = "see summary_metrics" if timing["status"] != "skip" else "timing not evaluated; see summary_metrics"
     completed_note = (
         signoff["note"]
         if signoff["note"].startswith("ORFS command returned nonzero")
-        else "Artifact/log guardrails passed (timing not evaluated; see summary_metrics)"
+        else f"Artifact/log guardrails passed ({scope})"
     )
     check_notes = signoff["note"] if auto_checks.signoff != "pass" else completed_note
     if auto_checks.signoff == "pass" and not final_ok:
-        failed = [name for name, verdict in asdict(auto_checks).items() if verdict == "fail"]
+        failed = [name for name in _FINAL_OK_CHECKS if getattr(auto_checks, name) == "fail"]
         check_notes += f" | run failed on: {', '.join(failed) or 'a non-signoff check'}"
+    if timing["note"]:
+        check_notes += f" | {timing['note']}"
     # A default clock (bypass, or spec/top module-name mismatch) means every
     # timing number below is only as real as the guessed port — the rollup must
     # carry that warning, not replace it.
@@ -2659,7 +2746,9 @@ def _build_status_response(
         "last_log_source": last_log_source,
         "artifacts_found": _collect_artifacts(run_dir),
         "summary_metrics": meta.get("summary_metrics"),
-        "auto_checks": meta.get("auto_checks", {"constraints": "skip", "signoff": "skip", "equiv": "skip"}),
+        "auto_checks": meta.get(
+            "auto_checks", {"constraints": "skip", "signoff": "skip", "equiv": "skip", "timing": "skip"}
+        ),
         "check_notes": meta.get("check_notes", ""),
         # How this run's clock constraint was chosen; sources in
         # _UNVERIFIED_CLOCK_SOURCES mean the port was guessed, so the timing in
@@ -2791,7 +2880,8 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
                 meta["status"] = "failed"
                 meta["check_notes"] = f"Job execution error: {exc}"
                 meta["auto_checks"] = meta.get(
-                    "auto_checks", {"constraints": "fail", "signoff": "fail", "equiv": "skip"}
+                    "auto_checks",
+                    {"constraints": "fail", "signoff": "fail", "equiv": "skip", "timing": "skip"},
                 )
                 if not meta.get("finished_at"):
                     meta["finished_at"] = _now_iso()
@@ -2969,6 +3059,23 @@ def _reconcile_stale_status(
         # the tombstone must not depend on the mutates-tarball sync.
         m["status"] = "completed"
         m["summary_metrics"] = _compute_summary_metrics(run_dir, m)
+        # B3: a run adopted here never ran the worker's finalize legs, so it
+        # carried NO auto_checks at all — leaving a reconciled run with metrics
+        # but no timing verdict, the one gap that would let "timing" be absent
+        # for a run that has timing data on disk. Fill the term (and only the
+        # term: the artifact/log guardrails genuinely were not run here).
+        adopted_timing = _timing_guardrail(run_dir, m)
+        adopted_checks = dict(m.get("auto_checks") or {})
+        for name in _FINAL_OK_CHECKS:
+            adopted_checks.setdefault(name, "skip")
+        adopted_checks["timing"] = adopted_timing["status"]
+        m["auto_checks"] = adopted_checks
+        if adopted_timing["note"] and adopted_timing["note"] not in (m.get("check_notes") or ""):
+            m["check_notes"] = (
+                f"{m['check_notes']} | {adopted_timing['note']}"
+                if m.get("check_notes")
+                else adopted_timing["note"]
+            )
         if not m.get("finished_at"):
             m["finished_at"] = _now_iso()
         m = _refresh_stage_metadata(run_dir, m, terminal_status="completed")

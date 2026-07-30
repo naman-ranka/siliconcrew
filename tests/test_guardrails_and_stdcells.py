@@ -187,9 +187,13 @@ def test_completed_rollup_names_what_was_actually_checked(monkeypatch):
         assert final["status"] == "completed"
         notes = final["check_notes"].lower()
         assert "all guardrails passed" not in notes
-        # Scope stated: what was checked, and that timing was NOT part of it.
+        # Scope stated: what the artifact/log guardrails covered — and, since
+        # Wave C, the timing verdict itself instead of a disclaimer that timing
+        # was never looked at.
         assert "artifact" in notes and "log" in notes
-        assert "timing not evaluated" in notes
+        assert "timing not evaluated" not in notes
+        assert "timing not met: setup slack -1137.00 ns, 8 setup violations" in notes
+        assert final["auto_checks"]["timing"] == "fail"
         # The raw numbers are still there for the reader to judge.
         assert final["summary_metrics"]["wns_ns"] == pytest.approx(-1137.0)
 
