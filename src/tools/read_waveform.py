@@ -97,12 +97,18 @@ def read_waveform(vcd_file: str, signals: list[str], start_time: int = 0,
     current_time = 0
     current_vals = {name: "x" for name in final_codes.values()}
     
-    # We will store snapshots at every time step where something interesting happens
+    # We will store snapshots at every time step where something interesting happens.
+    # Only MAX_OUTPUT_ROWS are kept in memory — with no end_time an unbounded
+    # list would hold every change in the VCD; total_matches feeds the footer.
     events = []
-    
+    total_matches = 0
+
     # Helper to record event
     def record_event(time, sig_name, val):
-        events.append((time, sig_name, val))
+        nonlocal total_matches
+        total_matches += 1
+        if len(events) < MAX_OUTPUT_ROWS:
+            events.append((time, sig_name, val))
 
     for i in range(header_end + 1, len(lines)):
         line = lines[i].strip()
@@ -141,14 +147,14 @@ def read_waveform(vcd_file: str, signals: list[str], start_time: int = 0,
     if not events:
         return "No events found in this time window."
         
-    shown = events[:MAX_OUTPUT_ROWS]
+    shown = events
     out_str = "Time\tSignal\tValue\n"
     for t, s, v in shown:
         out_str += f"{t}\t{s}\t{v}\n"
 
-    if len(events) > len(shown):
+    if total_matches > len(shown):
         out_str += (
-            f"... showing first {len(shown)} of {len(events)} changes "
+            f"... showing first {len(shown)} of {total_matches} changes "
             f"(up to t={shown[-1][0]}); narrow the window with start_time/end_time.\n"
         )
 

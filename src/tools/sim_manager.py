@@ -432,10 +432,17 @@ def list_sim_runs(workspace: str) -> List[Dict[str, Any]]:
         return []
     index = _load_index(workspace)
     # run_id tie-breaker: two runs can share a created_at at clock granularity,
-    # and a stable sort would then leave them oldest-first.
+    # and a stable sort would then leave them oldest-first. Numeric, so the
+    # ordering survives the sim_9999 -> sim_10000 id-width change.
+    def _ordinal(item: Dict[str, Any]) -> int:
+        try:
+            return int(str(item.get("run_id", "")).rsplit("_", 1)[1])
+        except (IndexError, ValueError):
+            return 0
+
     runs = sorted(
         index.get("runs", []),
-        key=lambda x: (x.get("created_at") or "", x.get("run_id") or ""),
+        key=lambda x: (x.get("created_at") or "", _ordinal(x)),
         reverse=True,
     )
     out: List[Dict[str, Any]] = []

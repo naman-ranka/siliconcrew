@@ -126,15 +126,15 @@ $end
 NESTED_BODY = """#0
 0!
 0%
-0&
+1&
 b00000000 #
 #10
 1!
-1&
+0&
 b00000001 #
 #20
 0!
-0&
+1&
 b00000010 #
 """
 
@@ -183,9 +183,9 @@ def test_full_path_disambiguates_a_colliding_leaf(tmp_path):
     rows = _rows(result)
     assert len(rows) == 3
     assert all(r.split("\t")[1] == "tb.dut.clk" for r in rows)
-    # tb.dut.clk is 0,1,0 while tb.clk is the same here — pick the values of the
-    # code that actually belongs to the requested path.
-    assert [r.split("\t")[2] for r in rows] == ["0", "1", "0"]
+    # tb.dut.clk is deliberately the INVERSE of tb.clk (1,0,1 vs 0,1,0), so
+    # this fails if the resolver picked the colliding leaf's other code.
+    assert [r.split("\t")[2] for r in rows] == ["1", "0", "1"]
 
 
 def test_not_found_lists_full_paths(tmp_path):
