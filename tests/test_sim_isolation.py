@@ -10,10 +10,16 @@ from src.tools import sim_manager as sm
 
 
 def _fake_runner_factory(status="test_passed", write_vcd=True, marker="dump.vcd"):
-    """Return a run_simulation stand-in that writes a VCD into cwd."""
+    """Return a run_simulation stand-in that writes a VCD into cwd.
+
+    ``log_path`` is accepted (and ignored) because sim_manager calls the runner
+    all-keyword — a fake that omits it TypeErrors instead of testing anything.
+    Not writing the file is the point: it keeps the "no log => no logFile on the
+    record" arm covered by every existing test here.
+    """
 
     def runner(verilog_files, top_module, cwd, mode, run_id, netlist_file,
-               platform, sim_profile, pass_marker, timeout):
+               platform, sim_profile, pass_marker, timeout, log_path=None):
         if write_vcd:
             with open(os.path.join(cwd, marker), "w", encoding="utf-8") as f:
                 f.write("$date fake $end\n")
@@ -131,7 +137,7 @@ def test_post_synth_resolves_run_against_workspace_not_sim_dir(tmp_path):
     captured = {}
 
     def spy_runner(verilog_files, top_module, cwd, mode, run_id, netlist_file,
-                   platform, sim_profile, pass_marker, timeout):
+                   platform, sim_profile, pass_marker, timeout, log_path=None):
         captured.update(
             run_id=run_id, netlist_file=netlist_file, platform=platform, cwd=cwd
         )
@@ -197,7 +203,7 @@ def test_isolated_post_synth_echoes_resolved_contract(tmp_path):
     captured = {}
 
     def spy_runner(verilog_files, top_module, cwd, mode, run_id, netlist_file,
-                   platform, sim_profile, pass_marker, timeout):
+                   platform, sim_profile, pass_marker, timeout, log_path=None):
         captured.update(netlist_file=netlist_file, platform=platform, run_id=run_id)
         with open(os.path.join(cwd, f"{top_module}.out"), "w") as f:
             f.write("bin")
@@ -250,7 +256,7 @@ def test_isolated_post_synth_missing_cache_recovery_propagates(tmp_path):
     _make_synth_run_with_contract(ws)
 
     def cache_miss_runner(verilog_files, top_module, cwd, mode, run_id, netlist_file,
-                          platform, sim_profile, pass_marker, timeout):
+                          platform, sim_profile, pass_marker, timeout, log_path=None):
         with open(os.path.join(cwd, f"{top_module}.out"), "w") as f:
             f.write("bin")
         return {"status": "compile_failed", "pass_marker_found": False,
