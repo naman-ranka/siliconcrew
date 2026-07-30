@@ -998,9 +998,11 @@ Ready to design! What would you like to create?"""
             # background incremental flush instead of waiting for the next
             # mutating call — otherwise an instance recycle, or another
             # writer's manifest bump forcing a hydration swap, deletes them.
-            # Self-host: the flusher no-ops (LocalWorkspaceProvider has no
-            # sync), so this is free there.
-            get_workspace_flusher().mark_dirty(active_session)
+            # Mutating calls just synced synchronously inside the scope, so
+            # only the non-synced paths need marking. Self-host: the flusher
+            # no-ops (LocalWorkspaceProvider has no sync), so this is free.
+            if not (mutates and not self.defer_workspace_sync):
+                get_workspace_flusher().mark_dirty(active_session)
 
             return [TextContent(type="text", text=str(result))]
             
