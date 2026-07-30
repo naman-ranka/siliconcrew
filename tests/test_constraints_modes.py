@@ -139,3 +139,56 @@ def test_matching_spec_still_drives_the_constraints(tmp_path):
     assert result["clock_source"] == "spec"
     assert result["clock_period_ns"] == pytest.approx(4.0)
     assert "get_ports {clk_i}" in _sdc_text(result)
+
+
+# ---------------------------------------------------------------------------
+# The warning must SURVIVE the run that produced it. check_notes is rewritten
+# at finalization and the guardrail dict is never persisted, so without a
+# durable constraints_note + clock_source in the status payload, a mismatch
+# run completed looking fully constrained (adversarial review finding B1).
+# ---------------------------------------------------------------------------
+
+def _fake_orfs_writing_artifacts(top: str, platform: str = "sky130hd"):
+    def fake_orfs(**kwargs):
+        run_dir = kwargs["run_dir"]
+        reports = os.path.join(run_dir, "orfs_reports", platform, top, "base")
+        results = os.path.join(run_dir, "orfs_results", platform, top, "base")
+        os.makedirs(reports, exist_ok=True)
+        os.makedirs(results, exist_ok=True)
+        with open(os.path.join(reports, "6_finish.rpt"), "w", encoding="utf-8") as f:
+            f.write(f"Chip area for module '{top}': 12.34\nNumber of cells: 9\nwns max 0.0\ntns max 0.0\n")
+        with open(os.path.join(results, "6_final.v"), "w", encoding="utf-8") as f:
+            f.write(f"module {top}(input clk, output [3:0] q); endmodule")
+        return {"success": True, "stdout": "", "stderr": "", "command": "fake"}
+
+    return fake_orfs
+
+
+def test_mismatch_warning_survives_to_the_final_status(tmp_path, monkeypatch):
+    import time
+
+    workspace = str(tmp_path / "ws2")
+    os.makedirs(workspace, exist_ok=True)
+    _spec(workspace, module_name="GCN", clock_port="clk_i")
+    design = os.path.join(workspace, "gcn_top.v")
+    with open(design, "w", encoding="utf-8") as f:
+        f.write("module GCN_synth(input clk, output [3:0] q); endmodule")
+    monkeypatch.setattr(sm, "_run_orfs", _fake_orfs_writing_artifacts("GCN_synth"))
+
+    started = sm.start_synthesis_job(
+        workspace=workspace, verilog_files=[design], top_module="GCN_synth"
+    )
+    final = None
+    for _ in range(60):
+        final = sm.get_synthesis_status(started["run_id"], workspace=workspace)
+        if final["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.05)
+
+    assert final["status"] == "completed"
+    # The payload names the clock's provenance...
+    assert final["clock_source"] == "default_module_mismatch"
+    assert "not verified" in (final["constraints_note"] or "").lower()
+    # ...and the finalized rollup carries the warning instead of replacing it.
+    assert "not verified" in final["check_notes"].lower()
+    assert "timing not evaluated" in final["check_notes"].lower()

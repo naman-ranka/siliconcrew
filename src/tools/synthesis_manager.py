@@ -577,6 +577,13 @@ def _write_default_sdc(
     return period
 
 
+# Clock sources whose port was guessed, never checked against the netlist.
+# _write_default_sdc guards create_clock behind [llength], so a wrong guess is
+# a silently unconstrained run — every reader of these runs' timing must see
+# the constraints note (finalization appends it to check_notes).
+_UNVERIFIED_CLOCK_SOURCES = {"bypass_default", "default_module_mismatch"}
+
+
 def _constraints_guardrail(
     workspace: str,
     run_dir: str,
@@ -1570,6 +1577,7 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
         "effective_clock_period_ns": parent_meta.get("effective_clock_period_ns"),
         "clock_period_ns": parent_meta.get("clock_period_ns"),
         "clock_source": parent_meta.get("clock_source"),
+        "constraints_note": parent_meta.get("constraints_note"),
         # A retry reuses the parent's constraints.sdc verbatim, so it inherits
         # the parent's SDC time unit (legacy parent -> no marker, by design).
         "sdc_time_unit": parent_meta.get("sdc_time_unit"),
@@ -2072,7 +2080,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         "requested_clock_period_ns": args.get("clock_period_ns"),
         "effective_clock_period_ns": constraints.get("effective_clock_period_ns"),
         "clock_period_ns": constraints.get("clock_period_ns"),
-        "clock_source": constraints.get("clock_source"),
+        "clock_source": constraints.get("clock_source"),  # see _UNVERIFIED_CLOCK_SOURCES
         # Marker: the SDC/report time unit for THIS run. Gates read-side
         # normalization of report times back to ns; absent on legacy runs.
         "sdc_time_unit": constraints.get("sdc_time_unit"),
@@ -2087,6 +2095,10 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         },
         "auto_checks": asdict(auto_checks),
         "check_notes": constraints["note"],
+        # check_notes is rewritten at finalization; the constraints verdict must
+        # survive the run that produced it (an unverified default clock changes
+        # how every timing number should be read).
+        "constraints_note": constraints["note"],
         "stages": _init_stage_metadata(),
         # Reproducibility stamp: repo commit, pinned ORFS image digest, PDK,
         # iverilog version, and the pinned NUM_CORES used for this run.
@@ -2267,6 +2279,11 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
     if auto_checks.signoff == "pass" and not final_ok:
         failed = [name for name, verdict in asdict(auto_checks).items() if verdict == "fail"]
         check_notes += f" | run failed on: {', '.join(failed) or 'a non-signoff check'}"
+    # A default clock (bypass, or spec/top module-name mismatch) means every
+    # timing number below is only as real as the guessed port — the rollup must
+    # carry that warning, not replace it.
+    if run_meta.get("clock_source") in _UNVERIFIED_CLOCK_SOURCES and run_meta.get("constraints_note"):
+        check_notes += f" | {run_meta['constraints_note']}"
     run_meta["check_notes"] = check_notes
     run_meta["next_action"] = (
         "Use search_logs_tool for detailed PPA/error verification." if run_meta["status"] == "completed"
@@ -2639,6 +2656,11 @@ def _build_status_response(
         "summary_metrics": meta.get("summary_metrics"),
         "auto_checks": meta.get("auto_checks", {"constraints": "skip", "signoff": "skip", "equiv": "skip"}),
         "check_notes": meta.get("check_notes", ""),
+        # How this run's clock constraint was chosen; sources in
+        # _UNVERIFIED_CLOCK_SOURCES mean the port was guessed, so the timing in
+        # summary_metrics is only as real as that guess.
+        "clock_source": meta.get("clock_source"),
+        "constraints_note": meta.get("constraints_note"),
         "next_action": next_action,
         "poll_after_sec": poll_after,
         "poll_hint": (
