@@ -228,7 +228,10 @@ def test_constraints_guardrail_allows_combinational_default_clock(monkeypatch):
         assert final is not None
         assert final["status"] == "completed"
         assert final["auto_checks"]["constraints"] == "pass"
-        assert "default clock fallback" in final["check_notes"].lower() or "all guardrails passed" in final["check_notes"].lower()
+        assert (
+            "default clock fallback" in final["check_notes"].lower()
+            or "artifact/log guardrails passed" in final["check_notes"].lower()
+        )
 
 
 def test_constraints_guardrail_strict_can_fail_on_missing_clock(monkeypatch):

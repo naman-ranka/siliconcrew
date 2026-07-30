@@ -2200,12 +2200,21 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
     final_ok = auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
     run_meta["status"] = "completed" if final_ok else "failed"
     run_meta["current_stage"] = "finish" if final_ok else _infer_stage(_collect_log_tail(run_dir))
+    # Honest rollup. These guardrails check artifacts, logs and the netlist —
+    # there is NO timing term, so "All guardrails passed" read as a verdict on a
+    # design that closed nothing (WNS -1137 ns). State the scope instead, and
+    # never summarize a run the flow marked FAILED as one where everything
+    # passed: signoff can pass while constraints or equivalence did not.
     completed_note = (
         signoff["note"]
         if signoff["note"].startswith("ORFS command returned nonzero")
-        else "All guardrails passed"
+        else "Artifact/log guardrails passed (timing not evaluated; see summary_metrics)"
     )
-    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else completed_note
+    check_notes = signoff["note"] if auto_checks.signoff != "pass" else completed_note
+    if auto_checks.signoff == "pass" and not final_ok:
+        failed = [name for name, verdict in asdict(auto_checks).items() if verdict == "fail"]
+        check_notes += f" | run failed on: {', '.join(failed) or 'a non-signoff check'}"
+    run_meta["check_notes"] = check_notes
     run_meta["next_action"] = (
         "Use search_logs_tool for detailed PPA/error verification." if run_meta["status"] == "completed"
         else "Use search_logs_tool with error/timing queries and fix RTL/constraints."
