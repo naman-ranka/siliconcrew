@@ -106,6 +106,18 @@ def test_no_runs_dir_returns_empty(tmp_path):
     assert sm.list_sim_runs(str(tmp_path)) == []
 
 
+def test_list_is_newest_first_even_on_a_created_at_tie(tmp_path, monkeypatch):
+    # Two runs inside one clock tick share created_at; ordering must fall back
+    # to run_id instead of the stable sort's oldest-first.
+    monkeypatch.setattr(sm, "_now_iso", lambda: "2026-07-30T12:00:00+00:00")
+    ws = str(tmp_path)
+    open(os.path.join(ws, "tb.v"), "w").close()
+    sm.run_sim_isolated(ws, ["tb.v"], "tb", _runner=_fake_runner_factory())
+    sm.run_sim_isolated(ws, ["tb.v"], "tb", _runner=_fake_runner_factory())
+    runs = sm.list_sim_runs(ws)
+    assert [r["id"] for r in runs] == ["sim_0002", "sim_0001"]
+
+
 def _make_synth_run(ws, run_id="synth_0001", platform="sky130hd", netlist_name="6_final.v"):
     """Create a workspace synth_runs/<run_id>/ with run_meta.json + netlist."""
     run_dir = os.path.join(ws, "synth_runs", run_id)

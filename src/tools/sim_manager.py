@@ -431,7 +431,13 @@ def list_sim_runs(workspace: str) -> List[Dict[str, Any]]:
     if not os.path.isdir(os.path.join(workspace, RUNS_DIRNAME)):
         return []
     index = _load_index(workspace)
-    runs = sorted(index.get("runs", []), key=lambda x: x.get("created_at") or "", reverse=True)
+    # run_id tie-breaker: two runs can share a created_at at clock granularity,
+    # and a stable sort would then leave them oldest-first.
+    runs = sorted(
+        index.get("runs", []),
+        key=lambda x: (x.get("created_at") or "", x.get("run_id") or ""),
+        reverse=True,
+    )
     out: List[Dict[str, Any]] = []
     for item in runs:
         run_id = item.get("run_id")
