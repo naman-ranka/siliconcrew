@@ -128,8 +128,20 @@ def _fake_orfs_writing_artifacts(top: str, platform: str = "sky130hd"):
         os.makedirs(reports, exist_ok=True)
         os.makedirs(results, exist_ok=True)
         with open(os.path.join(reports, "6_finish.rpt"), "w", encoding="utf-8") as f:
-            # A real run that met no timing whatsoever: WNS -1137 ns.
-            f.write(f"Chip area for module '{top}': 12.34\nNumber of cells: 9\nwns max -1137.0\ntns max -9999.0\n")
+            # A real run that met no timing whatsoever: WNS -1137 ns. The
+            # worst-slack / min-period / violation-count lines are the ones a
+            # real 6_finish.rpt carries alongside wns — without them the suite
+            # exercises only the fallback chain and proves nothing about timing.
+            f.write(
+                f"Chip area for module '{top}': 12.34\n"
+                "Number of cells: 9\n"
+                "wns max -1137.0\n"
+                "tns max -9999.0\n"
+                "worst slack max -1137.0\n"
+                "clk period_min = 1147.0 fmax = 0.87\n"
+                "setup violation count 8\n"
+                "hold violation count 0\n"
+            )
         with open(os.path.join(results, "6_final.v"), "w", encoding="utf-8") as f:
             f.write(f"module {top}(input clk, input rst, output [3:0] q); endmodule")
         return {"success": True, "stdout": "", "stderr": "", "command": "fake"}

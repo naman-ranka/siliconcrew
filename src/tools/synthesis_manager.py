@@ -3091,19 +3091,39 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
         # finished run doesn't read as "running" forever.
         meta = _reconcile_stale_status(run_dir, meta, workspace=workspace)
         # Self-heal: re-finalize PPA for completed runs whose stored
-        # summary_metrics predate the shared finalizer (missing cell_count or the
-        # derived fmax_mhz). This repairs historical runs on read without a
-        # migration, so the runs list shows correct PPA for old + new runs alike.
+        # summary_metrics predate the current finalizer. This repairs historical
+        # runs on read without a migration, so the runs list shows correct PPA
+        # for old + new runs alike.
+        #
+        # The trigger is the schema STAMP, not "some field is None" (B1): the
+        # old condition (`cell_count is None or fmax_mhz is None`) never fired
+        # for a completed full-flow run — fmax was always populated, because
+        # populating it with the clock target WAS the bug — so a card kept
+        # showing 100.0 MHz while the detail panel recomputed 8109.8. The same
+        # condition also fired on EVERY list read for partial runs, whose fmax
+        # is legitimately None forever, rewriting run_meta each time.
         if meta.get("status") == "completed":
-            sm = meta.get("summary_metrics") or {}
-            if sm.get("cell_count") is None or sm.get("fmax_mhz") is None:
+            stored = meta.get("summary_metrics") or {}
+            try:
+                stamp = int(stored.get("metrics_schema_version") or 0)
+            except (TypeError, ValueError):
+                stamp = 0
+            if stamp < METRICS_SCHEMA_VERSION:
                 recomputed = _compute_summary_metrics(run_dir, meta)
-                if recomputed.get("cell_count") is not None or recomputed.get("fmax_mhz") is not None:
+                if any(
+                    recomputed.get(k) is not None
+                    for k in ("area_um2", "cell_count", "wns_ns", "worst_slack_ns", "power_uw", "fmax_mhz")
+                ):
                     meta["summary_metrics"] = recomputed
-                    try:
-                        _persist_run_meta(run_dir, meta)
-                    except Exception:
-                        pass
+                else:
+                    # Nothing on disk left to re-derive from (reports pruned):
+                    # keep the stored values, but stamp them so this read stops
+                    # rewriting run_meta forever.
+                    meta["summary_metrics"] = dict(stored, metrics_schema_version=METRICS_SCHEMA_VERSION)
+                try:
+                    _persist_run_meta(run_dir, meta)
+                except Exception:
+                    pass
         report_path = os.path.join(run_dir, "design_report.md")
         items.append(
             {
@@ -3750,10 +3770,17 @@ def compare_pd_runs(
     }
 
 
+_INF_TOKEN_RE = re.compile(r"^[+-]?inf(inity)?$", re.IGNORECASE)
+
+
 def _parse_finish_report(path: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "wns_ns": None,
         "tns_ns": None,
+        "worst_slack_ns": None,
+        "clock_period_min_ns": None,
+        "clock_fmax_mhz": None,
+        "timing_unconstrained": False,
         "power_uw": None,
         "violations": {
             "setup": None,
@@ -3787,8 +3814,40 @@ def _parse_finish_report(path: str) -> Dict[str, Any]:
         except Exception:
             return None
 
+    def _mtoken(pattern: str) -> Optional[str]:
+        m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        return m.group(1) if m else None
+
+    def _tofloat(token: Optional[str]) -> Optional[float]:
+        # float("inf") parses, so INF must be rejected explicitly — it is a
+        # sentinel, not a magnitude.
+        if token is None or _INF_TOKEN_RE.match(token):
+            return None
+        try:
+            return float(token)
+        except Exception:
+            return None
+
     out["wns_ns"] = _mfloat(r"^\s*wns\s+max\s+([0-9.eE+-]+)")
     out["tns_ns"] = _mfloat(r"^\s*tns\s+max\s+([0-9.eE+-]+)")
+
+    # The REAL worst slack and ORFS's own achieved-Fmax line sit in this same
+    # report, right next to the clamped wns (report_wns clamps positive slack to
+    # 0 BY DESIGN — OpenSTA search/Search.tcl). Regexes lifted from
+    # get_cts_summary, which has parsed these three lines since Wave sc#63.
+    # ``INF`` on either line means the design has NO constrained timing paths
+    # (OpenROAD #4425) — a distinct fact from "unknown", recorded as such.
+    # Single-clock assumption: the regex takes the first clock's line.
+    slack_token = _mtoken(r"^\s*worst\s+slack\s+max\s+(\S+)")
+    fmax_token = _mtoken(r"fmax\s*=\s*(\S+)")
+    out["timing_unconstrained"] = bool(
+        (slack_token is not None and _INF_TOKEN_RE.match(slack_token))
+        or (fmax_token is not None and _INF_TOKEN_RE.match(fmax_token))
+    )
+    out["worst_slack_ns"] = _tofloat(slack_token)
+    out["clock_fmax_mhz"] = _tofloat(fmax_token)
+    out["clock_period_min_ns"] = _mfloat(r"period_min\s*=\s*([0-9.eE+-]+)")
+
     out["violations"]["setup"] = _mint(r"setup\s+violation\s+count\s+([0-9]+)")
     out["violations"]["hold"] = _mint(r"hold\s+violation\s+count\s+([0-9]+)")
     out["violations"]["max_slew"] = _mint(r"max\s+slew\s+violation\s+count\s+([0-9]+)")
@@ -3869,6 +3928,90 @@ def _normalize_report_time_ns(value: Optional[float], run_meta: Dict[str, Any]) 
     return round(ns, 6) if ns is not None else None
 
 
+# Bumped whenever summary_metrics gains fields or changes meaning, so the runs
+# list can re-finalize snapshots written by an older finalizer (a run card and
+# the detail panel must never disagree about the same run).
+METRICS_SCHEMA_VERSION = 2
+
+# ORFS runs each platform at its config.mk default corner: asap7 ships
+# ``CORNER ?= BC`` (FF libraries — best case, optimistic), sky130hd ships TT.
+# An unlabelled 8-GHz figure from a best-case corner is its own kind of lie, so
+# the label travels with the number. Platforms whose default corner we have not
+# confirmed from ORFS's own config stay unlabelled rather than guessed.
+_PLATFORM_TIMING_CORNER = {
+    "asap7": "BC/FF (best-case)",
+    "sky130hd": "TT (typical)",
+}
+
+
+def _timing_corner_label(platform: Optional[str]) -> Optional[str]:
+    return _PLATFORM_TIMING_CORNER.get((platform or "").strip().lower())
+
+
+def _timing_metric_fields(
+    finish_data: Dict[str, Any],
+    run_meta: Dict[str, Any],
+    clock_period_ns: Optional[float],
+    have_finish_report: bool,
+) -> Dict[str, Any]:
+    """The honest timing block, shared by both metric assembly sites.
+
+    ``wns_ns`` keeps ORFS's clamped ``report_wns`` semantics (unchanged); the
+    real margin is ``worst slack max``. Fmax is ORFS's own ``fmax =`` value when
+    the report carries it, a LABELLED derivation from the real slack otherwise,
+    and ``None`` when there is no slack data at all — never the clock target
+    echoed back as an achieved frequency (issue dev#70).
+
+    Returns the metric fields plus ``notes``: disclosure the caller must surface
+    (parse_notes on the read path, ``timing_note`` in the persisted snapshot).
+    """
+    notes: List[str] = []
+    unconstrained = bool(finish_data.get("timing_unconstrained"))
+    worst_slack_ns = _normalize_report_time_ns(finish_data.get("worst_slack_ns"), run_meta)
+    clock_period_min_ns = _normalize_report_time_ns(finish_data.get("clock_period_min_ns"), run_meta)
+    wns_ns = _normalize_report_time_ns(finish_data.get("wns_ns"), run_meta)
+
+    # report_wns clamps POSITIVE slack to 0; a NEGATIVE value passes through
+    # unclamped and therefore IS the worst slack. A zero or positive wns without
+    # a worst-slack line carries no margin information at all — that absence is
+    # exactly what used to be laundered into "fmax = the clock target".
+    effective_slack = worst_slack_ns
+    if effective_slack is None and not unconstrained and wns_ns is not None and wns_ns < 0:
+        effective_slack = wns_ns
+
+    fmax_mhz = finish_data.get("clock_fmax_mhz")  # MHz on every platform: never rescaled
+    if unconstrained:
+        effective_slack = None
+        fmax_mhz = None
+        notes.append(
+            "no constrained timing paths (the report reads INF): slack and Fmax are "
+            "undefined for this design, not merely unknown"
+        )
+    elif fmax_mhz is None and effective_slack is not None and clock_period_ns:
+        fmax_mhz = _derive_fmax_mhz(clock_period_ns, effective_slack)
+        if fmax_mhz is not None:
+            notes.append(
+                "fmax_mhz is APPROXIMATE: derived as 1000/(clock period - worst slack) "
+                "because this report carries no 'fmax =' line (OpenSTA's own "
+                "find_clk_min_period iterates instead of dividing once)"
+            )
+    elif fmax_mhz is None and have_finish_report:
+        notes.append(
+            "fmax_mhz unavailable: this report carries neither an 'fmax =' line nor a "
+            "'worst slack max' line, and ORFS's clamped wns cannot stand in for the "
+            "achieved frequency"
+        )
+
+    return {
+        "worst_slack_ns": worst_slack_ns,
+        "clock_period_min_ns": clock_period_min_ns,
+        "fmax_mhz": fmax_mhz,
+        "timing_met": None if effective_slack is None else effective_slack >= 0,
+        "timing_corner": _timing_corner_label(run_meta.get("platform")),
+        "notes": notes,
+    }
+
+
 def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, Any]:
     """Parse PPA from on-disk ORFS reports into the canonical summary_metrics shape.
 
@@ -3893,6 +4036,7 @@ def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str
     )
     power_uw = finish_data.get("power_uw")
     power_mw = round(power_uw / 1000.0, 6) if power_uw is not None else None
+    timing = _timing_metric_fields(finish_data, run_meta, clock_period_ns, bool(finish_path))
 
     return {
         "area_um2": stat_data.get("area_um2"),
@@ -3901,7 +4045,16 @@ def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str
         "tns_ns": _normalize_report_time_ns(finish_data.get("tns_ns"), run_meta),
         "power_uw": power_uw,
         "power_mw": power_mw,
-        "fmax_mhz": _derive_fmax_mhz(clock_period_ns, wns_ns),
+        "fmax_mhz": timing["fmax_mhz"],
+        "worst_slack_ns": timing["worst_slack_ns"],
+        "clock_period_min_ns": timing["clock_period_min_ns"],
+        "timing_met": timing["timing_met"],
+        "timing_corner": timing["timing_corner"],
+        # The runs list renders THIS snapshot, not the read path's parse_notes,
+        # so the disclosure has to travel with it — otherwise a run card reads
+        # as more certain than the detail panel for the same run.
+        "timing_note": "; ".join(timing["notes"]) or None,
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
     }
 
 
@@ -3928,6 +4081,7 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
     )
     power_uw = finish_data.get("power_uw")
     wns_ns = _normalize_report_time_ns(finish_data.get("wns_ns"), run_meta)
+    timing = _timing_metric_fields(finish_data, run_meta, clock_period_ns, bool(finish))
     metrics = {
         "area_um2": stat_data.get("area_um2"),
         "cell_count": stat_data.get("cell_count"),
@@ -3935,7 +4089,11 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
         "tns_ns": _normalize_report_time_ns(finish_data.get("tns_ns"), run_meta),
         "power_uw": power_uw,
         "power_mw": round(power_uw / 1000.0, 6) if power_uw is not None else None,
-        "fmax_mhz": _derive_fmax_mhz(clock_period_ns, wns_ns),
+        "fmax_mhz": timing["fmax_mhz"],
+        "worst_slack_ns": timing["worst_slack_ns"],
+        "clock_period_min_ns": timing["clock_period_min_ns"],
+        "timing_met": timing["timing_met"],
+        "timing_corner": timing["timing_corner"],
     }
     sources = {
         "area_um2": stat,
@@ -3945,12 +4103,18 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
         "power_uw": finish,
         "power_mw": finish,
         "fmax_mhz": finish,
+        "worst_slack_ns": finish,
+        "clock_period_min_ns": finish,
+        "timing_met": finish,
+        # Not parsed from an artifact: the corner is a property of the platform
+        # config ORFS ran with.
+        "timing_corner": f"platform config ({run_meta.get('platform')})",
     }
     # Completeness is judged on the core PPA fields; fmax/power_mw are derived
     # and may legitimately be absent without the run being "incomplete".
     core = ("area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw")
     missing = [k for k in core if metrics.get(k) is None]
-    notes = []
+    notes = list(timing["notes"])
     if not finish:
         notes.append("6_finish.rpt not found")
     if not stat:

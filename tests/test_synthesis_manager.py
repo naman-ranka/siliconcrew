@@ -289,6 +289,10 @@ def _write_clean_final_orfs_outputs(run_dir: str, top_module: str, dirty_route_d
         os.path.join(report_dir, "6_finish.rpt"),
         "wns max 0.3391\n"
         "tns max 0.0000\n"
+        # The lines that carry the REAL margin, modeled on a real 6_finish.rpt:
+        # ORFS prints worst-slack and its own achieved Fmax right next to wns.
+        "worst slack max 0.3391\n"
+        "clk period_min = 9.6609 fmax = 103.51\n"
         "setup violation count 0\n"
         "hold violation count 0\n"
         "max slew violation count 0\n"
