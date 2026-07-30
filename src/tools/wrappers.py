@@ -475,6 +475,11 @@ def get_synthesis_metrics(run_id: str = None) -> str:
     """
     Returns structured synthesis metrics for a run.
     Parses standard ORFS outputs (6_finish.rpt + synth_stat.txt) and returns JSON.
+    Read timing from worst_slack_ns (the REAL margin, signed) and timing_met —
+    NOT from wns_ns, which is ORFS's report_wns and clamps positive slack to 0,
+    so it reads 0.00 for any design that met timing. fmax_mhz is the achieved
+    frequency at timing_corner (null when the run carries no slack data — never
+    the clock target); parse_notes says when it was derived rather than read.
     """
     workspace = get_workspace_path()
     result = collect_synthesis_metrics(workspace=workspace, run_id=run_id)
