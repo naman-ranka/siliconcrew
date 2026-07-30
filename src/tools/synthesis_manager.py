@@ -602,6 +602,30 @@ def _constraints_guardrail(
     if constraints_mode not in {"auto", "strict", "bypass"}:
         constraints_mode = "auto"
 
+    if constraints_mode == "bypass":
+        # "bypass" means do not consult the spec at all — so this branch reads
+        # neither its ports nor its period. The port is the conventional "clk"
+        # because _write_default_sdc guards create_clock behind
+        # [llength $_sc_clk_ports] > 0: a port name this code cannot verify
+        # against the netlist silently produces NO clock, i.e. an unconstrained
+        # run that still reports "completed". The note says so.
+        period = fallback_clock_period_ns if fallback_clock_period_ns and fallback_clock_period_ns > 0 else 10.0
+        sdc_path = os.path.join(run_dir, "constraints.sdc")
+        _write_default_sdc(sdc_path=sdc_path, clock_period_ns=period, clock_port="clk", platform=platform)
+        result.update({
+            "status": "pass",
+            "note": (
+                f"constraints_mode='bypass': spec not read; default constraints on port 'clk' "
+                f"at {period} ns. The clock port was NOT verified against the netlist — if this "
+                "design's clock is named differently the run is unconstrained."
+            ),
+            "sdc_path": sdc_path,
+            "effective_clock_period_ns": period,
+            "clock_period_ns": period,
+            "clock_source": "bypass_default",
+        })
+        return result
+
     spec_path = _find_latest_spec(workspace)
     if not spec_path:
         if fallback_clock_period_ns is None or fallback_clock_period_ns <= 0:
@@ -626,7 +650,36 @@ def _constraints_guardrail(
         return result
 
     if spec.module_name != top_module:
-        result["note"] = f"Spec module '{spec.module_name}' does not match top module '{top_module}'."
+        mismatch = f"Spec module '{spec.module_name}' does not match top module '{top_module}'."
+        if constraints_mode == "strict":
+            result["note"] = (
+                f"{mismatch} Rerun start_synthesis with constraints_mode='auto' or 'bypass' "
+                "to synthesize a different top with default constraints."
+            )
+            return result
+        # A synthesis-only top (GCN_synth wrapping GCN) is a normal design
+        # choice, not a dispatch error. The spec describes a DIFFERENT module,
+        # so its ports say nothing about this netlist — constraining a port
+        # borrowed from it would silently produce no clock at all (the
+        # create_clock guard in _write_default_sdc). Only the period is
+        # reusable; the port falls back to the conventional "clk", unverified.
+        period = fallback_clock_period_ns if fallback_clock_period_ns and fallback_clock_period_ns > 0 else (
+            spec.clock_period_ns if spec.clock_period_ns > 0 else 10.0
+        )
+        sdc_path = os.path.join(run_dir, "constraints.sdc")
+        _write_default_sdc(sdc_path=sdc_path, clock_period_ns=period, clock_port="clk", platform=platform)
+        result.update({
+            "status": "pass",
+            "note": (
+                f"{mismatch} Using default clock constraints on port 'clk' at {period} ns; spec "
+                "port constraints skipped. The clock port was NOT verified against the netlist — "
+                "if this design's clock is named differently the run is unconstrained."
+            ),
+            "sdc_path": sdc_path,
+            "effective_clock_period_ns": period,
+            "clock_period_ns": period,
+            "clock_source": "default_module_mismatch",
+        })
         return result
 
     clock_ports = [p.name for p in spec.ports if p.direction == "input" and p.name.lower() in {"clk", "clock", "clk_i"}]
