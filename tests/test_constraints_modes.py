@@ -192,3 +192,49 @@ def test_mismatch_warning_survives_to_the_final_status(tmp_path, monkeypatch):
     # ...and the finalized rollup carries the warning instead of replacing it.
     assert "not verified" in final["check_notes"].lower()
     assert "timing not evaluated" in final["check_notes"].lower()
+
+
+def test_mismatch_warning_survives_a_partial_flow_too(tmp_path, monkeypatch):
+    """max_stage-limited runs take a different completion branch than the full
+    flow; its rollup must carry the unverified-clock warning the same way
+    (found live on staging: the partial branch replaced it)."""
+    import time
+
+    workspace = str(tmp_path / "ws3")
+    os.makedirs(workspace, exist_ok=True)
+    _spec(workspace, module_name="GCN", clock_port="clk_i")
+    design = os.path.join(workspace, "gcn_top.v")
+    with open(design, "w", encoding="utf-8") as f:
+        f.write("module GCN_synth(input clk, output [3:0] q); endmodule")
+
+    def fake_orfs(**kwargs):
+        run_dir = kwargs["run_dir"]
+        reports = os.path.join(run_dir, "orfs_reports", "sky130hd", "GCN_synth", "base")
+        results = os.path.join(run_dir, "orfs_results", "sky130hd", "GCN_synth", "base")
+        os.makedirs(reports, exist_ok=True)
+        os.makedirs(results, exist_ok=True)
+        with open(os.path.join(reports, "synth_stat.txt"), "w", encoding="utf-8") as f:
+            f.write("Chip area for module '\GCN_synth': 12.34\nNumber of cells: 9\n")
+        with open(os.path.join(results, "1_synth.odb"), "w", encoding="utf-8") as f:
+            f.write("odb")
+        with open(os.path.join(results, "1_synth.v"), "w", encoding="utf-8") as f:
+            f.write("module GCN_synth(); endmodule")
+        return {"success": True, "stdout": "", "stderr": "", "command": "fake"}
+
+    monkeypatch.setattr(sm, "_run_orfs", fake_orfs)
+
+    started = sm.start_synthesis_job(
+        workspace=workspace, verilog_files=[design], top_module="GCN_synth",
+        max_stage="synth",
+    )
+    final = None
+    for _ in range(400):
+        final = sm.get_synthesis_status(started["run_id"], workspace=workspace)
+        if final["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.05)
+
+    assert final["status"] == "completed"
+    assert final["clock_source"] == "default_module_mismatch"
+    assert "partial flow" in final["check_notes"].lower()
+    assert "not verified" in final["check_notes"].lower()

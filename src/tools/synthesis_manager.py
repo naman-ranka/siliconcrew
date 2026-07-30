@@ -2204,6 +2204,11 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
                 f"Partial flow completed through '{max_stage}'; signoff/equiv checks "
                 f"skipped: partial flow (max_stage={max_stage})."
             )
+            # Same rule as full-flow finalization: an unverified default clock
+            # changes how any timing read from this run must be interpreted —
+            # the rollup carries the warning, never replaces it.
+            if run_meta.get("clock_source") in _UNVERIFIED_CLOCK_SOURCES and run_meta.get("constraints_note"):
+                run_meta["check_notes"] += f" | {run_meta['constraints_note']}"
             next_stage = _next_stage_after(max_stage)
             if next_stage in PD_RETRYABLE_STAGES:
                 run_meta["next_action"] = (
