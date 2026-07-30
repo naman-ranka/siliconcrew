@@ -209,6 +209,14 @@ def _synth_to_run(workspace: str, item: Dict[str, Any]) -> Dict[str, Any]:
             "tnsNs": _pick("tns_ns", "tnsNs"),
             "fmaxMhz": _pick("fmax_mhz", "fmaxMhz"),
             "powerMw": _pick("power_mw", "powerMw"),
+            # The honest timing set. Kept identical to the run-detail payload
+            # below: this card reads the PERSISTED snapshot and the detail panel
+            # recomputes, so any field present in one must be present in both or
+            # the same run shows two different answers in one UI.
+            "worstSlackNs": _pick("worst_slack_ns", "worstSlackNs"),
+            "timingMet": _pick("timing_met", "timingMet"),
+            "timingCorner": _pick("timing_corner", "timingCorner"),
+            "timingNote": _pick("timing_note", "timingNote"),
         }
 
     return {
@@ -928,6 +936,11 @@ def build_actions_router(
             "tnsNs": metrics.get("tns_ns"),
             "fmaxMhz": metrics.get("fmax_mhz"),
             "powerMw": metrics.get("power_mw"),
+            # Must mirror _synth_to_run's card payload exactly — see the note there.
+            "worstSlackNs": metrics.get("worst_slack_ns"),
+            "timingMet": metrics.get("timing_met"),
+            "timingCorner": metrics.get("timing_corner"),
+            "timingNote": metrics.get("timing_note"),
         } if metrics else None
         return _ok({"run": {
             "id": run_id,

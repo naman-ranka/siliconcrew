@@ -115,7 +115,7 @@ You can verify specific components of the system using the provided test scripts
 *   `python tests/verify_linter.py`: Tests the Verilog syntax checker.
 *   `python tests/verify_simulation.py`: Tests the compilation and simulation flow.
 *   `python tests/verify_synthesis.py`: Tests the OpenROAD synthesis execution (requires Docker).
-*   `python tests/verify_ppa.py`: Tests the PPA report parser (regex logic).
+*   `python -m pytest tests/test_honest_metrics.py`: Tests the PPA/timing report parser.
 *   `python tests/test_waveform.py`: Tests the VCD waveform parser.
 
 **2. Individual Agents**

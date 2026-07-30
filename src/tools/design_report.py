@@ -239,6 +239,9 @@ def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
                 # frequency ORFS itself reported, and the corner it ran at.
                 "worst_slack_ns", "clock_period_min_ns", "fmax_mhz",
                 "timing_met", "timing_corner",
+                # The disclosure travels with the numbers: without it the report
+                # cannot say WHY a run has no verdict.
+                "timing_note",
             ]:
                 if key not in metrics or metrics.get(key) is None:
                     if parsed_metrics.get(key) is not None:
@@ -389,18 +392,25 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
         else:
             report_lines.append("| Cell Count | N/A | - |")
         
-        # Timing. ORFS's report_wns CLAMPS positive slack to 0, so it reads
-        # "Met" both for a design with margin and for one whose real slack was
-        # never reported. The verdict comes from the real worst slack; the
-        # clamped value is only a labelled fallback.
+        # Timing. ORFS's report_wns CLAMPS positive slack to 0, so a 0.00 reads
+        # the same for a design with real margin and for one whose margin was
+        # never reported at all. A NEGATIVE wns is not clamped and therefore IS
+        # the worst slack — the same rule get_synthesis_metrics applies, so the
+        # report and the metrics can never disagree about a run. Only that real
+        # slack earns a verdict; the clamped 0.00 earns a labelled row and
+        # nothing more.
+        clamped_wns = metrics.get("wns_ns")
+        timing_note = metrics.get("timing_note")
         wns = metrics.get("worst_slack_ns")
-        slack_label = "Worst Slack (Setup)"
-        if wns is None:
-            wns = metrics.get("wns_ns")
-            slack_label = "WNS (Setup, ORFS-clamped)"
+        if wns is None and clamped_wns is not None and clamped_wns < 0:
+            wns = clamped_wns
         if wns is not None:
             status = "✅ Met" if wns >= 0 else "❌ Violated"
-            report_lines.append(f"| {slack_label} | {wns:.3f} ns | {status} |")
+            report_lines.append(f"| Worst Slack (Setup) | {wns:.3f} ns | {status} |")
+        elif clamped_wns is not None:
+            report_lines.append(
+                f"| WNS (Setup, ORFS-clamped) | {clamped_wns:.3f} ns | ⚠️ no verdict |"
+            )
         else:
             report_lines.append("| Worst Slack (Setup) | N/A | - |")
         
@@ -411,25 +421,30 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
         else:
             report_lines.append("| Total Power | N/A | - |")
         
-        # Spec vs Actual comparison
-        if wns is not None:
+        # Spec vs Actual comparison. The clock rows describe the CONSTRAINT and
+        # are always printable; only the achieved rows and the verdict need the
+        # real slack, because every one of them is derived from it — and derived
+        # from a clamped 0.00 they reproduce the target echo this wave removed
+        # (1000/(target - 0) == 1000/target).
+        if wns is not None or clamped_wns is not None or timing_note:
             report_lines.append("\n### Timing Comparison\n")
             requested_clock, target_period, target_source = _resolve_run_clock_fields(run_meta, spec)
             if target_period is None:
                 target_period = 0
-            # The achieved period is target - slack in BOTH directions: positive
-            # slack means the clock could be tightened by that much, negative
-            # means it must be loosened. Reporting the target as "achieved"
-            # whenever timing met was the same echo as the fmax bug.
-            achieved_period = target_period - wns
-            slack_pct = (wns / target_period) * 100 if target_period > 0 else 0
             corner = metrics.get("timing_corner")
 
             if requested_clock is not None:
                 report_lines.append(f"| Requested Clock | {requested_clock} ns |")
             report_lines.append(f"| Target Clock | {target_period} ns |")
-            report_lines.append(f"| Achieved Slack | {wns:.3f} ns ({slack_pct:+.1f}%) |")
-            report_lines.append(f"| Achieved Period | {achieved_period:.3f} ns |")
+
+            if wns is not None:
+                # The achieved period is target - slack in BOTH directions:
+                # positive slack means the clock could be tightened by that much,
+                # negative means it must be loosened.
+                achieved_period = target_period - wns
+                slack_pct = (wns / target_period) * 100 if target_period > 0 else 0
+                report_lines.append(f"| Achieved Slack | {wns:.3f} ns ({slack_pct:+.1f}%) |")
+                report_lines.append(f"| Achieved Period | {achieved_period:.3f} ns |")
             if target_source:
                 report_lines.append(f"| Timing Target Source | {target_source} |")
             if corner:
@@ -437,25 +452,37 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
                 # frequency from that corner overstates the design.
                 report_lines.append(f"| Timing Corner | {corner} |")
 
-            # Prefer ORFS's own achieved Fmax; fall back to the arithmetic from
-            # the real slack. Never 1000/target — that is the input, not a result.
-            achieved_fmax = metrics.get("fmax_mhz")
-            if achieved_fmax is None and achieved_period > 0:
-                achieved_fmax = 1000 / achieved_period
-            corner_suffix = f" ({corner} corner)" if corner else ""
-            if wns >= 0:
-                if achieved_fmax:
+            if wns is None:
+                report_lines.append(
+                    "\n*Timing cannot be judged from this run: ORFS's `report_wns` clamps "
+                    "positive slack to 0 and these reports carry no `worst slack` line, so "
+                    "neither the achieved margin nor the achieved frequency is recoverable. "
+                    "The clock target above is a CONSTRAINT, not an achieved frequency.*"
+                )
+            else:
+                # The achieved frequency comes from get_synthesis_metrics and
+                # ONLY from there: it already prefers ORFS's own fmax, already
+                # falls back to a labelled derivation from the real slack, and
+                # already returns None when neither exists (a combinational block
+                # has no maximum frequency at all). Re-deriving it here would be
+                # a second opinion that can disagree with every other surface —
+                # and the version of that arithmetic this report used to run was
+                # the target echo itself.
+                achieved_fmax = metrics.get("fmax_mhz")
+                corner_suffix = f" ({corner} corner)" if corner else ""
+                verdict = (
+                    "✅ **Timing requirement MET**" if wns >= 0
+                    else "❌ **Timing requirement NOT MET**"
+                )
+                if achieved_fmax is not None:
+                    qualifier = "Design runs at" if wns >= 0 else "Max achievable:"
                     report_lines.append(
-                        f"\n✅ **Timing requirement MET** - Design runs at "
-                        f"{achieved_fmax:.1f} MHz{corner_suffix}"
+                        f"\n{verdict} - {qualifier} {achieved_fmax:.1f} MHz{corner_suffix}"
                     )
                 else:
-                    report_lines.append("\n✅ **Timing requirement MET**")
-            else:
-                report_lines.append(
-                    f"\n❌ **Timing requirement NOT MET** - Max achievable: "
-                    f"{achieved_fmax or 0:.1f} MHz{corner_suffix}"
-                )
+                    report_lines.append(f"\n{verdict}")
+            if timing_note:
+                report_lines.append(f"\n*{timing_note}*")
         
         # Note the source of metrics
         metrics_path = os.path.join(report_dir, METRICS_FILENAME)

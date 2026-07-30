@@ -145,8 +145,13 @@ def _extract_synth_metrics(result_text: str | None) -> tuple[float | None, float
     obj = _parse_json_maybe(result_text)
     if not obj:
         return None, None
-    wns = obj.get("wns_ns")
-    tns = obj.get("tns_ns")
+    # get_synthesis_metrics nests the PPA fields under "metrics" (the top level
+    # is the wrapper: status/run_id/metrics/...), so reading the top level
+    # logged None for every attempt. Flat payloads (older logs, save_metrics
+    # output) still resolve.
+    ppa = obj.get("metrics") if isinstance(obj.get("metrics"), dict) else obj
+    wns = ppa.get("wns_ns")
+    tns = ppa.get("tns_ns")
     try:
         wns = float(wns) if wns is not None else None
     except Exception:

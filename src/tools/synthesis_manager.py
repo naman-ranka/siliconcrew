@@ -4240,6 +4240,10 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
         "clock_period_min_ns": timing["clock_period_min_ns"],
         "timing_met": timing["timing_met"],
         "timing_corner": timing["timing_corner"],
+        # Same key, same construction as the persisted snapshot's, so the runs
+        # card (which reads summary_metrics) and the detail panel (which reads
+        # this) cannot disagree about the caveats on the same run.
+        "timing_note": "; ".join(timing["notes"]) or None,
     }
     sources = {
         "area_um2": stat,
