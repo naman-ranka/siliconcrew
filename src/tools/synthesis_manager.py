@@ -356,16 +356,15 @@ def _submit_with_quota_release(reservation, fn, *fn_args):
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _POLL_CACHE: Dict[str, Dict[str, Any]] = {}
-_POLL_BACKOFF_STATE: Dict[str, Dict[str, Any]] = {}
 
 
 def _job_key(workspace: Optional[str], run_id: str) -> str:
     """Workspace-scoped key for the in-memory bookkeeping maps.
 
     run_ids (synth_NNNN) are unique per WORKSPACE, not globally: on a hosted
-    instance two tenants' synth_0001 must never share a _JOBS/_POLL_CACHE/
-    _POLL_BACKOFF_STATE slot. Callers without a workspace fall back to the
-    bare run_id (which then simply never matches a scoped entry).
+    instance two tenants' synth_0001 must never share a _JOBS/_POLL_CACHE
+    slot. Callers without a workspace fall back to the bare run_id (which
+    then simply never matches a scoped entry).
     """
     if not workspace:
         return run_id
@@ -381,6 +380,14 @@ _ORFS_OVERRIDE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 POLL_MIN_INTERVAL_SEC = 1.0
 POLL_BACKOFF_START_SEC = 30
 POLL_BACKOFF_MAX_SEC = 600
+# Recommended polling cadence as a function of how long the run has been going:
+# (elapsed_below_sec, poll_after_sec), first match wins, POLL_BACKOFF_LATE_SEC
+# beyond the last step. A full ORFS flow is legitimately 8-40 min, so early
+# polling stays responsive and late polling stays calm — and because the answer
+# depends only on the run's own clock, two callers (or two hosted instances)
+# looking at the same run at the same moment get the same number.
+POLL_BACKOFF_STEPS = ((120, POLL_BACKOFF_START_SEC), (480, 60), (1200, 120))
+POLL_BACKOFF_LATE_SEC = 300
 
 # Stage-aware run ceilings replace the old flat 1200s cap, which killed healthy
 # full-flow runs at 20 min even though RTL->GDS for a few-thousand-cell design
@@ -2410,20 +2417,42 @@ def _read_run_meta(run_dir: str) -> Dict[str, Any]:
         return {}
 
 
-def _recommended_poll_after_sec(
-    run_id: str, status: str, stage: str, last_log_lines: List[str], workspace: Optional[str] = None
-) -> int:
-    key = _job_key(workspace, run_id)
+def _recommended_poll_after_sec(status: str, elapsed_sec: Optional[float]) -> int:
+    """Polling cadence for a live run, derived from its elapsed time.
+
+    Stateless on purpose: a per-process call counter told the second caller of
+    the same run to wait twice as long as the first (and reset on every new
+    hosted instance), which described the process's polling habits rather than
+    the run.
+    """
     if status not in {"queued", "running"}:
-        _POLL_BACKOFF_STATE.pop(key, None)
         return 0
+    elapsed = elapsed_sec if elapsed_sec is not None else 0.0
+    for below, poll_after in POLL_BACKOFF_STEPS:
+        if elapsed < below:
+            return min(POLL_BACKOFF_MAX_SEC, poll_after)
+    return min(POLL_BACKOFF_MAX_SEC, POLL_BACKOFF_LATE_SEC)
 
-    state = _POLL_BACKOFF_STATE.get(key, {"count": 0})
-    state["count"] = int(state.get("count", 0)) + 1
-    _POLL_BACKOFF_STATE[key] = state
 
-    poll_after = POLL_BACKOFF_START_SEC * (2 ** (state["count"] - 1))
-    return min(POLL_BACKOFF_MAX_SEC, max(POLL_BACKOFF_START_SEC, poll_after))
+def _backoff_elapsed_seconds(meta: Dict[str, Any], elapsed_sec: Optional[float]) -> float:
+    """Elapsed used for the polling cadence, never None.
+
+    ``created_at`` is written by the WORKER, so ``_elapsed_seconds`` is None for
+    the whole queued window; dispatch time is the honest clock there. A run with
+    neither timestamp is treated as brand new rather than guessed at.
+    """
+    if elapsed_sec is not None:
+        return float(elapsed_sec)
+    dispatched = meta.get("dispatched_at")
+    if dispatched:
+        try:
+            started = datetime.fromisoformat(dispatched)
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+        except Exception:
+            pass
+    return 0.0
 
 
 def _elapsed_seconds(meta: Dict[str, Any], status: str) -> Optional[float]:
@@ -2473,7 +2502,8 @@ def _build_status_response(
     # tail stays as detail, never as the stage source.
     progress = stage_progress_from_files(run_dir, meta)
     stage = progress["current_stage"]
-    poll_after = _recommended_poll_after_sec(run_id, status, stage, last_log_lines, workspace=workspace)
+    elapsed_sec = _elapsed_seconds(meta, status)
+    poll_after = _recommended_poll_after_sec(status, _backoff_elapsed_seconds(meta, elapsed_sec))
 
     next_action = (
         "Use search_logs_tool for detailed PPA/error verification."
@@ -2540,7 +2570,7 @@ def _build_status_response(
         "top_module": meta.get("top_module"),
         # Live elapsed while running (computed from created_at), final elapsed
         # once persisted at finalization. So the UI always has a running timer.
-        "elapsed_sec": _elapsed_seconds(meta, status),
+        "elapsed_sec": elapsed_sec,
         "last_log_lines": last_log_lines,
         "last_log_source": last_log_source,
         "artifacts_found": _collect_artifacts(run_dir),
@@ -2550,8 +2580,11 @@ def _build_status_response(
         "next_action": next_action,
         "poll_after_sec": poll_after,
         "poll_hint": (
-            f"Polling backoff for this job: start {POLL_BACKOFF_START_SEC}s, "
-            f"double each subsequent poll, cap {POLL_BACKOFF_MAX_SEC}s."
+            "Polling cadence follows how long this run has been going, not how "
+            f"often you ask: {POLL_BACKOFF_START_SEC}s for the first "
+            f"{POLL_BACKOFF_STEPS[0][0]}s, then 60s, 120s, and "
+            f"{POLL_BACKOFF_LATE_SEC}s past {POLL_BACKOFF_STEPS[-1][0]}s. "
+            "Honor poll_after_sec."
         ),
     }
     # Communicate where this run is executing so the UI can say e.g. "running on
@@ -2589,8 +2622,6 @@ def _maybe_cache_poll_response(run_id: str, response: Dict[str, Any], workspace:
         _POLL_CACHE[key] = {"ts": time.time(), "response": dict(response)}
     elif key in _POLL_CACHE:
         del _POLL_CACHE[key]
-    if status not in {"running", "queued"} and key in _POLL_BACKOFF_STATE:
-        del _POLL_BACKOFF_STATE[key]
 
 
 def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[str, Any]:
