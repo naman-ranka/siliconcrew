@@ -59,3 +59,38 @@ def test_failure_paths_still_carry_tail(tmp_path, monkeypatch):
         )
         assert needle in out
         assert "MARKER_" + status in out
+
+
+def test_pass_with_error_text_in_tail_still_classifies_green(tmp_path, monkeypatch):
+    """A passing run whose own output mentions an exception must not go red.
+
+    run_cocotb prints `SC_COCOTB_TEST_EXC: RuntimeError(...)` and can still
+    report PASS from results.xml; with a prose return the API's substring
+    heuristic saw "Error" in the tail and wrote an error activity event. The
+    JSON status keeps the verdict out of the tail's hands.
+    """
+    import json as _json
+    from api import format_tool_result_for_api, classify_result_status
+
+    stdout = "SC_COCOTB_TEST_EXC: RuntimeError('transient')\nall 3 tests FAILED-free"
+    out = _invoke(tmp_path, monkeypatch, _fake_result("PASS", stdout))
+
+    payload = _json.loads(out)
+    assert payload["status"] == "test_passed"
+    assert "RuntimeError" in payload["output_tail"]
+
+    formatted = format_tool_result_for_api(out)
+    assert formatted["status"] == "test_passed"
+    assert classify_result_status(formatted) == "success"
+
+
+def test_fail_and_timeout_statuses_classify_as_errors(tmp_path, monkeypatch):
+    import json as _json
+    from api import format_tool_result_for_api, classify_result_status
+
+    for status, expected in (("FAIL", "test_failed"), ("TIMEOUT", "timeout"),
+                             ("ERROR", "error")):
+        out = _invoke(tmp_path, monkeypatch,
+                      _fake_result(status, "output", passed=0, failed=2))
+        assert _json.loads(out)["status"] == expected
+        assert classify_result_status(format_tool_result_for_api(out)) == "error"

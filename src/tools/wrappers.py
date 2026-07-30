@@ -1041,15 +1041,39 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
     status = r.get("status")
     tail = ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()[-16000:]
 
+    # JSON, not prose: raw simulator output legitimately contains words like
+    # "Error", and the API-side substring heuristic would classify a passing
+    # run as an error from its own tail. A structured status keeps the verdict
+    # out of the tail's hands (same contract as simulation_tool).
     if status == "PASS":
-        return (f"Cocotb Test PASSED ✅  ({r['passed']} testcase(s)) — verified in the reference container."
-                f"\nOutput tail:\n{tail[-4000:]}")
-    if status == "TIMEOUT":
-        return ("Cocotb Test DID NOT TERMINATE ⏱️ — treat this as a FAILURE (likely a combinational "
-                f"loop, missing clock, or unbounded test). Output tail:\n{tail}")
-    if status == "FAIL":
-        return f"Cocotb Test FAILED ❌  ({r['failed']} failing testcase(s)).\nOutput tail:\n{tail}"
-    return f"Cocotb Test ERROR ⚠️ (build/collection failure — no test ran).\nOutput tail:\n{tail}"
+        payload = {
+            "status": "test_passed",
+            "summary": f"Cocotb Test PASSED ✅  ({r['passed']} testcase(s)) — verified in the reference container.",
+            "passed": r["passed"],
+            "failed": 0,
+            "output_tail": tail[-4000:],
+        }
+    elif status == "TIMEOUT":
+        payload = {
+            "status": "timeout",
+            "summary": ("Cocotb Test DID NOT TERMINATE ⏱️ — treat this as a FAILURE (likely a "
+                        "combinational loop, missing clock, or unbounded test)."),
+            "output_tail": tail,
+        }
+    elif status == "FAIL":
+        payload = {
+            "status": "test_failed",
+            "summary": f"Cocotb Test FAILED ❌  ({r['failed']} failing testcase(s)).",
+            "failed": r["failed"],
+            "output_tail": tail,
+        }
+    else:
+        payload = {
+            "status": "error",
+            "summary": "Cocotb Test ERROR ⚠️ (build/collection failure — no test ran).",
+            "output_tail": tail,
+        }
+    return json.dumps(payload, indent=2)
 
 @tool
 def sby_tool(sby_file: str) -> str:
