@@ -536,6 +536,14 @@ class CloudWorkspaceProvider:
 
     # -- the WorkspaceProvider surface ----------------------------------------
 
+    def workspace_path_for(self, session_id: str) -> str:
+        """The scratch path ``workspace_for`` materializes into — pure.
+
+        No lock, no store call, no mkdir: safe on a read/reply path that must
+        report or log where tools act without hydrating the session.
+        """
+        return self._scratch(session_id)
+
     def workspace_for(self, session_id: str) -> str:
         scratch = self._scratch(session_id)
         key = self._key(session_id)

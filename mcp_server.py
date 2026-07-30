@@ -84,7 +84,7 @@ from src.tools.wrappers import (
 )
 from src.utils.session_manager import SessionManager
 from src.utils.attempt_logger import log_tool_call, log_tool_result
-from src.platform_engines.request_scope import run_in_session
+from src.platform_engines.request_scope import resolve_workspace_path, run_in_session
 from src.platform_engines import auth as auth_engine
 from src.platform_engines.identity import Action, AuthError, authorize
 
@@ -279,6 +279,19 @@ class RTLDesignMCPServer:
     def _scoped_user_id(self):
         return auth_engine.scoped_user_id(self._current_identity())
 
+    def _workspace_path(self, session_id: str) -> str:
+        """The workspace tools for ``session_id`` actually act on (dev#43).
+
+        ``session_manager.get_workspace_path`` is the LOGICAL layout; on hosted,
+        ``run_in_session`` binds the provider's scratch materialization instead,
+        so every reply that names a workspace — and, critically, the path the
+        activity log is written to — must come from the same provider. Pure: it
+        never materializes, so it is safe on read/reply paths. Providers without
+        the accessor (older test fakes) keep today's logical answer."""
+        return resolve_workspace_path(
+            session_id, fallback=self.session_manager.get_workspace_path
+        )
+
     def _resource_sessions(self) -> list[str]:
         """Sessions this MCP identity may see through the RESOURCE surface —
         mirrors the tool path's scoping so resources can't leak past the same
@@ -344,7 +357,7 @@ class RTLDesignMCPServer:
         # owner-scoped / all) — not every tenant's sessions.
         sessions = self._resource_sessions()
         for session_id in sessions:
-            workspace = self.session_manager.get_workspace_path(session_id)
+            workspace = self._workspace_path(session_id)
             encoded_session_id = quote(session_id, safe="")
             
             # Session info resource
@@ -409,7 +422,7 @@ class RTLDesignMCPServer:
                 session_id = unquote(encoded_session_id)
                 filename = unquote(encoded_filename)
                 self._assert_session_readable(session_id)  # scope BEFORE touching the workspace
-                workspace = self.session_manager.get_workspace_path(session_id)
+                workspace = self._workspace_path(session_id)
                 filepath = os.path.join(workspace, filename)
 
                 if not os.path.exists(filepath):
@@ -441,7 +454,7 @@ class RTLDesignMCPServer:
                 self._assert_session_readable(session_id)  # scope BEFORE reading metadata/files
                 # Session metadata
                 meta = self.session_manager.get_session_metadata(session_id)
-                workspace = self.session_manager.get_workspace_path(session_id)
+                workspace = self._workspace_path(session_id)
                 
                 files = []
                 if os.path.exists(workspace):
@@ -517,7 +530,7 @@ class RTLDesignMCPServer:
                 tag=session_id, model_name="claude-via-mcp", user_id=self._scoped_user_id()
             )
             
-            workspace = self.session_manager.get_workspace_path(session_id)
+            workspace = self._workspace_path(session_id)
             
             # Set as current session. Workspace resolution is now per-call via
             # session_request_scope (no process-global env mutation).
@@ -728,7 +741,7 @@ Ready to design! What would you like to create?"""
                     user_id=self._scoped_user_id(),
                 )
                 self.current_session = session_id
-                workspace = self.session_manager.get_workspace_path(session_id)
+                workspace = self._workspace_path(session_id)
                 project_line = f"\nProject: {project_id}" if project_id else ""
                 return [TextContent(
                     type="text",
@@ -769,7 +782,7 @@ Ready to design! What would you like to create?"""
             # uid is None → any existing session).
             if not self.session_manager.owns_session(session_id, self._scoped_user_id()):
                 return [TextContent(type="text", text=f"❌ Session '{session_id}' not found.")]
-            workspace = self.session_manager.get_workspace_path(session_id)
+            workspace = self._workspace_path(session_id)
 
             self.current_session = session_id
             return [TextContent(
@@ -781,7 +794,7 @@ Ready to design! What would you like to create?"""
             if not self.current_session:
                 return [TextContent(type="text", text="No active session. Load a prompt or call create_session_tool.")]
             
-            workspace = self.session_manager.get_workspace_path(self.current_session)
+            workspace = self._workspace_path(self.current_session)
             meta = self.session_manager.get_session_metadata(self.current_session)
             
             import json
@@ -844,10 +857,10 @@ Ready to design! What would you like to create?"""
             if session_id:
                 if not self.session_manager.owns_session(session_id, self._scoped_user_id()):
                     return [TextContent(type="text", text=f"❌ Session '{session_id}' not found.")]
-                workspace = self.session_manager.get_workspace_path(session_id)
+                workspace = self._workspace_path(session_id)
                 self.current_session = session_id
             elif self.current_session:
-                workspace = self.session_manager.get_workspace_path(self.current_session)
+                workspace = self._workspace_path(self.current_session)
 
             prompt_text, prompt_source, resolved_version = _load_architect_prompt()
             payload = f"{prompt_text}"
@@ -907,7 +920,12 @@ Ready to design! What would you like to create?"""
         # Execute the tool
         tool_func = tool_map[name]
         active_session = self.current_session
-        active_workspace = self.session_manager.get_workspace_path(active_session)
+        # THE path activity events are written to. It MUST be the workspace the
+        # tool runs in (below, via run_in_session): attempt_logger drops the event
+        # when the dir is absent and otherwise writes attempt_events.jsonl there,
+        # so a logical path meant hosted MCP activity vanished or landed on
+        # never-synced instance disk (invariants 3 + 9).
+        active_workspace = self._workspace_path(active_session)
         identity = self._current_identity()
         uid = auth_engine.scoped_user_id(identity)
 

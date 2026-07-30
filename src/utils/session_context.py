@@ -114,6 +114,15 @@ class WorkspaceProvider(Protocol):
     def workspace_for(self, session_id: str) -> str:
         ...
 
+    def workspace_path_for(self, session_id: str) -> str:
+        """Where ``workspace_for`` would put this session — with no side effects.
+
+        ``workspace_for`` materializes (mkdir locally, download+swap in cloud
+        mode), so it cannot be called just to *report* or *log* a path. This is
+        the same answer without touching the filesystem or object store.
+        """
+        ...
+
 
 @dataclass
 class LocalWorkspaceProvider:
@@ -121,7 +130,10 @@ class LocalWorkspaceProvider:
 
     base_dir: str
 
+    def workspace_path_for(self, session_id: str) -> str:
+        return os.path.join(self.base_dir, session_id)
+
     def workspace_for(self, session_id: str) -> str:
-        path = os.path.join(self.base_dir, session_id)
+        path = self.workspace_path_for(session_id)
         os.makedirs(path, exist_ok=True)
         return path
