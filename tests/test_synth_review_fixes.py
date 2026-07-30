@@ -2,8 +2,8 @@
 
 F1  stage_progress_from_files mtime floor is timezone-independent (naive
     dispatched_at is assumed UTC; never interpreted in the host TZ).
-F2  _JOBS/_POLL_CACHE/_POLL_BACKOFF_STATE are keyed workspace::run_id — two
-    workspaces' synth_0001 never clobber each other in one process.
+F2  _JOBS/_POLL_CACHE are keyed workspace::run_id — two workspaces'
+    synth_0001 never clobber each other in one process.
 F3  _reconcile_stale_status trusts a live worker FIRST: neither the
     completed-marker leg nor the death leg fires under a live future.
 F5  POST /runs/{id}/retry maps a validation "error" result to HTTP 400.

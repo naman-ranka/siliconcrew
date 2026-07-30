@@ -21,5 +21,4 @@ def _clear_synthesis_memory_state():
         return
     _sm._JOBS.clear()
     _sm._POLL_CACHE.clear()
-    _sm._POLL_BACKOFF_STATE.clear()
     yield
