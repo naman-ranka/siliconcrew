@@ -37,7 +37,7 @@ from src.api.activity import read_activity
 from src.api import workspace_fs
 from src.api import tool_catalog
 from src.utils.attempt_logger import log_tool_call, log_tool_result
-from src.utils.session_context import SessionContext, session_scope
+from src.utils.session_context import SessionContext, current_session_id, session_scope
 from src.utils.paths import is_within
 from src.platform_engines import auth as _auth_engine
 from src.tools import manifest as manifest_mod
@@ -343,7 +343,7 @@ def _snapshot_code(workspace: str, manifest: Optional[manifest_mod.DesignManifes
     root files); the frontend keys code tabs by exactly this value.
     """
     if manifest is None:
-        manifest = manifest_mod.read_manifest(workspace)
+        manifest = manifest_mod.read_manifest(workspace, session_id=current_session_id())
     out: List[Dict[str, Any]] = []
     for rel in _code_file_rel_paths(workspace, manifest):
         with open(os.path.join(workspace, rel), "r", errors="ignore") as f:

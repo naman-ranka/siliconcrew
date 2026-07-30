@@ -1,17 +1,25 @@
 import os
 import sys
+from typing import Optional
 
-def read_waveform(vcd_file: str, signals: list[str], start_time: int = 0, end_time: int = 1000) -> str:
+# Removing the old end_time=1000 default means an unbounded VCD can produce an
+# unbounded table; cap the rows and say what was withheld rather than silently
+# dropping the tail (as the t=1000 bound used to) or flooding the reader.
+MAX_OUTPUT_ROWS = 2000
+
+
+def read_waveform(vcd_file: str, signals: list[str], start_time: int = 0,
+                  end_time: Optional[int] = None) -> str:
     """
     Reads a VCD file and extracts the values of specified signals within a time window.
     Pure Python implementation (no external dependencies).
-    
+
     Args:
         vcd_file: Path to the .vcd file.
         signals: List of signal names to extract (e.g., ['clk', 'rst', 'count']).
         start_time: Start of the time window.
-        end_time: End of the time window.
-        
+        end_time: End of the time window; None (default) reads to the end of the VCD.
+
     Returns:
         A string representation of the signal changes.
     """
@@ -91,7 +99,7 @@ def read_waveform(vcd_file: str, signals: list[str], start_time: int = 0, end_ti
             except:
                 continue
                 
-            if current_time > end_time:
+            if end_time is not None and current_time > end_time:
                 break
                 
         elif current_time >= start_time:
@@ -118,8 +126,15 @@ def read_waveform(vcd_file: str, signals: list[str], start_time: int = 0, end_ti
     if not events:
         return "No events found in this time window."
         
+    shown = events[:MAX_OUTPUT_ROWS]
     out_str = "Time\tSignal\tValue\n"
-    for t, s, v in events:
+    for t, s, v in shown:
         out_str += f"{t}\t{s}\t{v}\n"
-        
+
+    if len(events) > len(shown):
+        out_str += (
+            f"... showing first {len(shown)} of {len(events)} changes "
+            f"(up to t={shown[-1][0]}); narrow the window with start_time/end_time.\n"
+        )
+
     return out_str

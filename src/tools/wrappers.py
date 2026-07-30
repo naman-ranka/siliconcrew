@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from typing import Any
+from typing import Any, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from src.tools.run_linter import run_linter
@@ -27,6 +27,7 @@ from src.tools.file_patch import apply_unified_patch
 # tool/agent module. Re-exported here for backward compatibility — ~30 call
 # sites in this file resolve the workspace via get_workspace_path().
 from src.utils.workspace import get_workspace_path, resolve_in_workspace
+from src.utils.session_context import current_session_id
 
 
 def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
@@ -223,7 +224,7 @@ def get_manifest() -> str:
     The manifest is the single source of truth shared with the UI; auto-derived if absent.
     """
     workspace = get_workspace_path()
-    m = manifest_mod.read_manifest(workspace)
+    m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
     return json.dumps(m.model_dump(), indent=2)
 
 
@@ -241,7 +242,7 @@ def update_manifest(updates_json: str) -> str:
             return "Error: updates_json must be a JSON object."
     except Exception as exc:
         return f"Error: invalid updates_json ({exc})."
-    m = manifest_mod.write_manifest(workspace, updates)
+    m = manifest_mod.write_manifest(workspace, updates, session_id=current_session_id())
     return json.dumps(m.model_dump(), indent=2)
 
 
@@ -265,7 +266,7 @@ def run_isolated_simulation(
         pass_marker: explicit pass marker required for a passing status.
     """
     workspace = get_workspace_path()
-    m = manifest_mod.read_manifest(workspace)
+    m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
     top = sim_top or m.simTop
     if not top:
         return "Error: no simTop in manifest and none provided. Set it with update_manifest."
@@ -439,7 +440,8 @@ def wait_for_synthesis(run_id: str, max_wait_sec: int = 30, poll_interval_sec: i
 
 
 @tool
-def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0, end_time: int = 1000) -> str:
+def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
+                  end_time: Optional[int] = None) -> str:
     """
     Reads a VCD waveform file to inspect signal values.
     Use this when simulation fails to understand WHY.
@@ -447,7 +449,7 @@ def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0, end_ti
         vcd_file: Name of the .vcd file (e.g., 'dump.vcd').
         signals: List of signal names to inspect (e.g., ['clk', 'rst', 'count']).
         start_time: Start time to view.
-        end_time: End time to view.
+        end_time: End time to view; omit to read to the end of the waveform.
     """
     workspace = get_workspace_path()
     abs_file = os.path.join(workspace, vcd_file)

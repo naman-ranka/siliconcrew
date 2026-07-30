@@ -36,6 +36,34 @@ def _tail_text(text: str, max_lines: int, max_chars: int) -> Dict[str, Any]:
     return {"text": out, "truncated": truncated}
 
 
+def _write_full_log(log_path: str, comp: Dict[str, Any], sim: Optional[Dict[str, Any]]) -> None:
+    """Persist the un-truncated compile/run streams next to the run.
+
+    The tails on the run record serve the quick-read path and lose the head of
+    every long stream; this is the recoverable evidence. Best-effort: a log we
+    cannot write must never fail the simulation — the caller advertises the log
+    only when the file actually exists.
+    """
+    def _section(title: str, res: Dict[str, Any]) -> str:
+        return (
+            f"=== {title} ===\n"
+            f"$ {res.get('command') or ''}\n"
+            f"--- stdout ---\n{res.get('stdout') or ''}\n"
+            f"--- stderr ---\n{res.get('stderr') or ''}\n"
+        )
+
+    try:
+        parent = os.path.dirname(os.path.abspath(log_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(log_path, "w", encoding="utf-8", errors="replace") as f:
+            f.write(_section("COMPILE", comp))
+            if sim is not None:
+                f.write("\n" + _section("RUN", sim))
+    except Exception:
+        pass
+
+
 def _extract_unresolved_cells(stderr: str) -> List[str]:
     patterns = [
         re.compile(r"Unknown module type:\s*([a-zA-Z_][\w$]*)", re.IGNORECASE),
@@ -254,6 +282,7 @@ def run_simulation(
     max_lines_per_stream: int = 40,
     max_chars_per_stream: int = 4000,
     workspace: Optional[str] = None,
+    log_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run RTL or post-synthesis simulation with strict status contract.
@@ -270,6 +299,10 @@ def run_simulation(
     defaults to ``cwd`` so the non-isolated path (where cwd == workspace) is
     unchanged; the isolated path passes its real workspace while ``cwd`` stays
     the per-run exec dir.
+
+    ``log_path``, when given, receives the full compile + run streams (this is
+    the only place that holds them un-truncated). Early returns that never
+    reach the toolchain write nothing there.
     """
     if cwd is None:
         cwd = os.getcwd()
@@ -435,6 +468,8 @@ def run_simulation(
     comp = _compile(compile_files=compile_files, output_executable=output_exec, cwd=cwd, timeout=timeout, top_module=top_module)
 
     if comp["returncode"] != 0:
+        if log_path:
+            _write_full_log(log_path, comp, None)
         unresolved_cells = _extract_unresolved_cells(comp.get("stderr", "")) if mode == "post_synth" else []
         stderr_tail = _tail_text(comp.get("stderr", ""), max_lines_per_stream, max_chars_per_stream)
         stdout_tail = _tail_text(comp.get("stdout", ""), max_lines_per_stream, max_chars_per_stream)
@@ -464,6 +499,8 @@ def run_simulation(
         }
 
     sim = _simulate(output_executable=output_exec, cwd=cwd, timeout=timeout)
+    if log_path:
+        _write_full_log(log_path, comp, sim)
     stdout_tail = _tail_text(sim.get("stdout", ""), max_lines_per_stream, max_chars_per_stream)
     stderr_tail = _tail_text(sim.get("stderr", ""), max_lines_per_stream, max_chars_per_stream)
 

@@ -68,6 +68,16 @@ def current_workspace() -> Optional[str]:
     return ctx.workspace if ctx else None
 
 
+def current_session_id() -> str:
+    """Session id for the active session, or ``""`` when there is no context.
+
+    Returns a string (not ``None``) so callers can pass it straight through to
+    the manifest's ``session_id`` parameter, whose "unknown" value is ``""``.
+    """
+    ctx = _current.get()
+    return ctx.session_id if ctx else ""
+
+
 def set_current_session(ctx: SessionContext) -> contextvars.Token:
     """Set the active session; returns a token to pass to reset."""
     return _current.set(ctx)

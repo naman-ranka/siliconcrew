@@ -28,6 +28,7 @@ RUNS_DIRNAME = "sim_runs"
 INDEX_FILENAME = "index.json"
 LATEST_FILENAME = "LATEST"
 RUN_META_FILENAME = "run_meta.json"
+SIM_LOG_FILENAME = "sim.log"
 
 _ALLOC_LOCK = threading.Lock()
 _PROVENANCE_CACHE: Dict[str, Any] = {}
@@ -286,6 +287,7 @@ def run_sim_isolated(
         forward_run_id = None  # already resolved; don't re-resolve under cwd
 
     created_at = _now_iso()
+    log_abs = os.path.join(run_dir, SIM_LOG_FILENAME)
     sim_result = _runner(
         verilog_files=abs_files,
         top_module=top_module,
@@ -297,6 +299,7 @@ def run_sim_isolated(
         sim_profile=sim_profile,
         pass_marker=pass_marker,
         timeout=timeout,
+        log_path=log_abs,
     )
 
     vcd_abs = _find_vcd(run_dir)
@@ -344,6 +347,11 @@ def run_sim_isolated(
         "stderrTail": sim_result.get("stderr_tail", ""),
         "logTruncated": bool(sim_result.get("log_truncated")),
     }
+    # Advertise the full log only when it is really there: run_simulation has
+    # early returns (bad mode/profile, post-synth resolution errors) that never
+    # reach the toolchain and so produce no streams to write.
+    if os.path.exists(log_abs):
+        sim_run["logFile"] = SIM_LOG_FILENAME
 
     _persist_run_meta(run_dir, sim_run)
     _append_to_index(workspace, sim_run)
