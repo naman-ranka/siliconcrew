@@ -1040,7 +1040,8 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
     tail = ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()[-16000:]
 
     if status == "PASS":
-        return f"Cocotb Test PASSED ✅  ({r['passed']} testcase(s)) — verified in the reference container."
+        return (f"Cocotb Test PASSED ✅  ({r['passed']} testcase(s)) — verified in the reference container."
+                f"\nOutput tail:\n{tail[-4000:]}")
     if status == "TIMEOUT":
         return ("Cocotb Test DID NOT TERMINATE ⏱️ — treat this as a FAILURE (likely a combinational "
                 f"loop, missing clock, or unbounded test). Output tail:\n{tail}")
