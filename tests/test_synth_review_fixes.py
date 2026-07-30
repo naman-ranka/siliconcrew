@@ -413,6 +413,58 @@ def test_wait_final_sample_still_running_reports_timed_out(monkeypatch, tmp_path
 
 
 # --------------------------------------------------------------------------
+# B3 (dev#30, cap half): the wait must never sample AFTER its deadline
+#
+# The loop bound was honest but the post-loop sample was unbounded, and a hosted
+# status call is not cheap (it can reconcile + re-tar the workspace). Worst case
+# was max_wait + TWO slow calls — what tripped the MCP idle abort in dev#30.
+# The restructure (sample at loop top, return on terminal, break when the
+# deadline has passed, never call after the loop) halves the tail to
+# max_wait + ONE call while keeping F8's final-sample guarantee above.
+# --------------------------------------------------------------------------
+
+
+def _slow_status(monkeypatch, call_cost):
+    """Fake clock in which each status call itself burns ``call_cost`` seconds."""
+    clock = _fake_clock(monkeypatch)
+    calls = {"n": 0}
+
+    def _fake_status(run_id, workspace=None):
+        calls["n"] += 1
+        clock["t"] += call_cost  # the call is the expensive part, not the sleep
+        return {"run_id": run_id, "status": "running", "poll_after_sec": 2}
+
+    monkeypatch.setattr(wrappers, "collect_synthesis_status", _fake_status)
+    return clock, calls
+
+
+def test_wait_does_not_resample_past_the_deadline(monkeypatch, tmp_path):
+    """One status call (5s) already overruns max_wait=2 — there must be no second."""
+    clock, calls = _slow_status(monkeypatch, call_cost=5.0)
+
+    out = wrappers._wait_for_synthesis_job(str(tmp_path), "synth_0001", 2, 2)
+
+    assert out["status"] == "running"
+    assert out["timed_out"] is True
+    assert calls["n"] == 1          # pre-fix: 2 (broke on remaining<=0, then resampled)
+    assert clock["t"] <= 2 + 5.0    # max_wait + ONE call; pre-fix burned 10s
+    assert out["waited_sec"] <= 2 + 5.0
+
+
+def test_wait_worst_case_is_max_wait_plus_one_call(monkeypatch, tmp_path):
+    """Multi-iteration: the total call count equals the in-loop count."""
+    clock, calls = _slow_status(monkeypatch, call_cost=4.0)
+
+    out = wrappers._wait_for_synthesis_job(str(tmp_path), "synth_0001", 10, 2)
+
+    # t=0 call → 4, sleep 2 → 6, call → 10: the deadline is reached inside the
+    # loop and that sample is the answer.
+    assert calls["n"] == 2          # pre-fix: 3
+    assert clock["t"] <= 10 + 4.0
+    assert out["timed_out"] is True
+
+
+# --------------------------------------------------------------------------
 # F5: REST retry endpoint surfaces validation errors as 400
 # --------------------------------------------------------------------------
 
