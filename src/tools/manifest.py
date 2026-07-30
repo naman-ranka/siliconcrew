@@ -45,6 +45,9 @@ _MAX_SCAN_DEPTH = 6
 _RTL_EXTS = {".v", ".sv"}
 _INCLUDE_EXTS = {".vh", ".svh"}
 
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
 _MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)", re.MULTILINE)
 # Instantiation: `module_name #(...) inst (...)` or `module_name inst (...)`.
 _INSTANCE_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s+(?:#\s*\([^;]*?\)\s*)?[A-Za-z_]\w*\s*\(", re.MULTILINE)
@@ -150,10 +153,32 @@ def _list_source_files(workspace: str, ignore: Optional[List[str]] = None) -> Li
     return sorted(out)
 
 
+def _strip_comments(text: str) -> str:
+    """Blank out Verilog comments so the regexes above only ever see code.
+
+    Block comments collapse to their own newlines rather than "": ``_INSTANCE_RE``
+    is ``^\\s*``-anchored per line, so dropping the line breaks would splice a
+    following instantiation onto the preceding line and lose it. Block comments
+    are removed before line comments because ``//`` inside a ``/* … */`` (URLs,
+    commented-out code) is far more common than ``/*`` inside a ``//``.
+
+    No string-literal awareness: a ``"// module fake"`` inside a Verilog string
+    is an accepted false negative — comment density in generated RTL is the
+    actual threat, and a real lexer here would be machinery.
+    """
+    text = _BLOCK_COMMENT_RE.sub(lambda mo: "\n" * mo.group(0).count("\n"), text)
+    return _LINE_COMMENT_RE.sub("", text)
+
+
 def _read_text(path: str) -> str:
+    """Read a design source file, comment-stripped.
+
+    The single choke point feeding every module/instance/port regex here, so
+    stripping once at the read covers all of them.
+    """
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
+            return _strip_comments(f.read())
     except Exception:
         return ""
 
@@ -183,8 +208,10 @@ def derive_role(name: str, text: str = "") -> FileRole:
     """Deterministic role derivation (overridable). See data-model.md.
 
     ``name`` may be a bare filename or a workspace-relative path — extension and
-    testbench naming heuristics operate on the basename.
+    testbench naming heuristics operate on the basename. ``text`` is stripped of
+    comments here too (idempotent) since callers pass their own text.
     """
+    text = _strip_comments(text)
     ext = os.path.splitext(name)[1].lower()
     if ext == ".sdc":
         return "sdc"
