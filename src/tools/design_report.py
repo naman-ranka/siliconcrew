@@ -7,7 +7,6 @@ import json
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 from src.tools.spec_manager import load_yaml_file, DesignSpec
-from src.tools.get_ppa import get_ppa_metrics
 from src.tools.synthesis_manager import get_run_dir, get_synthesis_metrics
 from src.tools.sim_manager import list_sim_runs
 
@@ -204,10 +203,16 @@ def save_metrics(workspace_path: str, metrics: Dict[str, Any], run_id: str = Non
 
 def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
     """
-    Load metrics from the workspace, trying multiple sources:
-    1. First: design_metrics.json (saved by agent)
-    2. Second: Parse ORFS logs directly (get_ppa_metrics)
-    
+    Load metrics from the workspace, trying two sources in order:
+    1. design_metrics.json (saved by the agent, highest priority)
+    2. get_synthesis_metrics for the resolved run — the ONE structured parser
+       everything else uses.
+
+    A third tier used to parse *sta.log / *timing.rpt from the workspace root
+    with its own crude regexes (src/tools/get_ppa.py). It never read
+    6_finish.rpt, so it reported different numbers than every other surface;
+    it was deleted in Wave C rather than aligned.
+
     Returns:
         Dict with metrics or empty dict
     """
@@ -228,26 +233,19 @@ def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
         try:
             parsed = get_synthesis_metrics(workspace_path, resolved_run_id)
             parsed_metrics = parsed.get("metrics", {}) if parsed.get("status") == "ok" else {}
-            for key in ["area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw"]:
+            for key in [
+                "area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw",
+                # The honest timing set (Wave C): the real margin, the achieved
+                # frequency ORFS itself reported, and the corner it ran at.
+                "worst_slack_ns", "clock_period_min_ns", "fmax_mhz",
+                "timing_met", "timing_corner",
+            ]:
                 if key not in metrics or metrics.get(key) is None:
                     if parsed_metrics.get(key) is not None:
                         metrics[key] = parsed_metrics[key]
         except:
             pass
 
-    # Source 3: Legacy workspace-root parsing fallback
-    if not resolved_run_id:
-        orfs_logs = os.path.join(workspace_path, "orfs_logs")
-        if os.path.exists(orfs_logs):
-            try:
-                parsed_metrics = get_ppa_metrics(orfs_logs)
-                for key in ["area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw"]:
-                    if key not in metrics or metrics.get(key) is None:
-                        if parsed_metrics.get(key) is not None:
-                            metrics[key] = parsed_metrics[key]
-            except:
-                pass
-    
     return metrics
 
 
@@ -391,13 +389,20 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
         else:
             report_lines.append("| Cell Count | N/A | - |")
         
-        # Timing
-        wns = metrics.get("wns_ns")
+        # Timing. ORFS's report_wns CLAMPS positive slack to 0, so it reads
+        # "Met" both for a design with margin and for one whose real slack was
+        # never reported. The verdict comes from the real worst slack; the
+        # clamped value is only a labelled fallback.
+        wns = metrics.get("worst_slack_ns")
+        slack_label = "Worst Slack (Setup)"
+        if wns is None:
+            wns = metrics.get("wns_ns")
+            slack_label = "WNS (Setup, ORFS-clamped)"
         if wns is not None:
             status = "✅ Met" if wns >= 0 else "❌ Violated"
-            report_lines.append(f"| WNS (Setup) | {wns:.3f} ns | {status} |")
+            report_lines.append(f"| {slack_label} | {wns:.3f} ns | {status} |")
         else:
-            report_lines.append("| WNS (Setup) | N/A | - |")
+            report_lines.append("| Worst Slack (Setup) | N/A | - |")
         
         # Power
         power = metrics.get("power_uw")
@@ -412,24 +417,45 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
             requested_clock, target_period, target_source = _resolve_run_clock_fields(run_meta, spec)
             if target_period is None:
                 target_period = 0
-            achieved_period = target_period - wns if wns < 0 else target_period
+            # The achieved period is target - slack in BOTH directions: positive
+            # slack means the clock could be tightened by that much, negative
+            # means it must be loosened. Reporting the target as "achieved"
+            # whenever timing met was the same echo as the fmax bug.
+            achieved_period = target_period - wns
             slack_pct = (wns / target_period) * 100 if target_period > 0 else 0
-            
+            corner = metrics.get("timing_corner")
+
             if requested_clock is not None:
                 report_lines.append(f"| Requested Clock | {requested_clock} ns |")
             report_lines.append(f"| Target Clock | {target_period} ns |")
             report_lines.append(f"| Achieved Slack | {wns:.3f} ns ({slack_pct:+.1f}%) |")
+            report_lines.append(f"| Achieved Period | {achieved_period:.3f} ns |")
             if target_source:
                 report_lines.append(f"| Timing Target Source | {target_source} |")
-            
+            if corner:
+                # asap7 runs best-case (FF) libraries by default: an unlabelled
+                # frequency from that corner overstates the design.
+                report_lines.append(f"| Timing Corner | {corner} |")
+
+            # Prefer ORFS's own achieved Fmax; fall back to the arithmetic from
+            # the real slack. Never 1000/target — that is the input, not a result.
+            achieved_fmax = metrics.get("fmax_mhz")
+            if achieved_fmax is None and achieved_period > 0:
+                achieved_fmax = 1000 / achieved_period
+            corner_suffix = f" ({corner} corner)" if corner else ""
             if wns >= 0:
-                if target_period > 0:
-                    report_lines.append(f"\n✅ **Timing requirement MET** - Design can run at {1000/target_period:.1f} MHz")
+                if achieved_fmax:
+                    report_lines.append(
+                        f"\n✅ **Timing requirement MET** - Design runs at "
+                        f"{achieved_fmax:.1f} MHz{corner_suffix}"
+                    )
                 else:
                     report_lines.append("\n✅ **Timing requirement MET**")
             else:
-                max_freq = 1000 / achieved_period if achieved_period > 0 else 0
-                report_lines.append(f"\n❌ **Timing requirement NOT MET** - Max achievable: {max_freq:.1f} MHz")
+                report_lines.append(
+                    f"\n❌ **Timing requirement NOT MET** - Max achievable: "
+                    f"{achieved_fmax or 0:.1f} MHz{corner_suffix}"
+                )
         
         # Note the source of metrics
         metrics_path = os.path.join(report_dir, METRICS_FILENAME)

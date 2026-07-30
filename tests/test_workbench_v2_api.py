@@ -271,6 +271,31 @@ def test_runs_list_surfaces_failing_stage_and_notes(client):
     assert synth["checkNotes"] == "Clock tree synthesis failed (see 4_1_cts.log)."
 
 
+def test_runs_compare_reads_the_nested_metrics_dict(client):
+    """C6: get_synthesis_metrics nests PPA under "metrics"; the diff endpoint
+    read the wrapper's top level, so every value and deltaPct came back None."""
+    c, ws = client
+    for run_id, area, wns in (("synth_0001", 100.0, "0.50"), ("synth_0002", 120.0, "0.25")):
+        base = os.path.join(ws, "synth_runs", run_id, "orfs_reports", "sky130hd", "counter", "base")
+        os.makedirs(base, exist_ok=True)
+        with open(os.path.join(base, "6_finish.rpt"), "w") as f:
+            f.write(f"tns max 0.00\nwns max {wns}\nworst slack max {wns}\n"
+                    "Total 1.0e-3 1.0e-3 1.0e-9 2.0e-3 100.0%\n")
+        with open(os.path.join(base, "synth_stat.txt"), "w") as f:
+            f.write(f"  10 1.0E+02 cells\nChip area for module '\\counter': {area}\n")
+        with open(os.path.join(ws, "synth_runs", run_id, "run_meta.json"), "w") as f:
+            json.dump({"run_id": run_id, "status": "completed", "top_module": "counter",
+                       "platform": "sky130hd", "clock_period_ns": 10.0}, f)
+
+    r = c.get(f"/api/workspace/{SID}/runs/compare", params={"a": "synth_0001", "b": "synth_0002"})
+    assert r.status_code == 200
+    rows = {row["metric"]: row for row in r.json()["diff"]["rows"]}
+    assert rows["Area (µm²)"]["a"] == 100.0
+    assert rows["Area (µm²)"]["b"] == 120.0
+    assert rows["Area (µm²)"]["deltaPct"] == 20.0
+    assert rows["Cells"]["a"] == 10
+
+
 def test_run_status_route_unknown_run(client):
     c, ws = client
     r = c.get(f"/api/workspace/{SID}/runs/synth_9999/status")

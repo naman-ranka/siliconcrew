@@ -397,7 +397,6 @@ counter_4bit:
 │   │   ├── run_cocotb.py           # Cocotb runner (osvb reference container)
 │   │   ├── run_sby.py              # SymbiYosys formal verification (containerized)
 │   │   ├── run_xls.py              # Google XLS / DSLX HLS flow
-│   │   ├── get_ppa.py              # PPA metric extraction from logs
 │   │   ├── read_waveform.py        # VCD parsing
 │   │   ├── search_logs.py          # Log/report grep
 │   │   ├── edit_file.py            # Surgical file editing with diff

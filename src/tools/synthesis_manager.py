@@ -813,54 +813,6 @@ def _collect_log_tail(run_dir: str, max_lines: int = 40) -> List[str]:
     return _tail_from_logs_root(os.path.join(run_dir, "orfs_logs"), max_lines=max_lines)
 
 
-def _extract_summary_metrics(run_dir: str) -> Dict[str, Any]:
-    metrics = {"area_um2": None, "cell_count": None, "wns_ns": None, "tns_ns": None, "power_uw": None}
-    reports_root = os.path.join(run_dir, "orfs_reports")
-    logs_root = os.path.join(run_dir, "orfs_logs")
-    search_roots = [reports_root, logs_root]
-
-    area_re = re.compile(r"Chip area.*:\s*([0-9.]+)", re.IGNORECASE)
-    cells_re = re.compile(r"Number of cells.*:\s*([0-9]+)", re.IGNORECASE)
-    wns_re = re.compile(r"\bwns\b\s*[:=]?\s*([0-9.+-]+)", re.IGNORECASE)
-    tns_re = re.compile(r"\btns\b\s*[:=]?\s*([0-9.+-]+)", re.IGNORECASE)
-    power_re = re.compile(r"Total Power\s+([0-9.eE+-]+)", re.IGNORECASE)
-
-    for base in search_roots:
-        if not os.path.exists(base):
-            continue
-        for root, _, files in os.walk(base):
-            for name in files:
-                if not name.endswith((".log", ".rpt", ".txt")):
-                    continue
-                path = os.path.join(root, name)
-                try:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        text = f.read()
-                except Exception:
-                    continue
-                if metrics["area_um2"] is None:
-                    m = area_re.search(text)
-                    if m:
-                        metrics["area_um2"] = float(m.group(1))
-                if metrics["cell_count"] is None:
-                    m = cells_re.search(text)
-                    if m:
-                        metrics["cell_count"] = int(m.group(1))
-                if metrics["wns_ns"] is None:
-                    m = wns_re.search(text)
-                    if m:
-                        metrics["wns_ns"] = float(m.group(1))
-                if metrics["tns_ns"] is None:
-                    m = tns_re.search(text)
-                    if m:
-                        metrics["tns_ns"] = float(m.group(1))
-                if metrics["power_uw"] is None:
-                    m = power_re.search(text)
-                    if m:
-                        metrics["power_uw"] = float(m.group(1))
-    return metrics
-
-
 def _collect_artifacts(run_dir: str) -> Dict[str, int]:
     counts = {"gds": 0, "def": 0, "odb": 0, "reports": 0, "netlists": 0}
     for root, _, files in os.walk(run_dir):
@@ -2354,8 +2306,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
     # cloud job, remote VM) persists identical summary_metrics: area/cells from
     # synth_stat.txt, WNS/TNS/power from 6_finish.rpt (the targeted parsers handle
     # the "wns max <value>" finish-report format and the 4-column yosys cell row),
-    # plus derived fmax_mhz and power_mw. _extract_summary_metrics' broad regex
-    # scan missed both cell_count and the "wns max" format, leaving them null.
+    # plus the honest fmax/worst-slack block and power_mw.
     run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
 
     # The timing verdict (sc#64) reads the same 6_finish.rpt the metrics came

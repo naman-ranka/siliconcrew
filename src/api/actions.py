@@ -873,10 +873,15 @@ def build_actions_router(
             ("tns_ns", "TNS (ns)"),
             ("power_mw", "Power (mW)"),
         ]
+        # get_synthesis_metrics returns the PPA fields NESTED under "metrics";
+        # the wrapper's top level carries status/run_id/sources. Reading the
+        # wrapper made every value and deltaPct in this diff None.
+        pa = (ma or {}).get("metrics") or {}
+        pb = (mb or {}).get("metrics") or {}
         rows = []
         for key, label in metric_keys:
-            va = (ma or {}).get(key)
-            vb = (mb or {}).get(key)
+            va = pa.get(key)
+            vb = pb.get(key)
             delta_pct = None
             try:
                 if va not in (None, 0) and vb is not None:
