@@ -1643,15 +1643,29 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     retry_timing = _timing_guardrail(run_dir, run_meta)
     auto_checks.timing = retry_timing["status"]
     run_meta["auto_checks"] = asdict(auto_checks)
-    run_meta["status"] = "completed" if auto_checks.signoff == "pass" else "failed"
+    # Mirror the primary worker's gate (sc#75). Terminal status came from
+    # signoff alone, so a retry of a run whose constraints never validated
+    # still reported "PD retry completed". equiv is STRUCTURALLY out of scope
+    # here — _retry_pd_worker builds equiv="skip" and no path in a retry ever
+    # assigns it (the check runs on the finish-stage netlist of a first run), so
+    # it is neither gated on nor blamed.
+    final_ok = auto_checks.signoff == "pass" and auto_checks.constraints == "pass"
+    run_meta["status"] = "completed" if final_ok else "failed"
     retry_completed_note = (
         signoff["note"]
         if signoff["note"].startswith("ORFS command returned nonzero")
         else "PD retry completed"
     )
     check_notes = signoff["note"] if auto_checks.signoff != "pass" else retry_completed_note
+    if auto_checks.signoff == "pass" and not final_ok:
+        check_notes += " | run failed on: constraints (inherited from the source run)"
     if retry_timing["note"]:
         check_notes += f" | {retry_timing['note']}"
+    # The retry reuses the parent's constraints.sdc verbatim, so an unverified
+    # default clock is an INHERITED fact: every timing number above is only as
+    # real as that guessed port, and the rollup must say so here too.
+    if run_meta.get("clock_source") in _UNVERIFIED_CLOCK_SOURCES and run_meta.get("constraints_note"):
+        check_notes += f" | {run_meta['constraints_note']}"
     run_meta["check_notes"] = check_notes
     run_meta["next_action"] = (
         "Inspect stage summaries and continue tuning." if run_meta["status"] == "completed"
