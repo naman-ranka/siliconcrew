@@ -79,7 +79,11 @@ def test_start_and_poll_synthesis_job_with_guardrails(monkeypatch):
         assert data["netlist_path"].endswith("6_final.v")
 
 
-def test_constraints_guardrail_blocks_unsafe_success(monkeypatch):
+def test_constraints_guardrail_strict_blocks_unsafe_success(monkeypatch):
+    # strict is now the mode that refuses a spec/top mismatch: 'auto' proceeds
+    # with default constraints and an explicit note (sc#73, tests/test_constraints_modes.py),
+    # because a synthesis-only top is a legitimate design choice. What must not
+    # regress is that a refusal happens BEFORE any ORFS execution.
     with tempfile.TemporaryDirectory() as workspace:
         design = os.path.join(workspace, "counter.v")
         _write_file(design, "module counter(input clk, output y); assign y=clk; endmodule")
@@ -106,6 +110,7 @@ def test_constraints_guardrail_blocks_unsafe_success(monkeypatch):
             verilog_files=[design],
             top_module="counter",
             platform="sky130hd",
+            constraints_mode="strict",
         )
 
         final = None
