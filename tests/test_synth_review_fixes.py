@@ -383,7 +383,9 @@ def test_wait_takes_final_sample_and_catches_terminal_run(monkeypatch, tmp_path)
 
     def _fake_status(run_id, workspace=None):
         calls["n"] += 1
-        # Completes DURING the final sleep — only a post-loop sample sees it.
+        # Completes DURING the final sleep — the loop-top sample of the
+        # deadline-discovering iteration must see it (was a post-loop sample
+        # before the dev#30 restructure; the guarantee is unchanged).
         if clock["t"] >= 5:
             return {"run_id": run_id, "status": "completed", "poll_after_sec": 0}
         return {"run_id": run_id, "status": "running", "poll_after_sec": 10}
@@ -394,7 +396,7 @@ def test_wait_takes_final_sample_and_catches_terminal_run(monkeypatch, tmp_path)
 
     assert out["status"] == "completed"
     assert out["timed_out"] is False
-    assert calls["n"] == 2  # one in-loop sample + the final post-loop sample
+    assert calls["n"] == 2  # first sample + the deadline iteration's loop-top sample
 
 
 def test_wait_final_sample_still_running_reports_timed_out(monkeypatch, tmp_path):

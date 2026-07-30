@@ -131,7 +131,9 @@ class LocalWorkspaceProvider:
     base_dir: str
 
     def workspace_path_for(self, session_id: str) -> str:
-        return os.path.join(self.base_dir, session_id)
+        # abspath: a relative RTL_WORKSPACE would otherwise make reported
+        # paths CWD-dependent (SessionManager abspaths its base; match it).
+        return os.path.abspath(os.path.join(self.base_dir, session_id))
 
     def workspace_for(self, session_id: str) -> str:
         path = self.workspace_path_for(session_id)

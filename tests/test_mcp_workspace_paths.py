@@ -163,6 +163,15 @@ def test_activity_events_land_in_the_provider_workspace(server, tmp_path, provid
 
     events = os.path.join(scratch, "attempt_events.jsonl")
     assert os.path.isfile(events), "MCP activity did not reach the workspace tools ran in"
+    # BOTH events must land: the call event is logged inside the bound scope
+    # (after materialization) precisely so a cold instance can't drop it — a
+    # result-only log here means the call event regressed to pre-scope logging.
+    kinds = [
+        json.loads(line)["event_type"]
+        for line in open(events, encoding="utf-8")
+        if line.strip()
+    ]
+    assert kinds.count("tool_call") >= 1 and kinds.count("tool_result") >= 1
     assert "write_file" in open(events, encoding="utf-8").read()
     # Pre-fix the log went here — never synced, and not where the run lives.
     assert not os.path.exists(os.path.join(logical, "attempt_events.jsonl"))

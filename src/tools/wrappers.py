@@ -399,7 +399,9 @@ def _wait_for_synthesis_job(
     # still caught (F8) — and never sample after the loop. A status call is not
     # free on hosted (it can reconcile and re-tar the workspace), so a post-loop
     # resample made the worst case max_wait + TWO slow calls; that overshoot is
-    # what tripped the MCP idle abort in dev#30. Now: max_wait + ONE call.
+    # what tripped the MCP idle abort in dev#30. Now: max_wait + <1s of residual
+    # sleep + ONE call (the sleep floor is 1s, so the deadline-discovering
+    # sample can start up to ~1s late).
     while True:
         status = collect_synthesis_status(run_id, workspace=workspace)
         if status.get("status") in {"completed", "failed"}:

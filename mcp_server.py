@@ -85,6 +85,7 @@ from src.tools.wrappers import (
 from src.utils.session_manager import SessionManager
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.platform_engines.request_scope import resolve_workspace_path, run_in_session
+from src.platform_engines.workspace_flusher import get_workspace_flusher
 from src.platform_engines import auth as auth_engine
 from src.platform_engines.identity import Action, AuthError, authorize
 
@@ -287,10 +288,16 @@ class RTLDesignMCPServer:
         so every reply that names a workspace — and, critically, the path the
         activity log is written to — must come from the same provider. Pure: it
         never materializes, so it is safe on read/reply paths. Providers without
-        the accessor (older test fakes) keep today's logical answer."""
-        return resolve_workspace_path(
-            session_id, fallback=self.session_manager.get_workspace_path
-        )
+        the accessor (older test fakes) keep today's logical answer. A provider
+        that fails to construct at all (settings error) also degrades to the
+        logical path — a reply/log site must never be the thing that turns a
+        misconfiguration into an unhandled tool failure."""
+        try:
+            return resolve_workspace_path(
+                session_id, fallback=self.session_manager.get_workspace_path
+            )
+        except Exception:
+            return self.session_manager.get_workspace_path(session_id)
 
     def _resource_sessions(self) -> list[str]:
         """Sessions this MCP identity may see through the RESOURCE surface —
@@ -924,19 +931,28 @@ Ready to design! What would you like to create?"""
         # tool runs in (below, via run_in_session): attempt_logger drops the event
         # when the dir is absent and otherwise writes attempt_events.jsonl there,
         # so a logical path meant hosted MCP activity vanished or landed on
-        # never-synced instance disk (invariants 3 + 9).
+        # never-synced instance disk (invariants 3 + 9). The RESULT event uses
+        # this resolved path (the scope has materialized it by then); the CALL
+        # event is logged INSIDE the bound scope below — logging it out here
+        # dropped the first call event per (instance, session), because on a
+        # cold instance the scratch dir does not exist until run_in_session
+        # hydrates it. Cost stated plainly: on a cold hosted session the
+        # "started" card appears after hydration, not before.
         active_workspace = self._workspace_path(active_session)
         identity = self._current_identity()
         uid = auth_engine.scoped_user_id(identity)
 
-        try:
+        def _invoke_with_call_log(args):
             log_tool_call(
-                workspace=active_workspace,
+                workspace=get_workspace_path(),
                 session_id=active_session,
                 source="mcp",
                 tool=name,
-                arguments=arguments,
+                arguments=args,
             )
+            return tool_func.invoke(args)
+
+        try:
             # Run the sync LangChain tool inside a per-call session scope bound in
             # the worker thread, so the workspace resolves task-locally and
             # concurrent MCP clients are isolated (replaces the RTL_WORKSPACE
@@ -962,7 +978,7 @@ Ready to design! What would you like to create?"""
             mutates = name in _SHARED_MUTATING_TOOLS
             result = await run_in_session(
                 active_session,
-                tool_func.invoke,
+                _invoke_with_call_log,
                 arguments,
                 user_id=uid,
                 tier=identity.tier,
@@ -977,7 +993,15 @@ Ready to design! What would you like to create?"""
                 status="success",
                 arguments=arguments,
             )
-            
+            # Read-only calls append activity events with NO sync of their own
+            # (the F2 gate above). Mark the flusher so those appends ride the
+            # background incremental flush instead of waiting for the next
+            # mutating call — otherwise an instance recycle, or another
+            # writer's manifest bump forcing a hydration swap, deletes them.
+            # Self-host: the flusher no-ops (LocalWorkspaceProvider has no
+            # sync), so this is free there.
+            get_workspace_flusher().mark_dirty(active_session)
+
             return [TextContent(type="text", text=str(result))]
             
         except Exception as e:
@@ -991,8 +1015,9 @@ Ready to design! What would you like to create?"""
                 error=str(e),
                 arguments=arguments,
             )
+            get_workspace_flusher().mark_dirty(active_session)
             return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
-    
+
     def _hosted_auth_middleware(self):
         """Starlette middleware enforcing WorkOS bearer auth — hosted only.
 
