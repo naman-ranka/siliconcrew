@@ -26,56 +26,71 @@ def read_waveform(vcd_file: str, signals: list[str], start_time: int = 0,
     if not os.path.exists(vcd_file):
         return f"Error: File {vcd_file} does not exist."
         
-    id_map = {} # code -> name
-    
+    # (code, full dotted path), in header order. A list, not a dict: one VCD
+    # identifier code legitimately appears under several paths when a signal is
+    # connected across the hierarchy, and a dict keyed either way would drop
+    # half the story.
+    var_paths: list[tuple[str, str]] = []
+
     try:
         with open(vcd_file, 'r') as f:
             lines = f.readlines()
     except Exception as e:
         return f"Error reading file: {e}"
-        
+
     # 1. Parse Header
     header_end = 0
+    scope_stack: list[str] = []
     for i, line in enumerate(lines):
         line = line.strip()
-        if line.startswith("$var"):
+        if line.startswith("$scope"):
+            # $scope <type> <name> $end — push for EVERY scope type (module,
+            # begin, task, function, fork). Pushing only on `module` makes a
+            # named block's $upscope pop its parent, and every later $var gets
+            # a wrong path.
+            parts = line.split()
+            if len(parts) >= 3:
+                scope_stack.append(parts[2])
+        elif line.startswith("$upscope"):
+            if scope_stack:
+                scope_stack.pop()
+        elif line.startswith("$var"):
             # $var type size code ref $end
             parts = line.split()
             # parts[3] is code, parts[4] is ref
             if len(parts) >= 6:
                 code = parts[3]
                 ref = parts[4]
-                id_map[code] = ref
+                var_paths.append((code, ".".join(scope_stack + [ref])))
         if line.startswith("$enddefinitions"):
             header_end = i
             break
-            
+
     # Resolve wanted signals
     final_codes = {} # code -> user_friendly_name
-    
+
     # Strategy:
-    # 1. Exact match
-    # 2. Suffix match (e.g. user asks 'clk', VCD has 'tb.dut.clk')
-    
+    # 1. Exact full-path match ('tb.dut.clk')
+    # 2. Unique suffix/leaf match ('clk' when only one scope has one)
+    # A leaf matching several DISTINCT codes is ambiguous: returning the first
+    # would be returning a signal the caller did not ask for.
+
     for req in signals:
-        found = False
-        # Exact match
-        for code, ref in id_map.items():
-            if ref == req:
-                final_codes[code] = req
-                found = True
-                break
-        
-        if not found:
-            # Suffix match
-            for code, ref in id_map.items():
-                if ref.endswith("." + req) or ref == req:
-                    final_codes[code] = req
-                    found = True
-                    break
-                    
+        matches = [(c, p) for c, p in var_paths if p == req]
+        if not matches:
+            matches = [(c, p) for c, p in var_paths if p.endswith("." + req)]
+        codes = {c for c, _ in matches}
+        if not codes:
+            continue
+        if len(codes) > 1:
+            candidates = ", ".join(sorted({p for _, p in matches})[:10])
+            return (f"Error: Ambiguous signal '{req}': matches {candidates}. "
+                    f"Use a full hierarchical path.")
+        final_codes[matches[0][0]] = req
+
     if not final_codes:
-        return f"Error: Signals {signals} not found. Available signals: {list(id_map.values())[:20]}..."
+        available = sorted({p for _, p in var_paths})[:20]
+        return f"Error: Signals {signals} not found. Available signals: {available}..."
 
     # 2. Parse Body
     # We need to track state because VCD only stores changes.
