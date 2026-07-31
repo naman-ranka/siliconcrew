@@ -557,6 +557,21 @@ def _manifest_from_raw(raw: Dict[str, Any]) -> DesignManifest:
     return manifest
 
 
+def stored_ignore(workspace: str) -> List[str]:
+    """The persisted ``ignore`` globs, WITHOUT a reconcile.
+
+    For callers that need the user's exclusions and nothing else (staging data
+    files into a run dir). ``read_manifest`` re-scans and re-infers tops on every
+    read, which costs seconds on a large workspace — a price a file copy should
+    not pay. Returns [] when no manifest exists yet.
+    """
+    raw = _load_raw(workspace)
+    ignore = raw.get("ignore") if isinstance(raw, dict) else None
+    if not isinstance(ignore, list):
+        return []
+    return [p for p in ignore if isinstance(p, str) and p]
+
+
 def _persist(workspace: str, manifest: DesignManifest) -> None:
     os.makedirs(workspace, exist_ok=True)
     with open(_manifest_path(workspace), "w", encoding="utf-8") as f:

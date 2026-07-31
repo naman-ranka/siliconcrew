@@ -250,6 +250,18 @@ def _simulate(output_executable: str, cwd: str, timeout: int) -> Dict[str, Any]:
     return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "command": " ".join(cmd)}
 
 
+# A $readmem that cannot open its data file reports on STDOUT and vvp still
+# exits 0 (verified, iverilog 12.0: "ERROR: tb.v:4: $readmemb: Unable to open
+# weights.mem for reading."). The memory stays all-X, and a testbench that does
+# not self-check prints its pass marker anyway — so without this the run records
+# test_passed on garbage. A run whose input data never loaded did not pass.
+_READMEM_OPEN_FAIL_RE = re.compile(r"\$readmem[bh]?\s*:\s*Unable to open", re.IGNORECASE)
+
+
+def _data_load_failed(stdout: str, stderr: str) -> bool:
+    return bool(_READMEM_OPEN_FAIL_RE.search(f"{stdout or ''}\n{stderr or ''}"))
+
+
 def _detect_failure_info(status: str, stdout: str, stderr: str) -> Dict[str, Optional[str]]:
     text = f"{stdout or ''}\n{stderr or ''}"
     low = text.lower()
@@ -263,6 +275,9 @@ def _detect_failure_info(status: str, stdout: str, stderr: str) -> Dict[str, Opt
 
     if status == "compile_failed":
         return {"failure_type": "compile", "first_failure_line": _first_line(["error", "undefined", "unknown module"]), "first_failure_snippet": None}
+
+    if _data_load_failed(stdout, stderr):
+        return {"failure_type": "data_file_missing", "first_failure_line": _first_line(["unable to open"]), "first_failure_snippet": None}
 
     if "timed out" in low:
         return {"failure_type": "timeout", "first_failure_line": _first_line(["timed out"]), "first_failure_snippet": None}
@@ -517,6 +532,10 @@ def run_simulation(
     pass_marker_found = pass_marker in (sim.get("stdout") or "")
 
     if sim["returncode"] != 0:
+        status = "sim_failed"
+    elif _data_load_failed(sim.get("stdout", ""), sim.get("stderr", "")):
+        # The pass marker may well be present — it means nothing when the data
+        # the testbench was checking never loaded.
         status = "sim_failed"
     elif pass_marker_found:
         status = "test_passed"
