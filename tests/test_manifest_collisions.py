@@ -106,6 +106,60 @@ def test_ifdef_gated_alternates_do_not_warn(tmp_path):
     assert manifest.warnings == []
 
 
+INCLUDE_GUARDED_REF = """
+`ifndef GCN_REF_V
+`define GCN_REF_V
+module gcn (input clk, input [7:0] din, output reg [7:0] dout);
+    always @(posedge clk) dout <= din + 1;
+endmodule
+`endif
+"""
+
+
+def test_include_guarded_reference_copy_still_warns(tmp_path):
+    """The conventional `ifndef X_V/`define/`endif wrapper is NOT an alternate.
+
+    Its guard macro is unique to itself, so the copy is always compiled and it
+    collides with the plain original — verified with iverilog ('gcn' has already
+    been declared). Suppressing on "any declaration guarded" silenced sc#66's own
+    scenario; suppression requires EVERY declaration to be conditional.
+    """
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", GCN)
+    _write(ws, "given/gcn_reference.v", INCLUDE_GUARDED_REF)
+
+    warnings = m.read_manifest(ws, session_id="s1").warnings
+    assert len(warnings) == 1
+    assert "gcn.v" in warnings[0] and "given/gcn_reference.v" in warnings[0]
+
+
+def test_same_include_guard_in_two_copies_does_not_warn(tmp_path):
+    """Both guarded by the SAME macro: the preprocessor keeps one. iverilog agrees."""
+    ws = str(tmp_path)
+    guarded = "`ifndef SHARED_V\n`define SHARED_V\n" + GCN + "`endif\n"
+    _write(ws, "a/shared.v", guarded)
+    _write(ws, "b/shared.v", guarded)
+
+    assert m.read_manifest(ws, session_id="s1").warnings == []
+
+
+def test_warning_names_the_set_it_affects(tmp_path):
+    """An rtl/tb duplicate breaks simulation only — synthesis never sees the tb."""
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", GCN)
+    _write(ws, "gcn_tb.v", TB + GCN)  # the TB also declares gcn
+
+    warnings = m.read_manifest(ws, session_id="s1").warnings
+    assert len(warnings) == 1
+    assert "the simulation compile set" in warnings[0]
+
+    ws2 = str(tmp_path / "two")
+    _write(ws2, "gcn.v", GCN)
+    _write(ws2, "given/gcn_reference.v", GCN_REF)
+    rtl_only = m.read_manifest(ws2, session_id="s2").warnings
+    assert "every compile set" in rtl_only[0]
+
+
 def test_clean_workspace_has_no_warnings(tmp_path):
     ws = str(tmp_path)
     _write(ws, "gcn.v", GCN)

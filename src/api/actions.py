@@ -333,6 +333,20 @@ def _snapshot_spec(workspace: str, ignore: Optional[List[str]] = None) -> Option
     return {"filename": spec_files[0], "content": content, "parsed": parsed}
 
 
+def _compile_set_warnings(workspace: str, rel_files: List[str]) -> List[str]:
+    """Duplicate-module warnings for a compile set the IDE is about to run.
+
+    The Simulate/Synthesize buttons call the run functions directly rather than
+    the agent wrappers, so without this the IDE user — sc#66's actual protagonist
+    — would be the only actor who never sees the collision. Best-effort: a
+    warning is never worth failing a dispatch over.
+    """
+    try:
+        return manifest_mod.compile_set_collisions(workspace, rel_files)
+    except Exception:
+        return []
+
+
 def _code_file_rel_paths(workspace: str, manifest: manifest_mod.DesignManifest) -> List[str]:
     """Relative paths served by GET /code: manifest files with code roles
     (rtl/tb/include) plus any .v/.sv the exclusion-aware scan found."""
@@ -619,14 +633,14 @@ def build_actions_router(
                  "vcdPath": sim_run.get("vcdPath")},
                 ok=passed,
             )
-            return {"simRun": sim_run}
+            return {"simRun": sim_run, "warnings": _compile_set_warnings(workspace, rel_files)}
 
         out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error") == "no_sim_top":
             _err("no_sim_top", "No simTop in the manifest and none provided.", status=400)
         if out.get("error") == "no_files":
             _err("no_files", "Manifest has no rtl/tb files to simulate.", status=400)
-        return _ok({"run": out["simRun"]})
+        return _ok({"run": out["simRun"], "manifestWarnings": out["warnings"]})
 
     # ---- Synthesize (async job + poll) -------------------------------------
 
@@ -678,7 +692,7 @@ def build_actions_router(
                  "status": (result or {}).get("status")},
                 ok=dispatched,
             )
-            return {"result": result}
+            return {"result": result, "warnings": _compile_set_warnings(workspace, src_files)}
 
         out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error") == "no_synth_top":
@@ -695,7 +709,8 @@ def build_actions_router(
         if isinstance(result, dict) and result.get("status") == "error":
             _err("invalid_request", result.get("message", "Invalid synthesis request."),
                  details={"supported_stages": result.get("supported_stages")}, status=400)
-        return _ok({"runId": result.get("run_id"), "pollAfterSec": result.get("poll_after_sec"), "raw": result})
+        return _ok({"runId": result.get("run_id"), "pollAfterSec": result.get("poll_after_sec"),
+                    "raw": result, "manifestWarnings": out["warnings"]})
 
     # ---- Activity feed (unified per-session tool event log) -----------------
 

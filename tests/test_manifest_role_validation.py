@@ -77,6 +77,63 @@ def test_stored_unknown_role_coerces_without_wiping_the_document(tmp_path):
     assert "vendor/ip.v" not in roles
 
 
+def test_reading_never_rewrites_the_unknown_role_to_disk(tmp_path):
+    """Reading must not be what destroys a newer writer's data.
+
+    A rolling deploy runs both versions at once. If the old reader persists its
+    coerced view, the FIRST read makes the loss permanent — long after the
+    traffic split ends and the new version owns every instance.
+    """
+    ws = _seed(tmp_path)
+    m.read_manifest(ws, session_id="s1")
+    path = os.path.join(ws, m.MANIFEST_FILENAME)
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    raw["files"][0]["role"] = "quux"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(raw, f)
+
+    for _ in range(2):
+        reread = m.read_manifest(ws, session_id="s1")
+        assert {f.path: f.role for f in reread.files}["counter.v"] == "rtl"  # in memory
+        with open(path, "r", encoding="utf-8") as f:
+            assert json.load(f)["files"][0]["role"] == "quux"  # untouched on disk
+
+
+def test_non_list_files_field_does_not_explode(tmp_path):
+    ws = _seed(tmp_path)
+    m.read_manifest(ws, session_id="s1")
+    path = os.path.join(ws, m.MANIFEST_FILENAME)
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    raw["files"] = 7
+    raw["platform"] = "asap7"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(raw, f)
+
+    reread = m.read_manifest(ws, session_id="s1")
+    assert reread.platform == "asap7"          # the rest of the document survives
+    assert {f.path for f in reread.files} == {"counter.v", "counter_tb.v", "vendor/ip.v"}
+
+
+def test_numeric_string_clock_period_is_not_silently_reset(tmp_path):
+    ws = _seed(tmp_path)
+    m.read_manifest(ws, session_id="s1")
+    path = os.path.join(ws, m.MANIFEST_FILENAME)
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    raw["clockPeriodNs"] = "3.5"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(raw, f)
+
+    assert m.read_manifest(ws, session_id="s1").clockPeriodNs == 3.5
+
+    raw["clockPeriodNs"] = "fast please"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(raw, f)
+    assert m.read_manifest(ws, session_id="s1").clockPeriodNs == 10.0  # documented default
+
+
 def test_write_manifest_rejects_unknown_role_and_persists_nothing(tmp_path):
     ws = _seed(tmp_path)
     m.read_manifest(ws, session_id="s1")

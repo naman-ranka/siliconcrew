@@ -244,19 +244,69 @@ def _scan_text(text: str) -> _FileScan:
     )
 
 
-def _scan_design_files(workspace: str, files: List[DesignFile]) -> Dict[str, _FileScan]:
+# Per-workspace memo of the module scan. Process memory is a cache of disk truth
+# (invariant 5): the key is a fingerprint of the files that would be scanned, so
+# any edit invalidates it and a stale entry is unreachable rather than merely
+# unlikely. Without this the sweep re-read every rtl/tb file on EVERY
+# read_manifest — and read_manifest sits under GET /files, GET /code, every
+# write_file and every dispatch (measured: 0.011s -> 0.205s on 202 files).
+_SCAN_CACHE: Dict[str, tuple] = {}
+_SCAN_CACHE_MAX = 64  # bounded: a hosted instance serves many workspaces
+
+
+def _scan_fingerprint(workspace: str, files: List[DesignFile]) -> tuple:
+    """(path, mtime_ns, size) for every file the sweep would read, sorted.
+
+    Size alongside mtime because a filesystem's mtime granularity can hide a
+    same-tick rewrite; an unstat-able file fingerprints as missing, which
+    differs from any real state and so forces a rescan.
+    """
+    out = []
+    for f in files:
+        if f.role not in ("rtl", "tb"):
+            continue
+        try:
+            st = os.stat(os.path.join(workspace, f.path))
+            out.append((f.path, st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append((f.path, None, None))
+    return tuple(sorted(out))
+
+
+def _scan_design_files(
+    workspace: str, files: List[DesignFile], texts: Optional[Dict[str, str]] = None
+) -> Dict[str, _FileScan]:
     """ONE pass over the rtl/tb text per reconcile, keyed by workspace-relative path.
 
     ``_infer_tops``, ``_derive_testbenches`` and the duplicate-module detector all
     want the same module/instance lists; each reading the tree itself made the
     reconcile cost a multiple of the file count for no new information.
+
+    ``texts`` lets a caller that has ALREADY read a file (role derivation) hand
+    the stripped text over instead of paying for a second read.
     """
+    fingerprint = _scan_fingerprint(workspace, files)
+    cached = _SCAN_CACHE.get(workspace)
+    if cached is not None and cached[0] == fingerprint:
+        return cached[1]
+
     scans: Dict[str, _FileScan] = {}
     for f in files:
         if f.role not in ("rtl", "tb") or f.path in scans:
             continue
-        scans[f.path] = _scan_text(_read_text(os.path.join(workspace, f.path)))
+        text = (texts or {}).get(f.path)
+        if text is None:
+            text = _read_text(os.path.join(workspace, f.path))
+        scans[f.path] = _scan_text(text)
+
+    if len(_SCAN_CACHE) >= _SCAN_CACHE_MAX:
+        _SCAN_CACHE.clear()
+    _SCAN_CACHE[workspace] = (fingerprint, scans)
     return scans
+
+
+def _roles_by_path(files: List[DesignFile]) -> Dict[str, str]:
+    return {f.path: f.role for f in files}
 
 
 def _and_join(items: List[str]) -> str:
@@ -266,13 +316,34 @@ def _and_join(items: List[str]) -> str:
     return ", ".join(quoted[:-1]) + f" and {quoted[-1]}"
 
 
-def _collision_warnings(scans: Dict[str, _FileScan]) -> List[str]:
+def _affected_set(paths: List[str], roles: Optional[Dict[str, str]]) -> str:
+    """Which compile set these declarations actually collide in.
+
+    ``rtl`` reaches lint, simulation and synthesis; ``tb`` reaches only
+    simulation. So a duplicate between an rtl file and a tb file is a simulation
+    problem and nothing else — saying "every compile set" there would be a false
+    alarm for synthesis.
+    """
+    if roles is None:
+        return "this compile set"
+    if any(roles.get(p) == "tb" for p in paths):
+        return "the simulation compile set"
+    return "every compile set (lint, simulation, synthesis)"
+
+
+def _collision_warnings(
+    scans: Dict[str, _FileScan], roles: Optional[Dict[str, str]] = None
+) -> List[str]:
     """One line per module declared by 2+ files in the given set.
 
     We never guess which copy is the reference — both are named, and the remedy
     (the ``ignore`` glob) is spelled out, which is the part no compiler can tell
     the user. iverilog hard-errors on the redefinition; yosys names only the
     second file and is one flag away from silently picking one.
+
+    ``roles`` (manifest scan only) narrows the message to the set that actually
+    breaks; the dispatch path passes None because the set it was handed IS the
+    affected set.
     """
     declared: Dict[str, List[str]] = {}
     for path, scan in scans.items():
@@ -283,11 +354,19 @@ def _collision_warnings(scans: Dict[str, _FileScan]) -> List[str]:
     for module, paths in sorted(declared.items()):
         if len(paths) < 2:
             continue
-        if any(module in scans[p].guarded_modules for p in paths):
-            continue  # `ifdef-gated alternates are legal together
+        # Suppress only when EVERY declaration is conditional. All-guarded means
+        # the preprocessor picks at most one (`ifdef alternates, or the same
+        # include guard in two copies) — legal, verified with iverilog. If even
+        # one declaration is unconditional it is always compiled, so a guarded
+        # second copy still collides with it: the conventional
+        # `ifndef X_V/`define/`endif reference copy is exactly that case, and
+        # suppressing on "any guarded" silenced sc#66's own scenario.
+        if all(module in scans[p].guarded_modules for p in paths):
+            continue
         out.append(
-            f"module '{module}' is declared by {_and_join(paths)} — a compile set can "
-            f"hold only one definition (iverilog errors out; yosys may just pick one). "
+            f"module '{module}' is declared by {_and_join(paths)} — they collide in "
+            f"{_affected_set(paths, roles)}, which can hold only one definition "
+            f"(iverilog errors out; yosys may just pick one). "
             f"Keep one: add the other to the manifest 'ignore' list (fnmatch glob, e.g. "
             f"\"given/**\") or set its role to 'other'. The practice this rule comes "
             f"from: one module per file, and each file compiled once."
@@ -471,11 +550,13 @@ def _spec_clock_period(workspace: str) -> Optional[float]:
 def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
     """Construct a fresh manifest from the files on disk (no persistence)."""
     files: List[DesignFile] = []
+    texts: Dict[str, str] = {}
     for rel in _list_source_files(workspace):
         text = _read_text(os.path.join(workspace, rel)) if rel.lower().endswith((".v", ".sv")) else ""
+        texts[rel] = text  # hand it to the sweep instead of reading twice
         files.append(DesignFile(name=os.path.basename(rel), role=derive_role(rel, text), path=rel))
 
-    scans = _scan_design_files(workspace, files)
+    scans = _scan_design_files(workspace, files, texts=texts)
     synth_top, sim_top = _infer_tops(files, scans)
     clock = _spec_clock_period(workspace) or 10.0
     return DesignManifest(
@@ -486,7 +567,7 @@ def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
         clockPeriodNs=clock,
         platform="sky130hd",
         testbenches=_derive_testbenches(files, scans),
-        warnings=_collision_warnings(scans),
+        warnings=_collision_warnings(scans, _roles_by_path(files)),
     )
 
 
@@ -518,7 +599,10 @@ def _coerce_files(raw_files: Any) -> List[DesignFile]:
     document — wipes every user field on the way past.
     """
     out: List[DesignFile] = []
-    for entry in raw_files or []:
+    coerced = False
+    if not isinstance(raw_files, list):
+        return out, coerced
+    for entry in raw_files:
         if not isinstance(entry, dict):
             continue
         path = entry.get("path") or entry.get("name")
@@ -530,31 +614,46 @@ def _coerce_files(raw_files: Any) -> List[DesignFile]:
         role = entry.get("role")
         if role not in ROLES:
             logger.warning(
-                "manifest: unrecognized role %r for %r — reading it as %r "
-                "(the stored value is not rewritten unless the manifest is edited)",
+                "manifest: unrecognized role %r for %r — using %r for this read; "
+                "the stored value is left on disk untouched",
                 role, path, _ROLE_FALLBACK,
             )
             role = _ROLE_FALLBACK
+            coerced = True
         out.append(DesignFile(name=name, role=role, path=path))
-    return out
+    return out, coerced
 
 
-def _manifest_from_raw(raw: Dict[str, Any]) -> DesignManifest:
+def _manifest_from_raw(raw: Dict[str, Any]) -> tuple[DesignManifest, bool]:
     """Per-FIELD tolerant load: a value this reader can't use costs that field,
-    never the document. ``testbenches`` is derived — reconcile recomputes it."""
+    never the document. ``testbenches`` is derived — reconcile recomputes it.
+
+    Returns ``(manifest, coerced)``; ``coerced`` is True when a role had to be
+    downgraded, which is the caller's signal not to write the result back.
+    """
     manifest = DesignManifest()
-    manifest.files = _coerce_files(raw.get("files"))
+    manifest.files, coerced = _coerce_files(raw.get("files"))
     for key in ("sessionId", "synthTop", "simTop", "platform"):
         value = raw.get(key)
         if isinstance(value, str):
             setattr(manifest, key, value)
     clock = raw.get("clockPeriodNs")
-    if isinstance(clock, (int, float)) and not isinstance(clock, bool):
+    if isinstance(clock, bool):
+        clock = None
+    if isinstance(clock, (int, float)):
         manifest.clockPeriodNs = float(clock)
+    elif isinstance(clock, str):
+        # A numeric string ("10.0") is what a hand-edited manifest or a loosely
+        # typed client writes. Silently resetting a real constraint to the 10.0
+        # default is the kind of quiet wrong answer this whole item is about.
+        try:
+            manifest.clockPeriodNs = float(clock.strip())
+        except ValueError:
+            logger.warning("manifest: clockPeriodNs %r is not a number — keeping the default", clock)
     ignore = raw.get("ignore")
     if isinstance(ignore, list):
         manifest.ignore = [p for p in ignore if isinstance(p, str) and p]
-    return manifest
+    return manifest, coerced
 
 
 def stored_ignore(workspace: str) -> List[str]:
@@ -592,22 +691,24 @@ def _reconcile(workspace: str, stored: DesignManifest) -> DesignManifest:
     by_path = {f.path: f for f in stored.files}
 
     merged: List[DesignFile] = []
+    texts: Dict[str, str] = {}
     for rel in on_disk:
         if rel in by_path:
             merged.append(by_path[rel])
         else:
             text = _read_text(os.path.join(workspace, rel)) if rel.lower().endswith((".v", ".sv")) else ""
+            texts[rel] = text  # newly discovered: reuse the read the sweep needs
             merged.append(DesignFile(name=os.path.basename(rel), role=derive_role(rel, text), path=rel))
 
     stored.files = merged
 
-    scans = _scan_design_files(workspace, merged)
+    scans = _scan_design_files(workspace, merged, texts=texts)
     if not stored.synthTop or not stored.simTop:
         synth_top, sim_top = _infer_tops(merged, scans)
         stored.synthTop = stored.synthTop or synth_top
         stored.simTop = stored.simTop or sim_top
     stored.testbenches = _derive_testbenches(merged, scans)
-    stored.warnings = _collision_warnings(scans)
+    stored.warnings = _collision_warnings(scans, _roles_by_path(merged))
     return stored
 
 
@@ -616,17 +717,25 @@ def read_manifest(workspace: str, session_id: str = "") -> DesignManifest:
 
     Always reconciles against the files currently on disk so uploads/deletes
     made outside the manifest API are reflected.
+
+    One exception to the write-back: when a role had to be coerced (a value this
+    reader doesn't know, i.e. a NEWER writer during a rolling deploy), the result
+    is NOT persisted. Reading must not be what destroys the other version's data
+    — otherwise the first old-instance read makes the loss permanent, long after
+    the traffic split is over. An explicit ``write_manifest`` still rewrites it;
+    that is a user editing through an old client, which we cannot second-guess.
     """
     raw = _load_raw(workspace)
     if raw is None or not isinstance(raw, dict):
         manifest = build_manifest(workspace, session_id=session_id)
         _persist(workspace, manifest)
         return manifest
-    stored = _manifest_from_raw(raw)
+    stored, coerced = _manifest_from_raw(raw)
     if session_id and not stored.sessionId:
         stored.sessionId = session_id
     stored = _reconcile(workspace, stored)
-    _persist(workspace, stored)
+    if not coerced:
+        _persist(workspace, stored)
     return stored
 
 
@@ -707,7 +816,7 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
     # to 'other' leaves the compile set, so it can also leave a collision).
     scans = _scan_design_files(workspace, current.files)
     current.testbenches = _derive_testbenches(current.files, scans)
-    current.warnings = _collision_warnings(scans)
+    current.warnings = _collision_warnings(scans, _roles_by_path(current.files))
 
     _persist(workspace, current)
     return current
