@@ -187,17 +187,24 @@ def _compile(
     # both would run interleaved in one simulation. The chosen top makes
     # "simulate this testbench" true; unchosen TBs become dead code.
     top_args = ["-s", top_module] if top_module else []
-    # -gno-assertions: iverilog cannot elaborate a concurrent assertion and
+    # -gsupported-assertions: iverilog cannot elaborate a CONCURRENT assertion and
     # refuses the whole compile over one ("sorry: concurrent_assertion_item not
     # supported"). Inline `assert property` in production RTL is normal practice,
-    # so without this flag such a design cannot be simulated at all. The
-    # trade-off, stated plainly: iverilog then does NOT check those assertions —
-    # checking them is sby's job (formal), not the simulator's. Immediate
-    # assertions (`assert (expr)` in a procedural block) are unaffected and still
-    # execute. Properties using sequence operators iverilog's parser doesn't
-    # accept (e.g. `|=>`) remain a syntax error; this flag only skips what
-    # iverilog parses but can't elaborate.
-    cmd = ["iverilog", "-g2012", "-gno-assertions"] + include_args + top_args + ["-o", output_executable, "-f", filelist]
+    # so without this such a design cannot be simulated at all. This flag skips
+    # the assertions iverilog can't do while keeping every one it CAN — critically
+    # the IMMEDIATE `assert (expr) else $fatal(...)` that self-checking testbenches
+    # are built on (prompts/architect.py tells agents to write exactly that).
+    #
+    # NOT -gno-assertions: measured on iverilog 12.0, that flag also silences
+    # immediate assertions, so a testbench asserting `y == 9` against a DUT
+    # producing 4 exits 0 and prints its pass marker. A self-checking TB that
+    # cannot fail is worse than no testbench.
+    #
+    # Trade-off that remains: concurrent assertions go unchecked here — that is
+    # sby's job (formal), not the simulator's. Properties using sequence operators
+    # iverilog's parser rejects outright (e.g. `|=>`) stay a syntax error; this
+    # flag only covers what iverilog parses but can't elaborate.
+    cmd = ["iverilog", "-g2012", "-gsupported-assertions"] + include_args + top_args + ["-o", output_executable, "-f", filelist]
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:

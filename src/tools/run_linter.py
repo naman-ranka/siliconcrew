@@ -176,7 +176,12 @@ def run_linter(verilog_files, cwd=None, timeout=30, engine="auto"):
         diagnostics = parse_verilator_diagnostics(raw["stderr"] + "\n" + raw["stdout"], cwd)
     else:
         # -t null: no code generation, just check; -g2012 for SystemVerilog.
-        cmd = ["iverilog", "-t", "null", "-g2012"] + list(verilog_files)
+        # -gsupported-assertions: without it, RTL carrying an inline
+        # `assert property` fails LINT outright ("sorry: concurrent_assertion_item
+        # not supported") — the file is fine, iverilog just can't elaborate that
+        # construct. Same flag and same reasoning as the sim compile; immediate
+        # assertions are unaffected either way (lint never runs them).
+        cmd = ["iverilog", "-t", "null", "-g2012", "-gsupported-assertions"] + list(verilog_files)
         raw = _run(cmd, cwd, timeout)
         diagnostics = parse_iverilog_diagnostics(raw["stderr"], cwd)
 

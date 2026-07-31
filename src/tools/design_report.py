@@ -63,16 +63,42 @@ def _files_by_role(workspace_path: str) -> Dict[str, list]:
     return grouped
 
 
+def _latest_lint_event(workspace_path: str) -> Optional[Dict[str, Any]]:
+    """The most recent ``linter_tool`` result from the session event log.
+
+    Every actor's lint lands in ``attempt_events.jsonl`` (invariant 3), so that
+    log — not a guess — is the evidence for the report's lint cell. Appended in
+    order, so the last match is the latest.
+    """
+    try:
+        from src.utils.attempt_logger import EVENTS_FILE, _read_events
+
+        records = _read_events(os.path.join(workspace_path, EVENTS_FILE))
+    except Exception:
+        return None
+    for rec in reversed(records):
+        if rec.get("event_type") == "tool_result" and rec.get("tool") == "linter_tool":
+            return rec
+    return None
+
+
 def _lint_status_cell(workspace_path: str) -> str:
     """The Syntax (Lint) verification-table cell.
 
-    This used to print "✅ Pass" whenever any RTL file existed — the comment even
-    said "assume passed if RTL exists". No lint had to have run. Lint results are
-    not persisted anywhere today (``linter_tool`` returns them to the caller and
-    keeps nothing), so there is no evidence to report and the honest cell says
-    exactly that. A durable lint record is what would make this cell say more.
+    This used to print "✅ Pass" whenever any RTL file existed — its own comment
+    said "assume passed if RTL exists", so a design that had never been linted,
+    or had failed lint, still read as passing. Now it reports the last real lint
+    and WHEN it ran: the RTL may have changed since, and a timestamp lets the
+    reader judge that instead of being told a stale result is current
+    (invariant 4). No lint in the log → "Not run".
     """
-    return "| Syntax (Lint) | ⏳ Not run (lint results are not recorded yet) |"
+    rec = _latest_lint_event(workspace_path)
+    if not rec:
+        return "| Syntax (Lint) | ⏳ Not run |"
+    passed = str(rec.get("status", "")).lower() in ("success", "ok", "passed")
+    icon = "✅ Pass" if passed else "❌ Fail"
+    when = rec.get("ts")
+    return f"| Syntax (Lint) | {icon}{f' (last run {when})' if when else ''} |"
 
 
 def _simulation_status_cell(workspace_path: str) -> str:

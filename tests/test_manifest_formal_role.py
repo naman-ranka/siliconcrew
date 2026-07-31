@@ -121,7 +121,7 @@ def test_role_list_reaches_the_agent_from_one_source(tmp_path):
 
 @pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed")
 def test_rtl_with_inline_sva_still_simulates(tmp_path):
-    """The -gno-assertions companion fix, end to end with the real toolchain.
+    """The -gsupported-assertions companion fix, end to end with the real toolchain.
 
     Without the flag iverilog aborts the compile: "sorry: concurrent_assertion_item
     not supported" — so the fence's own critical case couldn't be simulated.
@@ -135,7 +135,7 @@ def test_rtl_with_inline_sva_still_simulates(tmp_path):
         top_module="arbiter_tb",
         cwd=ws,
     )
-    assert "-gno-assertions" in result["compile_command"]
+    assert "-gsupported-assertions" in result["compile_command"]
     assert result["status"] == "test_passed", result
 
     # Proof the flag is what did it: the same compile without it fails.
@@ -146,6 +146,64 @@ def test_rtl_with_inline_sva_still_simulates(tmp_path):
     )
     assert bare.returncode != 0
     assert "concurrent_assertion_item" in (bare.stderr + bare.stdout)
+
+
+WRONG_ADDER = """
+module adder(input [3:0] a, input [3:0] b, output [3:0] y);
+    assign y = a & b;
+endmodule
+"""
+
+# The self-checking style prompts/architect.py tells agents to write.
+ADDER_TB_IMMEDIATE_ASSERT = """
+module adder_tb;
+    reg [3:0] a, b;
+    wire [3:0] y;
+    adder dut(.a(a), .b(b), .y(y));
+    initial begin
+        a = 4'd4; b = 4'd5; #1;
+        assert (y == 4'd9) else $fatal(1, "MISMATCH got=%0d expected=9", y);
+        $display("TEST PASSED");
+        $finish;
+    end
+endmodule
+"""
+
+
+@pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed")
+def test_immediate_assertions_still_fail_a_wrong_dut(tmp_path):
+    """A self-checking TB must still be able to FAIL.
+
+    -gno-assertions (the first attempt at the concurrent-assertion problem) also
+    disabled immediate `assert (expr) else $fatal(...)`: this exact wrong adder
+    exited 0 and printed TEST PASSED. -gsupported-assertions skips only what
+    iverilog cannot elaborate.
+    """
+    ws = str(tmp_path)
+    _write(ws, "adder.v", WRONG_ADDER)
+    _write(ws, "adder_tb.sv", ADDER_TB_IMMEDIATE_ASSERT)
+
+    result = run_simulation(
+        verilog_files=[os.path.join(ws, "adder.v"), os.path.join(ws, "adder_tb.sv")],
+        top_module="adder_tb",
+        cwd=ws,
+    )
+    assert result["status"] == "sim_failed", result
+    assert result["failure_type"] == "fatal"
+    assert "MISMATCH got=4" in (result["stdout_tail"] + result["stderr_tail"])
+
+
+@pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed")
+def test_inline_sva_rtl_also_passes_lint(tmp_path):
+    """Lint carried the same defect: RTL with an inline property hard-failed."""
+    from src.tools.run_linter import run_linter
+
+    ws = str(tmp_path)
+    _write(ws, "arbiter.v", ARBITER_WITH_INLINE_SVA)
+
+    result = run_linter([os.path.join(ws, "arbiter.v")], cwd=ws, engine="iverilog")
+    assert result["success"], result
+    assert "concurrent_assertion_item" not in (result["stderr"] or "")
 
 
 def test_report_lists_formal_under_verification_and_is_honest_about_lint(tmp_path):
@@ -161,6 +219,24 @@ def test_report_lists_formal_under_verification_and_is_honest_about_lint(tmp_pat
     # The fabricated pass is gone: no lint ran, so the report cannot claim one.
     assert "| Syntax (Lint) | ✅ Pass |" not in report
     assert "Not run" in report
+
+
+def test_report_lint_cell_reads_the_event_log(tmp_path):
+    """Lint evidence IS durable — every actor's lint lands in the event log."""
+    from src.tools.design_report import generate_design_report
+    from src.utils.attempt_logger import log_tool_result
+
+    ws = str(tmp_path)
+    _write(ws, "fifo.v", FIFO)
+
+    log_tool_result(ws, "s1", "ui", "linter_tool", '{"status": "failed"}', status="error")
+    report = generate_design_report(ws)
+    assert "| Syntax (Lint) | ❌ Fail" in report
+
+    log_tool_result(ws, "s1", "ui", "linter_tool", '{"status": "passed"}', status="success")
+    report = generate_design_report(ws)
+    # Latest wins, and the report says WHEN — the RTL may have moved since.
+    assert "| Syntax (Lint) | ✅ Pass (last run 2" in report
 
 
 def test_report_files_section_sees_nested_files(tmp_path):
