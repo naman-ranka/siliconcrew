@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, Iterator, List, Literal, Optional
+from typing import Any, Dict, Iterator, List, Literal, Optional, get_args
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 MANIFEST_FILENAME = "manifest.json"
 
 FileRole = Literal["rtl", "tb", "sdc", "include", "other"]
+# The one list. Anything that names roles (validation, docstrings, API comments)
+# derives from it so a new role can never leave a stale copy behind.
+ROLES: tuple[str, ...] = get_args(FileRole)
+# What an unrecognized stored role reads as. "rtl" is the safe direction: a file
+# wrongly kept in the compile set is a loud toolchain error; a file wrongly
+# dropped from it is a silent miscompile.
+_ROLE_FALLBACK = "rtl"
 
 # Directories that hold generated run artifacts or third-party payloads — never
 # part of the design set. Dot-dirs (".git", ".cache", …) are pruned separately.
@@ -350,6 +357,54 @@ def _load_raw(workspace: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _coerce_files(raw_files: Any) -> List[DesignFile]:
+    """Stored file entries → DesignFile, one bad field at a time.
+
+    An unrecognized role reads as ``rtl`` with a log line instead of failing the
+    document. Hosted runs rolling deploys (invariant 9), so an old reader WILL
+    meet a manifest written by a newer one; the alternative — discarding the
+    document — wipes every user field on the way past.
+    """
+    out: List[DesignFile] = []
+    for entry in raw_files or []:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path") or entry.get("name")
+        if not isinstance(path, str) or not path:
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            name = os.path.basename(path)
+        role = entry.get("role")
+        if role not in ROLES:
+            logger.warning(
+                "manifest: unrecognized role %r for %r — reading it as %r "
+                "(the stored value is not rewritten unless the manifest is edited)",
+                role, path, _ROLE_FALLBACK,
+            )
+            role = _ROLE_FALLBACK
+        out.append(DesignFile(name=name, role=role, path=path))
+    return out
+
+
+def _manifest_from_raw(raw: Dict[str, Any]) -> DesignManifest:
+    """Per-FIELD tolerant load: a value this reader can't use costs that field,
+    never the document. ``testbenches`` is derived — reconcile recomputes it."""
+    manifest = DesignManifest()
+    manifest.files = _coerce_files(raw.get("files"))
+    for key in ("sessionId", "synthTop", "simTop", "platform"):
+        value = raw.get(key)
+        if isinstance(value, str):
+            setattr(manifest, key, value)
+    clock = raw.get("clockPeriodNs")
+    if isinstance(clock, (int, float)) and not isinstance(clock, bool):
+        manifest.clockPeriodNs = float(clock)
+    ignore = raw.get("ignore")
+    if isinstance(ignore, list):
+        manifest.ignore = [p for p in ignore if isinstance(p, str) and p]
+    return manifest
+
+
 def _persist(workspace: str, manifest: DesignManifest) -> None:
     os.makedirs(workspace, exist_ok=True)
     with open(_manifest_path(workspace), "w", encoding="utf-8") as f:
@@ -394,19 +449,32 @@ def read_manifest(workspace: str, session_id: str = "") -> DesignManifest:
     made outside the manifest API are reflected.
     """
     raw = _load_raw(workspace)
-    if raw is None:
+    if raw is None or not isinstance(raw, dict):
         manifest = build_manifest(workspace, session_id=session_id)
         _persist(workspace, manifest)
         return manifest
-    try:
-        stored = DesignManifest(**raw)
-    except Exception:
-        stored = build_manifest(workspace, session_id=session_id)
+    stored = _manifest_from_raw(raw)
     if session_id and not stored.sessionId:
         stored.sessionId = session_id
     stored = _reconcile(workspace, stored)
     _persist(workspace, stored)
     return stored
+
+
+def _validate_role_updates(updates: Dict[str, Any]) -> None:
+    """Reject unknown roles before anything is read, mutated or persisted."""
+    entries = updates.get("files")
+    if not isinstance(entries, list):
+        return
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("role"):
+            continue
+        role = entry["role"]
+        if role not in ROLES:
+            target = entry.get("path") or entry.get("name") or "?"
+            raise ValueError(
+                f"unknown role {role!r} for {target!r}. Valid roles: {', '.join(ROLES)}."
+            )
 
 
 def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = "") -> DesignManifest:
@@ -419,7 +487,14 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
     callers that can see nested files must address them by path.
 
     ``testbenches`` is derived and cannot be set here (silently recomputed).
+
+    Raises ``ValueError`` on an unknown role and persists NOTHING. The check
+    lives here, not in a request model, so agent / MCP / REST ``/invoke`` are
+    covered by construction — pydantic v2 does not validate on assignment, so an
+    unvalidated role would otherwise reach disk and the next read would have to
+    decide what to do with a document it can't parse.
     """
+    _validate_role_updates(updates)
     current = read_manifest(workspace, session_id=session_id)
 
     if "files" in updates and isinstance(updates["files"], list):

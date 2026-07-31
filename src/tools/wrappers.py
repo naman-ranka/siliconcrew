@@ -242,7 +242,10 @@ def update_manifest(updates_json: str) -> str:
             return "Error: updates_json must be a JSON object."
     except Exception as exc:
         return f"Error: invalid updates_json ({exc})."
-    m = manifest_mod.write_manifest(workspace, updates, session_id=current_session_id())
+    try:
+        m = manifest_mod.write_manifest(workspace, updates, session_id=current_session_id())
+    except ValueError as exc:
+        return f"Error: {exc}"
     return json.dumps(m.model_dump(), indent=2)
 
 

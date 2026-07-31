@@ -484,7 +484,12 @@ def build_actions_router(
         uid = require_owned(session_id, identity)
         workspace = await require_workspace(session_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
-        manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id, _uid=uid, _id=identity, mutates=True)
+        try:
+            manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id, _uid=uid, _id=identity, mutates=True)
+        except ValueError as exc:
+            # Role validation lives in write_manifest (so every caller is covered);
+            # here it just becomes a 400 instead of a 500.
+            _err("invalid_role", str(exc), status=400)
         return _ok({"manifest": manifest.model_dump()})
 
     @router.post("/files")
