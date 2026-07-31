@@ -1,0 +1,192 @@
+"""Duplicate-module collision detection (D1, sc#66).
+
+Auto-discovery happily pulls a reference copy of a design into the compile set;
+the toolchain then errors (iverilog) or silently picks one (yosys). Nothing here
+auto-excludes anything — the manifest names both files and the remedy.
+"""
+import json
+import os
+
+from src.tools import manifest as m
+
+
+def _write(ws, rel, text):
+    path = os.path.join(ws, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+GCN = """
+module gcn (input clk, input [7:0] din, output reg [7:0] dout);
+    always @(posedge clk) dout <= din;
+endmodule
+"""
+
+GCN_REF = """
+module gcn (input clk, input [7:0] din, output reg [7:0] dout);
+    always @(posedge clk) dout <= din + 1;
+endmodule
+"""
+
+TB = """
+module gcn_tb;
+    reg clk; reg [7:0] din; wire [7:0] dout;
+    gcn dut(.clk(clk), .din(din), .dout(dout));
+    initial begin clk = 0; din = 1; #10 $display("TEST PASSED"); $finish; end
+endmodule
+"""
+
+# Two `ifdef-gated alternates of ONE module across two files — legal together
+# (only one survives the preprocessor). This must never be reported.
+SRAM_BEHAV = """
+`ifndef SRAM_MACRO
+module sram (input clk, input we, input [3:0] addr, input [7:0] din, output reg [7:0] dout);
+    reg [7:0] mem [0:15];
+    always @(posedge clk) begin
+        if (we) mem[addr] <= din;
+        dout <= mem[addr];
+    end
+endmodule
+`endif
+"""
+
+SRAM_MACRO = """
+`ifdef SRAM_MACRO
+module sram (input clk, input we, input [3:0] addr, input [7:0] din, output reg [7:0] dout);
+    always @(posedge clk) dout <= 8'h00;
+endmodule
+`endif
+"""
+
+
+def test_collision_names_both_files_and_the_remedy(tmp_path):
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", GCN)
+    _write(ws, "given/gcn_reference.v", GCN_REF)
+    _write(ws, "gcn_tb.v", TB)
+
+    manifest = m.read_manifest(ws, session_id="s1")
+
+    assert len(manifest.warnings) == 1
+    warning = manifest.warnings[0]
+    assert "'gcn'" in warning
+    assert "gcn.v" in warning and "given/gcn_reference.v" in warning
+    assert "ignore" in warning  # the remedy no compiler can name
+
+
+def test_ignore_glob_clears_the_collision(tmp_path):
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", GCN)
+    _write(ws, "given/gcn_reference.v", GCN_REF)
+    _write(ws, "gcn_tb.v", TB)
+    m.read_manifest(ws, session_id="s1")
+
+    updated = m.write_manifest(ws, {"ignore": ["given/**"]})
+    assert updated.warnings == []
+    assert m.read_manifest(ws, session_id="s1").warnings == []
+
+
+def test_role_other_clears_the_collision(tmp_path):
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", GCN)
+    _write(ws, "given/gcn_reference.v", GCN_REF)
+    m.read_manifest(ws, session_id="s1")
+
+    updated = m.write_manifest(ws, {"files": [{"path": "given/gcn_reference.v", "role": "other"}]})
+    assert updated.warnings == []
+
+
+def test_ifdef_gated_alternates_do_not_warn(tmp_path):
+    ws = str(tmp_path)
+    _write(ws, "sram_behav.v", SRAM_BEHAV)
+    _write(ws, "sram_macro.v", SRAM_MACRO)
+
+    manifest = m.read_manifest(ws, session_id="s1")
+    assert manifest.warnings == []
+
+
+def test_clean_workspace_has_no_warnings(tmp_path):
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", GCN)
+    _write(ws, "gcn_tb.v", TB)
+
+    assert m.read_manifest(ws, session_id="s1").warnings == []
+
+
+def test_same_module_in_one_file_twice_is_not_a_collision(tmp_path):
+    """Two declarations in ONE file are that file's problem, not a file-set one."""
+    ws = str(tmp_path)
+    _write(ws, "dup.v", GCN + GCN_REF)
+    assert m.read_manifest(ws, session_id="s1").warnings == []
+
+
+def test_compile_set_collisions_only_reports_files_in_the_set(tmp_path):
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", GCN)
+    _write(ws, "given/gcn_reference.v", GCN_REF)
+
+    assert m.compile_set_collisions(ws, ["gcn.v"]) == []
+    both = m.compile_set_collisions(ws, ["gcn.v", "given/gcn_reference.v"])
+    assert len(both) == 1 and "gcn.v" in both[0]
+    # Absolute paths (what start_synthesis assembles) still report relative names.
+    abs_set = m.compile_set_collisions(
+        ws, [os.path.join(ws, "gcn.v"), os.path.join(ws, "given", "gcn_reference.v")]
+    )
+    assert abs_set == both
+
+
+# --- point of damage: the dispatch replies ---------------------------------
+
+def _stub_sim_run(**_kwargs):
+    return {"id": "sim_0001", "status": "failed", "simStatus": "compile_failed"}
+
+
+def _patch_workspace(monkeypatch, ws):
+    from src.tools import wrappers
+
+    monkeypatch.setattr(wrappers, "get_workspace_path", lambda: ws)
+    monkeypatch.setattr(wrappers, "current_session_id", lambda: "s1")
+    return wrappers
+
+
+def test_sim_dispatch_reply_leads_with_the_collision(tmp_path, monkeypatch):
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", GCN)
+    _write(ws, "given/gcn_reference.v", GCN_REF)
+    _write(ws, "gcn_tb.v", TB)
+    wrappers = _patch_workspace(monkeypatch, ws)
+    monkeypatch.setattr(wrappers, "run_sim_isolated", _stub_sim_run)
+
+    payload = json.loads(wrappers.run_isolated_simulation.func())
+    assert list(payload)[0] == "manifestWarnings"  # first thing the agent reads
+    assert "gcn.v" in payload["manifestWarnings"][0]
+    assert payload["id"] == "sim_0001"  # the run record is intact
+
+
+def test_sim_dispatch_reply_is_clean_without_a_collision(tmp_path, monkeypatch):
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", GCN)
+    _write(ws, "gcn_tb.v", TB)
+    wrappers = _patch_workspace(monkeypatch, ws)
+    monkeypatch.setattr(wrappers, "run_sim_isolated", _stub_sim_run)
+
+    payload = json.loads(wrappers.run_isolated_simulation.func())
+    assert "manifestWarnings" not in payload
+
+
+def test_synthesis_dispatch_reply_carries_the_collision(tmp_path, monkeypatch):
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", GCN)
+    _write(ws, "given/gcn_reference.v", GCN_REF)
+    wrappers = _patch_workspace(monkeypatch, ws)
+    monkeypatch.setattr(wrappers, "start_synthesis_job", lambda **kw: {"run_id": "synth_0001"})
+
+    payload = json.loads(wrappers.start_synthesis.func(
+        verilog_files=["gcn.v", "given/gcn_reference.v"], top_module="gcn"
+    ))
+    assert "manifestWarnings" in payload
+    assert payload["run_id"] == "synth_0001"
+
+    clean = json.loads(wrappers.start_synthesis.func(verilog_files=["gcn.v"], top_module="gcn"))
+    assert "manifestWarnings" not in clean

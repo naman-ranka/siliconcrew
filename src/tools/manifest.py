@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, Iterator, List, Literal, Optional, get_args
+from typing import Any, Dict, Iterator, List, Literal, NamedTuple, Optional, get_args
 
 from pydantic import BaseModel, Field
 
@@ -92,6 +92,10 @@ class DesignManifest(BaseModel):
     # ``simTop`` keeps its meaning as the *default* TB (what one-click Simulate
     # runs); it is still inferred from the first tb file when unset.
     testbenches: List[Dict[str, str]] = Field(default_factory=list)
+    # DERIVED, never user-maintained: one line per problem the file set has that
+    # the manifest can see (today: duplicate module declarations). Recomputed on
+    # every read/reconcile — any user edit is overwritten.
+    warnings: List[str] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -198,6 +202,124 @@ def _instances_in(text: str) -> List[str]:
     return [m for m in _INSTANCE_RE.findall(text) if m not in _NOT_A_MODULE]
 
 
+_GUARD_OPEN_RE = re.compile(r"^\s*`(?:ifdef|ifndef)\b")
+_GUARD_CLOSE_RE = re.compile(r"^\s*`endif\b")
+
+
+def _guarded_modules(text: str) -> frozenset:
+    """Modules whose declaration sits inside an `` `ifdef``/`` `ifndef`` region.
+
+    Guard-AWARE, not a preprocessor: no macro is ever evaluated, we only record
+    that a declaration is conditional. That is enough for the one decision it
+    feeds — two guarded alternates of the same module are a legal, common
+    pattern (SBY's `` `ifdef FORMAL ``, vendor/simulation model swaps), so a
+    duplicate involving one is not a collision worth shouting about.
+    """
+    depth = 0
+    out: set = set()
+    for line in text.splitlines():
+        if _GUARD_CLOSE_RE.match(line):
+            depth = max(0, depth - 1)
+            continue
+        if _GUARD_OPEN_RE.match(line):
+            depth += 1
+            continue
+        if depth > 0:
+            out.update(_MODULE_RE.findall(line))
+    return frozenset(out)
+
+
+class _FileScan(NamedTuple):
+    """What one design file declares — read once, used by every derived field."""
+    modules: List[str]
+    instances: List[str]
+    guarded_modules: frozenset
+
+
+def _scan_text(text: str) -> _FileScan:
+    return _FileScan(
+        modules=_modules_in(text),
+        instances=_instances_in(text),
+        guarded_modules=_guarded_modules(text),
+    )
+
+
+def _scan_design_files(workspace: str, files: List[DesignFile]) -> Dict[str, _FileScan]:
+    """ONE pass over the rtl/tb text per reconcile, keyed by workspace-relative path.
+
+    ``_infer_tops``, ``_derive_testbenches`` and the duplicate-module detector all
+    want the same module/instance lists; each reading the tree itself made the
+    reconcile cost a multiple of the file count for no new information.
+    """
+    scans: Dict[str, _FileScan] = {}
+    for f in files:
+        if f.role not in ("rtl", "tb") or f.path in scans:
+            continue
+        scans[f.path] = _scan_text(_read_text(os.path.join(workspace, f.path)))
+    return scans
+
+
+def _and_join(items: List[str]) -> str:
+    quoted = [f"'{i}'" for i in items]
+    if len(quoted) == 2:
+        return f"both {quoted[0]} and {quoted[1]}"
+    return ", ".join(quoted[:-1]) + f" and {quoted[-1]}"
+
+
+def _collision_warnings(scans: Dict[str, _FileScan]) -> List[str]:
+    """One line per module declared by 2+ files in the given set.
+
+    We never guess which copy is the reference — both are named, and the remedy
+    (the ``ignore`` glob) is spelled out, which is the part no compiler can tell
+    the user. iverilog hard-errors on the redefinition; yosys names only the
+    second file and is one flag away from silently picking one.
+    """
+    declared: Dict[str, List[str]] = {}
+    for path, scan in scans.items():
+        for module in dict.fromkeys(scan.modules):
+            declared.setdefault(module, []).append(path)
+
+    out: List[str] = []
+    for module, paths in sorted(declared.items()):
+        if len(paths) < 2:
+            continue
+        if any(module in scans[p].guarded_modules for p in paths):
+            continue  # `ifdef-gated alternates are legal together
+        out.append(
+            f"module '{module}' is declared by {_and_join(paths)} — a compile set can "
+            f"hold only one definition (iverilog errors out; yosys may just pick one). "
+            f"Keep one: add the other to the manifest 'ignore' list (fnmatch glob, e.g. "
+            f"\"given/**\") or set its role to 'other'. The practice this rule comes "
+            f"from: one module per file, and each file compiled once."
+        )
+    return out
+
+
+def compile_set_collisions(workspace: str, paths: List[str]) -> List[str]:
+    """Duplicate-module warnings for an ASSEMBLED compile set — the point of damage.
+
+    ``paths`` is the exact list about to be handed to the toolchain (absolute or
+    workspace-relative). A collision recorded on the manifest only costs a run
+    when both declarations are really in the set, so this re-checks the set
+    itself rather than replaying the manifest's warnings.
+    """
+    scans: Dict[str, _FileScan] = {}
+    for p in paths:
+        abs_p = p if os.path.isabs(p) else os.path.join(workspace, p)
+        if os.path.splitext(abs_p)[1].lower() not in _RTL_EXTS or not os.path.isfile(abs_p):
+            continue
+        try:
+            rel = os.path.relpath(abs_p, workspace).replace(os.sep, "/")
+        except ValueError:  # different drive on Windows
+            rel = os.path.basename(abs_p)
+        if rel.startswith(".."):
+            rel = os.path.basename(abs_p)
+        if rel in scans:
+            continue
+        scans[rel] = _scan_text(_read_text(abs_p))
+    return _collision_warnings(scans)
+
+
 def _looks_like_tb(name: str, text: str) -> bool:
     # ``name`` may be a workspace-relative path — heuristics key on the basename.
     base = os.path.splitext(os.path.basename(name))[0].lower()
@@ -229,21 +351,20 @@ def derive_role(name: str, text: str = "") -> FileRole:
     return "other"
 
 
-def _infer_tops(workspace: str, files: List[DesignFile]) -> tuple[str, str]:
+def _infer_tops(files: List[DesignFile], scans: Dict[str, _FileScan]) -> tuple[str, str]:
     """Infer (synthTop, simTop) from file roles + instantiation graph."""
     sim_top = ""
     synth_top = ""
-    tb_text = ""
+    tb_instances: List[str] = []
 
     # simTop = top module of the first testbench.
     for f in files:
         if f.role == "tb":
-            text = _read_text(os.path.join(workspace, f.path))
-            mods = _modules_in(text)
-            if mods:
+            scan = scans.get(f.path)
+            if scan and scan.modules:
                 # The tb top is usually the last/only module defining no ports.
-                sim_top = mods[-1]
-                tb_text = text
+                sim_top = scan.modules[-1]
+                tb_instances = scan.instances
                 break
 
     # synthTop = the ROOT of the RTL hierarchy (the module no other rtl module
@@ -255,16 +376,17 @@ def _infer_tops(workspace: str, files: List[DesignFile]) -> tuple[str, str]:
     instantiated_by_rtl: set[str] = set()
     for f in files:
         if f.role == "rtl":
-            text = _read_text(os.path.join(workspace, f.path))
-            for m in _modules_in(text):
+            scan = scans.get(f.path)
+            if scan is None:
+                continue
+            for m in scan.modules:
                 rtl_modules.append(m)
                 rtl_module_set.add(m)
-            for inst in _instances_in(text):
-                instantiated_by_rtl.add(inst)
+            instantiated_by_rtl.update(scan.instances)
 
     # Roots = rtl modules that are never instantiated by another rtl module.
     roots = [m for m in rtl_modules if m not in instantiated_by_rtl]
-    tb_insts = [i for i in _instances_in(tb_text) if i in rtl_module_set] if tb_text else []
+    tb_insts = [i for i in tb_instances if i in rtl_module_set]
 
     # 1) a root the testbench instantiates (the DUT); 2) the sole/first root;
     # 3) any module the tb instantiates; 4) first rtl module.
@@ -278,7 +400,7 @@ def _infer_tops(workspace: str, files: List[DesignFile]) -> tuple[str, str]:
     return synth_top, sim_top
 
 
-def _derive_testbenches(workspace: str, files: List[DesignFile]) -> List[Dict[str, str]]:
+def _derive_testbenches(files: List[DesignFile], scans: Dict[str, _FileScan]) -> List[Dict[str, str]]:
     """DERIVED testbench list: {file, module} per role=="tb" file.
 
     The TB top is the last module declared in the file — the same inference
@@ -289,9 +411,9 @@ def _derive_testbenches(workspace: str, files: List[DesignFile]) -> List[Dict[st
     for f in files:
         if f.role != "tb":
             continue
-        mods = _modules_in(_read_text(os.path.join(workspace, f.path)))
-        if mods:
-            out.append({"file": f.path, "module": mods[-1]})
+        scan = scans.get(f.path)
+        if scan and scan.modules:
+            out.append({"file": f.path, "module": scan.modules[-1]})
     return out
 
 
@@ -325,7 +447,8 @@ def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
         text = _read_text(os.path.join(workspace, rel)) if rel.lower().endswith((".v", ".sv")) else ""
         files.append(DesignFile(name=os.path.basename(rel), role=derive_role(rel, text), path=rel))
 
-    synth_top, sim_top = _infer_tops(workspace, files)
+    scans = _scan_design_files(workspace, files)
+    synth_top, sim_top = _infer_tops(files, scans)
     clock = _spec_clock_period(workspace) or 10.0
     return DesignManifest(
         sessionId=session_id,
@@ -334,7 +457,8 @@ def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
         simTop=sim_top,
         clockPeriodNs=clock,
         platform="sky130hd",
-        testbenches=_derive_testbenches(workspace, files),
+        testbenches=_derive_testbenches(files, scans),
+        warnings=_collision_warnings(scans),
     )
 
 
@@ -434,11 +558,13 @@ def _reconcile(workspace: str, stored: DesignManifest) -> DesignManifest:
 
     stored.files = merged
 
+    scans = _scan_design_files(workspace, merged)
     if not stored.synthTop or not stored.simTop:
-        synth_top, sim_top = _infer_tops(workspace, merged)
+        synth_top, sim_top = _infer_tops(merged, scans)
         stored.synthTop = stored.synthTop or synth_top
         stored.simTop = stored.simTop or sim_top
-    stored.testbenches = _derive_testbenches(workspace, merged)
+    stored.testbenches = _derive_testbenches(merged, scans)
+    stored.warnings = _collision_warnings(scans)
     return stored
 
 
@@ -534,8 +660,11 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
         # New exclusions take effect immediately (drops newly-ignored files).
         current = _reconcile(workspace, current)
 
-    # testbenches is derived — recompute so role edits above are reflected.
-    current.testbenches = _derive_testbenches(workspace, current.files)
+    # Derived fields — recompute so role edits above are reflected (a file moved
+    # to 'other' leaves the compile set, so it can also leave a collision).
+    scans = _scan_design_files(workspace, current.files)
+    current.testbenches = _derive_testbenches(current.files, scans)
+    current.warnings = _collision_warnings(scans)
 
     _persist(workspace, current)
     return current

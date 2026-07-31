@@ -205,6 +205,10 @@ export interface DesignManifest {
   testbenches?: { file: string; module: string }[];
   /** User-maintained fnmatch globs (workspace-relative) excluded from scans. */
   ignore?: string[];
+  /** Derived by the backend on each reconcile: one line per problem the file
+   *  set has (today: a module declared by two files, with the remedy). Nothing
+   *  renders these yet — surfacing them in the IDE is deferred. */
+  warnings?: string[];
 }
 
 // --- Unified run model ------------------------------------------------------

@@ -249,6 +249,25 @@ def update_manifest(updates_json: str) -> str:
     return json.dumps(m.model_dump(), indent=2)
 
 
+def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -> dict:
+    """Front the dispatch reply with any duplicate-module collision in THIS set.
+
+    The manifest carries the same warnings, but a run is where they cost
+    something — so they lead the reply, ahead of the run record, rather than
+    waiting to be noticed in metadata. Only the collisions actually present in
+    the assembled compile set are reported; the message adds the remedy the
+    compiler's own error can't (which file to ignore), it does not restate it.
+    Kept INSIDE the JSON so ``/invoke`` still parses a typed result.
+    """
+    try:
+        warnings = manifest_mod.compile_set_collisions(workspace, compile_files)
+    except Exception:
+        return result
+    if not warnings:
+        return result
+    return {"manifestWarnings": warnings, **result}
+
+
 @tool
 def run_isolated_simulation(
     sim_top: str = "",
@@ -286,7 +305,7 @@ def run_isolated_simulation(
         sim_profile=sim_profile,
         pass_marker=pass_marker,
     )
-    return json.dumps(result, indent=2)
+    return json.dumps(_with_manifest_warnings(result, workspace, files), indent=2)
 
 
 @tool
@@ -339,7 +358,7 @@ def start_synthesis(
         constraints_mode=constraints_mode,
         max_stage=max_stage,
     )
-    return json.dumps(result, indent=2)
+    return json.dumps(_with_manifest_warnings(result, workspace, abs_files), indent=2)
 
 
 @tool
