@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import yaml
 
 from dotenv import load_dotenv
@@ -290,7 +290,10 @@ class FileInfo(BaseModel):
     type: str
     size: int
     modified: str
-    role: Optional[str] = None  # manifest role: rtl|tb|sdc|include|other
+    # Manifest role. Generated from the FileRole Literal (src/tools/manifest.py)
+    # so this description can't drift from the roles that actually exist; typed
+    # as a plain str so a client never fails on a role it doesn't know yet.
+    role: Optional[str] = Field(default=None, description=f"manifest role: {'|'.join(manifest_mod.ROLES)}")
 
 
 class SpecResponse(BaseModel):

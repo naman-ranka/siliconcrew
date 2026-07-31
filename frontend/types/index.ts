@@ -185,7 +185,7 @@ export interface ReportData {
 }
 
 // --- Design manifest (mirrors plans/phase0/data-model.md) -------------------
-export type FileRole = "rtl" | "tb" | "sdc" | "include" | "other";
+export type FileRole = "rtl" | "tb" | "sdc" | "include" | "formal" | "other";
 
 export interface DesignFile {
   name: string;

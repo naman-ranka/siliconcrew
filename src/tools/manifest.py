@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = "manifest.json"
 
-FileRole = Literal["rtl", "tb", "sdc", "include", "other"]
+FileRole = Literal["rtl", "tb", "sdc", "include", "formal", "other"]
 # The one list. Anything that names roles (validation, docstrings, API comments)
 # derives from it so a new role can never leave a stale copy behind.
 ROLES: tuple[str, ...] = get_args(FileRole)
@@ -320,6 +320,32 @@ def compile_set_collisions(workspace: str, paths: List[str]) -> List[str]:
     return _collision_warnings(scans)
 
 
+# Formal-harness naming, the attested conventions (SymbiYosys/OpenTitan/
+# riscv-formal). ``_sva`` is deliberately absent — unattested as a file suffix.
+_FORMAL_NAME_RE = re.compile(r"_(props|properties|formal|fpv|bind|bind_fpv|assert_fpv)$")
+_PROPERTY_RE = re.compile(r"\b(?:assert|assume|cover)\s+property\b")
+
+
+def _looks_like_formal(name: str, text: str) -> bool:
+    """A formal harness: the NAME says so and the content doesn't contradict it.
+
+    Filename-primary on purpose. Inline ``assert property`` in production RTL is
+    normal practice (OpenTitan's policy puts basic assertions in the RTL), and
+    SBY's own documented pattern keeps properties INSIDE the synthesizable
+    module behind `` `ifdef FORMAL `` — so property constructs alone say nothing
+    about what the FILE is. Content is only a negative gate: a file named
+    ``*_props.sv`` with no properties in it stays rtl.
+
+    The cost asymmetry settles every tie: calling a formal harness ``rtl`` costs
+    a warning the compile already handles; calling rtl ``formal`` silently DROPS
+    A MODULE from synthesis. When unsure, rtl.
+    """
+    base = os.path.splitext(os.path.basename(name))[0].lower()
+    if not _FORMAL_NAME_RE.search(base):
+        return False
+    return bool(_PROPERTY_RE.search(text))
+
+
 def _looks_like_tb(name: str, text: str) -> bool:
     # ``name`` may be a workspace-relative path — heuristics key on the basename.
     base = os.path.splitext(os.path.basename(name))[0].lower()
@@ -347,6 +373,8 @@ def derive_role(name: str, text: str = "") -> FileRole:
     if ext in _INCLUDE_EXTS:
         return "include"
     if ext in _RTL_EXTS:
+        if _looks_like_formal(name, text):
+            return "formal"
         return "tb" if _looks_like_tb(name, text) else "rtl"
     return "other"
 
@@ -676,6 +704,11 @@ def files_for_stage(manifest: DesignManifest, stage: str) -> List[str]:
     | Lint      | rtl + include              |
     | Simulate  | rtl + tb + include         |
     | Synthesize| rtl + sdc (no tb)          |
+
+    Role ``formal`` reaches NO stage here: an SVA harness is not synthesizable
+    and iverilog can't elaborate concurrent assertions at all. Executing it is
+    sby's job (Wave F); this function only stops it from breaking the stages
+    that exist.
     """
     stage = stage.lower()
     if stage == "lint":

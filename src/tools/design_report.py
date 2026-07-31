@@ -44,6 +44,37 @@ def _spec_like_files(dir_path: str) -> list:
     return sorted(f for f in os.listdir(dir_path) if _is_spec_like(f))
 
 
+def _files_by_role(workspace_path: str) -> Dict[str, list]:
+    """Workspace files grouped by their MANIFEST role (invariant 1).
+
+    Replaces a root-only ``os.listdir`` + suffix guess that filed every nested
+    file nowhere and every ``*_props.sv`` under "RTL". Paths are
+    workspace-relative, so a nested file reads as ``rtl/alu.v``.
+    """
+    try:
+        from src.tools import manifest as manifest_mod
+
+        manifest = manifest_mod.read_manifest(workspace_path)
+    except Exception:
+        return {}
+    grouped: Dict[str, list] = {}
+    for f in manifest.files:
+        grouped.setdefault(f.role, []).append(f.path)
+    return grouped
+
+
+def _lint_status_cell(workspace_path: str) -> str:
+    """The Syntax (Lint) verification-table cell.
+
+    This used to print "✅ Pass" whenever any RTL file existed — the comment even
+    said "assume passed if RTL exists". No lint had to have run. Lint results are
+    not persisted anywhere today (``linter_tool`` returns them to the caller and
+    keeps nothing), so there is no evidence to report and the honest cell says
+    exactly that. A durable lint record is what would make this cell say more.
+    """
+    return "| Syntax (Lint) | ⏳ Not run (lint results are not recorded yet) |"
+
+
 def _simulation_status_cell(workspace_path: str) -> str:
     """The Simulation verification-table cell.
 
@@ -319,21 +350,29 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
     
     if os.path.exists(workspace_path):
         files = os.listdir(workspace_path)
-        
-        rtl_files = [f for f in files if f.endswith(('.v', '.sv')) and not f.endswith('_tb.v')]
-        tb_files = [f for f in files if f.endswith('_tb.v')]
+
+        # The manifest is the single source of truth for what a file IS
+        # (invariant 1). The old root-only listdir + suffix guess put a nested
+        # RTL file nowhere and a formal harness under "RTL".
+        by_role = _files_by_role(workspace_path)
+        rtl_files = by_role.get("rtl", [])
+        tb_files = by_role.get("tb", [])
+        formal_files = by_role.get("formal", [])
+        sdc_files = by_role.get("sdc", [])
+        include_files = by_role.get("include", [])
         spec_files = [f for f in files if _is_spec_like(f)]
-        sdc_files = [f for f in files if f.endswith('.sdc')]
         vcd_files = [f for f in files if f.endswith('.vcd')]
-        
+
         report_lines.append("| Category | Files |")
         report_lines.append("|----------|-------|")
-        report_lines.append(f"| RTL | {', '.join(rtl_files) if rtl_files else '-'} |")
-        report_lines.append(f"| Testbenches | {', '.join(tb_files) if tb_files else '-'} |")
+        report_lines.append(f"| Design — RTL | {', '.join(rtl_files) if rtl_files else '-'} |")
+        report_lines.append(f"| Design — Includes | {', '.join(include_files) if include_files else '-'} |")
+        report_lines.append(f"| Design — Constraints | {', '.join(sdc_files) if sdc_files else '-'} |")
+        report_lines.append(f"| Verification — Testbenches | {', '.join(tb_files) if tb_files else '-'} |")
+        report_lines.append(f"| Verification — Formal properties | {', '.join(formal_files) if formal_files else '-'} |")
         report_lines.append(f"| Specifications | {', '.join(spec_files) if spec_files else '-'} |")
-        report_lines.append(f"| Constraints | {', '.join(sdc_files) if sdc_files else '-'} |")
         report_lines.append(f"| Waveforms | {', '.join(vcd_files) if vcd_files else '-'} |")
-        
+
         # Check for ORFS outputs
         orfs_results = os.path.join(report_dir, "orfs_results")
         if os.path.exists(orfs_results):
@@ -357,11 +396,7 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
     report_lines.append("| Check | Status |")
     report_lines.append("|-------|--------|")
 
-    # Lint status (assume passed if RTL exists)
-    if rtl_files:
-        report_lines.append("| Syntax (Lint) | ✅ Pass |")
-    else:
-        report_lines.append("| Syntax (Lint) | ⏳ Pending |")
+    report_lines.append(_lint_status_cell(workspace_path))
 
     # Simulation status — the authoritative isolated sim runs, not a stale
     # workspace-root scan (which never matched isolated runs → false "Not Run").

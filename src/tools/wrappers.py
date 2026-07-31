@@ -233,7 +233,7 @@ def update_manifest(updates_json: str) -> str:
     """
     Upserts manifest fields. Pass a JSON object with any of:
     synthTop, simTop, clockPeriodNs, platform, or files: [{name, role}] to override roles.
-    Roles: rtl | tb | sdc | include | other.
+    Roles: {roles}. An unknown role is rejected and nothing is written.
     """
     workspace = get_workspace_path()
     try:
@@ -247,6 +247,14 @@ def update_manifest(updates_json: str) -> str:
     except ValueError as exc:
         return f"Error: {exc}"
     return json.dumps(m.model_dump(), indent=2)
+
+
+# The role list the agent and MCP clients see is GENERATED from the FileRole
+# Literal — a hand-copied list here is exactly how a tool description starts
+# advertising roles that no longer exist (or hiding ones that do).
+update_manifest.description = update_manifest.description.replace(
+    "{roles}", " | ".join(manifest_mod.ROLES)
+)
 
 
 def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -> dict:

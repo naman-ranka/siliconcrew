@@ -45,13 +45,15 @@ const ROW_H = 26;
 const INDENT = 12;
 
 // Role badge palette — mirrors the old FileTree.tsx language: RTL anchors on
-// info-blue, TB on the primary tint; SDC/INC/OTHER stay neutral. Status tokens
-// are reserved for runs so the file list reads calm.
+// info-blue, TB on the primary tint; FORMAL rides the TB tint (both are
+// verification, not design); SDC/INC/OTHER stay neutral. Status tokens are
+// reserved for runs so the file list reads calm.
 const ROLE_LABEL: Record<FileRole, string> = {
   rtl: "RTL",
   tb: "TB",
   sdc: "SDC",
   include: "INC",
+  formal: "FORMAL",
   other: "OTHER",
 };
 
@@ -60,6 +62,7 @@ const ROLE_BADGE: Record<FileRole, string> = {
   tb: "bg-primary/12 text-primary border-primary/25",
   sdc: "bg-surface-3 text-foreground/70 border-border",
   include: "bg-surface-3 text-muted-foreground border-border",
+  formal: "bg-primary/12 text-primary border-primary/25",
   other: "bg-surface-3 text-muted-foreground border-border",
 };
 

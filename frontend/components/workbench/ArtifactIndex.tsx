@@ -48,7 +48,10 @@ export function ArtifactIndex() {
   const files = useMemo(
     () =>
       (manifest?.files ?? []).filter((f) =>
-        ["rtl", "tb", "sdc", "include"].includes(f.role)
+        // "formal" belongs here: a verification harness the user wrote must not
+        // vanish from the agent shell's Files index just because no stage
+        // compiles it yet.
+        ["rtl", "tb", "sdc", "include", "formal"].includes(f.role)
       ),
     [manifest]
   );
