@@ -64,7 +64,21 @@ _COMMENT_OR_STRING_RE = re.compile(
     re.DOTALL,
 )
 
-_MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)", re.MULTILINE)
+# IEEE 1800 module_declaration: `module_keyword [lifetime] module_identifier`.
+# Without the lifetime branch, `module automatic core` declared a phantom
+# module named 'automatic' — which could win synthTop (dev#77's exact failure
+# through a different vector). `extern module x (...)` is a legal prototype
+# BESIDE the definition (IEEE 1800 §23.2.4), so it must not count as a second
+# declaration; it is blanked before matching (see _find_modules).
+_MODULE_RE = re.compile(
+    r"\bmodule\s+(?:static\s+|automatic\s+)?([A-Za-z_]\w*)", re.MULTILINE
+)
+_EXTERN_MODULE_RE = re.compile(r"\bextern\s+module\b")
+
+
+def _find_modules(text: str) -> List[str]:
+    """Declared module names in ``text`` (comment-stripped)."""
+    return _MODULE_RE.findall(_EXTERN_MODULE_RE.sub("", text))
 # Instantiation: `module_name #(...) inst (...)` or `module_name inst (...)`.
 _INSTANCE_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s+(?:#\s*\([^;]*?\)\s*)?[A-Za-z_]\w*\s*\(", re.MULTILINE)
 _HAS_PORTS_RE = re.compile(r"\bmodule\s+[A-Za-z_]\w*\s*(#\s*\([^;]*?\)\s*)?\(\s*[^)\s]", re.DOTALL)
@@ -210,7 +224,7 @@ def _read_text(path: str) -> str:
 
 
 def _modules_in(text: str) -> List[str]:
-    return _MODULE_RE.findall(text)
+    return _find_modules(text)
 
 
 def _instances_in(text: str) -> List[str]:
@@ -240,7 +254,7 @@ def _guarded_modules(text: str) -> frozenset:
             depth += 1
             continue
         if depth > 0:
-            out.update(_MODULE_RE.findall(line))
+            out.update(_find_modules(line))
     return frozenset(out)
 
 
