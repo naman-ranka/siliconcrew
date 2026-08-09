@@ -211,3 +211,26 @@ def test_explicit_role_update_replaces_an_unknown_role(tmp_path):
     with open(mpath, "r", encoding="utf-8") as f:
         after = json.load(f)
     assert next(e for e in after["files"] if e["path"] == "vendor/ip.v")["role"] == "other"
+
+
+def test_write_manifest_return_value_keeps_the_coerced_view(tmp_path):
+    """The unknown role round-trips to DISK only. The returned object must
+    match what the next read returns (the coerced view) — an off-enum value
+    leaked into a closed TS union and dropped the file from compile sets
+    computed on the return value."""
+    ws = _seed(tmp_path)
+    m.read_manifest(ws, session_id="s1")
+    mpath = os.path.join(ws, m.MANIFEST_FILENAME)
+    with open(mpath, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    next(e for e in raw["files"] if e["path"] == "vendor/ip.v")["role"] = "formal_v2"
+    with open(mpath, "w", encoding="utf-8") as f:
+        json.dump(raw, f)
+
+    returned = m.write_manifest(ws, {"clockPeriodNs": 4.0}, session_id="s1")
+    ip = next(f for f in returned.files if f.path == "vendor/ip.v")
+    assert ip.role == "rtl"  # coerced view, same as the next read
+    assert "vendor/ip.v" in m.files_for_stage(returned, "synth")
+    with open(mpath, "r", encoding="utf-8") as f:
+        after = json.load(f)
+    assert next(e for e in after["files"] if e["path"] == "vendor/ip.v")["role"] == "formal_v2"

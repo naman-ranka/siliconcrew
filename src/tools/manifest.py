@@ -81,7 +81,13 @@ def _find_modules(text: str) -> List[str]:
     return _MODULE_RE.findall(_EXTERN_MODULE_RE.sub("", text))
 # Instantiation: `module_name #(...) inst (...)` or `module_name inst (...)`.
 _INSTANCE_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s+(?:#\s*\([^;]*?\)\s*)?[A-Za-z_]\w*\s*\(", re.MULTILINE)
-_HAS_PORTS_RE = re.compile(r"\bmodule\s+[A-Za-z_]\w*\s*(#\s*\([^;]*?\)\s*)?\(\s*[^)\s]", re.DOTALL)
+# Same lifetime branch as _MODULE_RE: without it, `module automatic core (...)`
+# read as port-less, flipping the file's role to tb — which silently drops the
+# module from the synthesis compile set (files_for_stage synth = rtl + sdc).
+_HAS_PORTS_RE = re.compile(
+    r"\bmodule\s+(?:static\s+|automatic\s+)?[A-Za-z_]\w*\s*(#\s*\([^;]*?\)\s*)?\(\s*[^)\s]",
+    re.DOTALL,
+)
 
 # Verilog keywords that the instance regex can mistake for a module type.
 _NOT_A_MODULE = {
@@ -253,39 +259,47 @@ def _guarded_modules(text: str) -> Dict[str, frozenset]:
     declared"). Lines between directives are batched per condition, so a
     declaration split across lines (``module\\n  name``) still matches.
     """
-    stack: List[tuple] = []
+    # Stack of FRAMES (one per open `ifdef/`ifndef); a frame is the term list
+    # of the branch currently in force, INCLUDING the negations of earlier
+    # branches in its chain — `ifdef A/`elsif B's second branch is (¬A ∧ B),
+    # not just (B). Dropping the ¬A recorded `ifdef X vs `elsif Y alternates
+    # as unrelated conditions and manufactured a collision warning for a pair
+    # the preprocessor can never compile together.
+    frames: List[List[tuple]] = []
     segments: List[tuple] = []
     current: List[str] = []
 
     def _flush() -> None:
         nonlocal current
         if current:
-            segments.append((frozenset(stack), current))
+            cond = frozenset(term for frame in frames for term in frame)
+            segments.append((cond, current))
             current = []
 
     for line in text.splitlines():
         mo = _GUARD_OPEN_RE.match(line)
         if mo:
             _flush()
-            stack.append(("+" if mo.group(1) == "ifdef" else "-", mo.group(2)))
+            frames.append([("+" if mo.group(1) == "ifdef" else "-", mo.group(2))])
             continue
         mo = _GUARD_ELSIF_RE.match(line)
         if mo:
             _flush()
-            if stack:
-                stack.pop()
-            stack.append(("+", mo.group(1)))
+            if frames:
+                sign, name = frames[-1][-1]
+                frames[-1][-1] = ("-" if sign == "+" else "+", name)
+                frames[-1].append(("+", mo.group(1)))
             continue
         if _GUARD_ELSE_RE.match(line):
             _flush()
-            if stack:
-                sign, name = stack.pop()
-                stack.append(("-" if sign == "+" else "+", name))
+            if frames:
+                sign, name = frames[-1][-1]
+                frames[-1][-1] = ("-" if sign == "+" else "+", name)
             continue
         if _GUARD_CLOSE_RE.match(line):
             _flush()
-            if stack:
-                stack.pop()
+            if frames:
+                frames.pop()
             continue
         current.append(line)
     _flush()
@@ -947,14 +961,21 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
 
     # Round-trip a newer writer's roles: the coerced 'rtl' was a READ decision,
     # and persisting it here would be silent, permanent data loss (a formal
-    # harness re-entering the synthesis compile set). pydantic v2 does not
+    # harness re-entering the synthesis compile set). The restore goes into a
+    # COPY that only _persist sees: the returned object keeps the coerced view,
+    # matching what the next read returns — handing an off-enum role back to
+    # callers put an unknown value into a closed TS union and dropped the file
+    # from any compile set computed on the return value. pydantic v2 does not
     # validate on assignment, so the stored string passes through untouched.
-    for f in current.files:
-        stored_role = unknown_roles.get(f.path)
-        if stored_role is not None and f.path not in explicitly_set:
-            f.role = stored_role  # type: ignore[assignment]
+    persisted = current
+    if unknown_roles:
+        persisted = current.model_copy(deep=True)
+        for f in persisted.files:
+            stored_role = unknown_roles.get(f.path)
+            if stored_role is not None and f.path not in explicitly_set:
+                f.role = stored_role  # type: ignore[assignment]
 
-    _persist(workspace, current)
+    _persist(workspace, persisted)
     return current
 
 

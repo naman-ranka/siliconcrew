@@ -311,3 +311,29 @@ def test_multiline_module_declaration_inside_guard_is_seen(tmp_path):
     _write(ws, "b/sram.v", guarded)
 
     assert m.read_manifest(ws, session_id="s1").warnings == []
+
+
+def test_elsif_alternates_across_files_do_not_warn(tmp_path):
+    """`ifdef A / `elsif B: the second branch's condition is (not-A and B),
+    so it is mutually exclusive with another file's `ifdef A copy. Dropping
+    the not-A term manufactured a collision warning for a pair the
+    preprocessor can never compile together."""
+    ws = str(tmp_path)
+    _write(ws, "fast/gcn.v", """
+`ifdef USE_FAST
+module gcn (input clk, output reg [7:0] dout);
+    always @(posedge clk) dout <= 8'h01;
+endmodule
+`endif
+""")
+    _write(ws, "slow/gcn.v", """
+`ifdef USE_FAST
+module gcn_unused_stub (input clk); endmodule
+`elsif USE_SLOW
+module gcn (input clk, output reg [7:0] dout);
+    always @(posedge clk) dout <= 8'h02;
+endmodule
+`endif
+""")
+
+    assert m.read_manifest(ws, session_id="s1").warnings == []

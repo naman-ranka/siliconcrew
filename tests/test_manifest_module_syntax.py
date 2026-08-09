@@ -43,3 +43,16 @@ def test_extern_module_prototype_is_not_a_declaration(tmp_path):
     # A prototype plus the one real definition is NOT a collision.
     assert manifest.warnings == []
     assert manifest.synthTop == "user_of"
+
+
+def test_lifetime_qualifier_does_not_flip_role_to_tb(tmp_path):
+    """_HAS_PORTS_RE must skip the lifetime too: a ported `module automatic`
+    read as port-less, the file derived as tb, and the module silently left
+    the synthesis compile set (files_for_stage synth = rtl + sdc)."""
+    ws = str(tmp_path)
+    _write(ws, "sub.v", "module sub (input a);\nendmodule\n")
+    _write(ws, "core.v", "module automatic core (input clk, output q);\n  sub u1 (.a(clk));\nendmodule\n")
+    manifest = m.build_manifest(ws)
+    core = next(f for f in manifest.files if f.path == "core.v")
+    assert core.role == "rtl"
+    assert "core.v" in m.files_for_stage(manifest, "synth")
