@@ -4071,16 +4071,26 @@ def _derive_fmax_mhz(clock_period_ns: Optional[float], wns_ns: Optional[float]) 
 
 
 def _normalize_report_time_ns(value: Optional[float], run_meta: Dict[str, Any]) -> Optional[float]:
-    """A time value parsed from THIS run's STA reports -> canonical ns.
+    """A time value FRESHLY PARSED from this run's STA reports -> canonical ns.
 
     Reports are written in the platform's liberty time unit (ps on asap7),
-    recorded per-run as the ``sdc_time_unit`` marker at dispatch. Legacy runs
-    have no marker and are returned UNSCALED: their persisted values were
-    produced under the old behavior and must not be silently reinterpreted
-    (issue #63).
+    recorded per-run as the ``sdc_time_unit`` marker at dispatch. Runs finalized
+    before that marker existed have none — and the unit of the text sitting in
+    6_finish.rpt is a property of the PDK that wrote it, not of the snapshot, so
+    the platform's own unit is the fallback.
+
+    This does NOT reopen issue #63's rule. That rule protects STORED values (a
+    persisted summary_metrics number produced under the old behavior must not be
+    silently rescaled); every caller here hands in a number it just parsed out of
+    the report text, which carries its unit with it. Leaving those unscaled is
+    what published asap7 picoseconds as nanoseconds: a legacy asap7 run read back
+    "worst_slack_ns = 9876.69" and "timing met" against a 0.31 ns clock, and
+    _ensure_current_summary_metrics then froze it under the current schema stamp.
     """
-    unit = (run_meta or {}).get("sdc_time_unit")
-    if value is None or not unit or unit == "ns":
+    if value is None:
+        return None
+    unit = (run_meta or {}).get("sdc_time_unit") or platform_time_unit((run_meta or {}).get("platform"))
+    if unit == "ns":
         return value
     ns = time_unit_to_ns(value, unit)
     return round(ns, 6) if ns is not None else None

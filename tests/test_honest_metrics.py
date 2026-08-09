@@ -158,6 +158,47 @@ def test_real_asap7_report_reports_real_slack_and_fmax():
         assert summary["timing_met"] is True
 
 
+def test_legacy_asap7_run_without_the_unit_marker_is_not_published_as_ns():
+    """A run finalized before the sdc_time_unit marker existed still has asap7
+    PICOSECONDS in its 6_finish.rpt. Returning those unscaled published
+    worst_slack_ns = 9876.69 "ns" and "timing met" for a 0.12 ns min period —
+    and _ensure_current_summary_metrics then stamped that snapshot at the
+    current schema version, so it could never be re-healed.
+
+    Issue #63's don't-reinterpret rule is about STORED values; these numbers are
+    freshly parsed from report text whose unit is a property of the PDK.
+    """
+    legacy_meta = {k: v for k, v in ASAP7_META.items() if k != "sdc_time_unit"}
+    assert "sdc_time_unit" not in legacy_meta
+    with tempfile.TemporaryDirectory() as workspace:
+        run_dir = _make_run(workspace, ASAP7_FINISH_MET, legacy_meta)
+
+        m = sm.get_synthesis_metrics(workspace=workspace, run_id="synth_0001")["metrics"]
+        assert m["worst_slack_ns"] == pytest.approx(9.87669)
+        assert m["clock_period_min_ns"] == pytest.approx(0.12331)
+        # ORFS prints fmax in MHz on every platform: used verbatim either way.
+        assert m["fmax_mhz"] == pytest.approx(8109.80)
+
+        # The persisted snapshot — the one the runs list freezes — agrees.
+        summary = sm._compute_summary_metrics(run_dir, dict(legacy_meta, run_id="synth_0001"))
+        assert summary["worst_slack_ns"] == pytest.approx(9.87669)
+        assert summary["clock_period_min_ns"] == pytest.approx(0.12331)
+        assert summary["fmax_mhz"] == pytest.approx(8109.80)
+
+
+def test_legacy_sky130hd_run_without_the_unit_marker_stays_unscaled():
+    """The fallback is the PLATFORM's unit, not a blanket rescale: sky130hd
+    liberty is ns, so a marker-less sky130hd run reads exactly as before."""
+    legacy_meta = {k: v for k, v in SKY130_META.items() if k != "sdc_time_unit"}
+    with tempfile.TemporaryDirectory() as workspace:
+        run_dir = _make_run(workspace, SKY130_FINISH_VIOLATING, legacy_meta)
+        m = sm.get_synthesis_metrics(workspace=workspace, run_id="synth_0001")["metrics"]
+        assert m["worst_slack_ns"] == pytest.approx(-1137.59)
+        assert m["wns_ns"] == pytest.approx(-1137.59)
+        summary = sm._compute_summary_metrics(run_dir, dict(legacy_meta, run_id="synth_0001"))
+        assert summary["worst_slack_ns"] == pytest.approx(-1137.59)
+
+
 def test_derived_fmax_cross_checks_against_the_reports_own_fmax():
     """1000/(target - worst slack) approximates ORFS's own fmax within 0.01%.
 

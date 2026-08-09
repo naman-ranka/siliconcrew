@@ -221,17 +221,27 @@ def test_asap7_metrics_normalized_to_canonical_units():
         assert summary["fmax_mhz"] == pytest.approx(1000.0 / 1.2274, abs=0.01)
 
 
-def test_legacy_asap7_run_meta_not_reinterpreted():
-    """Runs persisted before the unit fix carry no sdc_time_unit marker: their
-    report values must come back RAW (old behavior), never silently rescaled."""
+def test_legacy_asap7_run_meta_falls_back_to_the_platform_unit():
+    """Runs persisted before the unit fix carry no sdc_time_unit marker — but
+    their 6_finish.rpt is still asap7 PICOSECONDS, so a fresh parse of it must
+    be normalized by the PLATFORM's unit.
+
+    This assertion used to lock the opposite (values returned RAW). That was
+    defensible only while the consumers were sign-only; once _timing_metric_fields
+    started deriving worst_slack_ns / clock_period_min_ns / timing_met from these
+    numbers, "unscaled" meant publishing ps under an _ns name — 1000x wrong, and
+    frozen forever by the schema stamp _ensure_current_summary_metrics writes.
+    Issue #63's don't-reinterpret rule still governs STORED values; a fresh parse
+    of report text is not one.
+    """
     legacy_meta = {k: v for k, v in NEW_ASAP7_META.items() if k != "sdc_time_unit"}
     with tempfile.TemporaryDirectory() as workspace:
         run_dir = _make_asap7_run(workspace, legacy_meta)
         result = sm.get_synthesis_metrics(workspace=workspace, run_id="synth_0001")
-        assert result["metrics"]["wns_ns"] == pytest.approx(-27.40)
-        assert result["metrics"]["tns_ns"] == pytest.approx(-2276.18)
+        assert result["metrics"]["wns_ns"] == pytest.approx(-0.0274)
+        assert result["metrics"]["tns_ns"] == pytest.approx(-2.27618)
         summary = sm._compute_summary_metrics(run_dir, legacy_meta)
-        assert summary["wns_ns"] == pytest.approx(-27.40)
+        assert summary["wns_ns"] == pytest.approx(-0.0274)
 
 
 def test_sky130hd_metrics_unchanged():
