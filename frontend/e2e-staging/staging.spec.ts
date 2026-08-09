@@ -83,40 +83,62 @@ module gadget (
 endmodule
 `;
 
-/** AuthKit hosted login: email → (continue) → password → submit. Tolerant of
- *  one-step and two-step layouts. */
+/** Dump the current auth page state into the run log (URL + visible text) —
+ *  artifacts aren't reachable from every diagnosing environment, stdout is. */
+async function dumpAuthState(page: Page, tag: string) {
+  const text = await page
+    .evaluate(() => document.body?.innerText?.slice(0, 900) ?? "")
+    .catch(() => "<no body>");
+  log(`[auth:${tag}] url=${page.url()}`);
+  log(`[auth:${tag}] text=${JSON.stringify(text)}`);
+}
+
+/** AuthKit hosted login: email → (continue) → password → submit. Submits with
+ *  Enter on the focused input — clicking a name-matched button risks hitting
+ *  the "Sign in with Google" SSO button instead. Tolerant of one-step and
+ *  two-step layouts. */
 async function signIn(page: Page) {
   await page.goto("/");
   await shot(page, "00-launcher-signed-out");
   await page.getByTestId("signin-button").click();
   await page.waitForURL(/authkit\.app|workos/i, { timeout: 60_000 });
   await shot(page, "01-authkit");
+  await dumpAuthState(page, "landing");
+
+  // Some AuthKit layouts lead with SSO buttons and hide the email form
+  // behind an "email" toggle.
+  const emailToggle = page.getByRole("button", { name: /email/i });
+  const emailNow = page.locator('input[type="email"], input[name="email"]');
+  if (!(await emailNow.count()) && (await emailToggle.count())) {
+    await emailToggle.first().click();
+  }
 
   const email = page.locator('input[type="email"], input[name="email"]').first();
   await expect(email).toBeVisible({ timeout: 30_000 });
   await email.fill(EMAIL);
-  const pwdNow = page.locator('input[type="password"]');
-  if (!(await pwdNow.count())) {
-    await Promise.all([
-      page
-        .getByRole("button", { name: /continue|next|sign in/i })
-        .first()
-        .click(),
-      page.waitForLoadState("networkidle").catch(() => {}),
-    ]);
-  }
+  await email.press("Enter");
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await dumpAuthState(page, "after-email");
+
   const pwd = page.locator('input[type="password"]').first();
   await expect(pwd).toBeVisible({ timeout: 30_000 });
   await pwd.fill(PASSWORD);
   await shot(page, "02-authkit-filled");
-  await page
-    .getByRole("button", { name: /continue|sign in|log in|submit/i })
-    .first()
-    .click();
+  await pwd.press("Enter");
 
-  await page.waitForURL((u) => !/authkit\.app|workos/i.test(u.href), { timeout: 90_000 });
+  // Poll rather than one long wait, logging the page state as it evolves —
+  // a wrong-password banner, a verification-code challenge, or a captcha
+  // each need a different remedy and must be visible in the run log.
+  for (let i = 0; i < 18; i++) {
+    await page.waitForTimeout(5_000);
+    const href = page.url();
+    if (!/authkit\.app|workos/i.test(href)) break;
+    await dumpAuthState(page, `post-submit-${(i + 1) * 5}s`);
+  }
+  await shot(page, "03-post-submit");
+  await page.waitForURL((u) => !/authkit\.app|workos/i.test(u.href), { timeout: 15_000 });
   await expect(page.getByTestId("account-chip")).toBeVisible({ timeout: 60_000 });
-  await shot(page, "03-signed-in");
+  await shot(page, "04-signed-in");
   log("signed in as", EMAIL.replace(/(.).*(@.*)/, "$1***$2"));
 }
 
