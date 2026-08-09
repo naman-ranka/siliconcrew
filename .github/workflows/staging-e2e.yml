@@ -74,7 +74,7 @@ jobs:
           # repo has no STAGING_E2E_* secrets yet. Rotate the password and
           # move these to repo secrets when this branch merges.
           STAGING_EMAIL: ${{ secrets.STAGING_E2E_EMAIL || inputs.email || 'rockstarme.the5@gmail.com' }}
-          STAGING_PASSWORD: ${{ secrets.STAGING_E2E_PASSWORD || inputs.password || 'staging@claude' }}
+          STAGING_PASSWORD: ${{ secrets.STAGING_E2E_PASSWORD || inputs.password || 'claude@test' }}
         run: |
           echo "::add-mask::$STAGING_EMAIL"
           echo "::add-mask::$STAGING_PASSWORD"
