@@ -34,6 +34,10 @@ on:
         description: "Sign-in password (fallback when STAGING_E2E_PASSWORD secret is unset)"
         default: ""
         type: string
+      spec:
+        description: "Optional spec filter, matched against test file paths (e.g. postsynth). Empty = every spec."
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -73,10 +77,14 @@ jobs:
           # runs stay green pre-secrets instead of failing on empty creds.
           STAGING_EMAIL: ${{ secrets.STAGING_E2E_EMAIL || inputs.email }}
           STAGING_PASSWORD: ${{ secrets.STAGING_E2E_PASSWORD || inputs.password }}
+          # Optional spec selector. Playwright treats a positional argument as a
+          # filter on test-file paths, so "postsynth" runs only the post-synth
+          # spec; empty (the default, and every push-triggered run) runs all.
+          SPEC: ${{ inputs.spec }}
         run: |
           echo "::add-mask::$STAGING_EMAIL"
           echo "::add-mask::$STAGING_PASSWORD"
-          npx playwright test --config e2e-staging/playwright.staging.config.ts
+          npx playwright test --config e2e-staging/playwright.staging.config.ts ${SPEC:+"$SPEC"}
 
       - name: Upload artifacts (screenshots, traces)
         if: always()
