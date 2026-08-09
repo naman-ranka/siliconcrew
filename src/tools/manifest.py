@@ -231,38 +231,106 @@ def _instances_in(text: str) -> List[str]:
     return [m for m in _INSTANCE_RE.findall(text) if m not in _NOT_A_MODULE]
 
 
-_GUARD_OPEN_RE = re.compile(r"^\s*`(?:ifdef|ifndef)\b")
+_GUARD_OPEN_RE = re.compile(r"^\s*`(ifdef|ifndef)\s+(\w+)")
+_GUARD_ELSIF_RE = re.compile(r"^\s*`elsif\s+(\w+)")
+_GUARD_ELSE_RE = re.compile(r"^\s*`else\b")
 _GUARD_CLOSE_RE = re.compile(r"^\s*`endif\b")
 
 
-def _guarded_modules(text: str) -> frozenset:
-    """Modules whose declaration sits inside an `` `ifdef``/`` `ifndef`` region.
+def _guarded_modules(text: str) -> Dict[str, frozenset]:
+    """Map module -> the set of guard CONDITIONS its declarations sit under.
 
-    Guard-AWARE, not a preprocessor: no macro is ever evaluated, we only record
-    that a declaration is conditional. That is enough for the one decision it
-    feeds — two guarded alternates of the same module are a legal, common
-    pattern (SBY's `` `ifdef FORMAL ``, vendor/simulation model swaps), so a
-    duplicate involving one is not a collision worth shouting about.
+    Guard-AWARE, not a preprocessor: no macro is ever evaluated. A condition is
+    a frozenset of ("+" | "-", MACRO) terms — the `` `ifdef``/`` `ifndef``
+    (and `` `else``/`` `elsif``) stack in force at the declaration; an
+    unguarded declaration records the empty condition.
+
+    Recording WHICH macros guard a declaration (not merely that one does) is
+    what lets the collision detector distinguish alternates of one module —
+    `` `ifdef X`` vs `` `ifndef X``, or the same include guard in two copies —
+    from two copies that each carry their OWN unrelated guard, which the
+    preprocessor happily compiles both of (iverilog: "'gcn' has already been
+    declared"). Lines between directives are batched per condition, so a
+    declaration split across lines (``module\\n  name``) still matches.
     """
-    depth = 0
-    out: set = set()
+    stack: List[tuple] = []
+    segments: List[tuple] = []
+    current: List[str] = []
+
+    def _flush() -> None:
+        nonlocal current
+        if current:
+            segments.append((frozenset(stack), current))
+            current = []
+
     for line in text.splitlines():
+        mo = _GUARD_OPEN_RE.match(line)
+        if mo:
+            _flush()
+            stack.append(("+" if mo.group(1) == "ifdef" else "-", mo.group(2)))
+            continue
+        mo = _GUARD_ELSIF_RE.match(line)
+        if mo:
+            _flush()
+            if stack:
+                stack.pop()
+            stack.append(("+", mo.group(1)))
+            continue
+        if _GUARD_ELSE_RE.match(line):
+            _flush()
+            if stack:
+                sign, name = stack.pop()
+                stack.append(("-" if sign == "+" else "+", name))
+            continue
         if _GUARD_CLOSE_RE.match(line):
-            depth = max(0, depth - 1)
+            _flush()
+            if stack:
+                stack.pop()
             continue
-        if _GUARD_OPEN_RE.match(line):
-            depth += 1
-            continue
-        if depth > 0:
-            out.update(_find_modules(line))
-    return frozenset(out)
+        current.append(line)
+    _flush()
+
+    out: Dict[str, set] = {}
+    for cond, lines in segments:
+        for mod in _find_modules("\n".join(lines)):
+            out.setdefault(mod, set()).add(cond)
+    return {mod: frozenset(conds) for mod, conds in out.items()}
+
+
+def _mutually_exclusive(cond_a: frozenset, cond_b: frozenset) -> bool:
+    """Some macro appears with opposite signs — both can't survive one run."""
+    return any(
+        (("-" if sign == "+" else "+"), name) in cond_b for sign, name in cond_a
+    )
+
+
+def _guards_make_exclusive(cond_sets: List[frozenset]) -> bool:
+    """True when guard conditions guarantee at most one declaration survives.
+
+    Requires every declaration to be conditional at all, then pairwise across
+    files: identical conditions (the same include guard in both copies — the
+    preprocessor keeps one) or mutually exclusive ones (`` `ifdef X`` vs
+    `` `ifndef X`` / `` `else`` alternates). Two copies each wrapped in their
+    OWN distinct guard fail this — both compile, and they collide.
+    """
+    for cs in cond_sets:
+        if any(not cond for cond in cs):
+            return False
+    for i in range(len(cond_sets)):
+        for j in range(i + 1, len(cond_sets)):
+            for cond_a in cond_sets[i]:
+                for cond_b in cond_sets[j]:
+                    if cond_a == cond_b or _mutually_exclusive(cond_a, cond_b):
+                        continue
+                    return False
+    return True
 
 
 class _FileScan(NamedTuple):
     """What one design file declares — read once, used by every derived field."""
     modules: List[str]
     instances: List[str]
-    guarded_modules: frozenset
+    guarded_modules: Dict[str, frozenset]  # module -> guard conditions (see _guarded_modules)
 
 
 def _scan_text(text: str) -> _FileScan:
@@ -383,14 +451,19 @@ def _collision_warnings(
     for module, paths in sorted(declared.items()):
         if len(paths) < 2:
             continue
-        # Suppress only when EVERY declaration is conditional. All-guarded means
-        # the preprocessor picks at most one (`ifdef alternates, or the same
-        # include guard in two copies) — legal, verified with iverilog. If even
-        # one declaration is unconditional it is always compiled, so a guarded
-        # second copy still collides with it: the conventional
-        # `ifndef X_V/`define/`endif reference copy is exactly that case, and
-        # suppressing on "any guarded" silenced sc#66's own scenario.
-        if all(module in scans[p].guarded_modules for p in paths):
+        # Suppress only when the guard MACROS guarantee at most one declaration
+        # survives a preprocessor run: identical conditions (the same include
+        # guard in two copies) or mutually exclusive ones (`ifdef X vs
+        # `ifndef X / `else alternates) — legal, verified with iverilog. Merely
+        # "every declaration is guarded" is not enough: two copies each wrapped
+        # in their OWN `ifndef X_V-style guard both compile and still collide
+        # (that is the normal hygiene state of sc#66's handout-plus-solution
+        # scenario), and an unconditional declaration always compiles.
+        cond_sets = [
+            scans[p].guarded_modules.get(module, frozenset({frozenset()}))
+            for p in paths
+        ]
+        if _guards_make_exclusive(cond_sets):
             continue
         out.append(
             f"module '{module}' is declared by {_and_join(paths)} — they collide in "

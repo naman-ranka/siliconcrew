@@ -244,3 +244,70 @@ def test_synthesis_dispatch_reply_carries_the_collision(tmp_path, monkeypatch):
 
     clean = json.loads(wrappers.start_synthesis.func(verilog_files=["gcn.v"], top_module="gcn"))
     assert "manifestWarnings" not in clean
+
+
+DISTINCT_GUARD_A = """
+`ifndef GCN_V
+`define GCN_V
+module gcn (input clk, input [7:0] din, output reg [7:0] dout);
+    always @(posedge clk) dout <= din;
+endmodule
+`endif
+"""
+
+DISTINCT_GUARD_B = """
+`ifndef GIVEN_GCN_V
+`define GIVEN_GCN_V
+module gcn (input clk, input [7:0] din, output reg [7:0] dout);
+    always @(posedge clk) dout <= din + 1;
+endmodule
+`endif
+"""
+
+
+def test_two_copies_with_distinct_include_guards_still_warn(tmp_path):
+    """Each copy carries its OWN guard macro — both always compile, iverilog
+    errors. 'Every declaration is guarded' alone must not suppress: the guard
+    MACROS have to make the declarations mutually exclusive."""
+    ws = str(tmp_path)
+    _write(ws, "gcn.v", DISTINCT_GUARD_A)
+    _write(ws, "given/gcn_reference.v", DISTINCT_GUARD_B)
+
+    warnings = m.read_manifest(ws, session_id="s1").warnings
+    assert len(warnings) == 1
+    assert "gcn.v" in warnings[0] and "given/gcn_reference.v" in warnings[0]
+
+
+def test_ifdef_else_alternates_do_not_warn(tmp_path):
+    """`ifdef X / `else in ONE file plus `ifdef X in another: the else-branch
+    condition is the complement of the macro, so at most one survives."""
+    ws = str(tmp_path)
+    _write(ws, "sram_sel.v", """
+`ifdef SRAM_MACRO
+module sram_stub (input clk); endmodule
+`else
+module sram (input clk, output reg [7:0] dout);
+    always @(posedge clk) dout <= 8'h01;
+endmodule
+`endif
+""")
+    _write(ws, "sram_macro.v", """
+`ifdef SRAM_MACRO
+module sram (input clk, output reg [7:0] dout);
+    always @(posedge clk) dout <= 8'h00;
+endmodule
+`endif
+""")
+
+    assert m.read_manifest(ws, session_id="s1").warnings == []
+
+
+def test_multiline_module_declaration_inside_guard_is_seen(tmp_path):
+    """`module` and its name split across lines inside a guard: the line-based
+    scan missed the declaration and produced a false collision warning."""
+    ws = str(tmp_path)
+    guarded = "`ifndef SHARED_V\n`define SHARED_V\nmodule\n  sram (input clk, output q);\n  assign q = clk;\nendmodule\n`endif\n"
+    _write(ws, "a/sram.v", guarded)
+    _write(ws, "b/sram.v", guarded)
+
+    assert m.read_manifest(ws, session_id="s1").warnings == []
