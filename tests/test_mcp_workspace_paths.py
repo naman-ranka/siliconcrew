@@ -313,3 +313,34 @@ def test_tool_error_inside_scope_logs_exactly_one_error_event(server, tmp_path, 
         rows = [json.loads(line) for line in f if line.strip()]
     results = [r for r in rows if r["event_type"] == "tool_result" and r.get("tool") == "read_file"]
     assert len(results) == 1, f"expected exactly one result event, got {len(results)}"
+
+
+class SyncFailsProvider(ScratchProvider):
+    """Hydration works; the scope-exit sync raises (a GCS 503)."""
+
+    def sync(self, session_id):
+        raise RuntimeError("GCS upload failed: 503")
+
+
+def test_sync_failure_after_success_logs_both_facts(server, tmp_path, provider_reset):
+    """The tool succeeded, the persist failed, and the client is told 'Error':
+    the log must carry BOTH facts or the activity trail and the reply
+    disagree about the same call."""
+    provider = SyncFailsProvider(tmp_path / "scratch")
+    provider_reset.set_workspace_provider(provider)
+
+    asyncio.run(server.call_tool("create_session_tool", {"session_name": "d1"}))
+    sid = server.current_session
+    out = _text(asyncio.run(server.call_tool("write_file", {"filename": "d.v", "content": "module d; endmodule\n"})))
+    assert "Error" in out  # the client is told the call failed
+
+    events = os.path.join(provider.workspace_path_for(sid), "attempt_events.jsonl")
+    with open(events, encoding="utf-8") as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+    results = [r for r in rows if r["event_type"] == "tool_result" and r.get("tool") == "write_file"]
+    statuses = sorted(r.get("status") for r in results)
+    assert statuses == ["error", "success"], (
+        f"expected the success event AND the sync-failure error event, got {statuses}"
+    )
+    err = next(r for r in results if r["status"] == "error")
+    assert "sync failed" in (err.get("error") or "")

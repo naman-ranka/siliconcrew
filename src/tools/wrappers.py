@@ -105,9 +105,18 @@ def write_file(filename: str, content: str | None = None) -> str:
 # Honest large-file window for read_file: unbounded reads of run artifacts
 # (sim.log can be multi-MB of per-cycle $display) went whole into the tool
 # result. Head + tail with an explicit omission marker — never a silent cut.
+#
+# DESIGN SOURCES get a far higher threshold: read_file pairs with write_file
+# in the agent loop, and a windowed read of a 70 KB generated sbox/LUT that
+# is then edited and written back DESTROYS the omitted bytes. Real RTL stays
+# well under 1 MiB (this repo's largest example is ~46 KB); anything over it
+# is windowed with the marker, at which point editing-by-rewrite was never
+# going to be sane anyway.
 _READ_FILE_MAX_BYTES = 64 * 1024
 _READ_FILE_HEAD_BYTES = 32 * 1024
 _READ_FILE_TAIL_BYTES = 16 * 1024
+_READ_FILE_SOURCE_EXTS = {".v", ".sv", ".vh", ".svh", ".sdc", ".yaml", ".yml", ".json", ".md", ".tcl", ".py"}
+_READ_FILE_SOURCE_MAX_BYTES = 1024 * 1024
 
 
 @tool
@@ -130,7 +139,11 @@ def read_file(filename: str) -> str:
         return f"Error: File {filename} does not exist."
 
     size = os.path.getsize(filepath)
-    if size <= _READ_FILE_MAX_BYTES:
+    ext = os.path.splitext(filepath)[1].lower()
+    threshold = (
+        _READ_FILE_SOURCE_MAX_BYTES if ext in _READ_FILE_SOURCE_EXTS else _READ_FILE_MAX_BYTES
+    )
+    if size <= threshold:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             return f.read()
     # Binary reads: a byte seek in text mode is undefined for arbitrary offsets.

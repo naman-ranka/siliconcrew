@@ -1050,6 +1050,22 @@ Ready to design! What would you like to create?"""
                     error=str(e),
                     arguments=arguments,
                 )
+            else:
+                # The tool succeeded (its success event is logged in-scope)
+                # but the scope-EXIT sync raised afterwards. Two different
+                # facts — the tool ran, the persist failed — and the client
+                # is being told "Error", so the log must say why or the
+                # activity trail and the reply disagree about the same call.
+                log_tool_result(
+                    workspace=active_workspace,
+                    session_id=active_session,
+                    source="mcp",
+                    tool=name,
+                    result=None,
+                    status="error",
+                    error=f"workspace sync failed after the call succeeded: {e}",
+                    arguments=arguments,
+                )
             get_workspace_flusher().mark_dirty(active_session)
             return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
 

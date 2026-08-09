@@ -158,3 +158,22 @@ def test_read_file_windows_large_files_with_an_explicit_marker(tmp_path):
     assert "LAST-LINE-SENTINEL" in content
     assert "bytes omitted" in content
     assert len(content) < 200000, "the window must actually bound the read"
+
+
+def test_read_file_does_not_window_design_sources(tmp_path):
+    """read_file pairs with write_file: a windowed 70 KB .v that is edited
+    and written back destroys the omitted bytes. Sources get a 1 MiB
+    threshold; only run artifacts window at 64 KiB."""
+    from src.utils.session_context import SessionContext, session_scope
+    from src.tools.wrappers import read_file
+
+    ws = str(tmp_path)
+    body = "// filler line for a generated sbox\n" * 2500  # ~90 KB
+    src = "module sbox(input [7:0] a, output [7:0] q);\n" + body + "endmodule\n"
+    with open(os.path.join(ws, "sbox.v"), "w", encoding="utf-8") as f:
+        f.write(src)
+    assert len(src) > 64 * 1024
+
+    with session_scope(SessionContext(session_id="s1", workspace=ws)):
+        content = read_file.invoke({"filename": "sbox.v"})
+    assert content == src, "a design source must round-trip byte-identical"
