@@ -165,3 +165,49 @@ def test_update_manifest_tool_reports_the_bad_role(tmp_path, monkeypatch):
     assert "RTL" in out
     roles = {f.path: f.role for f in m.read_manifest(ws, session_id="s1").files}
     assert roles["counter.v"] == "rtl"
+
+
+def test_unrelated_write_does_not_persist_a_coerced_role(tmp_path):
+    """An edit to an unrelated field must not downgrade a newer writer's role.
+
+    read_manifest correctly refuses to persist the coercion; write_manifest
+    used to read (coercing), then persist unconditionally — so a clock-period
+    edit from an old client permanently rewrote 'formal_v2' to 'rtl', putting
+    (say) a formal harness back into the synthesis compile set.
+    """
+    ws = _seed(tmp_path)
+    m.read_manifest(ws, session_id="s1")
+    mpath = os.path.join(ws, m.MANIFEST_FILENAME)
+    with open(mpath, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    target = next(e for e in raw["files"] if e["path"] == "vendor/ip.v")
+    target["role"] = "formal_v2"  # a role only a newer version knows
+    with open(mpath, "w", encoding="utf-8") as f:
+        json.dump(raw, f)
+
+    result = m.write_manifest(ws, {"clockPeriodNs": 4.0}, session_id="s1")
+    assert result.clockPeriodNs == 4.0
+
+    with open(mpath, "r", encoding="utf-8") as f:
+        after = json.load(f)
+    stored = next(e for e in after["files"] if e["path"] == "vendor/ip.v")
+    assert stored["role"] == "formal_v2"
+    assert after["clockPeriodNs"] == 4.0
+
+
+def test_explicit_role_update_replaces_an_unknown_role(tmp_path):
+    """A user editing THE FILE'S role through an old client is an explicit
+    decision — that one write may replace the unknown value."""
+    ws = _seed(tmp_path)
+    m.read_manifest(ws, session_id="s1")
+    mpath = os.path.join(ws, m.MANIFEST_FILENAME)
+    with open(mpath, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    next(e for e in raw["files"] if e["path"] == "vendor/ip.v")["role"] = "formal_v2"
+    with open(mpath, "w", encoding="utf-8") as f:
+        json.dump(raw, f)
+
+    m.write_manifest(ws, {"files": [{"path": "vendor/ip.v", "role": "other"}]}, session_id="s1")
+    with open(mpath, "r", encoding="utf-8") as f:
+        after = json.load(f)
+    assert next(e for e in after["files"] if e["path"] == "vendor/ip.v")["role"] == "other"

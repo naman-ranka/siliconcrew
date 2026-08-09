@@ -875,7 +875,25 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
     decide what to do with a document it can't parse.
     """
     _validate_role_updates(updates)
+
+    # Roles this reader doesn't know (a NEWER writer during a rolling deploy)
+    # are coerced to rtl for THIS read — but this function persists, and an
+    # unrelated edit (clock period from the IDE) must not make the coercion
+    # permanent. Capture the stored originals so they round-trip verbatim;
+    # only an EXPLICIT role update for that same path may replace one.
+    raw_before = _load_raw(workspace)
+    unknown_roles: Dict[str, str] = {}
+    if isinstance(raw_before, dict) and isinstance(raw_before.get("files"), list):
+        for entry in raw_before["files"]:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path") or entry.get("name")
+            role = entry.get("role")
+            if isinstance(path, str) and path and isinstance(role, str) and role not in ROLES:
+                unknown_roles[path] = role
+
     current = read_manifest(workspace, session_id=session_id)
+    explicitly_set: set = set()
 
     if "files" in updates and isinstance(updates["files"], list):
         by_path = {f.path: f for f in current.files}
@@ -900,6 +918,7 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
                     )
             if target is not None:
                 target.role = entry["role"]  # type: ignore[assignment]
+                explicitly_set.add(target.path)
 
     for key in ("synthTop", "simTop", "platform", "sessionId"):
         if key in updates and isinstance(updates[key], str) and updates[key]:
@@ -919,6 +938,15 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
     scans = _scan_design_files(workspace, current.files)
     current.testbenches = _derive_testbenches(current.files, scans)
     current.warnings = _collision_warnings(scans, _roles_by_path(current.files))
+
+    # Round-trip a newer writer's roles: the coerced 'rtl' was a READ decision,
+    # and persisting it here would be silent, permanent data loss (a formal
+    # harness re-entering the synthesis compile set). pydantic v2 does not
+    # validate on assignment, so the stored string passes through untouched.
+    for f in current.files:
+        stored_role = unknown_roles.get(f.path)
+        if stored_role is not None and f.path not in explicitly_set:
+            f.role = stored_role  # type: ignore[assignment]
 
     _persist(workspace, current)
     return current
