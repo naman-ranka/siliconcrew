@@ -234,8 +234,10 @@ def test_unconstrained_design_is_distinct_from_unknown():
         assert m["fmax_mhz"] is None
         assert m["timing_met"] is None
         assert any("no constrained timing paths" in n for n in result["parse_notes"])
-        # period_min = 0.00 must never reach a division.
-        assert m["clock_period_min_ns"] == pytest.approx(0.0)
+        # ``period_min = 0.00 fmax = INF`` is OpenSTA's sentinel PAIR, not a
+        # measurement: 0.0 published as a real metric reads as "this design
+        # achieves an infinite frequency". The absence is the fact.
+        assert m["clock_period_min_ns"] is None
 
 
 def test_missing_slack_lines_yield_no_fmax_not_the_target_echo():

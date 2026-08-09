@@ -3280,9 +3280,13 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
                 "platform": meta.get("platform"),
                 "elapsed_sec": meta.get("elapsed_sec"),
                 "summary_metrics": meta.get("summary_metrics"),
-                # Same read-side fill as the status payload: the card and the
-                # poll response must not differ on whether timing was judged.
-                "auto_checks": _auto_checks_for_read(run_dir, meta) if meta.get("auto_checks") else None,
+                # Same read-side fill as the status payload (_build_status_response
+                # calls this unconditionally), so the card and the poll response
+                # cannot differ on whether timing was judged. The old ``if
+                # meta.get("auto_checks")`` guard was exactly that difference: a
+                # terminal run finalized before auto_checks existed showed null on
+                # the run card and a full verdict in the poll payload.
+                "auto_checks": _auto_checks_for_read(run_dir, meta),
                 # Failing stage + reason so a failed run is legible in the list
                 # without opening logs (F12). Absent in run_meta → null.
                 "current_stage": meta.get("current_stage"),
@@ -4106,28 +4110,71 @@ METRICS_SCHEMA_VERSION = 2
 # An unlabelled 8-GHz figure from a best-case corner is its own kind of lie, so
 # the label travels with the number. Platforms whose default corner we have not
 # confirmed from ORFS's own config stay unlabelled rather than guessed.
-# Keyed platform -> (ORFS corner code, human label).
+#
+# ``honors_corner`` is the SECOND fact this table has to carry: CORNER is not a
+# generic ORFS knob. asap7's platform config selects its liberty/lef set FROM
+# ``$(CORNER)``; sky130hd's config.mk hard-wires the TT libraries and ORFS's
+# variables.mk declares no CORNER at all. _write_orfs_config exports every
+# override it is given, so ``orfs_overrides={"CORNER": "WC"}`` on sky130hd lands
+# in config.mk and is then ignored by ORFS — labelling that run "overridden: WC"
+# invents a corner the run was never measured at.
+# Keyed platform -> (ORFS corner code, human label, honors CORNER).
 _PLATFORM_TIMING_CORNER = {
-    "asap7": ("BC", "BC/FF (best-case)"),
-    "sky130hd": ("TT", "TT (typical)"),
+    "asap7": ("BC", "BC/FF (best-case)", True),
+    "sky130hd": ("TT", "TT (typical)", False),
 }
 
 
-def _timing_corner_label(platform: Optional[str], run_meta: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """The corner this run's timing was measured at, or None if unknown.
+def _timing_corner_fields(
+    platform: Optional[str], run_meta: Optional[Dict[str, Any]] = None
+) -> Dict[str, Optional[str]]:
+    """The corner this run's timing was measured at, plus any disclosure.
 
-    A retry can pass ``orfs_overrides={"CORNER": "WC"}``, which _write_config_mk
-    genuinely exports — so the platform DEFAULT would be a wrong label, which is
-    worse than no label. An override that disagrees with the default is reported
-    as the override; one that matches keeps the readable label.
+    Returns ``{"label": ..., "note": ...}``; either may be None.
+
+    A retry can pass ``orfs_overrides={"CORNER": "WC"}``, which _write_orfs_config
+    genuinely exports. On a platform whose ORFS config is CORNER-driven (asap7)
+    that override is real, so the platform DEFAULT would be a wrong label —
+    worse than no label — and the override is reported. On a platform that
+    ignores CORNER the opposite is true: the run really did execute at the
+    platform default, and the honest answer is that label plus a note that the
+    override did nothing. On a platform we have no entry for we can verify
+    NEITHER claim, so there is no label at all — only the note.
     """
     entry = _PLATFORM_TIMING_CORNER.get((platform or "").strip().lower())
+    default_label = entry[1] if entry else None
     override = ((run_meta or {}).get("orfs_overrides") or {}).get("CORNER")
-    if override is not None:
-        override = str(override).strip()
-        if override and (entry is None or override.upper() != entry[0]):
-            return f"overridden: {override}"
-    return entry[1] if entry else None
+    override = str(override).strip() if override is not None else ""
+    if not override:
+        return {"label": default_label, "note": None}
+
+    if entry is None:
+        return {
+            "label": None,
+            "note": (
+                f"CORNER override '{override}' cannot be verified on this platform: "
+                "SiliconCrew only knows asap7's ORFS config to be CORNER-driven, so "
+                "whether this run honored the override is unknown and the timing "
+                "corner is left unlabelled"
+            ),
+        }
+    if not entry[2]:
+        return {
+            "label": default_label,
+            "note": (
+                f"CORNER override '{override}' has no effect on this platform (only "
+                "asap7's ORFS config is CORNER-driven); timing is at the platform "
+                "default corner"
+            ),
+        }
+    if override.upper() != entry[0]:
+        return {"label": f"overridden: {override}", "note": None}
+    return {"label": default_label, "note": None}
+
+
+def _timing_corner_label(platform: Optional[str], run_meta: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Just the corner label — see _timing_corner_fields for the whole answer."""
+    return _timing_corner_fields(platform, run_meta)["label"]
 
 
 def _timing_metric_fields(
@@ -4165,6 +4212,11 @@ def _timing_metric_fields(
     if unconstrained:
         effective_slack = None
         fmax_mhz = None
+        # OpenSTA prints the sentinel PAIR ``period_min = 0.00 fmax = inf``. 0.0
+        # published as a real metric reads as "infinite frequency achievable" —
+        # the same laundering of an absent fact that the fmax handling below
+        # exists to prevent.
+        clock_period_min_ns = None
         notes.append(
             "no constrained timing paths (the report reads INF): slack and Fmax are "
             "undefined for this design, not merely unknown"
@@ -4175,6 +4227,9 @@ def _timing_metric_fields(
         # would invent a number ORFS explicitly declined to give. The slack
         # itself is still real and still governs timing_met below.
         fmax_mhz = None
+        # Same sentinel pair as above: no reg-to-reg path means there is no
+        # minimum period either, and 0.00 is how OpenSTA says so.
+        clock_period_min_ns = None
         notes.append(
             "no maximum frequency: ORFS reports fmax = INF (no register-to-register "
             "paths); any timing here comes from IO-constrained paths"
@@ -4201,12 +4256,16 @@ def _timing_metric_fields(
             "fmax_mhz are the FIRST clock's, not the design's worst"
         )
 
+    corner = _timing_corner_fields(run_meta.get("platform"), run_meta)
+    if corner["note"]:
+        notes.append(corner["note"])
+
     return {
         "worst_slack_ns": worst_slack_ns,
         "clock_period_min_ns": clock_period_min_ns,
         "fmax_mhz": fmax_mhz,
         "timing_met": None if effective_slack is None else effective_slack >= 0,
-        "timing_corner": _timing_corner_label(run_meta.get("platform"), run_meta),
+        "timing_corner": corner["label"],
         "notes": notes,
     }
 

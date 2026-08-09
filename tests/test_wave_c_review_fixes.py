@@ -53,9 +53,13 @@ def _write_file(path: str, content: str) -> None:
         f.write(content)
 
 
+def _base_rel(platform: str = PLATFORM) -> str:
+    return os.path.join(platform, TOP, "base")
+
+
 def _seed_parent(workspace: str, **meta_overrides) -> None:
     parent_dir = os.path.join(workspace, "synth_runs", "synth_0001")
-    ckpt = os.path.join(parent_dir, "orfs_results", BASE_REL)
+    ckpt = os.path.join(parent_dir, "orfs_results", _base_rel(meta_overrides.get("platform", PLATFORM)))
     _write_file(os.path.join(ckpt, "3_place.odb"), "ODB")
     _write_file(os.path.join(ckpt, "3_place.sdc"), "# sdc")
     _write_file(os.path.join(parent_dir, "inputs", f"{TOP}.v"), f"module {TOP}; endmodule\n")
@@ -63,7 +67,7 @@ def _seed_parent(workspace: str, **meta_overrides) -> None:
     meta = {
         "run_id": "synth_0001",
         "status": "completed",
-        "platform": PLATFORM,
+        "platform": meta_overrides.get("platform", PLATFORM),
         "top_module": TOP,
         "clock_period_ns": 10.0,
         "effective_clock_period_ns": 10.0,
@@ -74,12 +78,13 @@ def _seed_parent(workspace: str, **meta_overrides) -> None:
     _write_file(os.path.join(parent_dir, "run_meta.json"), json.dumps(meta))
 
 
-def _fake_targets(finish_rpt: str):
+def _fake_targets(finish_rpt: str, platform: str = PLATFORM):
     def fake(**kwargs):
         run_dir = kwargs["run_dir"]
-        _write_file(os.path.join(run_dir, "orfs_reports", BASE_REL, "6_finish.rpt"), finish_rpt)
+        base_rel = _base_rel(platform)
+        _write_file(os.path.join(run_dir, "orfs_reports", base_rel, "6_finish.rpt"), finish_rpt)
         _write_file(
-            os.path.join(run_dir, "orfs_results", BASE_REL, "6_final.v"),
+            os.path.join(run_dir, "orfs_results", base_rel, "6_final.v"),
             f"module {TOP}(input clk); endmodule\n",
         )
         return {"success": True, "stdout": "", "stderr": "", "command": "fake"}
@@ -87,10 +92,10 @@ def _fake_targets(finish_rpt: str):
     return fake
 
 
-def _run_retry(workspace: str, monkeypatch, finish_rpt: str, overrides=None) -> dict:
+def _run_retry(workspace: str, monkeypatch, finish_rpt: str, overrides=None, platform: str = PLATFORM) -> dict:
     child_dir = os.path.join(workspace, "synth_runs", "synth_0002")
     os.makedirs(child_dir, exist_ok=True)
-    monkeypatch.setattr(sm, "_run_orfs_targets", _fake_targets(finish_rpt))
+    monkeypatch.setattr(sm, "_run_orfs_targets", _fake_targets(finish_rpt, platform))
     return sm._retry_pd_worker(
         workspace,
         child_dir,
@@ -100,7 +105,7 @@ def _run_retry(workspace: str, monkeypatch, finish_rpt: str, overrides=None) -> 
             "start_stage": "cts",
             "max_stage": "finish",
             "orfs_overrides": overrides or {},
-            "platform": PLATFORM,
+            "platform": platform,
             "top_module": TOP,
             "utilization": 5,
             "aspect_ratio": 1.0,
@@ -138,14 +143,45 @@ def test_retry_of_a_constraints_failed_parent_still_fails(monkeypatch):
 
 # --- S-2: a CORNER override makes the platform-default label WRONG -----------
 
-def test_corner_override_is_not_labelled_with_the_platform_default(monkeypatch):
-    """retry_pd(orfs_overrides={"CORNER": "WC"}) genuinely writes CORNER into
-    config.mk, so reporting sky130hd's default "TT (typical)" mislabels a
-    worst-case run — worse than no label at all."""
+def test_corner_override_is_reported_on_the_platform_that_honors_it(monkeypatch):
+    """asap7's ORFS config selects its liberty set FROM $(CORNER), so
+    retry_pd(orfs_overrides={"CORNER": "WC"}) really does move the corner:
+    reporting asap7's default "BC/FF (best-case)" would mislabel a worst-case
+    run — worse than no label at all."""
+    with tempfile.TemporaryDirectory() as workspace:
+        _seed_parent(workspace, platform="asap7", sdc_time_unit="ps")
+        run_meta = _run_retry(
+            workspace, monkeypatch, MET_FINISH, overrides={"CORNER": "WC"}, platform="asap7"
+        )
+        assert run_meta["summary_metrics"]["timing_corner"] == "overridden: WC"
+        assert not (run_meta["summary_metrics"]["timing_note"] or "").count("no effect")
+
+
+def test_corner_override_on_a_platform_that_ignores_it_is_not_a_corner(monkeypatch):
+    """The mirror image, and the fabrication this test used to lock in:
+    sky130hd's config.mk hard-wires the TT libraries and ORFS's variables.mk
+    declares no CORNER at all. _write_orfs_config still exports the override —
+    ORFS then ignores it — so "overridden: WC" named a corner this run was
+    never measured at. The honest answer is the platform default, plus a note
+    that the override did nothing."""
     with tempfile.TemporaryDirectory() as workspace:
         _seed_parent(workspace)
         run_meta = _run_retry(workspace, monkeypatch, MET_FINISH, overrides={"CORNER": "WC"})
-        assert run_meta["summary_metrics"]["timing_corner"] == "overridden: WC"
+        summary = run_meta["summary_metrics"]
+        assert summary["timing_corner"] == "TT (typical)"
+        assert "CORNER override 'WC' has no effect on this platform" in summary["timing_note"]
+        # ...and the read path says exactly the same thing.
+        result = sm.get_synthesis_metrics(workspace=workspace, run_id="synth_0002")
+        assert result["metrics"]["timing_corner"] == "TT (typical)"
+        assert any("no effect on this platform" in n for n in result["parse_notes"])
+
+
+def test_corner_override_on_an_unknown_platform_claims_nothing():
+    """Neither claim is verifiable there: not the default (we have no entry) and
+    not the override (we do not know the platform reads CORNER). No label."""
+    fields = sm._timing_corner_fields("nangate45", {"orfs_overrides": {"CORNER": "WC"}})
+    assert fields["label"] is None
+    assert "cannot be verified" in fields["note"]
 
 
 def test_corner_override_matching_the_default_keeps_the_normal_label(monkeypatch):
@@ -225,8 +261,10 @@ def test_unbounded_fmax_does_not_suppress_a_real_violation():
         assert m["worst_slack_ns"] == pytest.approx(-1.20)
         assert m["timing_met"] is False
         # No maximum frequency exists for a design with no reg-to-reg path: say
-        # so, never invent one by dividing.
+        # so, never invent one by dividing. The report's ``period_min = 0.00``
+        # is the other half of that same sentinel and is equally not a number.
         assert m["fmax_mhz"] is None
+        assert m["clock_period_min_ns"] is None
 
 
 def test_truly_unconstrained_report_still_skips_but_counts_violations():
@@ -275,6 +313,34 @@ def test_sources_does_not_claim_a_corner_it_never_derived():
         result = sm.get_synthesis_metrics(workspace=workspace, run_id="synth_0001")
         assert result["metrics"]["timing_corner"] is None
         assert result["sources"]["timing_corner"] is None
+
+
+def test_run_card_and_poll_payload_agree_on_auto_checks():
+    """list_synthesis_runs guarded _auto_checks_for_read behind ``if
+    meta.get("auto_checks")``; _build_status_response calls it unconditionally.
+    A terminal run finalized before auto_checks existed therefore rendered as
+    null on the run card and as a full verdict in the poll payload — the same
+    run, two answers (invariant #4)."""
+    with tempfile.TemporaryDirectory() as workspace:
+        run_dir = os.path.join(workspace, "synth_runs", "synth_0001")
+        _write_file(os.path.join(run_dir, "orfs_reports", BASE_REL, "6_finish.rpt"), MET_FINISH)
+        # No auto_checks key at all: the pre-Wave-C shape.
+        _write_file(
+            os.path.join(run_dir, "run_meta.json"),
+            json.dumps({"run_id": "synth_0001", "status": "completed", "platform": PLATFORM,
+                        "top_module": TOP, "sdc_time_unit": "ns", "clock_period_ns": 10.0}),
+        )
+        _write_file(
+            os.path.join(workspace, "synth_runs", "index.json"),
+            json.dumps({"runs": [{"run_id": "synth_0001", "status": "completed",
+                                  "updated_at": "2026-07-30T00:00:00+00:00"}], "jobs": []}),
+        )
+
+        card = sm.list_synthesis_runs(workspace)[0]["auto_checks"]
+        poll = sm.get_synthesis_status("synth_0001", workspace=workspace)["auto_checks"]
+        assert card is not None
+        assert card == poll
+        assert card["timing"] == "pass"
 
 
 def test_compare_pd_runs_ranks_real_slack():
