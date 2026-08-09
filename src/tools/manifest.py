@@ -318,26 +318,48 @@ def _mutually_exclusive(cond_a: frozenset, cond_b: frozenset) -> bool:
     )
 
 
-def _guards_make_exclusive(cond_sets: List[frozenset]) -> bool:
+def _self_defining(cond: frozenset, defines: frozenset) -> bool:
+    """An `` `ifndef X`` term whose file also `` `defines X`` — an include
+    guard: whichever copy the preprocessor reads first defines the macro, so
+    the other copy's region is skipped."""
+    return any(sign == "-" and name in defines for sign, name in cond)
+
+
+def _guards_make_exclusive(entries: List[tuple]) -> bool:
     """True when guard conditions guarantee at most one declaration survives.
 
-    Requires every declaration to be conditional at all, then pairwise across
-    files: identical conditions (the same include guard in both copies — the
-    preprocessor keeps one) or mutually exclusive ones (`` `ifdef X`` vs
-    `` `ifndef X`` / `` `else`` alternates). Two copies each wrapped in their
-    OWN distinct guard fail this — both compile, and they collide.
+    ``entries`` is one ``(condition_set, file_defines)`` pair per declaring
+    file. Requires every declaration to be conditional at all, then pairwise
+    across files: mutually exclusive conditions (`` `ifdef X`` vs
+    `` `ifndef X`` / `` `else`` alternates), or identical SELF-DEFINING
+    include guards (`` `ifndef X`` + `` `define X`` in both copies — the
+    preprocessor keeps one; verified with iverilog). Identical conditions
+    alone are NOT enough: two copies both wrapped in a plain `` `ifdef DEBUG``
+    each compile under ``+define+DEBUG`` and still collide. And two copies
+    each wrapped in their OWN distinct guard fail outright — both compile.
     """
-    for cs in cond_sets:
+    for cs, _ in entries:
         if any(not cond for cond in cs):
             return False
-    for i in range(len(cond_sets)):
-        for j in range(i + 1, len(cond_sets)):
-            for cond_a in cond_sets[i]:
-                for cond_b in cond_sets[j]:
-                    if cond_a == cond_b or _mutually_exclusive(cond_a, cond_b):
+    for i in range(len(entries)):
+        for j in range(i + 1, len(entries)):
+            cs_a, defs_a = entries[i]
+            cs_b, defs_b = entries[j]
+            for cond_a in cs_a:
+                for cond_b in cs_b:
+                    if _mutually_exclusive(cond_a, cond_b):
+                        continue
+                    if (
+                        cond_a == cond_b
+                        and _self_defining(cond_a, defs_a)
+                        and _self_defining(cond_b, defs_b)
+                    ):
                         continue
                     return False
     return True
+
+
+_DEFINE_RE = re.compile(r"^\s*`define\s+(\w+)", re.MULTILINE)
 
 
 class _FileScan(NamedTuple):
@@ -345,6 +367,7 @@ class _FileScan(NamedTuple):
     modules: List[str]
     instances: List[str]
     guarded_modules: Dict[str, frozenset]  # module -> guard conditions (see _guarded_modules)
+    defines: frozenset  # macros the file `defines — distinguishes include guards
 
 
 def _scan_text(text: str) -> _FileScan:
@@ -352,6 +375,7 @@ def _scan_text(text: str) -> _FileScan:
         modules=_modules_in(text),
         instances=_instances_in(text),
         guarded_modules=_guarded_modules(text),
+        defines=frozenset(_DEFINE_RE.findall(text)),
     )
 
 
@@ -472,18 +496,22 @@ def _collision_warnings(
         if len(paths) < 2:
             continue
         # Suppress only when the guard MACROS guarantee at most one declaration
-        # survives a preprocessor run: identical conditions (the same include
-        # guard in two copies) or mutually exclusive ones (`ifdef X vs
-        # `ifndef X / `else alternates) — legal, verified with iverilog. Merely
-        # "every declaration is guarded" is not enough: two copies each wrapped
-        # in their OWN `ifndef X_V-style guard both compile and still collide
-        # (that is the normal hygiene state of sc#66's handout-plus-solution
-        # scenario), and an unconditional declaration always compiles.
-        cond_sets = [
-            scans[p].guarded_modules.get(module, frozenset({frozenset()}))
+        # survives a preprocessor run: mutually exclusive conditions (`ifdef X
+        # vs `ifndef X / `else alternates) or the same SELF-DEFINING include
+        # guard in both copies — legal, verified with iverilog. Merely "every
+        # declaration is guarded" is not enough: two copies each wrapped in
+        # their OWN `ifndef X_V-style guard both compile and still collide
+        # (sc#66's handout-plus-solution scenario), a plain identical `ifdef
+        # DEBUG in both copies collides under +define+DEBUG, and an
+        # unconditional declaration always compiles.
+        entries = [
+            (
+                scans[p].guarded_modules.get(module, frozenset({frozenset()})),
+                scans[p].defines,
+            )
             for p in paths
         ]
-        if _guards_make_exclusive(cond_sets):
+        if _guards_make_exclusive(entries):
             continue
         out.append(
             f"module '{module}' is declared by {_and_join(paths)} — they collide in "
@@ -712,7 +740,7 @@ def _load_raw(workspace: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _coerce_files(raw_files: Any) -> List[DesignFile]:
+def _coerce_files(raw_files: Any) -> tuple[List[DesignFile], bool]:
     """Stored file entries → DesignFile, one bad field at a time.
 
     An unrecognized role reads as ``rtl`` with a log line instead of failing the

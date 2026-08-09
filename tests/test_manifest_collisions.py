@@ -337,3 +337,23 @@ endmodule
 """)
 
     assert m.read_manifest(ws, session_id="s1").warnings == []
+
+
+def test_identical_plain_ifdef_guards_still_warn(tmp_path):
+    """A plain `ifdef DEBUG (no `define inside) in BOTH copies is not an
+    include guard: under +define+DEBUG both compile and collide. Identical
+    conditions suppress only when each copy SELF-DEFINES the guard macro
+    (`ifndef X + `define X — the preprocessor keeps one)."""
+    ws = str(tmp_path)
+    plain = """
+`ifdef DEBUG
+module foo (input a);
+endmodule
+`endif
+"""
+    _write(ws, "a/foo.v", plain)
+    _write(ws, "b/foo.v", plain)
+
+    warnings = m.read_manifest(ws, session_id="s1").warnings
+    assert len(warnings) == 1
+    assert "a/foo.v" in warnings[0] and "b/foo.v" in warnings[0]
