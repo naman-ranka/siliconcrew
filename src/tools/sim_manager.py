@@ -422,9 +422,12 @@ def run_sim_isolated(
     }
     # Advertise the full log only when it is really there: run_simulation has
     # early returns (bad mode/profile, post-synth resolution errors) that never
-    # reach the toolchain and so produce no streams to write.
+    # reach the toolchain and so produce no streams to write. WORKSPACE-relative
+    # like every sibling path on this record (vcdPath, resolvedNetlist): a bare
+    # basename was unreadable through read_file, which resolves against the
+    # workspace root — the durable evidence existed and no tool could open it.
     if os.path.exists(log_abs):
-        sim_run["logFile"] = SIM_LOG_FILENAME
+        sim_run["logFile"] = os.path.relpath(log_abs, workspace).replace(os.sep, "/")
 
     _persist_run_meta(run_dir, sim_run)
     _append_to_index(workspace, sim_run)

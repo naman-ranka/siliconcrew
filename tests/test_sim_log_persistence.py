@@ -46,7 +46,10 @@ def test_isolated_run_writes_full_log_and_records_it(tmp_path, monkeypatch):
 
     r = sm.run_sim_isolated(ws, ["tb.v"], "tb")
 
-    assert r["logFile"] == "sim.log"
+    # Workspace-relative like every sibling path on the record: a bare
+    # basename was unreadable through read_file (it resolves against the
+    # workspace root), leaving the durable evidence unaddressable.
+    assert r["logFile"] == f"sim_runs/{r['id']}/sim.log"
     log_abs = os.path.join(ws, "sim_runs", r["id"], "sim.log")
     assert os.path.exists(log_abs)
 
@@ -86,7 +89,7 @@ def test_compile_failure_persists_its_log(tmp_path, monkeypatch):
     r = sm.run_sim_isolated(ws, ["tb.v"], "tb")
 
     assert r["status"] == "failed"
-    assert r["logFile"] == "sim.log"
+    assert r["logFile"] == f"sim_runs/{r['id']}/sim.log"
     with open(os.path.join(ws, "sim_runs", r["id"], "sim.log"), "r", encoding="utf-8") as f:
         log = f.read()
     assert "=== COMPILE ===" in log
@@ -116,3 +119,42 @@ def test_legacy_non_isolated_path_writes_no_log(tmp_path, monkeypatch):
 
     assert result["status"] == "test_passed"
     assert not any(name.endswith(".log") for name in os.listdir(ws))
+
+
+def test_log_file_is_readable_through_the_tool_surface(tmp_path, monkeypatch):
+    """The advertised handle must actually open through read_file — that is
+    the entire point of persisting the log (dev#71)."""
+    ws = _ws(tmp_path)
+    _patch_toolchain(monkeypatch)
+    r = sm.run_sim_isolated(ws, ["tb.v"], "tb")
+
+    from src.utils.session_context import SessionContext, session_scope
+    from src.tools.wrappers import read_file
+
+    with session_scope(SessionContext(session_id="s1", workspace=ws)):
+        content = read_file.invoke({"filename": r["logFile"]})
+    assert not content.startswith("Error:"), content
+    assert "=== COMPILE ===" in content or content.strip()
+
+
+def test_read_file_windows_large_files_with_an_explicit_marker(tmp_path):
+    from src.utils.session_context import SessionContext, session_scope
+    from src.tools.wrappers import read_file
+
+    ws = str(tmp_path)
+    big = os.path.join(ws, "big.log")
+    first = "FIRST-LINE-SENTINEL\n"
+    last = "LAST-LINE-SENTINEL\n"
+    with open(big, "w", encoding="utf-8") as f:
+        f.write(first)
+        for i in range(200000):
+            f.write(f"cycle {i}: q=x\n")
+        f.write(last)
+
+    with session_scope(SessionContext(session_id="s1", workspace=ws)):
+        content = read_file.invoke({"filename": "big.log"})
+
+    assert "FIRST-LINE-SENTINEL" in content
+    assert "LAST-LINE-SENTINEL" in content
+    assert "bytes omitted" in content
+    assert len(content) < 200000, "the window must actually bound the read"

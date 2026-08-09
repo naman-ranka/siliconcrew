@@ -102,10 +102,21 @@ def write_file(filename: str, content: str | None = None) -> str:
         return f"Error: {exc}"
     return f"Successfully wrote to {filename}"
 
+# Honest large-file window for read_file: unbounded reads of run artifacts
+# (sim.log can be multi-MB of per-cycle $display) went whole into the tool
+# result. Head + tail with an explicit omission marker — never a silent cut.
+_READ_FILE_MAX_BYTES = 64 * 1024
+_READ_FILE_HEAD_BYTES = 32 * 1024
+_READ_FILE_TAIL_BYTES = 16 * 1024
+
+
 @tool
 def read_file(filename: str) -> str:
     """
-    Reads content from a file in the workspace.
+    Reads content from a file in the workspace. Large files (over 64 KiB) are
+    returned as head + tail with an explicit omission marker — for a systematic
+    failure the first occurrences are the informative ones, and an unbounded
+    read of a multi-MB sim log would swamp the model's context.
     Args:
         filename: Name of the file to read.
     """
@@ -118,8 +129,22 @@ def read_file(filename: str) -> str:
     if not os.path.exists(filepath):
         return f"Error: File {filename} does not exist."
 
-    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-        return f.read()
+    size = os.path.getsize(filepath)
+    if size <= _READ_FILE_MAX_BYTES:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    # Binary reads: a byte seek in text mode is undefined for arbitrary offsets.
+    with open(filepath, "rb") as f:
+        head = f.read(_READ_FILE_HEAD_BYTES).decode("utf-8", errors="replace")
+        f.seek(size - _READ_FILE_TAIL_BYTES)
+        tail = f.read().decode("utf-8", errors="replace")
+    omitted = size - _READ_FILE_HEAD_BYTES - _READ_FILE_TAIL_BYTES
+    return (
+        f"{head}\n"
+        f"... [{omitted} bytes omitted — file is {size} bytes; "
+        f"this is the first {_READ_FILE_HEAD_BYTES} and last {_READ_FILE_TAIL_BYTES} bytes of {filename}] ...\n"
+        f"{tail}"
+    )
 
 @tool
 def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
