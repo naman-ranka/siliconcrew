@@ -204,8 +204,8 @@ else
   run_step "Run frontend build" "cd '${REPO_ROOT}/frontend' && npm run build" || true
 fi
 
-run_step "Bootstrap stdcells (asap7)" "cd '${REPO_ROOT}' && . .venv/bin/activate && PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace workspace --platform asap7" || true
-run_step "Bootstrap stdcells (sky130hd)" "cd '${REPO_ROOT}' && . .venv/bin/activate && PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace workspace --platform sky130hd" || true
+run_step "Bootstrap stdcells (asap7)" "cd '${REPO_ROOT}' && . .venv/bin/activate && PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace . --platform asap7" || true
+run_step "Bootstrap stdcells (sky130hd)" "cd '${REPO_ROOT}' && . .venv/bin/activate && PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace . --platform sky130hd" || true
 
 DOCKER_CMD="docker"
 if docker info >/dev/null 2>&1; then

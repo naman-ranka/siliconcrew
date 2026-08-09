@@ -203,6 +203,56 @@ def test_failed_run_rollup_does_not_claim_guardrails_passed(monkeypatch):
         assert "equiv" in notes
 
 
+def test_run_record_names_the_stdcells_a_post_synth_sim_will_actually_load(monkeypatch):
+    """Issue #59, the last caller: run-record PDK provenance.
+
+    ``_load_stdcell_manifest`` took a *workspace* and read
+    ``<workspace>/_stdcells/...``. The models are install-global and the session
+    workspace never holds them, so every finalization silently stamped
+    ``stdcell_files_used: []`` / ``stdcell_manifest_version: null`` — including
+    into the sim contract simulation reads. A run record that cannot name the
+    PDK models its netlist was signed off against is not honest (invariant 5:
+    the run directory is the database).
+
+    The install root here is a temp dir DISTINCT from the session workspace, so
+    the assertion only passes if the manifest is read from the install root.
+    PRE-FIX this fails with ``assert [] ...`` — the empty provenance set, read
+    from a session workspace that has no ``_stdcells`` and never will.
+    """
+    with tempfile.TemporaryDirectory() as install_root, tempfile.TemporaryDirectory() as workspace:
+        sim_dir = os.path.join(install_root, "_stdcells", "sky130hd", "sim")
+        os.makedirs(sim_dir, exist_ok=True)
+        with open(os.path.join(sim_dir, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "platform": "sky130hd",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "files": [{"name": "sky130_fd_sc_hd__inv_1.v"}],
+                },
+                f,
+            )
+        # raising=False: pre-fix synthesis_manager has no stdcell_root to patch,
+        # and the point is to watch the OLD code ignore the install root, not to
+        # error on a missing attribute.
+        monkeypatch.setattr(sm, "stdcell_root", lambda: install_root, raising=False)
+
+        design = _counter_workspace(workspace)
+        monkeypatch.setattr(sm, "_run_orfs", _fake_orfs_writing_artifacts("counter"))
+
+        final = _run_to_completion(workspace, verilog_files=[design], top_module="counter")
+        assert final["status"] == "completed"
+
+        # The run directory is authoritative — read what was actually persisted.
+        run_dir = sm.get_run_dir(workspace, final["run_id"])
+        with open(os.path.join(run_dir, "run_meta.json"), "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        assert meta["stdcell_files_used"] == [{"name": "sky130_fd_sc_hd__inv_1.v"}]
+        assert meta["stdcell_manifest_version"] == "2026-01-01T00:00:00+00:00"
+        # Same value on the contract post-synth simulation reads.
+        assert meta["sim_contract"]["stdcell_manifest_version"] == "2026-01-01T00:00:00+00:00"
+
+
 def test_bootstrap_stdcells_successful_and_resolvable(monkeypatch):
     with tempfile.TemporaryDirectory() as workspace:
         def fake_pinned(cache_dir):

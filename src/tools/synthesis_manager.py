@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from src.tools.pdk_units import platform_time_unit, ns_to_platform_time, time_unit_to_ns
 from src.tools.run_docker import run_docker_command
 from src.tools.spec_manager import load_yaml_file
+from src.tools.stdcells import stdcell_root
 from src.platform_engines.orfs_runner import OrfsRequest, get_orfs_runner
 from src.platform_engines.provenance import collect_provenance
 
@@ -2109,8 +2110,17 @@ def _dispatch_fields(run_dir: str) -> Dict[str, Any]:
     }
 
 
-def _load_stdcell_manifest(workspace: str, platform: str) -> Dict[str, Any]:
-    manifest = os.path.join(workspace, "_stdcells", platform, "sim", "manifest.json")
+def _load_stdcell_manifest(platform: str) -> Dict[str, Any]:
+    """The manifest of the PDK models a post-synth sim will actually load.
+
+    Read from the install root (``stdcell_root``), the same place
+    ``run_simulation`` resolves models from — NOT from a session workspace
+    (issue #59). Taking a workspace here was the last caller reaching the PDK
+    through a workspace-shaped pointer: the models are install-global, the
+    session workspace never held them, so this silently recorded an empty
+    provenance set on every run record.
+    """
+    manifest = os.path.join(stdcell_root(), "_stdcells", platform, "sim", "manifest.json")
     if not os.path.exists(manifest):
         return {}
     try:
@@ -2136,7 +2146,7 @@ def _attach_sim_contract(
     """
     from src.tools.sim_contract import build_sim_contract
 
-    manifest = _load_stdcell_manifest(workspace, platform) if platform else {}
+    manifest = _load_stdcell_manifest(platform) if platform else {}
     run_meta[SIM_CONTRACT_KEY] = build_sim_contract(
         workspace,
         netlist_abs=netlist_abs,
@@ -2302,7 +2312,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
                 f"partial flow (max_stage={max_stage}): equivalence check skipped "
                 "(it runs on the finish-stage netlist)"
             )
-        manifest = _load_stdcell_manifest(workspace, platform)
+        manifest = _load_stdcell_manifest(platform)
         run_meta["stdcell_manifest_version"] = manifest.get("updated_at") if manifest else None
         run_meta["stdcell_files_used"] = manifest.get("files", []) if manifest else []
         run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
@@ -2374,7 +2384,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
 
     run_meta["auto_checks"] = asdict(auto_checks)
 
-    manifest = _load_stdcell_manifest(workspace, platform)
+    manifest = _load_stdcell_manifest(platform)
     run_meta["stdcell_manifest_version"] = manifest.get("updated_at") if manifest else None
     run_meta["stdcell_files_used"] = manifest.get("files", []) if manifest else []
 
