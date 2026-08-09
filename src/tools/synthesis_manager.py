@@ -590,8 +590,40 @@ def _write_default_sdc(
 # Clock sources whose port was guessed, never checked against the netlist.
 # _write_default_sdc guards create_clock behind [llength], so a wrong guess is
 # a silently unconstrained run — every reader of these runs' timing must see
-# the constraints note (finalization appends it to check_notes).
-_UNVERIFIED_CLOCK_SOURCES = {"bypass_default", "default_module_mismatch"}
+# the constraints note (finalization appends it to check_notes via
+# _carry_unverified_clock_note).
+#
+# The two *_fallback_port sources are the WORSE half: they do not guess the
+# conventional "clk", they take input_ports[0] from a spec that names no clock
+# at all — often a reset. That port usually DOES exist in the netlist, so
+# create_clock fires and the design is constrained on the wrong net. Wrong is
+# not better than absent, and both belong here.
+_UNVERIFIED_CLOCK_SOURCES = {
+    "bypass_default",
+    "default_module_mismatch",
+    "spec_fallback_port",
+    "requested_period_fallback_port",
+}
+
+
+def _carry_unverified_clock_note(run_meta: Dict[str, Any], note: str) -> str:
+    """Append this run's constraints warning to a terminal rollup, when earned.
+
+    ONE copy of the rule "an unverified clock's warning survives finalization".
+    It lived as three verbatim if-statements (full flow, partial flow, PD retry)
+    and was therefore already missing from the partial-flow FAILED leg and the
+    constraints-only leg. Every terminal check_notes write goes through here so
+    it cannot go missing per-site again. Idempotent: a note that already carries
+    the warning (an adopted run's dispatch-time check_notes) is returned as-is.
+    """
+    constraints_note = (run_meta or {}).get("constraints_note")
+    if not constraints_note:
+        return note
+    if run_meta.get("clock_source") not in _UNVERIFIED_CLOCK_SOURCES:
+        return note
+    if constraints_note in (note or ""):
+        return note
+    return f"{note} | {constraints_note}" if note else str(constraints_note)
 
 
 def _constraints_guardrail(
@@ -708,6 +740,14 @@ def _constraints_guardrail(
                 "Rerun start_synthesis with constraints_mode='auto' or 'bypass' to allow default-clock fallback."
             )
             return result
+        # The spec names NO clock, so the port is the spec's first input — an
+        # arbitrary choice that is very often a reset. Unlike the other fallback
+        # branches (which use the literal "clk" and are usually a silent no-op),
+        # this port generally DOES exist in the netlist, so create_clock fires
+        # and the design is constrained on the WRONG net: every timing number
+        # from the run is then confidently wrong rather than merely absent. Both
+        # sources below are in _UNVERIFIED_CLOCK_SOURCES for that reason, and
+        # the note has to say it out loud.
         fallback_port = input_ports[0] if input_ports else "clk"
         requested_clock = fallback_clock_period_ns if fallback_clock_period_ns and fallback_clock_period_ns > 0 else None
         period = requested_clock if requested_clock is not None else (
@@ -715,17 +755,27 @@ def _constraints_guardrail(
         )
         sdc_path = os.path.join(run_dir, "constraints.sdc")
         _write_default_sdc(sdc_path=sdc_path, clock_period_ns=period, clock_port=fallback_port, platform=platform)
+        period_note = (
+            f"Applied the explicit requested clock ({period} ns)"
+            if requested_clock is not None
+            else f"Applied the default clock fallback ({period} ns)"
+        )
         result.update({
             "status": "pass",
             "note": (
-                f"No explicit clock in spec. Applied explicit requested clock on port '{fallback_port}'."
-                if requested_clock is not None
-                else f"No explicit clock in spec. Applied default clock fallback on port '{fallback_port}'."
+                f"No explicit clock in spec (no clk/clock/clk_i input). {period_note} on "
+                f"port '{fallback_port}', the spec's FIRST input port. That port was NOT "
+                "verified to be this design's clock — if it is not (a reset, an enable), "
+                "the design is constrained on the wrong net and its timing is invalid."
             ),
             "sdc_path": sdc_path,
             "effective_clock_period_ns": period,
             "clock_period_ns": period,
-            "clock_source": "requested" if requested_clock is not None else "spec_fallback_port",
+            # The PERIOD was requested; the PORT was still guessed. Recording a
+            # bare "requested" here made clock_source and constraints_note
+            # disagree about what had actually been verified — "requested" is
+            # kept only for the branches where the port itself is named.
+            "clock_source": "requested_period_fallback_port" if requested_clock is not None else "spec_fallback_port",
         })
         return result
 
@@ -1621,9 +1671,7 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     # The retry reuses the parent's constraints.sdc verbatim, so an unverified
     # default clock is an INHERITED fact: every timing number above is only as
     # real as that guessed port, and the rollup must say so here too.
-    if run_meta.get("clock_source") in _UNVERIFIED_CLOCK_SOURCES and run_meta.get("constraints_note"):
-        check_notes += f" | {run_meta['constraints_note']}"
-    run_meta["check_notes"] = check_notes
+    run_meta["check_notes"] = _carry_unverified_clock_note(run_meta, check_notes)
     run_meta["next_action"] = (
         "Inspect stage summaries and continue tuning." if run_meta["status"] == "completed"
         else "Inspect retry stage logs and adjust parameters."
@@ -2175,8 +2223,9 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         run_meta["status"] = "completed"
         run_meta["current_stage"] = "constraints"
         run_meta["auto_checks"] = asdict(auto_checks)  # signoff/equiv stay "skip"
-        run_meta["check_notes"] = (
-            "Constraints validated; partial flow (max_stage=constraints): ORFS stages skipped."
+        run_meta["check_notes"] = _carry_unverified_clock_note(
+            run_meta,
+            "Constraints validated; partial flow (max_stage=constraints): ORFS stages skipped.",
         )
         run_meta["next_action"] = (
             "Rerun start_synthesis with a later max_stage (e.g. 'synth') to execute the flow."
@@ -2259,11 +2308,6 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
             )
             if partial_timing["note"]:
                 run_meta["check_notes"] += f" | {partial_timing['note']}"
-            # Same rule as full-flow finalization: an unverified default clock
-            # changes how any timing read from this run must be interpreted —
-            # the rollup carries the warning, never replaces it.
-            if run_meta.get("clock_source") in _UNVERIFIED_CLOCK_SOURCES and run_meta.get("constraints_note"):
-                run_meta["check_notes"] += f" | {run_meta['constraints_note']}"
             next_stage = _next_stage_after(max_stage)
             if next_stage in PD_RETRYABLE_STAGES:
                 run_meta["next_action"] = (
@@ -2284,6 +2328,11 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
             run_meta["next_action"] = (
                 "Use search_logs_tool with error/timing queries and fix RTL/constraints."
             )
+        # BOTH partial legs, one rule (the failed leg used to drop the warning):
+        # an unverified clock changes how any timing read from this run must be
+        # interpreted, and "why did this stage fail" is not a reason to hide that
+        # the design may have been constrained on the wrong net.
+        run_meta["check_notes"] = _carry_unverified_clock_note(run_meta, run_meta["check_notes"])
         run_meta["finished_at"] = _now_iso()
         run_meta["elapsed_sec"] = round(time.time() - start, 2)
         run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
@@ -2348,12 +2397,11 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         check_notes += f" | run failed on: {', '.join(failed) or 'a non-signoff check'}"
     if timing["note"]:
         check_notes += f" | {timing['note']}"
-    # A default clock (bypass, or spec/top module-name mismatch) means every
-    # timing number below is only as real as the guessed port — the rollup must
-    # carry that warning, not replace it.
-    if run_meta.get("clock_source") in _UNVERIFIED_CLOCK_SOURCES and run_meta.get("constraints_note"):
-        check_notes += f" | {run_meta['constraints_note']}"
-    run_meta["check_notes"] = check_notes
+    # A default clock (bypass, spec/top module-name mismatch, or a period pinned
+    # onto the spec's first input port) means every timing number below is only
+    # as real as the guessed port — the rollup carries that warning, never
+    # replaces it.
+    run_meta["check_notes"] = _carry_unverified_clock_note(run_meta, check_notes)
     run_meta["next_action"] = (
         "Use search_logs_tool for detailed PPA/error verification." if run_meta["status"] == "completed"
         else "Use search_logs_tool with error/timing queries and fix RTL/constraints."
@@ -3059,6 +3107,10 @@ def _reconcile_stale_status(
                 if m.get("check_notes")
                 else adopted_timing["note"]
             )
+        # Adoption is a terminal write too. Normally a no-op here (check_notes
+        # still holds the dispatch-time constraints note verbatim, and the helper
+        # is idempotent), but it must not depend on that.
+        m["check_notes"] = _carry_unverified_clock_note(m, m.get("check_notes") or "")
         if not m.get("finished_at"):
             m["finished_at"] = _now_iso()
         m = _refresh_stage_metadata(run_dir, m, terminal_status="completed")

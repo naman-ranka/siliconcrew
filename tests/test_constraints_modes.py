@@ -36,6 +36,28 @@ def _spec(workspace: str, module_name: str = "GCN", clock_port: str = "clk_i") -
     return path
 
 
+def _spec_without_a_clock(workspace: str, module_name: str = "GCN") -> str:
+    """A spec whose inputs contain NO clk/clock/clk_i — the fallback-port case.
+
+    ``rst`` is deliberately first: this is the shape that makes the fallback
+    dangerous, because the port DOES exist in the netlist, so create_clock fires
+    and the design is constrained on the reset.
+    """
+    spec = DesignSpec(
+        module_name=module_name,
+        description="no clock named in the spec",
+        clock_period_ns=4.0,
+        ports=[
+            PortSpec(name="rst", direction="input"),
+            PortSpec(name="data_in", direction="input"),
+            PortSpec(name="data_out", direction="output"),
+        ],
+    )
+    path = os.path.join(workspace, f"{module_name}_spec.yaml")
+    save_yaml_file(spec, path)
+    return path
+
+
 def _dirs(tmp_path):
     workspace = tmp_path / "ws"
     run_dir = workspace / "synth_runs" / "synth_0001"
@@ -221,7 +243,12 @@ def test_mismatch_warning_survives_a_partial_flow_too(tmp_path, monkeypatch):
             f.write("module GCN_synth(); endmodule")
         return {"success": True, "stdout": "", "stderr": "", "command": "fake"}
 
+    # A bounded (max_stage) run does NOT go through _run_orfs: _job_worker calls
+    # _run_orfs_targets, which goes straight to docker. Patching only _run_orfs
+    # left this test running real ORFS and failing on every machine without it —
+    # the whole point of the test (the partial-flow branch) was never exercised.
     monkeypatch.setattr(sm, "_run_orfs", fake_orfs)
+    monkeypatch.setattr(sm, "_run_orfs_targets", fake_orfs)
 
     started = sm.start_synthesis_job(
         workspace=workspace, verilog_files=[design], top_module="GCN_synth",
@@ -238,3 +265,136 @@ def test_mismatch_warning_survives_a_partial_flow_too(tmp_path, monkeypatch):
     assert final["clock_source"] == "default_module_mismatch"
     assert "partial flow" in final["check_notes"].lower()
     assert "not verified" in final["check_notes"].lower()
+
+
+# ---------------------------------------------------------------------------
+# The fallback PORT is the worst of the guesses, and it did not warn at all.
+# input_ports[0] is an arbitrary first input — usually a reset. Unlike the
+# literal-"clk" branches (a silent no-op when the guess is wrong), this port
+# generally EXISTS, so create_clock fires and the design is constrained on the
+# wrong net: confidently wrong beats absent only in the sense of being worse.
+# ---------------------------------------------------------------------------
+
+def test_first_input_port_fallback_is_an_unverified_clock(tmp_path):
+    workspace, run_dir = _dirs(tmp_path)
+    _spec_without_a_clock(workspace)
+
+    result = sm._constraints_guardrail(workspace, run_dir, "GCN", None, constraints_mode="auto")
+
+    assert result["status"] == "pass"
+    assert result["clock_source"] == "spec_fallback_port"
+    assert result["clock_source"] in sm._UNVERIFIED_CLOCK_SOURCES
+    # The SDC really did land on the reset.
+    assert "get_ports {rst}" in _sdc_text(result)
+    assert "not verified" in result["note"].lower()
+    assert "first input port" in result["note"].lower()
+
+
+def test_a_requested_period_does_not_make_a_guessed_port_verified(tmp_path):
+    """clock_source said "requested" while the note said the port was a guess:
+    the field and the note disagreed about what had been checked. The PERIOD was
+    requested; the PORT was not, and the source name now says exactly that."""
+    workspace, run_dir = _dirs(tmp_path)
+    _spec_without_a_clock(workspace)
+
+    result = sm._constraints_guardrail(workspace, run_dir, "GCN", 8.0, constraints_mode="auto")
+
+    assert result["clock_source"] == "requested_period_fallback_port"
+    assert result["clock_source"] in sm._UNVERIFIED_CLOCK_SOURCES
+    assert result["clock_period_ns"] == 8.0
+    assert "get_ports {rst}" in _sdc_text(result)
+    assert "not verified" in result["note"].lower()
+
+
+def test_a_named_spec_clock_port_with_a_requested_period_stays_verified(tmp_path):
+    """Regression fence: plain "requested" keeps its meaning where the port
+    itself came from the spec's own clock declaration."""
+    workspace, run_dir = _dirs(tmp_path)
+    _spec(workspace, module_name="GCN", clock_port="clk_i")
+
+    result = sm._constraints_guardrail(workspace, run_dir, "GCN", 8.0, constraints_mode="auto")
+
+    assert result["clock_source"] == "requested"
+    assert result["clock_source"] not in sm._UNVERIFIED_CLOCK_SOURCES
+    assert "get_ports {clk_i}" in _sdc_text(result)
+
+
+def test_fallback_port_warning_survives_to_the_final_status(tmp_path, monkeypatch):
+    """End to end: the warning has to reach check_notes, not just the guardrail
+    dict that is never persisted."""
+    import time
+
+    workspace = str(tmp_path / "ws4")
+    os.makedirs(workspace, exist_ok=True)
+    _spec_without_a_clock(workspace, module_name="GCN")
+    design = os.path.join(workspace, "gcn.v")
+    with open(design, "w", encoding="utf-8") as f:
+        f.write("module GCN(input rst, input data_in, output [3:0] data_out); endmodule")
+    monkeypatch.setattr(sm, "_run_orfs", _fake_orfs_writing_artifacts("GCN"))
+
+    started = sm.start_synthesis_job(workspace=workspace, verilog_files=[design], top_module="GCN")
+    final = None
+    for _ in range(60):
+        final = sm.get_synthesis_status(started["run_id"], workspace=workspace)
+        if final["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.05)
+
+    assert final["status"] == "completed"
+    # start_synthesis_job defaults clock_period_ns to 10.0, so the PERIOD is
+    # "requested" here — the PORT is still the spec's first input.
+    assert final["clock_source"] == "requested_period_fallback_port"
+    assert final["clock_source"] in sm._UNVERIFIED_CLOCK_SOURCES
+    assert "not verified" in (final["constraints_note"] or "").lower()
+    assert "not verified" in final["check_notes"].lower()
+
+
+def test_the_partial_flow_FAILED_leg_carries_the_warning_too(tmp_path, monkeypatch):
+    """The rule lived as three verbatim copies, so it was already missing from
+    the partial-flow failure branch: a run that ended on the wrong clock AND
+    failed its target stage reported only the stage failure."""
+    import time
+
+    workspace = str(tmp_path / "ws5")
+    os.makedirs(workspace, exist_ok=True)
+    _spec(workspace, module_name="GCN", clock_port="clk_i")
+    design = os.path.join(workspace, "gcn_top.v")
+    with open(design, "w", encoding="utf-8") as f:
+        f.write("module GCN_synth(input clk, output [3:0] q); endmodule")
+
+    def fake_orfs_producing_nothing(**kwargs):
+        # No completion artifact for the target stage -> the failed leg.
+        return {"success": False, "stdout": "", "stderr": "boom", "command": "fake"}
+
+    monkeypatch.setattr(sm, "_run_orfs", fake_orfs_producing_nothing)
+    monkeypatch.setattr(sm, "_run_orfs_targets", fake_orfs_producing_nothing)
+
+    started = sm.start_synthesis_job(
+        workspace=workspace, verilog_files=[design], top_module="GCN_synth", max_stage="synth",
+    )
+    final = None
+    for _ in range(400):
+        final = sm.get_synthesis_status(started["run_id"], workspace=workspace)
+        if final["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.05)
+
+    assert final["status"] == "failed"
+    assert final["clock_source"] == "default_module_mismatch"
+    assert "partial flow failed" in final["check_notes"].lower()
+    assert "not verified" in final["check_notes"].lower()
+
+
+def test_carry_helper_is_idempotent_and_silent_on_a_verified_clock():
+    """Every terminal write routes through the one helper, so it has to be safe
+    to apply twice (adoption re-finalizes a meta whose check_notes already
+    carries the note) and to apply to a run that earned no warning."""
+    unverified = {"clock_source": "spec_fallback_port", "constraints_note": "port NOT verified."}
+    once = sm._carry_unverified_clock_note(unverified, "Artifact/log guardrails passed")
+    assert once == "Artifact/log guardrails passed | port NOT verified."
+    assert sm._carry_unverified_clock_note(unverified, once) == once
+
+    verified = {"clock_source": "spec", "constraints_note": "Spec-driven constraints validated."}
+    assert sm._carry_unverified_clock_note(verified, "rollup") == "rollup"
+    # No note recorded at all (legacy meta): nothing to carry, nothing invented.
+    assert sm._carry_unverified_clock_note({"clock_source": "bypass_default"}, "rollup") == "rollup"
