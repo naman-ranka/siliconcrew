@@ -1,14 +1,21 @@
-import { test, expect, APIResponse } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import {
   ARTIFACTS,
   EMAIL,
   PASSWORD,
+  attachBearerCapture,
+  bearerAgeSec,
   createFileViaUi,
+  looksUnauthorized,
   newSession,
+  openRunsDock,
+  parseToolResult,
+  readBody,
   shot,
   signIn,
   simulateViaPalette,
+  warmAuth,
 } from "./helpers";
 
 /**
@@ -141,7 +148,12 @@ test("staging: post-synthesis simulation resolves stdcells and reaches a verdict
   const dump = () => fs.writeFileSync(`${ARTIFACTS}/postsynth-results.json`, JSON.stringify(evidence, null, 2));
 
   // --- 1. sign in ----------------------------------------------------------
+  // Subscribe to the app's tokens BEFORE it makes its first authenticated
+  // request, then never hold a token of our own (see the auth-freshness note
+  // at the poll loop).
+  const bearers = attachBearerCapture(page);
   await signIn(page, "ps-");
+  log(`bearer captured: rotations=${bearers.rotations} origin=${bearers.origin}`);
 
   // --- 2. session + a small synthesizable design ---------------------------
   const sid = await newSession(page, `psynth_${Date.now().toString(36)}`);
@@ -160,57 +172,160 @@ test("staging: post-synthesis simulation resolves stdcells and reaches a verdict
   expect(sim1.body.run.status, "RTL sim must pass before post-synth is meaningful").toBe("passed");
   await shot(page, "ps-06-rtl-sim-passed");
 
-  const { apiOrigin, bearer } = sim1;
-  const authHeaders: Record<string, string> = bearer ? { authorization: bearer } : {};
+  // The origin the APP itself talks to (it may be the backend directly or the
+  // frontend's same-origin /api proxy, app/api/[...path]/route.ts) — taken from
+  // the app's own simulate request, with the passive capture as a backstop.
+  const apiOrigin = sim1.apiOrigin || bearers.origin;
   const wsPath = `/api/workspace/${encodeURIComponent(sid)}`;
-  const apiGet = (path: string, timeout = 60_000) =>
-    page.request.get(`${apiOrigin}${path}`, { headers: authHeaders, timeout });
-  const apiPost = (path: string, data: unknown, timeout = 120_000) =>
-    page.request.post(`${apiOrigin}${path}`, { headers: authHeaders, data, timeout });
-  const jsonOf = async (r: APIResponse) => {
-    const text = await r.text();
-    try {
-      return JSON.parse(text);
-    } catch {
-      return { ok: false, parseError: true, raw: text.slice(0, 2000) };
+
+  /** Headers built at CALL time from the live holder — never from a constant
+   *  captured minutes ago. */
+  const authHeaders = (): Record<string, string> =>
+    bearers.value ? { authorization: bearers.value } : {};
+
+  /** Every raw-body log goes through here: HTTP status + the first 300 chars.
+   *  This is what run 31341766743 was missing. */
+  const logRaw = (tag: string, res: { status: number; raw: string }) =>
+    log(`[RAW ${tag}] http=${res.status} bearerAge=${bearerAgeSec(bearers)}s body=${JSON.stringify(res.raw.slice(0, 300))}`);
+
+  /** One request, then — if it looks unauthorized — ONE warm-and-retry with the
+   *  freshest token the app has minted since. The warm gesture is a real click
+   *  on the dock's Refresh, so the retry uses a token the page just used
+   *  successfully itself. */
+  const apiCall = async (
+    method: "get" | "post",
+    path: string,
+    opts: { data?: unknown; timeout?: number; tag: string }
+  ) => {
+    const timeout = opts.timeout ?? 120_000;
+    const send = async () =>
+      readBody(
+        method === "get"
+          ? await page.request.get(`${apiOrigin}${path}`, { headers: authHeaders(), timeout })
+          : await page.request.post(`${apiOrigin}${path}`, { headers: authHeaders(), data: opts.data, timeout })
+      );
+
+    let res = await send();
+    if (looksUnauthorized(res)) {
+      logRaw(`${opts.tag}:401`, res);
+      log(`[AUTH] ${opts.tag} looked unauthorized — warming the app's token and retrying once`);
+      await warmAuth(page);
+      await page.waitForTimeout(1_000);
+      res = await send();
+      log(`[AUTH] retry of ${opts.tag}: http=${res.status} bearerAge=${bearerAgeSec(bearers)}s rotations=${bearers.rotations}`);
     }
+    return res;
   };
+
+  const apiGet = (path: string, tag: string, timeout = 60_000) =>
+    apiCall("get", path, { tag, timeout });
+  const apiPost = (path: string, data: unknown, tag: string, timeout = 120_000) =>
+    apiCall("post", path, { data, tag, timeout });
 
   // The manifest is the single source of truth for the tops — assert what the
   // synthesis dispatch below will actually resolve, rather than assuming it.
-  const manifest = (await jsonOf(await apiGet(`${wsPath}/manifest`))).manifest;
+  const manifestRes = await apiGet(`${wsPath}/manifest`, "manifest");
+  const manifest = manifestRes.json?.manifest;
+  if (!manifest) logRaw("manifest", manifestRes);
   evidence.manifest = manifest;
   log("manifest:", JSON.stringify({ synthTop: manifest?.synthTop, simTop: manifest?.simTop, platform: manifest?.platform }));
-  expect(manifest.synthTop).toBe("counter");
-  expect(manifest.simTop).toBe("counter_tb");
+  expect(manifest?.synthTop).toBe("counter");
+  expect(manifest?.simTop).toBe("counter_tb");
 
   // --- 4. dispatch synthesis, the same route the Synthesize command uses ----
   // frontend/lib/commands.ts:350 -> workbenchApi.synthesize (frontend/lib/api.ts:489)
   // -> POST /api/workspace/{sid}/synthesize (src/api/actions.py:647), which
   // calls start_synthesis_job with the manifest's synth set.
-  const dispatchResp = await apiPost(`${wsPath}/synthesize`, {
-    platform: "sky130hd",
-    maxStage: "synth", // bounded: writes 1_synth.v + the sim contract, skips PnR
-    clockPeriodNs: 10,
-  });
-  const dispatch = await jsonOf(dispatchResp);
-  evidence.synthDispatch = dispatch;
-  log("synthesize dispatch:", dispatchResp.status(), JSON.stringify(dispatch).slice(0, 800));
-  expect(dispatchResp.ok(), `synthesize dispatch failed: ${JSON.stringify(dispatch).slice(0, 600)}`).toBeTruthy();
-  const runId: string = dispatch.runId;
-  expect(runId, "no runId returned by /synthesize").toBeTruthy();
+  const dispatchRes = await apiPost(
+    `${wsPath}/synthesize`,
+    {
+      platform: "sky130hd",
+      maxStage: "synth", // bounded: writes 1_synth.v + the sim contract, skips PnR
+      clockPeriodNs: 10,
+    },
+    "synthesize"
+  );
+  evidence.synthDispatch = dispatchRes.json ?? dispatchRes.raw;
+  log("synthesize dispatch: http=", dispatchRes.status, JSON.stringify(dispatchRes.json ?? "").slice(0, 800));
+  if (!dispatchRes.json?.runId) logRaw("synthesize", dispatchRes);
+  expect(dispatchRes.ok, `synthesize dispatch failed (${dispatchRes.status}): ${dispatchRes.raw.slice(0, 600)}`).toBeTruthy();
+  const runId: string = dispatchRes.json?.runId;
+  expect(runId, `no runId returned by /synthesize: ${dispatchRes.raw.slice(0, 300)}`).toBeTruthy();
   log("synthesis run_id:", runId);
   await shot(page, "ps-07-synth-dispatched");
 
   // --- 5. poll get_synthesis_status until terminal --------------------------
-  // The user-gesture Refresh does exactly this: invokeTool("get_synthesis_status",
-  // { run_id }) — frontend/components/workbench/runStatus.ts:62 ->
-  // POST /api/workspace/{sid}/invoke (src/api/actions.py:778).
+  //
+  // AUTH-FRESHNESS DESIGN (learned from staging run 31341766743, where a single
+  // captured bearer expired at ~5 min and every later poll silently degraded to
+  // `status=undefined`):
+  //
+  //   PRIMARY  — the app's OWN Refresh gesture. The Runs dock renders a
+  //   per-run refresh button (data-testid `run-refresh-<id>`,
+  //   components/workbench/RunsPane.tsx:184-194) which calls
+  //   refreshRunStatus -> invokeTool("get_synthesis_status") — the documented
+  //   user gesture (runStatus.ts:56-65). We click it and read the app's own
+  //   /invoke RESPONSE as the poll result. No bearer is involved at all: the
+  //   page always sends its live, SDK-refreshed token (lib/auth.tsx onRefresh).
+  //
+  //   FALLBACK — a direct /invoke with the freshest token the passive capture
+  //   has seen, plus one warm-and-retry on an unauthorized shape. Needed
+  //   because the refresh button unmounts as soon as the run is terminal
+  //   (RunsPane.tsx:175 `!isTerminal(...)`), and because a dock/tab layout
+  //   change must degrade to a slower poll, not to a hung test.
+  //
+  // Either way the page keeps making requests every iteration, so the captured
+  // bearer can never go stale again — freshness is a side effect of the poll,
+  // not a thing the test has to remember.
   const POLL_CAP_MS = 25 * 60_000;
   const startedAt = Date.now();
   let status: Record<string, any> = {};
   let lastReported = "";
-  const transitions: { atSec: number; status: string; stage: string }[] = [];
+  const transitions: { atSec: number; status: string; stage: string; via: string }[] = [];
+
+  await openRunsDock(page);
+  await warmAuth(page); // hydrate the runs table so the API-dispatched run has a row
+
+  /** Poll via the app's own Refresh button; null when that path isn't available. */
+  const pollViaGesture = async (): Promise<Record<string, any> | null> => {
+    const btn = page.getByTestId(`run-refresh-${runId}`);
+    if (!(await btn.count())) return null;
+    try {
+      const [resp] = await Promise.all([
+        page.waitForResponse(
+          (r) => r.url().includes("/invoke") && r.request().method() === "POST",
+          { timeout: 60_000 }
+        ),
+        btn.first().click({ timeout: 10_000 }),
+      ]);
+      const res = await readBody(resp);
+      const parsed = parseToolResult(res.json?.result);
+      if (!parsed?.status) {
+        logRaw("gesture-invoke", res);
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  /** Poll via a direct /invoke with the freshest captured bearer. */
+  const pollViaApi = async (): Promise<Record<string, any>> => {
+    const res = await apiPost(
+      `${wsPath}/invoke`,
+      { tool: "get_synthesis_status", arguments: { run_id: runId } },
+      "status-invoke",
+      180_000
+    );
+    const parsed = parseToolResult(res.json?.result);
+    if (!parsed?.status) {
+      // The exact hole that hid the expiry: expected field absent -> RAW.
+      logRaw("status-invoke", res);
+      return {};
+    }
+    return parsed;
+  };
 
   for (;;) {
     const elapsed = Date.now() - startedAt;
@@ -225,17 +340,28 @@ test("staging: post-synthesis simulation resolves stdcells and reaches a verdict
       );
     }
 
-    const res = await jsonOf(await apiPost(`${wsPath}/invoke`, {
-      tool: "get_synthesis_status",
-      arguments: { run_id: runId },
-    }, 180_000));
-    status = (res?.result ?? {}) as Record<string, any>;
+    let via = "gesture";
+    let next = await pollViaGesture();
+    if (!next) {
+      via = "api";
+      next = await pollViaApi();
+    }
+    // An empty read is an ERROR, not a status — never overwrite a known status
+    // with nothing (invariant #4: honest state, no ambiguous verdicts).
+    if (next.status) status = next;
+    else log(`t+${Math.round((Date.now() - startedAt) / 1000)}s poll produced NO status (via ${via}) — see [RAW] above`);
 
     const line = `${status.status}/${status.stage}`;
     if (line !== lastReported) {
       const atSec = Math.round((Date.now() - startedAt) / 1000);
-      transitions.push({ atSec, status: String(status.status), stage: String(status.stage) });
-      log(`t+${atSec}s status=${status.status} stage=${status.stage} backend=${status.backend} elapsed=${status.elapsed_sec}`);
+      transitions.push({ atSec, status: String(status.status), stage: String(status.stage), via });
+      log(
+        `t+${atSec}s status=${status.status} stage=${status.stage} via=${via} backend=${status.backend} ` +
+          `elapsed=${status.elapsed_sec} bearerAge=${bearerAgeSec(bearers)}s rotations=${bearers.rotations}`
+      );
+      // The ORFS job's own tail — the only view of a cold-starting Cloud Run job.
+      const tail: string[] = status.last_log_lines || [];
+      if (tail.length) log(`  last_log_lines (${status.last_log_source}):\n    ${tail.slice(-8).join("\n    ")}`);
       lastReported = line;
     }
     if (status.status === "completed" || status.status === "failed") break;
@@ -272,24 +398,34 @@ test("staging: post-synthesis simulation resolves stdcells and reaches a verdict
   // @tool the agent calls (src/tools/wrappers.py:318), executed through the one
   // registry via /invoke. `run_id` pins which synthesis run's sim contract
   // resolves the netlist (src/tools/sim_contract.py:144 resolve_post_synth).
-  const simResp = await apiPost(`${wsPath}/invoke`, {
-    tool: "run_isolated_simulation",
-    arguments: { sim_top: "counter_tb", mode: "post_synth", run_id: runId },
-  }, 10 * 60_000);
-  const simEnvelope = await jsonOf(simResp);
-  evidence.postSynthEnvelope = simEnvelope;
+  // Freshness matters most here: this call lands ~25 min after sign-in. It goes
+  // through the same warm-and-retry wrapper, and we warm the token immediately
+  // before, so the request carries a bearer the page minted seconds ago.
+  await warmAuth(page);
+  const simRes = await apiPost(
+    `${wsPath}/invoke`,
+    { tool: "run_isolated_simulation", arguments: { sim_top: "counter_tb", mode: "post_synth", run_id: runId } },
+    "postsynth-invoke",
+    10 * 60_000
+  );
+  evidence.postSynthEnvelope = simRes.json ?? simRes.raw;
   dump();
 
-  log("post-synth /invoke http:", simResp.status());
-  log("post-synth result:", JSON.stringify(simEnvelope).slice(0, 3000));
+  log(`post-synth /invoke http=${simRes.status} bearerAge=${bearerAgeSec(bearers)}s rotations=${bearers.rotations}`);
+  log("post-synth result:", JSON.stringify(simRes.json ?? "").slice(0, 3000));
   await shot(page, "ps-09-postsynth-invoked");
 
+  if (!simRes.json?.result) logRaw("postsynth-invoke", simRes);
   expect(
-    simResp.ok(),
-    `post-synth /invoke failed (${simResp.status()}): ${JSON.stringify(simEnvelope).slice(0, 900)}`
+    simRes.ok,
+    `post-synth /invoke failed (${simRes.status}): ${simRes.raw.slice(0, 900)}`
   ).toBeTruthy();
 
-  const run: SimRunRecord = (simEnvelope.result ?? {}) as SimRunRecord;
+  const run: SimRunRecord = (parseToolResult(simRes.json?.result) ?? {}) as SimRunRecord;
+  expect(
+    Object.keys(run).length,
+    `post-synth /invoke returned no parsable run record (http=${simRes.status}): ${simRes.raw.slice(0, 600)}`
+  ).toBeGreaterThan(0);
 
   // --- 7. report honestly ---------------------------------------------------
   const failureText = [
@@ -312,9 +448,10 @@ test("staging: post-synthesis simulation resolves stdcells and reaches a verdict
 
   // Pull the run's own log — the durable evidence, workspace-relative.
   if (run.logFile) {
-    const logResp = await apiGet(`${wsPath}/file/${encodeURIComponent(run.logFile)}`, 60_000);
-    if (logResp.ok()) {
-      const content = String((await jsonOf(logResp)).content ?? "");
+    const logRes = await apiGet(`${wsPath}/file/${encodeURIComponent(run.logFile)}`, "sim-log", 60_000);
+    const content = typeof logRes.json?.content === "string" ? logRes.json.content : null;
+    if (content === null) logRaw("sim-log", logRes);
+    else {
       evidence.postSynthLogTail = content.slice(-4000);
       log("sim.log tail:\n" + content.slice(-2500));
     }

@@ -148,3 +148,134 @@ export async function simulateViaPalette(page: Page) {
   const body = await resp.json();
   return { apiOrigin, bearer, body };
 }
+
+// ---------------------------------------------------------------------------
+// Auth freshness
+//
+// The app's bearer is a WorkOS access token with a ~5-minute TTL; the AuthKit
+// SDK refreshes it in the page (lib/auth.tsx: onRefresh -> tokenRef). A bearer
+// copied once out of one request is therefore STALE after ~5 minutes — which is
+// exactly what happened on staging run 31341766743: every poll past t+302s was
+// an unauthorized response the spec parsed into `status=undefined`.
+//
+// Fix: never hold a token, hold a *subscription*. This listener records the
+// authorization header off EVERY request the app makes, so the holder always
+// carries the freshest token the page has minted. It is passive — no gesture,
+// no interception, nothing the app can notice.
+// ---------------------------------------------------------------------------
+
+export interface BearerHolder {
+  /** Latest `authorization` header seen from the app (empty until first seen). */
+  value: string;
+  /** Origin of the API the app is talking to (captured alongside the token). */
+  origin: string;
+  /** Wall-clock ms of the last capture — logged so staleness is visible. */
+  seenAt: number;
+  /** How many distinct tokens we've seen — proof the refresh loop is alive. */
+  rotations: number;
+}
+
+export function attachBearerCapture(page: Page): BearerHolder {
+  const holder: BearerHolder = { value: "", origin: "", seenAt: 0, rotations: 0 };
+  page.on("request", (req) => {
+    const auth = req.headers()["authorization"];
+    if (!auth || !req.url().includes("/api/")) return;
+    if (auth !== holder.value) holder.rotations += 1;
+    holder.value = auth;
+    holder.origin = new URL(req.url()).origin;
+    holder.seenAt = Date.now();
+  });
+  return holder;
+}
+
+/** Age of the captured bearer, in seconds (Infinity when nothing captured). */
+export function bearerAgeSec(holder: BearerHolder): number {
+  return holder.seenAt ? Math.round((Date.now() - holder.seenAt) / 1000) : Infinity;
+}
+
+/** Open the bottom dock's Runs tab (expanding the dock if collapsed) so the
+ *  per-run Refresh affordance is on screen. Best-effort: the caller has an
+ *  API fallback and must not die because a dock didn't open. */
+export async function openRunsDock(page: Page): Promise<boolean> {
+  try {
+    const expand = page.getByRole("button", { name: "Expand dock" });
+    if (await expand.count()) await expand.first().click();
+    const runsTab = page.getByRole("button", { name: /^Runs\b/ }).first();
+    await runsTab.click({ timeout: 10_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Make the app issue an authenticated request of its own — the dock's
+ *  "Refresh activity and runs" gesture (loadActivity + loadRuns). Two jobs:
+ *  it re-hydrates the runs table (so a run dispatched over the API appears as
+ *  a row), and it forces the page to send a request, which is how the passive
+ *  capture above learns the freshest token. Returns false if the affordance
+ *  wasn't there. */
+export async function warmAuth(page: Page): Promise<boolean> {
+  try {
+    const btn = page.getByRole("button", { name: "Refresh activity and runs" }).first();
+    await btn.click({ timeout: 10_000 });
+    await page
+      .waitForResponse((r) => r.url().includes("/runs") && r.request().method() === "GET", { timeout: 20_000 })
+      .catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The shape both response kinds share: `page.request` returns an APIResponse,
+ *  a captured network response is a Response. Structural, so one reader serves
+ *  the direct-API poll and the app's-own-gesture poll alike. */
+export interface BodyLike {
+  status(): number;
+  ok(): boolean;
+  text(): Promise<string>;
+}
+
+/** Read a response ONCE, keeping the raw text next to the parsed JSON.
+ *  Never poll blind: callers log `status` + `raw` whenever the field they
+ *  expected is missing, so an auth failure can never masquerade as an
+ *  undefined status again. */
+export async function readBody(resp: BodyLike): Promise<{
+  status: number;
+  ok: boolean;
+  json: any;
+  raw: string;
+}> {
+  const raw = await resp.text();
+  let json: any = null;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    /* not JSON — `raw` is the evidence */
+  }
+  return { status: resp.status(), ok: resp.ok(), json, raw };
+}
+
+/** Does this response look like an expired/absent token? Covers the HTTP
+ *  codes and the app's typed error envelope (`_err("signin_required"…)`). */
+export function looksUnauthorized(res: { status: number; raw: string }): boolean {
+  if (res.status === 401 || res.status === 403) return true;
+  return /signin_required|unauthorized|not authenticated|invalid.{0,12}token|expired/i.test(
+    res.raw.slice(0, 600)
+  );
+}
+
+/** /invoke and every tool wrapper may return the tool result as an object or
+ *  as a JSON string (mirrors frontend parseToolJsonResult). */
+export function parseToolResult(result: unknown): Record<string, any> | null {
+  if (result && typeof result === "object" && !Array.isArray(result)) return result as Record<string, any>;
+  if (typeof result === "string") {
+    try {
+      const parsed = JSON.parse(result);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch {
+      /* not JSON */
+    }
+  }
+  return null;
+}
