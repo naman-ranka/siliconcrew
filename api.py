@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import yaml
 
 from dotenv import load_dotenv
@@ -290,7 +290,10 @@ class FileInfo(BaseModel):
     type: str
     size: int
     modified: str
-    role: Optional[str] = None  # manifest role: rtl|tb|sdc|include|other
+    # Manifest role. Generated from the FileRole Literal (src/tools/manifest.py)
+    # so this description can't drift from the roles that actually exist; typed
+    # as a plain str so a client never fails on a role it doesn't know yet.
+    role: Optional[str] = Field(default=None, description=f"manifest role: {'|'.join(manifest_mod.ROLES)}")
 
 
 class SpecResponse(BaseModel):
@@ -387,6 +390,22 @@ def format_tool_result_for_api(content: str) -> dict:
         "status": status,
         "content": content[:5000] if len(content) > 5000 else content
     }
+
+
+def classify_result_status(result: dict) -> str:
+    """Activity-event status ("success"/"error") for a formatted tool result.
+
+    The event answers "did the tool CALL complete", not "did the design pass" —
+    domain verdicts (`test_passed`, `queued`) live in the payload and must not
+    render as errors. So only statuses that name a failure are errors; anything
+    else, including a status this code has never seen, is a success.
+    """
+    status = str(result.get("status", "")).strip().lower()
+    if "fail" in status or "error" in status:
+        return "error"
+    if status in {"timeout", "cancelled", "rejected", "denied"}:
+        return "error"
+    return "success"
 
 
 def resolve_report_path(workspace: str, run_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
@@ -2121,7 +2140,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             source="api_ws",
                             tool=call_meta.get("name", "unknown"),
                             result=msg.content,
-                            status="success" if result.get("status") == "success" else "error",
+                            status=classify_result_status(result),
                             tool_call_id=msg.tool_call_id,
                             arguments=call_meta.get("args", {}),
                         )

@@ -20,21 +20,31 @@ permissions:
   contents: read
   id-token: write   # required for keyless Workload Identity Federation
 
+# Two trigger paths (auto on main + manual dispatch) must never interleave
+# their backend/frontend `gcloud run deploy` pairs — a race leaves the two
+# services on different SHAs. Queue, never cancel: a rollout in flight
+# finishes before the next starts.
+concurrency:
+  group: deploy-app
+  cancel-in-progress: false
+
 jobs:
   deploy:
-    # Only when CI passed on main.
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Auto path: only when CI passed on main. Manual path: workflow_dispatch
+    # deploys the ref it was dispatched on (the guard used to reference only
+    # workflow_run, so the advertised manual trigger could never actually run).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     env:
       PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       REGION: ${{ vars.GCP_REGION }}
       AR_REPO: siliconcrew
-      SHA: ${{ github.event.workflow_run.head_sha }}
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - name: Checkout the tested commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Authenticate to Google Cloud (keyless / WIF)
         uses: google-github-actions/auth@v2

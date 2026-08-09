@@ -40,9 +40,11 @@ def write_file(workspace: str, path: str, content: str) -> Dict[str, Any]:
     rel = os.path.relpath(abspath, workspace)
     try:
         from src.tools import manifest as manifest_mod
+        from src.utils.session_context import current_session_id
 
         if rel.lower().endswith((".v", ".sv", ".vh", ".svh", ".sdc")):
-            manifest_mod.read_manifest(workspace)  # read = reconcile + persist
+            # read = reconcile + persist
+            manifest_mod.read_manifest(workspace, session_id=current_session_id())
     except Exception:
         # manifest reconciliation is best-effort; never fail a write on it
         pass

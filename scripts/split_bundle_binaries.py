@@ -17,7 +17,7 @@ drops only ``.odb`` + intermediate ``.gds``) — do not confuse them. The split
 line is deliberately by file TYPE inside the two result trees, so that the
 lightweight stage-completion markers (``.sdc``/``.json``/``.guide``/``.tcl``/
 ``.txt`` under ``orfs_results``; ``.rpt``/``.txt`` under ``orfs_reports``) stay
-in git and ``get_stage_status``/``get_ppa``/the design report remain
+in git and ``get_stage_status``/``get_synthesis_metrics``/the design report remain
 byte-identical on a self-host clone that never fetched the binaries.
 
 For each bundle that has any classified binary, ``--apply`` writes
@@ -46,7 +46,7 @@ SC_BINARIES_VERSION = 1
 # they live under so a same-extension file elsewhere in the workspace (e.g. an
 # RTL ``.v`` under ``inputs/`` or the repo source) is never touched. The line is
 # principled: KEEP whatever some on-instance reader consumes (stage markers
-# ``.sdc``/``.odb``, ``get_ppa`` on ``.rpt``/logs, ``design_report`` on
+# ``.sdc``/``.odb``, ``get_synthesis_metrics`` on ``.rpt``/logs, ``design_report`` on
 # ``design_metrics.json``/``run_meta``), MOVE unread heavy blobs. That is why
 # ``mem.json`` (the OpenROAD macro/mem placement dump, ~1.7 MB in aes — no
 # reader) and ``route.guide`` (~MB routing guides — no reader) move despite

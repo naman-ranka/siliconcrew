@@ -84,7 +84,8 @@ from src.tools.wrappers import (
 )
 from src.utils.session_manager import SessionManager
 from src.utils.attempt_logger import log_tool_call, log_tool_result
-from src.platform_engines.request_scope import run_in_session
+from src.platform_engines.request_scope import resolve_workspace_path, run_in_session
+from src.platform_engines.workspace_flusher import get_workspace_flusher
 from src.platform_engines import auth as auth_engine
 from src.platform_engines.identity import Action, AuthError, authorize
 
@@ -279,6 +280,25 @@ class RTLDesignMCPServer:
     def _scoped_user_id(self):
         return auth_engine.scoped_user_id(self._current_identity())
 
+    def _workspace_path(self, session_id: str) -> str:
+        """The workspace tools for ``session_id`` actually act on (dev#43).
+
+        ``session_manager.get_workspace_path`` is the LOGICAL layout; on hosted,
+        ``run_in_session`` binds the provider's scratch materialization instead,
+        so every reply that names a workspace — and, critically, the path the
+        activity log is written to — must come from the same provider. Pure: it
+        never materializes, so it is safe on read/reply paths. Providers without
+        the accessor (older test fakes) keep today's logical answer. A provider
+        that fails to construct at all (settings error) also degrades to the
+        logical path — a reply/log site must never be the thing that turns a
+        misconfiguration into an unhandled tool failure."""
+        try:
+            return resolve_workspace_path(
+                session_id, fallback=self.session_manager.get_workspace_path
+            )
+        except Exception:
+            return self.session_manager.get_workspace_path(session_id)
+
     def _resource_sessions(self) -> list[str]:
         """Sessions this MCP identity may see through the RESOURCE surface —
         mirrors the tool path's scoping so resources can't leak past the same
@@ -344,7 +364,7 @@ class RTLDesignMCPServer:
         # owner-scoped / all) — not every tenant's sessions.
         sessions = self._resource_sessions()
         for session_id in sessions:
-            workspace = self.session_manager.get_workspace_path(session_id)
+            workspace = self._workspace_path(session_id)
             encoded_session_id = quote(session_id, safe="")
             
             # Session info resource
@@ -409,7 +429,7 @@ class RTLDesignMCPServer:
                 session_id = unquote(encoded_session_id)
                 filename = unquote(encoded_filename)
                 self._assert_session_readable(session_id)  # scope BEFORE touching the workspace
-                workspace = self.session_manager.get_workspace_path(session_id)
+                workspace = self._workspace_path(session_id)
                 filepath = os.path.join(workspace, filename)
 
                 if not os.path.exists(filepath):
@@ -441,7 +461,7 @@ class RTLDesignMCPServer:
                 self._assert_session_readable(session_id)  # scope BEFORE reading metadata/files
                 # Session metadata
                 meta = self.session_manager.get_session_metadata(session_id)
-                workspace = self.session_manager.get_workspace_path(session_id)
+                workspace = self._workspace_path(session_id)
                 
                 files = []
                 if os.path.exists(workspace):
@@ -517,7 +537,7 @@ class RTLDesignMCPServer:
                 tag=session_id, model_name="claude-via-mcp", user_id=self._scoped_user_id()
             )
             
-            workspace = self.session_manager.get_workspace_path(session_id)
+            workspace = self._workspace_path(session_id)
             
             # Set as current session. Workspace resolution is now per-call via
             # session_request_scope (no process-global env mutation).
@@ -728,7 +748,7 @@ Ready to design! What would you like to create?"""
                     user_id=self._scoped_user_id(),
                 )
                 self.current_session = session_id
-                workspace = self.session_manager.get_workspace_path(session_id)
+                workspace = self._workspace_path(session_id)
                 project_line = f"\nProject: {project_id}" if project_id else ""
                 return [TextContent(
                     type="text",
@@ -769,7 +789,7 @@ Ready to design! What would you like to create?"""
             # uid is None → any existing session).
             if not self.session_manager.owns_session(session_id, self._scoped_user_id()):
                 return [TextContent(type="text", text=f"❌ Session '{session_id}' not found.")]
-            workspace = self.session_manager.get_workspace_path(session_id)
+            workspace = self._workspace_path(session_id)
 
             self.current_session = session_id
             return [TextContent(
@@ -781,7 +801,7 @@ Ready to design! What would you like to create?"""
             if not self.current_session:
                 return [TextContent(type="text", text="No active session. Load a prompt or call create_session_tool.")]
             
-            workspace = self.session_manager.get_workspace_path(self.current_session)
+            workspace = self._workspace_path(self.current_session)
             meta = self.session_manager.get_session_metadata(self.current_session)
             
             import json
@@ -844,10 +864,10 @@ Ready to design! What would you like to create?"""
             if session_id:
                 if not self.session_manager.owns_session(session_id, self._scoped_user_id()):
                     return [TextContent(type="text", text=f"❌ Session '{session_id}' not found.")]
-                workspace = self.session_manager.get_workspace_path(session_id)
+                workspace = self._workspace_path(session_id)
                 self.current_session = session_id
             elif self.current_session:
-                workspace = self.session_manager.get_workspace_path(self.current_session)
+                workspace = self._workspace_path(self.current_session)
 
             prompt_text, prompt_source, resolved_version = _load_architect_prompt()
             payload = f"{prompt_text}"
@@ -907,18 +927,68 @@ Ready to design! What would you like to create?"""
         # Execute the tool
         tool_func = tool_map[name]
         active_session = self.current_session
-        active_workspace = self.session_manager.get_workspace_path(active_session)
+        # Pre-resolved path for the ONE place events may still be written
+        # outside the bound scope: the scope-entry failure fallback in the
+        # except handler below. Both normal-path events (call AND result) are
+        # logged inside the bound scope via _invoke_with_call_log — attempt_
+        # logger drops an event when the dir is absent and otherwise writes
+        # attempt_events.jsonl there, so logging outside the scope either
+        # vanished on a cold instance or landed on never-synced instance disk
+        # (invariants 3 + 9). Cost stated plainly: on a cold hosted session
+        # the "started" card appears after hydration, not before.
+        active_workspace = self._workspace_path(active_session)
         identity = self._current_identity()
         uid = auth_engine.scoped_user_id(identity)
 
-        try:
+        # Both events are logged INSIDE the bound scope, before the scope's
+        # exit sync — so a mutating call's synchronous sync covers its own
+        # result event (previously the result was appended AFTER the sync and
+        # sat on instance disk unscheduled: every successful mutating call's
+        # "finished" card was lost to an instance recycle). It also pins both
+        # events to the SAME workspace resolution (the bound scope's), so a
+        # fallback provider can no longer split one call's events across two
+        # files. This mirrors /invoke, which logs call+result inside
+        # run_scoped. ``logged_result`` tells the outer handler whether the
+        # error path still needs a best-effort event (scope-entry failures —
+        # e.g. hydration — never reach the inner logging).
+        logged_result = {"done": False}
+
+        def _invoke_with_call_log(args):
             log_tool_call(
-                workspace=active_workspace,
+                workspace=get_workspace_path(),
                 session_id=active_session,
                 source="mcp",
                 tool=name,
-                arguments=arguments,
+                arguments=args,
             )
+            try:
+                result = tool_func.invoke(args)
+            except Exception as exc:
+                log_tool_result(
+                    workspace=get_workspace_path(),
+                    session_id=active_session,
+                    source="mcp",
+                    tool=name,
+                    result=None,
+                    status="error",
+                    error=str(exc),
+                    arguments=args,
+                )
+                logged_result["done"] = True
+                raise
+            log_tool_result(
+                workspace=get_workspace_path(),
+                session_id=active_session,
+                source="mcp",
+                tool=name,
+                result=str(result),
+                status="success",
+                arguments=args,
+            )
+            logged_result["done"] = True
+            return result
+
+        try:
             # Run the sync LangChain tool inside a per-call session scope bound in
             # the worker thread, so the workspace resolves task-locally and
             # concurrent MCP clients are isolated (replaces the RTL_WORKSPACE
@@ -944,37 +1014,61 @@ Ready to design! What would you like to create?"""
             mutates = name in _SHARED_MUTATING_TOOLS
             result = await run_in_session(
                 active_session,
-                tool_func.invoke,
+                _invoke_with_call_log,
                 arguments,
                 user_id=uid,
                 tier=identity.tier,
                 sync=mutates and not self.defer_workspace_sync,
             )
-            log_tool_result(
-                workspace=active_workspace,
-                session_id=active_session,
-                source="mcp",
-                tool=name,
-                result=str(result),
-                status="success",
-                arguments=arguments,
-            )
-            
+            # Read-only calls append activity events with NO sync of their own
+            # (the F2 gate above). Mark the flusher so those appends ride the
+            # background incremental flush instead of waiting for the next
+            # mutating call — otherwise an instance recycle, or another
+            # writer's manifest bump forcing a hydration swap, deletes them.
+            # Mutating calls synced synchronously inside the scope, AFTER both
+            # events were logged (see _invoke_with_call_log) — so only the
+            # non-synced paths need marking, and that claim is now true by
+            # ordering, not by hope. Self-host: the flusher no-ops
+            # (LocalWorkspaceProvider has no sync), so this is free.
+            if not (mutates and not self.defer_workspace_sync):
+                get_workspace_flusher().mark_dirty(active_session)
+
             return [TextContent(type="text", text=str(result))]
-            
+
         except Exception as e:
-            log_tool_result(
-                workspace=active_workspace,
-                session_id=active_session,
-                source="mcp",
-                tool=name,
-                result=None,
-                status="error",
-                error=str(e),
-                arguments=arguments,
-            )
+            if not logged_result["done"]:
+                # The scope itself failed (hydration, provider error) before
+                # the inner logging could run: best-effort error event at the
+                # pre-resolved path so the failure is not invisible.
+                log_tool_result(
+                    workspace=active_workspace,
+                    session_id=active_session,
+                    source="mcp",
+                    tool=name,
+                    result=None,
+                    status="error",
+                    error=str(e),
+                    arguments=arguments,
+                )
+            else:
+                # The tool succeeded (its success event is logged in-scope)
+                # but the scope-EXIT sync raised afterwards. Two different
+                # facts — the tool ran, the persist failed — and the client
+                # is being told "Error", so the log must say why or the
+                # activity trail and the reply disagree about the same call.
+                log_tool_result(
+                    workspace=active_workspace,
+                    session_id=active_session,
+                    source="mcp",
+                    tool=name,
+                    result=None,
+                    status="error",
+                    error=f"workspace sync failed after the call succeeded: {e}",
+                    arguments=arguments,
+                )
+            get_workspace_flusher().mark_dirty(active_session)
             return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
-    
+
     def _hosted_auth_middleware(self):
         """Starlette middleware enforcing WorkOS bearer auth — hosted only.
 

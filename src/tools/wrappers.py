@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from typing import Any
+from typing import Any, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from src.tools.run_linter import run_linter
@@ -27,6 +27,7 @@ from src.tools.file_patch import apply_unified_patch
 # tool/agent module. Re-exported here for backward compatibility — ~30 call
 # sites in this file resolve the workspace via get_workspace_path().
 from src.utils.workspace import get_workspace_path, resolve_in_workspace
+from src.utils.session_context import current_session_id
 
 
 def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
@@ -101,10 +102,30 @@ def write_file(filename: str, content: str | None = None) -> str:
         return f"Error: {exc}"
     return f"Successfully wrote to {filename}"
 
+# Honest large-file window for read_file: unbounded reads of run artifacts
+# (sim.log can be multi-MB of per-cycle $display) went whole into the tool
+# result. Head + tail with an explicit omission marker — never a silent cut.
+#
+# DESIGN SOURCES get a far higher threshold: read_file pairs with write_file
+# in the agent loop, and a windowed read of a 70 KB generated sbox/LUT that
+# is then edited and written back DESTROYS the omitted bytes. Real RTL stays
+# well under 1 MiB (this repo's largest example is ~46 KB); anything over it
+# is windowed with the marker, at which point editing-by-rewrite was never
+# going to be sane anyway.
+_READ_FILE_MAX_BYTES = 64 * 1024
+_READ_FILE_HEAD_BYTES = 32 * 1024
+_READ_FILE_TAIL_BYTES = 16 * 1024
+_READ_FILE_SOURCE_EXTS = {".v", ".sv", ".vh", ".svh", ".sdc", ".yaml", ".yml", ".json", ".md", ".tcl", ".py"}
+_READ_FILE_SOURCE_MAX_BYTES = 1024 * 1024
+
+
 @tool
 def read_file(filename: str) -> str:
     """
-    Reads content from a file in the workspace.
+    Reads content from a file in the workspace. Large files (over 64 KiB) are
+    returned as head + tail with an explicit omission marker — for a systematic
+    failure the first occurrences are the informative ones, and an unbounded
+    read of a multi-MB sim log would swamp the model's context.
     Args:
         filename: Name of the file to read.
     """
@@ -117,8 +138,26 @@ def read_file(filename: str) -> str:
     if not os.path.exists(filepath):
         return f"Error: File {filename} does not exist."
 
-    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-        return f.read()
+    size = os.path.getsize(filepath)
+    ext = os.path.splitext(filepath)[1].lower()
+    threshold = (
+        _READ_FILE_SOURCE_MAX_BYTES if ext in _READ_FILE_SOURCE_EXTS else _READ_FILE_MAX_BYTES
+    )
+    if size <= threshold:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    # Binary reads: a byte seek in text mode is undefined for arbitrary offsets.
+    with open(filepath, "rb") as f:
+        head = f.read(_READ_FILE_HEAD_BYTES).decode("utf-8", errors="replace")
+        f.seek(size - _READ_FILE_TAIL_BYTES)
+        tail = f.read().decode("utf-8", errors="replace")
+    omitted = size - _READ_FILE_HEAD_BYTES - _READ_FILE_TAIL_BYTES
+    return (
+        f"{head}\n"
+        f"... [{omitted} bytes omitted — file is {size} bytes; "
+        f"this is the first {_READ_FILE_HEAD_BYTES} and last {_READ_FILE_TAIL_BYTES} bytes of {filename}] ...\n"
+        f"{tail}"
+    )
 
 @tool
 def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
@@ -223,7 +262,7 @@ def get_manifest() -> str:
     The manifest is the single source of truth shared with the UI; auto-derived if absent.
     """
     workspace = get_workspace_path()
-    m = manifest_mod.read_manifest(workspace)
+    m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
     return json.dumps(m.model_dump(), indent=2)
 
 
@@ -232,7 +271,7 @@ def update_manifest(updates_json: str) -> str:
     """
     Upserts manifest fields. Pass a JSON object with any of:
     synthTop, simTop, clockPeriodNs, platform, or files: [{name, role}] to override roles.
-    Roles: rtl | tb | sdc | include | other.
+    Roles: {roles}. An unknown role is rejected and nothing is written.
     """
     workspace = get_workspace_path()
     try:
@@ -241,8 +280,38 @@ def update_manifest(updates_json: str) -> str:
             return "Error: updates_json must be a JSON object."
     except Exception as exc:
         return f"Error: invalid updates_json ({exc})."
-    m = manifest_mod.write_manifest(workspace, updates)
+    try:
+        m = manifest_mod.write_manifest(workspace, updates, session_id=current_session_id())
+    except ValueError as exc:
+        return f"Error: {exc}"
     return json.dumps(m.model_dump(), indent=2)
+
+
+# The role list the agent and MCP clients see is GENERATED from the FileRole
+# Literal — a hand-copied list here is exactly how a tool description starts
+# advertising roles that no longer exist (or hiding ones that do).
+update_manifest.description = update_manifest.description.replace(
+    "{roles}", " | ".join(manifest_mod.ROLES)
+)
+
+
+def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -> dict:
+    """Front the dispatch reply with any duplicate-module collision in THIS set.
+
+    The manifest carries the same warnings, but a run is where they cost
+    something — so they lead the reply, ahead of the run record, rather than
+    waiting to be noticed in metadata. Only the collisions actually present in
+    the assembled compile set are reported; the message adds the remedy the
+    compiler's own error can't (which file to ignore), it does not restate it.
+    Kept INSIDE the JSON so ``/invoke`` still parses a typed result.
+    """
+    try:
+        warnings = manifest_mod.compile_set_collisions(workspace, compile_files)
+    except Exception:
+        return result
+    if not warnings:
+        return result
+    return {"manifestWarnings": warnings, **result}
 
 
 @tool
@@ -265,7 +334,7 @@ def run_isolated_simulation(
         pass_marker: explicit pass marker required for a passing status.
     """
     workspace = get_workspace_path()
-    m = manifest_mod.read_manifest(workspace)
+    m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
     top = sim_top or m.simTop
     if not top:
         return "Error: no simTop in manifest and none provided. Set it with update_manifest."
@@ -282,7 +351,7 @@ def run_isolated_simulation(
         sim_profile=sim_profile,
         pass_marker=pass_marker,
     )
-    return json.dumps(result, indent=2)
+    return json.dumps(_with_manifest_warnings(result, workspace, files), indent=2)
 
 
 @tool
@@ -335,7 +404,7 @@ def start_synthesis(
         constraints_mode=constraints_mode,
         max_stage=max_stage,
     )
-    return json.dumps(result, indent=2)
+    return json.dumps(_with_manifest_warnings(result, workspace, abs_files), indent=2)
 
 
 @tool
@@ -391,8 +460,17 @@ def _wait_for_synthesis_job(
     start = time.time()
     max_wait = max(1, min(int(max_wait_sec), WAIT_MAX_WAIT_SEC))
     poll_interval = max(1, int(poll_interval_sec))
+    status = None
 
-    while (time.time() - start) < max_wait:
+    # Sample at the TOP of every iteration, including the one that discovers the
+    # deadline has passed — so the run going terminal during the last sleep is
+    # still caught (F8) — and never sample after the loop. A status call is not
+    # free on hosted (it can reconcile and re-tar the workspace), so a post-loop
+    # resample made the worst case max_wait + TWO slow calls; that overshoot is
+    # what tripped the MCP idle abort in dev#30. Now: max_wait + <1s of residual
+    # sleep + ONE call (the sleep floor is 1s, so the deadline-discovering
+    # sample can start up to ~1s late).
+    while True:
         status = collect_synthesis_status(run_id, workspace=workspace)
         if status.get("status") in {"completed", "failed"}:
             status["waited_sec"] = round(time.time() - start, 2)
@@ -408,18 +486,11 @@ def _wait_for_synthesis_job(
             break
         time.sleep(min(sleep_s, max(1, int(remaining))))
 
-    # One final sample after the wait loop: the run may have gone terminal
-    # during the last sleep — report that, not a stale pre-sleep snapshot.
-    last = collect_synthesis_status(run_id, workspace=workspace)
-    last["waited_sec"] = round(time.time() - start, 2)
-    if last.get("status") in {"completed", "failed"}:
-        last["timed_out"] = False
-        return last
-
     # timeout path returns latest known status with explicit timeout flag
-    last["timed_out"] = True
-    last["next_action"] = "Call wait_for_synthesis again or poll with get_synthesis_status."
-    return last
+    status["waited_sec"] = round(time.time() - start, 2)
+    status["timed_out"] = True
+    status["next_action"] = "Call wait_for_synthesis again or poll with get_synthesis_status."
+    return status
 
 
 @tool
@@ -439,7 +510,8 @@ def wait_for_synthesis(run_id: str, max_wait_sec: int = 30, poll_interval_sec: i
 
 
 @tool
-def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0, end_time: int = 1000) -> str:
+def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
+                  end_time: Optional[int] = None) -> str:
     """
     Reads a VCD waveform file to inspect signal values.
     Use this when simulation fails to understand WHY.
@@ -447,7 +519,7 @@ def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0, end_ti
         vcd_file: Name of the .vcd file (e.g., 'dump.vcd').
         signals: List of signal names to inspect (e.g., ['clk', 'rst', 'count']).
         start_time: Start time to view.
-        end_time: End time to view.
+        end_time: End time to view; omit to read to the end of the waveform.
     """
     workspace = get_workspace_path()
     abs_file = os.path.join(workspace, vcd_file)
@@ -471,6 +543,11 @@ def get_synthesis_metrics(run_id: str = None) -> str:
     """
     Returns structured synthesis metrics for a run.
     Parses standard ORFS outputs (6_finish.rpt + synth_stat.txt) and returns JSON.
+    Read timing from worst_slack_ns (the REAL margin, signed) and timing_met —
+    NOT from wns_ns, which is ORFS's report_wns and clamps positive slack to 0,
+    so it reads 0.00 for any design that met timing. fmax_mhz is the achieved
+    frequency at timing_corner (null when the run carries no slack data — never
+    the clock target); parse_notes says when it was derived rather than read.
     """
     workspace = get_workspace_path()
     result = collect_synthesis_metrics(workspace=workspace, run_id=run_id)
@@ -1039,14 +1116,39 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
     status = r.get("status")
     tail = ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()[-16000:]
 
+    # JSON, not prose: raw simulator output legitimately contains words like
+    # "Error", and the API-side substring heuristic would classify a passing
+    # run as an error from its own tail. A structured status keeps the verdict
+    # out of the tail's hands (same contract as simulation_tool).
     if status == "PASS":
-        return f"Cocotb Test PASSED ✅  ({r['passed']} testcase(s)) — verified in the reference container."
-    if status == "TIMEOUT":
-        return ("Cocotb Test DID NOT TERMINATE ⏱️ — treat this as a FAILURE (likely a combinational "
-                f"loop, missing clock, or unbounded test). Output tail:\n{tail}")
-    if status == "FAIL":
-        return f"Cocotb Test FAILED ❌  ({r['failed']} failing testcase(s)).\nOutput tail:\n{tail}"
-    return f"Cocotb Test ERROR ⚠️ (build/collection failure — no test ran).\nOutput tail:\n{tail}"
+        payload = {
+            "status": "test_passed",
+            "summary": f"Cocotb Test PASSED ✅  ({r['passed']} testcase(s)) — verified in the reference container.",
+            "passed": r["passed"],
+            "failed": 0,
+            "output_tail": tail[-4000:],
+        }
+    elif status == "TIMEOUT":
+        payload = {
+            "status": "timeout",
+            "summary": ("Cocotb Test DID NOT TERMINATE ⏱️ — treat this as a FAILURE (likely a "
+                        "combinational loop, missing clock, or unbounded test)."),
+            "output_tail": tail,
+        }
+    elif status == "FAIL":
+        payload = {
+            "status": "test_failed",
+            "summary": f"Cocotb Test FAILED ❌  ({r['failed']} failing testcase(s)).",
+            "failed": r["failed"],
+            "output_tail": tail,
+        }
+    else:
+        payload = {
+            "status": "error",
+            "summary": "Cocotb Test ERROR ⚠️ (build/collection failure — no test ran).",
+            "output_tail": tail,
+        }
+    return json.dumps(payload, indent=2)
 
 @tool
 def sby_tool(sby_file: str) -> str:

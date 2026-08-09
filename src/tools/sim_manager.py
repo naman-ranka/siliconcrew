@@ -28,6 +28,7 @@ RUNS_DIRNAME = "sim_runs"
 INDEX_FILENAME = "index.json"
 LATEST_FILENAME = "LATEST"
 RUN_META_FILENAME = "run_meta.json"
+SIM_LOG_FILENAME = "sim.log"
 
 _ALLOC_LOCK = threading.Lock()
 _PROVENANCE_CACHE: Dict[str, Any] = {}
@@ -141,6 +142,72 @@ def _provenance(platform: Optional[str]) -> Dict[str, Any]:
     }
 
 
+# Data a testbench loads at RUNTIME with $readmemh/$readmemb. ASCII digit text
+# only, which is why ".bin" is deliberately absent — $readmem reads text; raw
+# binary is $fread's job, so listing .bin here would encode a factual error.
+# ".vcd" and ".log" must NEVER be added: they are run OUTPUT, and copying one
+# run's output into another run's directory destroys the isolation this module
+# exists to provide.
+_DATA_EXTS = {".mem", ".hex", ".vmem", ".dat", ".txt"}
+
+
+def _stage_data_files(workspace: str, run_dir: str) -> List[Dict[str, Any]]:
+    """Copy the workspace's data files into the run dir before compile.
+
+    vvp runs with ``cwd=run_dir``, so a testbench's ``$readmemb("weights.mem", …)``
+    — a bare, CWD-relative path — had nothing to open, and the sim silently read
+    all-X memory. Every data file the user's ``ignore`` rules didn't exclude gets
+    a copy here: at its workspace-relative path (so ``$readmemh("data/w.hex")``
+    resolves) and, when its basename is unique across the staged set, at the run
+    dir root (the ecosystem convention is to reference data by basename).
+
+    Copies, never links — the run dir stays a self-contained record of what ran.
+    The extension allowlist only decides what to STAGE; it never claims to have
+    validated a file's format.
+    """
+    from src.tools import manifest as manifest_mod
+
+    ignore = manifest_mod.stored_ignore(workspace)
+    candidates = [
+        rel for rel in manifest_mod.iter_workspace_files(workspace, ignore)
+        if os.path.splitext(rel)[1].lower() in _DATA_EXTS
+    ]
+    basename_counts: Dict[str, int] = {}
+    for rel in candidates:
+        base = os.path.basename(rel)
+        basename_counts[base] = basename_counts.get(base, 0) + 1
+
+    staged: List[Dict[str, Any]] = []
+    for rel in candidates:
+        src = os.path.join(workspace, rel)
+        if not os.path.isfile(src):
+            continue
+        placements: List[str] = []
+        for dest_rel in _placements_for(rel, basename_counts):
+            dest = os.path.join(run_dir, dest_rel.replace("/", os.sep))
+            try:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                shutil.copyfile(src, dest)
+            except Exception:
+                continue
+            placements.append(dest_rel)
+        if placements:
+            staged.append({"source": rel, "stagedAs": placements})
+    return staged
+
+
+def _placements_for(rel: str, basename_counts: Dict[str, int]) -> List[str]:
+    """Where one data file is staged: its relative path, plus the run-dir root
+    when its basename is unambiguous (two ``init.mem`` files can't both be the
+    root ``init.mem``, and guessing which one wins would be a lie)."""
+    base = os.path.basename(rel)
+    if rel == base:
+        return [rel]
+    if basename_counts.get(base, 0) == 1:
+        return [rel, base]
+    return [rel]
+
+
 def _find_vcd(run_dir: str) -> Optional[str]:
     """Return the workspace-relative path of the VCD produced in the run dir."""
     candidates = []
@@ -199,6 +266,7 @@ def _persist_resolution_failure(
         "provenance": _provenance(platform),
         "mode": mode,
         "vcdPath": "",
+        "stagedDataFiles": [],  # nothing ran, so nothing was staged
         "passMarkerFound": False,
         "passMarker": "",
         "failure": {"type": res_err.code, "firstFailureLine": res_err.message, "timeNs": None},
@@ -285,7 +353,12 @@ def run_sim_isolated(
         stdcell_source = resolution.stdcell_source
         forward_run_id = None  # already resolved; don't re-resolve under cwd
 
+    # Runtime data ($readmem*) must be in place BEFORE the run — vvp's cwd is
+    # the run dir, not the workspace.
+    staged_data = _stage_data_files(workspace, run_dir)
+
     created_at = _now_iso()
+    log_abs = os.path.join(run_dir, SIM_LOG_FILENAME)
     sim_result = _runner(
         verilog_files=abs_files,
         top_module=top_module,
@@ -297,6 +370,7 @@ def run_sim_isolated(
         sim_profile=sim_profile,
         pass_marker=pass_marker,
         timeout=timeout,
+        log_path=log_abs,
     )
 
     vcd_abs = _find_vcd(run_dir)
@@ -322,6 +396,8 @@ def run_sim_isolated(
         "provenance": _provenance(platform),
         "mode": mode,
         "vcdPath": vcd_rel,
+        # Evidence: exactly which data files this run could see, and where.
+        "stagedDataFiles": staged_data,
         "passMarkerFound": bool(sim_result.get("pass_marker_found")),
         "passMarker": sim_result.get("pass_marker") or pass_marker,
         "failure": failure,
@@ -344,6 +420,14 @@ def run_sim_isolated(
         "stderrTail": sim_result.get("stderr_tail", ""),
         "logTruncated": bool(sim_result.get("log_truncated")),
     }
+    # Advertise the full log only when it is really there: run_simulation has
+    # early returns (bad mode/profile, post-synth resolution errors) that never
+    # reach the toolchain and so produce no streams to write. WORKSPACE-relative
+    # like every sibling path on this record (vcdPath, resolvedNetlist): a bare
+    # basename was unreadable through read_file, which resolves against the
+    # workspace root — the durable evidence existed and no tool could open it.
+    if os.path.exists(log_abs):
+        sim_run["logFile"] = os.path.relpath(log_abs, workspace).replace(os.sep, "/")
 
     _persist_run_meta(run_dir, sim_run)
     _append_to_index(workspace, sim_run)
@@ -423,7 +507,20 @@ def list_sim_runs(workspace: str) -> List[Dict[str, Any]]:
     if not os.path.isdir(os.path.join(workspace, RUNS_DIRNAME)):
         return []
     index = _load_index(workspace)
-    runs = sorted(index.get("runs", []), key=lambda x: x.get("created_at") or "", reverse=True)
+    # run_id tie-breaker: two runs can share a created_at at clock granularity,
+    # and a stable sort would then leave them oldest-first. Numeric, so the
+    # ordering survives the sim_9999 -> sim_10000 id-width change.
+    def _ordinal(item: Dict[str, Any]) -> int:
+        try:
+            return int(str(item.get("run_id", "")).rsplit("_", 1)[1])
+        except (IndexError, ValueError):
+            return 0
+
+    runs = sorted(
+        index.get("runs", []),
+        key=lambda x: (x.get("created_at") or "", _ordinal(x)),
+        reverse=True,
+    )
     out: List[Dict[str, Any]] = []
     for item in runs:
         run_id = item.get("run_id")

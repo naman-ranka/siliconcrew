@@ -37,7 +37,7 @@ from src.api.activity import read_activity
 from src.api import workspace_fs
 from src.api import tool_catalog
 from src.utils.attempt_logger import log_tool_call, log_tool_result
-from src.utils.session_context import SessionContext, session_scope
+from src.utils.session_context import SessionContext, current_session_id, session_scope
 from src.utils.paths import is_within
 from src.platform_engines import auth as _auth_engine
 from src.tools import manifest as manifest_mod
@@ -209,6 +209,14 @@ def _synth_to_run(workspace: str, item: Dict[str, Any]) -> Dict[str, Any]:
             "tnsNs": _pick("tns_ns", "tnsNs"),
             "fmaxMhz": _pick("fmax_mhz", "fmaxMhz"),
             "powerMw": _pick("power_mw", "powerMw"),
+            # The honest timing set. Kept identical to the run-detail payload
+            # below: this card reads the PERSISTED snapshot and the detail panel
+            # recomputes, so any field present in one must be present in both or
+            # the same run shows two different answers in one UI.
+            "worstSlackNs": _pick("worst_slack_ns", "worstSlackNs"),
+            "timingMet": _pick("timing_met", "timingMet"),
+            "timingCorner": _pick("timing_corner", "timingCorner"),
+            "timingNote": _pick("timing_note", "timingNote"),
         }
 
     return {
@@ -325,6 +333,20 @@ def _snapshot_spec(workspace: str, ignore: Optional[List[str]] = None) -> Option
     return {"filename": spec_files[0], "content": content, "parsed": parsed}
 
 
+def _compile_set_warnings(workspace: str, rel_files: List[str]) -> List[str]:
+    """Duplicate-module warnings for a compile set the IDE is about to run.
+
+    The Simulate/Synthesize buttons call the run functions directly rather than
+    the agent wrappers, so without this the IDE user — sc#66's actual protagonist
+    — would be the only actor who never sees the collision. Best-effort: a
+    warning is never worth failing a dispatch over.
+    """
+    try:
+        return manifest_mod.compile_set_collisions(workspace, rel_files)
+    except Exception:
+        return []
+
+
 def _code_file_rel_paths(workspace: str, manifest: manifest_mod.DesignManifest) -> List[str]:
     """Relative paths served by GET /code: manifest files with code roles
     (rtl/tb/include) plus any .v/.sv the exclusion-aware scan found."""
@@ -343,7 +365,7 @@ def _snapshot_code(workspace: str, manifest: Optional[manifest_mod.DesignManifes
     root files); the frontend keys code tabs by exactly this value.
     """
     if manifest is None:
-        manifest = manifest_mod.read_manifest(workspace)
+        manifest = manifest_mod.read_manifest(workspace, session_id=current_session_id())
     out: List[Dict[str, Any]] = []
     for rel in _code_file_rel_paths(workspace, manifest):
         with open(os.path.join(workspace, rel), "r", errors="ignore") as f:
@@ -476,7 +498,12 @@ def build_actions_router(
         uid = require_owned(session_id, identity)
         workspace = await require_workspace(session_id)
         updates = {k: v for k, v in body.model_dump().items() if v is not None}
-        manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id, _uid=uid, _id=identity, mutates=True)
+        try:
+            manifest = await run_scoped(session_id, workspace, manifest_mod.write_manifest, workspace, updates, session_id, _uid=uid, _id=identity, mutates=True)
+        except ValueError as exc:
+            # Role validation lives in write_manifest (so every caller is covered);
+            # here it just becomes a 400 instead of a 500.
+            _err("invalid_role", str(exc), status=400)
         return _ok({"manifest": manifest.model_dump()})
 
     @router.post("/files")
@@ -606,14 +633,14 @@ def build_actions_router(
                  "vcdPath": sim_run.get("vcdPath")},
                 ok=passed,
             )
-            return {"simRun": sim_run}
+            return {"simRun": sim_run, "warnings": _compile_set_warnings(workspace, rel_files)}
 
         out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error") == "no_sim_top":
             _err("no_sim_top", "No simTop in the manifest and none provided.", status=400)
         if out.get("error") == "no_files":
             _err("no_files", "Manifest has no rtl/tb files to simulate.", status=400)
-        return _ok({"run": out["simRun"]})
+        return _ok({"run": out["simRun"], "manifestWarnings": out["warnings"]})
 
     # ---- Synthesize (async job + poll) -------------------------------------
 
@@ -665,7 +692,7 @@ def build_actions_router(
                  "status": (result or {}).get("status")},
                 ok=dispatched,
             )
-            return {"result": result}
+            return {"result": result, "warnings": _compile_set_warnings(workspace, src_files)}
 
         out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error") == "no_synth_top":
@@ -682,7 +709,8 @@ def build_actions_router(
         if isinstance(result, dict) and result.get("status") == "error":
             _err("invalid_request", result.get("message", "Invalid synthesis request."),
                  details={"supported_stages": result.get("supported_stages")}, status=400)
-        return _ok({"runId": result.get("run_id"), "pollAfterSec": result.get("poll_after_sec"), "raw": result})
+        return _ok({"runId": result.get("run_id"), "pollAfterSec": result.get("poll_after_sec"),
+                    "raw": result, "manifestWarnings": out["warnings"]})
 
     # ---- Activity feed (unified per-session tool event log) -----------------
 
@@ -873,10 +901,15 @@ def build_actions_router(
             ("tns_ns", "TNS (ns)"),
             ("power_mw", "Power (mW)"),
         ]
+        # get_synthesis_metrics returns the PPA fields NESTED under "metrics";
+        # the wrapper's top level carries status/run_id/sources. Reading the
+        # wrapper made every value and deltaPct in this diff None.
+        pa = (ma or {}).get("metrics") or {}
+        pb = (mb or {}).get("metrics") or {}
         rows = []
         for key, label in metric_keys:
-            va = (ma or {}).get(key)
-            vb = (mb or {}).get(key)
+            va = pa.get(key)
+            vb = pb.get(key)
             delta_pct = None
             try:
                 if va not in (None, 0) and vb is not None:
@@ -923,6 +956,11 @@ def build_actions_router(
             "tnsNs": metrics.get("tns_ns"),
             "fmaxMhz": metrics.get("fmax_mhz"),
             "powerMw": metrics.get("power_mw"),
+            # Must mirror _synth_to_run's card payload exactly — see the note there.
+            "worstSlackNs": metrics.get("worst_slack_ns"),
+            "timingMet": metrics.get("timing_met"),
+            "timingCorner": metrics.get("timing_corner"),
+            "timingNote": metrics.get("timing_note"),
         } if metrics else None
         return _ok({"run": {
             "id": run_id,

@@ -7,7 +7,6 @@ import json
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 from src.tools.spec_manager import load_yaml_file, DesignSpec
-from src.tools.get_ppa import get_ppa_metrics
 from src.tools.synthesis_manager import get_run_dir, get_synthesis_metrics
 from src.tools.sim_manager import list_sim_runs
 
@@ -43,6 +42,63 @@ def _spec_like_files(dir_path: str) -> list:
     if not dir_path or not os.path.isdir(dir_path):
         return []
     return sorted(f for f in os.listdir(dir_path) if _is_spec_like(f))
+
+
+def _files_by_role(workspace_path: str) -> Dict[str, list]:
+    """Workspace files grouped by their MANIFEST role (invariant 1).
+
+    Replaces a root-only ``os.listdir`` + suffix guess that filed every nested
+    file nowhere and every ``*_props.sv`` under "RTL". Paths are
+    workspace-relative, so a nested file reads as ``rtl/alu.v``.
+    """
+    try:
+        from src.tools import manifest as manifest_mod
+
+        manifest = manifest_mod.read_manifest(workspace_path)
+    except Exception:
+        return {}
+    grouped: Dict[str, list] = {}
+    for f in manifest.files:
+        grouped.setdefault(f.role, []).append(f.path)
+    return grouped
+
+
+def _latest_lint_event(workspace_path: str) -> Optional[Dict[str, Any]]:
+    """The most recent ``linter_tool`` result from the session event log.
+
+    Every actor's lint lands in ``attempt_events.jsonl`` (invariant 3), so that
+    log — not a guess — is the evidence for the report's lint cell. Appended in
+    order, so the last match is the latest.
+    """
+    try:
+        from src.utils.attempt_logger import EVENTS_FILE, _read_events
+
+        records = _read_events(os.path.join(workspace_path, EVENTS_FILE))
+    except Exception:
+        return None
+    for rec in reversed(records):
+        if rec.get("event_type") == "tool_result" and rec.get("tool") == "linter_tool":
+            return rec
+    return None
+
+
+def _lint_status_cell(workspace_path: str) -> str:
+    """The Syntax (Lint) verification-table cell.
+
+    This used to print "✅ Pass" whenever any RTL file existed — its own comment
+    said "assume passed if RTL exists", so a design that had never been linted,
+    or had failed lint, still read as passing. Now it reports the last real lint
+    and WHEN it ran: the RTL may have changed since, and a timestamp lets the
+    reader judge that instead of being told a stale result is current
+    (invariant 4). No lint in the log → "Not run".
+    """
+    rec = _latest_lint_event(workspace_path)
+    if not rec:
+        return "| Syntax (Lint) | ⏳ Not run |"
+    passed = str(rec.get("status", "")).lower() in ("success", "ok", "passed")
+    icon = "✅ Pass" if passed else "❌ Fail"
+    when = rec.get("ts")
+    return f"| Syntax (Lint) | {icon}{f' (last run {when})' if when else ''} |"
 
 
 def _simulation_status_cell(workspace_path: str) -> str:
@@ -204,10 +260,16 @@ def save_metrics(workspace_path: str, metrics: Dict[str, Any], run_id: str = Non
 
 def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
     """
-    Load metrics from the workspace, trying multiple sources:
-    1. First: design_metrics.json (saved by agent)
-    2. Second: Parse ORFS logs directly (get_ppa_metrics)
-    
+    Load metrics from the workspace, trying two sources in order:
+    1. design_metrics.json (saved by the agent, highest priority)
+    2. get_synthesis_metrics for the resolved run — the ONE structured parser
+       everything else uses.
+
+    A third tier used to parse *sta.log / *timing.rpt from the workspace root
+    with its own crude regexes (src/tools/get_ppa.py). It never read
+    6_finish.rpt, so it reported different numbers than every other surface;
+    it was deleted in Wave C rather than aligned.
+
     Returns:
         Dict with metrics or empty dict
     """
@@ -228,26 +290,22 @@ def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
         try:
             parsed = get_synthesis_metrics(workspace_path, resolved_run_id)
             parsed_metrics = parsed.get("metrics", {}) if parsed.get("status") == "ok" else {}
-            for key in ["area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw"]:
+            for key in [
+                "area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw",
+                # The honest timing set (Wave C): the real margin, the achieved
+                # frequency ORFS itself reported, and the corner it ran at.
+                "worst_slack_ns", "clock_period_min_ns", "fmax_mhz",
+                "timing_met", "timing_corner",
+                # The disclosure travels with the numbers: without it the report
+                # cannot say WHY a run has no verdict.
+                "timing_note",
+            ]:
                 if key not in metrics or metrics.get(key) is None:
                     if parsed_metrics.get(key) is not None:
                         metrics[key] = parsed_metrics[key]
         except:
             pass
 
-    # Source 3: Legacy workspace-root parsing fallback
-    if not resolved_run_id:
-        orfs_logs = os.path.join(workspace_path, "orfs_logs")
-        if os.path.exists(orfs_logs):
-            try:
-                parsed_metrics = get_ppa_metrics(orfs_logs)
-                for key in ["area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw"]:
-                    if key not in metrics or metrics.get(key) is None:
-                        if parsed_metrics.get(key) is not None:
-                            metrics[key] = parsed_metrics[key]
-            except:
-                pass
-    
     return metrics
 
 
@@ -318,21 +376,29 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
     
     if os.path.exists(workspace_path):
         files = os.listdir(workspace_path)
-        
-        rtl_files = [f for f in files if f.endswith(('.v', '.sv')) and not f.endswith('_tb.v')]
-        tb_files = [f for f in files if f.endswith('_tb.v')]
+
+        # The manifest is the single source of truth for what a file IS
+        # (invariant 1). The old root-only listdir + suffix guess put a nested
+        # RTL file nowhere and a formal harness under "RTL".
+        by_role = _files_by_role(workspace_path)
+        rtl_files = by_role.get("rtl", [])
+        tb_files = by_role.get("tb", [])
+        formal_files = by_role.get("formal", [])
+        sdc_files = by_role.get("sdc", [])
+        include_files = by_role.get("include", [])
         spec_files = [f for f in files if _is_spec_like(f)]
-        sdc_files = [f for f in files if f.endswith('.sdc')]
         vcd_files = [f for f in files if f.endswith('.vcd')]
-        
+
         report_lines.append("| Category | Files |")
         report_lines.append("|----------|-------|")
-        report_lines.append(f"| RTL | {', '.join(rtl_files) if rtl_files else '-'} |")
-        report_lines.append(f"| Testbenches | {', '.join(tb_files) if tb_files else '-'} |")
+        report_lines.append(f"| Design — RTL | {', '.join(rtl_files) if rtl_files else '-'} |")
+        report_lines.append(f"| Design — Includes | {', '.join(include_files) if include_files else '-'} |")
+        report_lines.append(f"| Design — Constraints | {', '.join(sdc_files) if sdc_files else '-'} |")
+        report_lines.append(f"| Verification — Testbenches | {', '.join(tb_files) if tb_files else '-'} |")
+        report_lines.append(f"| Verification — Formal properties | {', '.join(formal_files) if formal_files else '-'} |")
         report_lines.append(f"| Specifications | {', '.join(spec_files) if spec_files else '-'} |")
-        report_lines.append(f"| Constraints | {', '.join(sdc_files) if sdc_files else '-'} |")
         report_lines.append(f"| Waveforms | {', '.join(vcd_files) if vcd_files else '-'} |")
-        
+
         # Check for ORFS outputs
         orfs_results = os.path.join(report_dir, "orfs_results")
         if os.path.exists(orfs_results):
@@ -356,11 +422,7 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
     report_lines.append("| Check | Status |")
     report_lines.append("|-------|--------|")
 
-    # Lint status (assume passed if RTL exists)
-    if rtl_files:
-        report_lines.append("| Syntax (Lint) | ✅ Pass |")
-    else:
-        report_lines.append("| Syntax (Lint) | ⏳ Pending |")
+    report_lines.append(_lint_status_cell(workspace_path))
 
     # Simulation status — the authoritative isolated sim runs, not a stale
     # workspace-root scan (which never matched isolated runs → false "Not Run").
@@ -391,13 +453,27 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
         else:
             report_lines.append("| Cell Count | N/A | - |")
         
-        # Timing
-        wns = metrics.get("wns_ns")
+        # Timing. ORFS's report_wns CLAMPS positive slack to 0, so a 0.00 reads
+        # the same for a design with real margin and for one whose margin was
+        # never reported at all. A NEGATIVE wns is not clamped and therefore IS
+        # the worst slack — the same rule get_synthesis_metrics applies, so the
+        # report and the metrics can never disagree about a run. Only that real
+        # slack earns a verdict; the clamped 0.00 earns a labelled row and
+        # nothing more.
+        clamped_wns = metrics.get("wns_ns")
+        timing_note = metrics.get("timing_note")
+        wns = metrics.get("worst_slack_ns")
+        if wns is None and clamped_wns is not None and clamped_wns < 0:
+            wns = clamped_wns
         if wns is not None:
             status = "✅ Met" if wns >= 0 else "❌ Violated"
-            report_lines.append(f"| WNS (Setup) | {wns:.3f} ns | {status} |")
+            report_lines.append(f"| Worst Slack (Setup) | {wns:.3f} ns | {status} |")
+        elif clamped_wns is not None:
+            report_lines.append(
+                f"| WNS (Setup, ORFS-clamped) | {clamped_wns:.3f} ns | ⚠️ no verdict |"
+            )
         else:
-            report_lines.append("| WNS (Setup) | N/A | - |")
+            report_lines.append("| Worst Slack (Setup) | N/A | - |")
         
         # Power
         power = metrics.get("power_uw")
@@ -406,30 +482,68 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
         else:
             report_lines.append("| Total Power | N/A | - |")
         
-        # Spec vs Actual comparison
-        if wns is not None:
+        # Spec vs Actual comparison. The clock rows describe the CONSTRAINT and
+        # are always printable; only the achieved rows and the verdict need the
+        # real slack, because every one of them is derived from it — and derived
+        # from a clamped 0.00 they reproduce the target echo this wave removed
+        # (1000/(target - 0) == 1000/target).
+        if wns is not None or clamped_wns is not None or timing_note:
             report_lines.append("\n### Timing Comparison\n")
             requested_clock, target_period, target_source = _resolve_run_clock_fields(run_meta, spec)
             if target_period is None:
                 target_period = 0
-            achieved_period = target_period - wns if wns < 0 else target_period
-            slack_pct = (wns / target_period) * 100 if target_period > 0 else 0
-            
+            corner = metrics.get("timing_corner")
+
             if requested_clock is not None:
                 report_lines.append(f"| Requested Clock | {requested_clock} ns |")
             report_lines.append(f"| Target Clock | {target_period} ns |")
-            report_lines.append(f"| Achieved Slack | {wns:.3f} ns ({slack_pct:+.1f}%) |")
+
+            if wns is not None:
+                # The achieved period is target - slack in BOTH directions:
+                # positive slack means the clock could be tightened by that much,
+                # negative means it must be loosened.
+                achieved_period = target_period - wns
+                slack_pct = (wns / target_period) * 100 if target_period > 0 else 0
+                report_lines.append(f"| Achieved Slack | {wns:.3f} ns ({slack_pct:+.1f}%) |")
+                report_lines.append(f"| Achieved Period | {achieved_period:.3f} ns |")
             if target_source:
                 report_lines.append(f"| Timing Target Source | {target_source} |")
-            
-            if wns >= 0:
-                if target_period > 0:
-                    report_lines.append(f"\n✅ **Timing requirement MET** - Design can run at {1000/target_period:.1f} MHz")
-                else:
-                    report_lines.append("\n✅ **Timing requirement MET**")
+            if corner:
+                # asap7 runs best-case (FF) libraries by default: an unlabelled
+                # frequency from that corner overstates the design.
+                report_lines.append(f"| Timing Corner | {corner} |")
+
+            if wns is None:
+                report_lines.append(
+                    "\n*Timing cannot be judged from this run: ORFS's `report_wns` clamps "
+                    "positive slack to 0 and these reports carry no `worst slack` line, so "
+                    "neither the achieved margin nor the achieved frequency is recoverable. "
+                    "The clock target above is a CONSTRAINT, not an achieved frequency.*"
+                )
             else:
-                max_freq = 1000 / achieved_period if achieved_period > 0 else 0
-                report_lines.append(f"\n❌ **Timing requirement NOT MET** - Max achievable: {max_freq:.1f} MHz")
+                # The achieved frequency comes from get_synthesis_metrics and
+                # ONLY from there: it already prefers ORFS's own fmax, already
+                # falls back to a labelled derivation from the real slack, and
+                # already returns None when neither exists (a combinational block
+                # has no maximum frequency at all). Re-deriving it here would be
+                # a second opinion that can disagree with every other surface —
+                # and the version of that arithmetic this report used to run was
+                # the target echo itself.
+                achieved_fmax = metrics.get("fmax_mhz")
+                corner_suffix = f" ({corner} corner)" if corner else ""
+                verdict = (
+                    "✅ **Timing requirement MET**" if wns >= 0
+                    else "❌ **Timing requirement NOT MET**"
+                )
+                if achieved_fmax is not None:
+                    qualifier = "Design runs at" if wns >= 0 else "Max achievable:"
+                    report_lines.append(
+                        f"\n{verdict} - {qualifier} {achieved_fmax:.1f} MHz{corner_suffix}"
+                    )
+                else:
+                    report_lines.append(f"\n{verdict}")
+            if timing_note:
+                report_lines.append(f"\n*{timing_note}*")
         
         # Note the source of metrics
         metrics_path = os.path.join(report_dir, METRICS_FILENAME)

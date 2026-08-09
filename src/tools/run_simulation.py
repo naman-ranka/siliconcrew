@@ -36,6 +36,34 @@ def _tail_text(text: str, max_lines: int, max_chars: int) -> Dict[str, Any]:
     return {"text": out, "truncated": truncated}
 
 
+def _write_full_log(log_path: str, comp: Dict[str, Any], sim: Optional[Dict[str, Any]]) -> None:
+    """Persist the un-truncated compile/run streams next to the run.
+
+    The tails on the run record serve the quick-read path and lose the head of
+    every long stream; this is the recoverable evidence. Best-effort: a log we
+    cannot write must never fail the simulation — the caller advertises the log
+    only when the file actually exists.
+    """
+    def _section(title: str, res: Dict[str, Any]) -> str:
+        return (
+            f"=== {title} ===\n"
+            f"$ {res.get('command') or ''}\n"
+            f"--- stdout ---\n{res.get('stdout') or ''}\n"
+            f"--- stderr ---\n{res.get('stderr') or ''}\n"
+        )
+
+    try:
+        parent = os.path.dirname(os.path.abspath(log_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(log_path, "w", encoding="utf-8", errors="replace") as f:
+            f.write(_section("COMPILE", comp))
+            if sim is not None:
+                f.write("\n" + _section("RUN", sim))
+    except Exception:
+        pass
+
+
 def _extract_unresolved_cells(stderr: str) -> List[str]:
     patterns = [
         re.compile(r"Unknown module type:\s*([a-zA-Z_][\w$]*)", re.IGNORECASE),
@@ -159,7 +187,24 @@ def _compile(
     # both would run interleaved in one simulation. The chosen top makes
     # "simulate this testbench" true; unchosen TBs become dead code.
     top_args = ["-s", top_module] if top_module else []
-    cmd = ["iverilog", "-g2012"] + include_args + top_args + ["-o", output_executable, "-f", filelist]
+    # -gsupported-assertions: iverilog cannot elaborate a CONCURRENT assertion and
+    # refuses the whole compile over one ("sorry: concurrent_assertion_item not
+    # supported"). Inline `assert property` in production RTL is normal practice,
+    # so without this such a design cannot be simulated at all. This flag skips
+    # the assertions iverilog can't do while keeping every one it CAN — critically
+    # the IMMEDIATE `assert (expr) else $fatal(...)` that self-checking testbenches
+    # are built on (prompts/architect.py tells agents to write exactly that).
+    #
+    # NOT -gno-assertions: measured on iverilog 12.0, that flag also silences
+    # immediate assertions, so a testbench asserting `y == 9` against a DUT
+    # producing 4 exits 0 and prints its pass marker. A self-checking TB that
+    # cannot fail is worse than no testbench.
+    #
+    # Trade-off that remains: concurrent assertions go unchecked here — that is
+    # sby's job (formal), not the simulator's. Properties using sequence operators
+    # iverilog's parser rejects outright (e.g. `|=>`) stay a syntax error; this
+    # flag only covers what iverilog parses but can't elaborate.
+    cmd = ["iverilog", "-g2012", "-gsupported-assertions"] + include_args + top_args + ["-o", output_executable, "-f", filelist]
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -212,6 +257,18 @@ def _simulate(output_executable: str, cwd: str, timeout: int) -> Dict[str, Any]:
     return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "command": " ".join(cmd)}
 
 
+# A $readmem that cannot open its data file reports on STDOUT and vvp still
+# exits 0 (verified, iverilog 12.0: "ERROR: tb.v:4: $readmemb: Unable to open
+# weights.mem for reading."). The memory stays all-X, and a testbench that does
+# not self-check prints its pass marker anyway — so without this the run records
+# test_passed on garbage. A run whose input data never loaded did not pass.
+_READMEM_OPEN_FAIL_RE = re.compile(r"\$readmem[bh]?\s*:\s*Unable to open", re.IGNORECASE)
+
+
+def _data_load_failed(stdout: str, stderr: str) -> bool:
+    return bool(_READMEM_OPEN_FAIL_RE.search(f"{stdout or ''}\n{stderr or ''}"))
+
+
 def _detect_failure_info(status: str, stdout: str, stderr: str) -> Dict[str, Optional[str]]:
     text = f"{stdout or ''}\n{stderr or ''}"
     low = text.lower()
@@ -225,6 +282,9 @@ def _detect_failure_info(status: str, stdout: str, stderr: str) -> Dict[str, Opt
 
     if status == "compile_failed":
         return {"failure_type": "compile", "first_failure_line": _first_line(["error", "undefined", "unknown module"]), "first_failure_snippet": None}
+
+    if _data_load_failed(stdout, stderr):
+        return {"failure_type": "data_file_missing", "first_failure_line": _first_line(["unable to open"]), "first_failure_snippet": None}
 
     if "timed out" in low:
         return {"failure_type": "timeout", "first_failure_line": _first_line(["timed out"]), "first_failure_snippet": None}
@@ -254,6 +314,7 @@ def run_simulation(
     max_lines_per_stream: int = 40,
     max_chars_per_stream: int = 4000,
     workspace: Optional[str] = None,
+    log_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run RTL or post-synthesis simulation with strict status contract.
@@ -270,6 +331,10 @@ def run_simulation(
     defaults to ``cwd`` so the non-isolated path (where cwd == workspace) is
     unchanged; the isolated path passes its real workspace while ``cwd`` stays
     the per-run exec dir.
+
+    ``log_path``, when given, receives the full compile + run streams (this is
+    the only place that holds them un-truncated). Early returns that never
+    reach the toolchain write nothing there.
     """
     if cwd is None:
         cwd = os.getcwd()
@@ -435,6 +500,8 @@ def run_simulation(
     comp = _compile(compile_files=compile_files, output_executable=output_exec, cwd=cwd, timeout=timeout, top_module=top_module)
 
     if comp["returncode"] != 0:
+        if log_path:
+            _write_full_log(log_path, comp, None)
         unresolved_cells = _extract_unresolved_cells(comp.get("stderr", "")) if mode == "post_synth" else []
         stderr_tail = _tail_text(comp.get("stderr", ""), max_lines_per_stream, max_chars_per_stream)
         stdout_tail = _tail_text(comp.get("stdout", ""), max_lines_per_stream, max_chars_per_stream)
@@ -464,12 +531,18 @@ def run_simulation(
         }
 
     sim = _simulate(output_executable=output_exec, cwd=cwd, timeout=timeout)
+    if log_path:
+        _write_full_log(log_path, comp, sim)
     stdout_tail = _tail_text(sim.get("stdout", ""), max_lines_per_stream, max_chars_per_stream)
     stderr_tail = _tail_text(sim.get("stderr", ""), max_lines_per_stream, max_chars_per_stream)
 
     pass_marker_found = pass_marker in (sim.get("stdout") or "")
 
     if sim["returncode"] != 0:
+        status = "sim_failed"
+    elif _data_load_failed(sim.get("stdout", ""), sim.get("stderr", "")):
+        # The pass marker may well be present — it means nothing when the data
+        # the testbench was checking never loaded.
         status = "sim_failed"
     elif pass_marker_found:
         status = "test_passed"

@@ -79,7 +79,11 @@ def test_start_and_poll_synthesis_job_with_guardrails(monkeypatch):
         assert data["netlist_path"].endswith("6_final.v")
 
 
-def test_constraints_guardrail_blocks_unsafe_success(monkeypatch):
+def test_constraints_guardrail_strict_blocks_unsafe_success(monkeypatch):
+    # strict is now the mode that refuses a spec/top mismatch: 'auto' proceeds
+    # with default constraints and an explicit note (sc#73, tests/test_constraints_modes.py),
+    # because a synthesis-only top is a legitimate design choice. What must not
+    # regress is that a refusal happens BEFORE any ORFS execution.
     with tempfile.TemporaryDirectory() as workspace:
         design = os.path.join(workspace, "counter.v")
         _write_file(design, "module counter(input clk, output y); assign y=clk; endmodule")
@@ -106,6 +110,7 @@ def test_constraints_guardrail_blocks_unsafe_success(monkeypatch):
             verilog_files=[design],
             top_module="counter",
             platform="sky130hd",
+            constraints_mode="strict",
         )
 
         final = None
@@ -228,7 +233,10 @@ def test_constraints_guardrail_allows_combinational_default_clock(monkeypatch):
         assert final is not None
         assert final["status"] == "completed"
         assert final["auto_checks"]["constraints"] == "pass"
-        assert "default clock fallback" in final["check_notes"].lower() or "all guardrails passed" in final["check_notes"].lower()
+        assert (
+            "default clock fallback" in final["check_notes"].lower()
+            or "artifact/log guardrails passed" in final["check_notes"].lower()
+        )
 
 
 def test_constraints_guardrail_strict_can_fail_on_missing_clock(monkeypatch):
@@ -281,6 +289,10 @@ def _write_clean_final_orfs_outputs(run_dir: str, top_module: str, dirty_route_d
         os.path.join(report_dir, "6_finish.rpt"),
         "wns max 0.3391\n"
         "tns max 0.0000\n"
+        # The lines that carry the REAL margin, modeled on a real 6_finish.rpt:
+        # ORFS prints worst-slack and its own achieved Fmax right next to wns.
+        "worst slack max 0.3391\n"
+        "clk period_min = 9.6609 fmax = 103.51\n"
         "setup violation count 0\n"
         "hold violation count 0\n"
         "max slew violation count 0\n"

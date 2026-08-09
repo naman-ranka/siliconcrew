@@ -356,16 +356,15 @@ def _submit_with_quota_release(reservation, fn, *fn_args):
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _POLL_CACHE: Dict[str, Dict[str, Any]] = {}
-_POLL_BACKOFF_STATE: Dict[str, Dict[str, Any]] = {}
 
 
 def _job_key(workspace: Optional[str], run_id: str) -> str:
     """Workspace-scoped key for the in-memory bookkeeping maps.
 
     run_ids (synth_NNNN) are unique per WORKSPACE, not globally: on a hosted
-    instance two tenants' synth_0001 must never share a _JOBS/_POLL_CACHE/
-    _POLL_BACKOFF_STATE slot. Callers without a workspace fall back to the
-    bare run_id (which then simply never matches a scoped entry).
+    instance two tenants' synth_0001 must never share a _JOBS/_POLL_CACHE
+    slot. Callers without a workspace fall back to the bare run_id (which
+    then simply never matches a scoped entry).
     """
     if not workspace:
         return run_id
@@ -381,6 +380,14 @@ _ORFS_OVERRIDE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 POLL_MIN_INTERVAL_SEC = 1.0
 POLL_BACKOFF_START_SEC = 30
 POLL_BACKOFF_MAX_SEC = 600
+# Recommended polling cadence as a function of how long the run has been going:
+# (elapsed_below_sec, poll_after_sec), first match wins, POLL_BACKOFF_LATE_SEC
+# beyond the last step. A full ORFS flow is legitimately 8-40 min, so early
+# polling stays responsive and late polling stays calm — and because the answer
+# depends only on the run's own clock, two callers (or two hosted instances)
+# looking at the same run at the same moment get the same number.
+POLL_BACKOFF_STEPS = ((120, POLL_BACKOFF_START_SEC), (480, 60), (1200, 120))
+POLL_BACKOFF_LATE_SEC = 300
 
 # Stage-aware run ceilings replace the old flat 1200s cap, which killed healthy
 # full-flow runs at 20 min even though RTL->GDS for a few-thousand-cell design
@@ -434,6 +441,16 @@ class GuardrailSummary:
     constraints: str = "skip"
     signoff: str = "skip"
     equiv: str = "skip"
+    # Setup-slack sign + the setup/hold violation counts (sc#64). Deliberately
+    # NOT part of final_ok: a run that produced its GDS completed, and missing
+    # timing is a design verdict, not a flow failure. See _FINAL_OK_CHECKS.
+    timing: str = "skip"
+
+
+# The checks that decide whether a run is "completed" — and, therefore, the only
+# ones a rollup may blame when it is not. Explicit rather than an asdict() sweep
+# so a new advisory check (timing) can never leak into failure attribution.
+_FINAL_OK_CHECKS = ("constraints", "signoff", "equiv")
 
 
 def _now_iso() -> str:
@@ -570,6 +587,48 @@ def _write_default_sdc(
     return period
 
 
+# Clock sources whose port was guessed, never checked against the netlist.
+# _write_default_sdc guards create_clock behind [llength], so a wrong guess is
+# a silently unconstrained run — every reader of these runs' timing must see
+# the constraints note (finalization appends it to check_notes via
+# _carry_unverified_clock_note).
+#
+# The two *_fallback_port sources are the WORSE half: they do not guess the
+# conventional "clk", they take input_ports[0] from a spec that names no clock
+# at all — often a reset. That port usually DOES exist in the netlist, so
+# create_clock fires and the design is constrained on the wrong net. Wrong is
+# not better than absent, and both belong here.
+_UNVERIFIED_CLOCK_SOURCES = {
+    "bypass_default",
+    "default_module_mismatch",
+    "spec_fallback_port",
+    "requested_period_fallback_port",
+    # No spec at all + explicit period: the port is the guessed literal "clk",
+    # exactly bypass_default's situation with a user-supplied period.
+    "requested_period_default_port",
+}
+
+
+def _carry_unverified_clock_note(run_meta: Dict[str, Any], note: str) -> str:
+    """Append this run's constraints warning to a terminal rollup, when earned.
+
+    ONE copy of the rule "an unverified clock's warning survives finalization".
+    It lived as three verbatim if-statements (full flow, partial flow, PD retry)
+    and was therefore already missing from the partial-flow FAILED leg and the
+    constraints-only leg. Every terminal check_notes write goes through here so
+    it cannot go missing per-site again. Idempotent: a note that already carries
+    the warning (an adopted run's dispatch-time check_notes) is returned as-is.
+    """
+    constraints_note = (run_meta or {}).get("constraints_note")
+    if not constraints_note:
+        return note
+    if run_meta.get("clock_source") not in _UNVERIFIED_CLOCK_SOURCES:
+        return note
+    if constraints_note in (note or ""):
+        return note
+    return f"{note} | {constraints_note}" if note else str(constraints_note)
+
+
 def _constraints_guardrail(
     workspace: str,
     run_dir: str,
@@ -595,6 +654,30 @@ def _constraints_guardrail(
     if constraints_mode not in {"auto", "strict", "bypass"}:
         constraints_mode = "auto"
 
+    if constraints_mode == "bypass":
+        # "bypass" means do not consult the spec at all — so this branch reads
+        # neither its ports nor its period. The port is the conventional "clk"
+        # because _write_default_sdc guards create_clock behind
+        # [llength $_sc_clk_ports] > 0: a port name this code cannot verify
+        # against the netlist silently produces NO clock, i.e. an unconstrained
+        # run that still reports "completed". The note says so.
+        period = fallback_clock_period_ns if fallback_clock_period_ns and fallback_clock_period_ns > 0 else 10.0
+        sdc_path = os.path.join(run_dir, "constraints.sdc")
+        _write_default_sdc(sdc_path=sdc_path, clock_period_ns=period, clock_port="clk", platform=platform)
+        result.update({
+            "status": "pass",
+            "note": (
+                f"constraints_mode='bypass': spec not read; default constraints on port 'clk' "
+                f"at {period} ns. The clock port was NOT verified against the netlist — if this "
+                "design's clock is named differently the run is unconstrained."
+            ),
+            "sdc_path": sdc_path,
+            "effective_clock_period_ns": period,
+            "clock_period_ns": period,
+            "clock_source": "bypass_default",
+        })
+        return result
+
     spec_path = _find_latest_spec(workspace)
     if not spec_path:
         if fallback_clock_period_ns is None or fallback_clock_period_ns <= 0:
@@ -604,11 +687,23 @@ def _constraints_guardrail(
         _write_default_sdc(
             sdc_path=sdc_path, clock_period_ns=fallback_clock_period_ns, clock_port="clk", platform=platform
         )
+        # Same guess as bypass_default: the port is the literal "clk", never
+        # verified against the netlist, and _write_default_sdc guards
+        # create_clock behind the port existing — a differently-named clock
+        # yields NO clock at all. The period was requested; the PORT was not,
+        # so the source must be in _UNVERIFIED_CLOCK_SOURCES and the note must
+        # say what happens when the guess is wrong.
         result.update({
             "status": "pass",
-            "note": "No spec found; generated fallback constraints.sdc from explicit clock period.",
+            "note": (
+                "No spec found; generated fallback constraints.sdc from the explicit "
+                "clock period on port 'clk'. The clock port was NOT verified against "
+                "the netlist — if this design's clock is named differently the run is "
+                "unconstrained."
+            ),
             "sdc_path": sdc_path,
             "effective_clock_period_ns": fallback_clock_period_ns,
+            "clock_source": "requested_period_default_port",
         })
         return result
 
@@ -619,7 +714,36 @@ def _constraints_guardrail(
         return result
 
     if spec.module_name != top_module:
-        result["note"] = f"Spec module '{spec.module_name}' does not match top module '{top_module}'."
+        mismatch = f"Spec module '{spec.module_name}' does not match top module '{top_module}'."
+        if constraints_mode == "strict":
+            result["note"] = (
+                f"{mismatch} Rerun start_synthesis with constraints_mode='auto' or 'bypass' "
+                "to synthesize a different top with default constraints."
+            )
+            return result
+        # A synthesis-only top (GCN_synth wrapping GCN) is a normal design
+        # choice, not a dispatch error. The spec describes a DIFFERENT module,
+        # so its ports say nothing about this netlist — constraining a port
+        # borrowed from it would silently produce no clock at all (the
+        # create_clock guard in _write_default_sdc). Only the period is
+        # reusable; the port falls back to the conventional "clk", unverified.
+        period = fallback_clock_period_ns if fallback_clock_period_ns and fallback_clock_period_ns > 0 else (
+            spec.clock_period_ns if spec.clock_period_ns > 0 else 10.0
+        )
+        sdc_path = os.path.join(run_dir, "constraints.sdc")
+        _write_default_sdc(sdc_path=sdc_path, clock_period_ns=period, clock_port="clk", platform=platform)
+        result.update({
+            "status": "pass",
+            "note": (
+                f"{mismatch} Using default clock constraints on port 'clk' at {period} ns; spec "
+                "port constraints skipped. The clock port was NOT verified against the netlist — "
+                "if this design's clock is named differently the run is unconstrained."
+            ),
+            "sdc_path": sdc_path,
+            "effective_clock_period_ns": period,
+            "clock_period_ns": period,
+            "clock_source": "default_module_mismatch",
+        })
         return result
 
     clock_ports = [p.name for p in spec.ports if p.direction == "input" and p.name.lower() in {"clk", "clock", "clk_i"}]
@@ -631,6 +755,14 @@ def _constraints_guardrail(
                 "Rerun start_synthesis with constraints_mode='auto' or 'bypass' to allow default-clock fallback."
             )
             return result
+        # The spec names NO clock, so the port is the spec's first input — an
+        # arbitrary choice that is very often a reset. Unlike the other fallback
+        # branches (which use the literal "clk" and are usually a silent no-op),
+        # this port generally DOES exist in the netlist, so create_clock fires
+        # and the design is constrained on the WRONG net: every timing number
+        # from the run is then confidently wrong rather than merely absent. Both
+        # sources below are in _UNVERIFIED_CLOCK_SOURCES for that reason, and
+        # the note has to say it out loud.
         fallback_port = input_ports[0] if input_ports else "clk"
         requested_clock = fallback_clock_period_ns if fallback_clock_period_ns and fallback_clock_period_ns > 0 else None
         period = requested_clock if requested_clock is not None else (
@@ -638,17 +770,27 @@ def _constraints_guardrail(
         )
         sdc_path = os.path.join(run_dir, "constraints.sdc")
         _write_default_sdc(sdc_path=sdc_path, clock_period_ns=period, clock_port=fallback_port, platform=platform)
+        period_note = (
+            f"Applied the explicit requested clock ({period} ns)"
+            if requested_clock is not None
+            else f"Applied the default clock fallback ({period} ns)"
+        )
         result.update({
             "status": "pass",
             "note": (
-                f"No explicit clock in spec. Applied explicit requested clock on port '{fallback_port}'."
-                if requested_clock is not None
-                else f"No explicit clock in spec. Applied default clock fallback on port '{fallback_port}'."
+                f"No explicit clock in spec (no clk/clock/clk_i input). {period_note} on "
+                f"port '{fallback_port}', the spec's FIRST input port. That port was NOT "
+                "verified to be this design's clock — if it is not (a reset, an enable), "
+                "the design is constrained on the wrong net and its timing is invalid."
             ),
             "sdc_path": sdc_path,
             "effective_clock_period_ns": period,
             "clock_period_ns": period,
-            "clock_source": "requested" if requested_clock is not None else "spec_fallback_port",
+            # The PERIOD was requested; the PORT was still guessed. Recording a
+            # bare "requested" here made clock_source and constraints_note
+            # disagree about what had actually been verified — "requested" is
+            # kept only for the branches where the port itself is named.
+            "clock_source": "requested_period_fallback_port" if requested_clock is not None else "spec_fallback_port",
         })
         return result
 
@@ -734,54 +876,6 @@ def _tail_from_logs_root(logs_root: str, max_lines: int = 40) -> List[str]:
 
 def _collect_log_tail(run_dir: str, max_lines: int = 40) -> List[str]:
     return _tail_from_logs_root(os.path.join(run_dir, "orfs_logs"), max_lines=max_lines)
-
-
-def _extract_summary_metrics(run_dir: str) -> Dict[str, Any]:
-    metrics = {"area_um2": None, "cell_count": None, "wns_ns": None, "tns_ns": None, "power_uw": None}
-    reports_root = os.path.join(run_dir, "orfs_reports")
-    logs_root = os.path.join(run_dir, "orfs_logs")
-    search_roots = [reports_root, logs_root]
-
-    area_re = re.compile(r"Chip area.*:\s*([0-9.]+)", re.IGNORECASE)
-    cells_re = re.compile(r"Number of cells.*:\s*([0-9]+)", re.IGNORECASE)
-    wns_re = re.compile(r"\bwns\b\s*[:=]?\s*([0-9.+-]+)", re.IGNORECASE)
-    tns_re = re.compile(r"\btns\b\s*[:=]?\s*([0-9.+-]+)", re.IGNORECASE)
-    power_re = re.compile(r"Total Power\s+([0-9.eE+-]+)", re.IGNORECASE)
-
-    for base in search_roots:
-        if not os.path.exists(base):
-            continue
-        for root, _, files in os.walk(base):
-            for name in files:
-                if not name.endswith((".log", ".rpt", ".txt")):
-                    continue
-                path = os.path.join(root, name)
-                try:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        text = f.read()
-                except Exception:
-                    continue
-                if metrics["area_um2"] is None:
-                    m = area_re.search(text)
-                    if m:
-                        metrics["area_um2"] = float(m.group(1))
-                if metrics["cell_count"] is None:
-                    m = cells_re.search(text)
-                    if m:
-                        metrics["cell_count"] = int(m.group(1))
-                if metrics["wns_ns"] is None:
-                    m = wns_re.search(text)
-                    if m:
-                        metrics["wns_ns"] = float(m.group(1))
-                if metrics["tns_ns"] is None:
-                    m = tns_re.search(text)
-                    if m:
-                        metrics["tns_ns"] = float(m.group(1))
-                if metrics["power_uw"] is None:
-                    m = power_re.search(text)
-                    if m:
-                        metrics["power_uw"] = float(m.group(1))
-    return metrics
 
 
 def _collect_artifacts(run_dir: str) -> Dict[str, int]:
@@ -1510,6 +1604,7 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
         "effective_clock_period_ns": parent_meta.get("effective_clock_period_ns"),
         "clock_period_ns": parent_meta.get("clock_period_ns"),
         "clock_source": parent_meta.get("clock_source"),
+        "constraints_note": parent_meta.get("constraints_note"),
         # A retry reuses the parent's constraints.sdc verbatim, so it inherits
         # the parent's SDC time unit (legacy parent -> no marker, by design).
         "sdc_time_unit": parent_meta.get("sdc_time_unit"),
@@ -1560,13 +1655,38 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     _attach_sim_contract(run_meta, workspace, retry_netlist, args.get("platform"), args["top_module"])
     # Same shared finalization parser as the full-flow worker (see _job_worker).
     run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
-    run_meta["status"] = "completed" if auto_checks.signoff == "pass" else "failed"
+    # ...and the same timing term (B3): a retry that reaches finish has exactly
+    # the same timing evidence on disk as a first run.
+    retry_timing = _timing_guardrail(run_dir, run_meta)
+    auto_checks.timing = retry_timing["status"]
+    run_meta["auto_checks"] = asdict(auto_checks)
+    # Mirror the primary worker's gate (sc#75). Terminal status came from
+    # signoff alone, so a retry of a run whose constraints never validated
+    # still reported "PD retry completed". equiv is STRUCTURALLY out of scope
+    # here — _retry_pd_worker builds equiv="skip" and no path in a retry ever
+    # assigns it (the check runs on the finish-stage netlist of a first run), so
+    # it is neither gated on nor blamed.
+    # ``constraints`` is three-valued and INHERITED here: a parent adopted by
+    # _finalize_completed legitimately carries "skip" (its worker died before
+    # the check ran — not "the check failed"). Gate on an explicit failure, the
+    # same idiom the full-flow worker uses for equiv, or a retry that produced
+    # its GDS, passed signoff and MET timing gets declared failed.
+    final_ok = auto_checks.signoff == "pass" and auto_checks.constraints != "fail"
+    run_meta["status"] = "completed" if final_ok else "failed"
     retry_completed_note = (
         signoff["note"]
         if signoff["note"].startswith("ORFS command returned nonzero")
         else "PD retry completed"
     )
-    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else retry_completed_note
+    check_notes = signoff["note"] if auto_checks.signoff != "pass" else retry_completed_note
+    if auto_checks.signoff == "pass" and not final_ok:
+        check_notes += " | run failed on: constraints (inherited from the source run)"
+    if retry_timing["note"]:
+        check_notes += f" | {retry_timing['note']}"
+    # The retry reuses the parent's constraints.sdc verbatim, so an unverified
+    # default clock is an INHERITED fact: every timing number above is only as
+    # real as that guessed port, and the rollup must say so here too.
+    run_meta["check_notes"] = _carry_unverified_clock_note(run_meta, check_notes)
     run_meta["next_action"] = (
         "Inspect stage summaries and continue tuning." if run_meta["status"] == "completed"
         else "Inspect retry stage logs and adjust parameters."
@@ -1605,6 +1725,64 @@ def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, A
         return {"status": "pass", "note": "ORFS command returned nonzero, but final artifacts and reports are clean"}
 
     return {"status": "pass", "note": "Signoff artifact/log checks passed"}
+
+
+def _timing_guardrail(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, str]:
+    """Did this run's design actually close timing? (sc#64)
+
+    Reads the ONE authoritative artifact (6_finish.rpt) so every finalization
+    path — full flow, partial flow, PD retry, and the adoption path in
+    _finalize_completed — gets the same verdict from the same evidence:
+
+    * ``fail``  — real worst slack < 0, or setup/hold violations were counted;
+    * ``pass``  — real worst slack >= 0 and both counts are 0;
+    * ``skip``  — no slack data (partial flow, or a report with no constrained
+      paths). ORFS's clamped ``wns max 0.00`` is NOT slack data: it is exactly
+      what "positive slack" looks like after clamping, so it can never prove
+      timing met. A NEGATIVE wns is unclamped and does count.
+
+    ``note`` names the failing MODE, or the margin when timing was met; it is
+    empty when the check is skipped, so callers can tell "not evaluated" apart
+    from "evaluated and fine".
+    """
+    finish_path = _find_report_file(run_dir, "6_finish.rpt")
+    if not finish_path:
+        return {"status": "skip", "note": ""}
+    data = _parse_finish_report(finish_path)
+    unconstrained = bool(data.get("timing_unconstrained"))
+
+    slack = None
+    if not unconstrained:
+        slack = _normalize_report_time_ns(data.get("worst_slack_ns"), run_meta)
+        if slack is None:
+            wns = _normalize_report_time_ns(data.get("wns_ns"), run_meta)
+            if wns is not None and wns < 0:
+                slack = wns
+    violations = data.get("violations") or {}
+    setup_count = violations.get("setup") or 0
+    hold_count = violations.get("hold") or 0
+
+    # Violation counts are checked BEFORE any skip: ORFS counted them, so they
+    # are evidence in their own right — an "unconstrained" or slack-less report
+    # that nonetheless reports violations must never be summarized as "no
+    # timing data".
+    reasons: List[str] = []
+    if slack is not None and slack < 0:
+        reasons.append(f"setup slack {slack:.2f} ns")
+    if setup_count > 0:
+        reasons.append(f"{setup_count} setup violations")
+    if hold_count > 0:
+        reasons.append(f"{hold_count} hold violations")
+    if reasons:
+        return {"status": "fail", "note": f"timing NOT met: {', '.join(reasons)}"}
+    if unconstrained:
+        return {
+            "status": "skip",
+            "note": "timing not evaluated: the design has no constrained timing paths",
+        }
+    if slack is not None:
+        return {"status": "pass", "note": f"timing met (worst slack {slack:+.2f} ns)"}
+    return {"status": "skip", "note": ""}
 
 
 def _persist_run_meta(run_dir: str, meta: Dict[str, Any]) -> None:
@@ -2012,7 +2190,7 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         "requested_clock_period_ns": args.get("clock_period_ns"),
         "effective_clock_period_ns": constraints.get("effective_clock_period_ns"),
         "clock_period_ns": constraints.get("clock_period_ns"),
-        "clock_source": constraints.get("clock_source"),
+        "clock_source": constraints.get("clock_source"),  # see _UNVERIFIED_CLOCK_SOURCES
         # Marker: the SDC/report time unit for THIS run. Gates read-side
         # normalization of report times back to ns; absent on legacy runs.
         "sdc_time_unit": constraints.get("sdc_time_unit"),
@@ -2027,6 +2205,10 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         },
         "auto_checks": asdict(auto_checks),
         "check_notes": constraints["note"],
+        # check_notes is rewritten at finalization; the constraints verdict must
+        # survive the run that produced it (an unverified default clock changes
+        # how every timing number should be read).
+        "constraints_note": constraints["note"],
         "stages": _init_stage_metadata(),
         # Reproducibility stamp: repo commit, pinned ORFS image digest, PDK,
         # iverilog version, and the pinned NUM_CORES used for this run.
@@ -2056,8 +2238,9 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         run_meta["status"] = "completed"
         run_meta["current_stage"] = "constraints"
         run_meta["auto_checks"] = asdict(auto_checks)  # signoff/equiv stay "skip"
-        run_meta["check_notes"] = (
-            "Constraints validated; partial flow (max_stage=constraints): ORFS stages skipped."
+        run_meta["check_notes"] = _carry_unverified_clock_note(
+            run_meta,
+            "Constraints validated; partial flow (max_stage=constraints): ORFS stages skipped.",
         )
         run_meta["next_action"] = (
             "Rerun start_synthesis with a later max_stage (e.g. 'synth') to execute the flow."
@@ -2123,6 +2306,12 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         run_meta["stdcell_manifest_version"] = manifest.get("updated_at") if manifest else None
         run_meta["stdcell_files_used"] = manifest.get("files", []) if manifest else []
         run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
+        # A bounded run produces no 6_finish.rpt, so timing normally reads
+        # "skip" here — but the term must be PRESENT either way (B3), and a
+        # bound that does reach finish artifacts gets a real verdict.
+        partial_timing = _timing_guardrail(run_dir, run_meta)
+        auto_checks.timing = partial_timing["status"]
+        run_meta["auto_checks"] = asdict(auto_checks)
 
         target_marker = _find_stage_completion_marker(run_dir, max_stage)
         if target_marker:
@@ -2132,6 +2321,8 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
                 f"Partial flow completed through '{max_stage}'; signoff/equiv checks "
                 f"skipped: partial flow (max_stage={max_stage})."
             )
+            if partial_timing["note"]:
+                run_meta["check_notes"] += f" | {partial_timing['note']}"
             next_stage = _next_stage_after(max_stage)
             if next_stage in PD_RETRYABLE_STAGES:
                 run_meta["next_action"] = (
@@ -2152,6 +2343,11 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
             run_meta["next_action"] = (
                 "Use search_logs_tool with error/timing queries and fix RTL/constraints."
             )
+        # BOTH partial legs, one rule (the failed leg used to drop the warning):
+        # an unverified clock changes how any timing read from this run must be
+        # interpreted, and "why did this stage fail" is not a reason to hide that
+        # the design may have been constrained on the wrong net.
+        run_meta["check_notes"] = _carry_unverified_clock_note(run_meta, run_meta["check_notes"])
         run_meta["finished_at"] = _now_iso()
         run_meta["elapsed_sec"] = round(time.time() - start, 2)
         run_meta = _refresh_stage_metadata(run_dir, run_meta, terminal_status=run_meta["status"])
@@ -2186,19 +2382,41 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
     # cloud job, remote VM) persists identical summary_metrics: area/cells from
     # synth_stat.txt, WNS/TNS/power from 6_finish.rpt (the targeted parsers handle
     # the "wns max <value>" finish-report format and the 4-column yosys cell row),
-    # plus derived fmax_mhz and power_mw. _extract_summary_metrics' broad regex
-    # scan missed both cell_count and the "wns max" format, leaving them null.
+    # plus the honest fmax/worst-slack block and power_mw.
     run_meta["summary_metrics"] = _compute_summary_metrics(run_dir, run_meta)
+
+    # The timing verdict (sc#64) reads the same 6_finish.rpt the metrics came
+    # from. It is advisory — see _FINAL_OK_CHECKS — so it is computed AFTER the
+    # auto_checks assignment above and re-persisted, never folded into final_ok.
+    timing = _timing_guardrail(run_dir, run_meta)
+    auto_checks.timing = timing["status"]
+    run_meta["auto_checks"] = asdict(auto_checks)
 
     final_ok = auto_checks.signoff == "pass" and auto_checks.constraints == "pass" and auto_checks.equiv != "fail"
     run_meta["status"] = "completed" if final_ok else "failed"
     run_meta["current_stage"] = "finish" if final_ok else _infer_stage(_collect_log_tail(run_dir))
+    # Honest rollup. The signoff guardrails check artifacts, logs and the
+    # netlist; timing is now a separate term, so the rollup names the margin (or
+    # the failing mode) instead of disclaiming that timing was never looked at.
+    # And never summarize a run the flow marked FAILED as one where everything
+    # passed: signoff can pass while constraints or equivalence did not.
+    scope = "see summary_metrics" if timing["status"] != "skip" else "timing not evaluated; see summary_metrics"
     completed_note = (
         signoff["note"]
         if signoff["note"].startswith("ORFS command returned nonzero")
-        else "All guardrails passed"
+        else f"Artifact/log guardrails passed ({scope})"
     )
-    run_meta["check_notes"] = signoff["note"] if auto_checks.signoff != "pass" else completed_note
+    check_notes = signoff["note"] if auto_checks.signoff != "pass" else completed_note
+    if auto_checks.signoff == "pass" and not final_ok:
+        failed = [name for name in _FINAL_OK_CHECKS if getattr(auto_checks, name) == "fail"]
+        check_notes += f" | run failed on: {', '.join(failed) or 'a non-signoff check'}"
+    if timing["note"]:
+        check_notes += f" | {timing['note']}"
+    # A default clock (bypass, spec/top module-name mismatch, or a period pinned
+    # onto the spec's first input port) means every timing number below is only
+    # as real as the guessed port — the rollup carries that warning, never
+    # replaces it.
+    run_meta["check_notes"] = _carry_unverified_clock_note(run_meta, check_notes)
     run_meta["next_action"] = (
         "Use search_logs_tool for detailed PPA/error verification." if run_meta["status"] == "completed"
         else "Use search_logs_tool with error/timing queries and fix RTL/constraints."
@@ -2410,20 +2628,42 @@ def _read_run_meta(run_dir: str) -> Dict[str, Any]:
         return {}
 
 
-def _recommended_poll_after_sec(
-    run_id: str, status: str, stage: str, last_log_lines: List[str], workspace: Optional[str] = None
-) -> int:
-    key = _job_key(workspace, run_id)
+def _recommended_poll_after_sec(status: str, elapsed_sec: Optional[float]) -> int:
+    """Polling cadence for a live run, derived from its elapsed time.
+
+    Stateless on purpose: a per-process call counter told the second caller of
+    the same run to wait twice as long as the first (and reset on every new
+    hosted instance), which described the process's polling habits rather than
+    the run.
+    """
     if status not in {"queued", "running"}:
-        _POLL_BACKOFF_STATE.pop(key, None)
         return 0
+    elapsed = elapsed_sec if elapsed_sec is not None else 0.0
+    for below, poll_after in POLL_BACKOFF_STEPS:
+        if elapsed < below:
+            return min(POLL_BACKOFF_MAX_SEC, poll_after)
+    return min(POLL_BACKOFF_MAX_SEC, POLL_BACKOFF_LATE_SEC)
 
-    state = _POLL_BACKOFF_STATE.get(key, {"count": 0})
-    state["count"] = int(state.get("count", 0)) + 1
-    _POLL_BACKOFF_STATE[key] = state
 
-    poll_after = POLL_BACKOFF_START_SEC * (2 ** (state["count"] - 1))
-    return min(POLL_BACKOFF_MAX_SEC, max(POLL_BACKOFF_START_SEC, poll_after))
+def _backoff_elapsed_seconds(meta: Dict[str, Any], elapsed_sec: Optional[float]) -> float:
+    """Elapsed used for the polling cadence, never None.
+
+    ``created_at`` is written by the WORKER, so ``_elapsed_seconds`` is None for
+    the whole queued window; dispatch time is the honest clock there. A run with
+    neither timestamp is treated as brand new rather than guessed at.
+    """
+    if elapsed_sec is not None:
+        return float(elapsed_sec)
+    dispatched = meta.get("dispatched_at")
+    if dispatched:
+        try:
+            started = datetime.fromisoformat(dispatched)
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+        except Exception:
+            pass
+    return 0.0
 
 
 def _elapsed_seconds(meta: Dict[str, Any], status: str) -> Optional[float]:
@@ -2456,6 +2696,14 @@ def _build_status_response(
     recovered: bool = False,
     workspace: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # A terminal run's persisted snapshot may predate the current metrics
+    # schema. Heal it HERE too, not only in the runs list: this payload is what
+    # the Report tab and every polling agent read, and serving the stored v1
+    # fmax here while get_synthesis_metrics recomputed the honest one had the
+    # two agent-facing surfaces disagreeing about the same run (found live on
+    # staging, run synth_0003: 100.0 MHz here vs 8109.8 there). The stamp keeps
+    # repeat polls write-free.
+    _ensure_current_summary_metrics(run_dir, meta)
     last_log_lines = _collect_log_tail(run_dir)
     # Honest-state log source. Final (staged-back) logs win. When there are none
     # — a live hosted run mid-flight, or one killed before out.tar.gz — fall back
@@ -2473,7 +2721,8 @@ def _build_status_response(
     # tail stays as detail, never as the stage source.
     progress = stage_progress_from_files(run_dir, meta)
     stage = progress["current_stage"]
-    poll_after = _recommended_poll_after_sec(run_id, status, stage, last_log_lines, workspace=workspace)
+    elapsed_sec = _elapsed_seconds(meta, status)
+    poll_after = _recommended_poll_after_sec(status, _backoff_elapsed_seconds(meta, elapsed_sec))
 
     next_action = (
         "Use search_logs_tool for detailed PPA/error verification."
@@ -2540,18 +2789,26 @@ def _build_status_response(
         "top_module": meta.get("top_module"),
         # Live elapsed while running (computed from created_at), final elapsed
         # once persisted at finalization. So the UI always has a running timer.
-        "elapsed_sec": _elapsed_seconds(meta, status),
+        "elapsed_sec": elapsed_sec,
         "last_log_lines": last_log_lines,
         "last_log_source": last_log_source,
         "artifacts_found": _collect_artifacts(run_dir),
         "summary_metrics": meta.get("summary_metrics"),
-        "auto_checks": meta.get("auto_checks", {"constraints": "skip", "signoff": "skip", "equiv": "skip"}),
+        "auto_checks": _auto_checks_for_read(run_dir, meta),
         "check_notes": meta.get("check_notes", ""),
+        # How this run's clock constraint was chosen; sources in
+        # _UNVERIFIED_CLOCK_SOURCES mean the port was guessed, so the timing in
+        # summary_metrics is only as real as that guess.
+        "clock_source": meta.get("clock_source"),
+        "constraints_note": meta.get("constraints_note"),
         "next_action": next_action,
         "poll_after_sec": poll_after,
         "poll_hint": (
-            f"Polling backoff for this job: start {POLL_BACKOFF_START_SEC}s, "
-            f"double each subsequent poll, cap {POLL_BACKOFF_MAX_SEC}s."
+            "Polling cadence follows how long this run has been going, not how "
+            f"often you ask: {POLL_BACKOFF_START_SEC}s for the first "
+            f"{POLL_BACKOFF_STEPS[0][0]}s, then 60s, 120s, and "
+            f"{POLL_BACKOFF_LATE_SEC}s past {POLL_BACKOFF_STEPS[-1][0]}s. "
+            "Honor poll_after_sec."
         ),
     }
     # Communicate where this run is executing so the UI can say e.g. "running on
@@ -2589,8 +2846,6 @@ def _maybe_cache_poll_response(run_id: str, response: Dict[str, Any], workspace:
         _POLL_CACHE[key] = {"ts": time.time(), "response": dict(response)}
     elif key in _POLL_CACHE:
         del _POLL_CACHE[key]
-    if status not in {"running", "queued"} and key in _POLL_BACKOFF_STATE:
-        del _POLL_BACKOFF_STATE[key]
 
 
 def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[str, Any]:
@@ -2671,7 +2926,8 @@ def get_synthesis_status(run_id: str, workspace: Optional[str] = None) -> Dict[s
                 meta["status"] = "failed"
                 meta["check_notes"] = f"Job execution error: {exc}"
                 meta["auto_checks"] = meta.get(
-                    "auto_checks", {"constraints": "fail", "signoff": "fail", "equiv": "skip"}
+                    "auto_checks",
+                    {"constraints": "fail", "signoff": "fail", "equiv": "skip", "timing": "skip"},
                 )
                 if not meta.get("finished_at"):
                     meta["finished_at"] = _now_iso()
@@ -2849,6 +3105,27 @@ def _reconcile_stale_status(
         # the tombstone must not depend on the mutates-tarball sync.
         m["status"] = "completed"
         m["summary_metrics"] = _compute_summary_metrics(run_dir, m)
+        # B3: a run adopted here never ran the worker's finalize legs, so it
+        # carried NO auto_checks at all — leaving a reconciled run with metrics
+        # but no timing verdict, the one gap that would let "timing" be absent
+        # for a run that has timing data on disk. Fill the term (and only the
+        # term: the artifact/log guardrails genuinely were not run here).
+        adopted_timing = _timing_guardrail(run_dir, m)
+        adopted_checks = dict(m.get("auto_checks") or {})
+        for name in _FINAL_OK_CHECKS:
+            adopted_checks.setdefault(name, "skip")
+        adopted_checks["timing"] = adopted_timing["status"]
+        m["auto_checks"] = adopted_checks
+        if adopted_timing["note"] and adopted_timing["note"] not in (m.get("check_notes") or ""):
+            m["check_notes"] = (
+                f"{m['check_notes']} | {adopted_timing['note']}"
+                if m.get("check_notes")
+                else adopted_timing["note"]
+            )
+        # Adoption is a terminal write too. Normally a no-op here (check_notes
+        # still holds the dispatch-time constraints note verbatim, and the helper
+        # is idempotent), but it must not depend on that.
+        m["check_notes"] = _carry_unverified_clock_note(m, m.get("check_notes") or "")
         if not m.get("finished_at"):
             m["finished_at"] = _now_iso()
         m = _refresh_stage_metadata(run_dir, m, terminal_status="completed")
@@ -2947,6 +3224,93 @@ def _reconcile_stale_status(
     return meta
 
 
+def _ensure_current_summary_metrics(run_dir: str, meta: Dict[str, Any]) -> bool:
+    """Bring a TERMINAL run's persisted summary_metrics up to the current schema.
+
+    Self-healing read (invariant #5: the run directory is the database, process
+    and snapshot state are caches). Called from every surface that serves the
+    PERSISTED snapshot — the runs list and the status payload — so a run card,
+    a poll response and get_synthesis_metrics can never disagree about the same
+    run. Returns True when the snapshot was rewritten.
+
+    The trigger is the schema STAMP, not "some field is None" (B1): the old
+    condition (``cell_count is None or fmax_mhz is None``) never fired for a
+    completed full-flow run — fmax was always populated, because populating it
+    with the clock TARGET was the bug — and it fired on EVERY read for partial
+    runs, whose fmax is legitimately None forever. Stamping is therefore also
+    what makes repeat reads write-free, which matters most here: statuses are
+    polled hard.
+
+    Non-terminal runs are left alone: their metrics are still being written, and
+    a poll must never freeze a half-finished snapshot under a current stamp.
+    """
+    if meta.get("status") not in _TERMINAL_SYNTH_STATES:
+        return False
+    stored = meta.get("summary_metrics") or {}
+    try:
+        stamp = int(stored.get("metrics_schema_version") or 0)
+    except (TypeError, ValueError):
+        stamp = 0
+    if stamp >= METRICS_SCHEMA_VERSION:
+        return False
+
+    recomputed = _compute_summary_metrics(run_dir, meta)
+    if any(
+        recomputed.get(k) is not None
+        for k in ("area_um2", "cell_count", "wns_ns", "worst_slack_ns", "power_uw", "fmax_mhz")
+    ):
+        meta["summary_metrics"] = recomputed
+    else:
+        # Nothing on disk left to re-derive from (reports pruned). Stamp so this
+        # read stops rewriting run_meta forever — but a v1 snapshot cannot be
+        # stamped as v2 wholesale: its fmax_mhz IS the target echo this wave
+        # removed, and freezing it under a v2 stamp would make that lie
+        # permanently unhealable. Keep what a v1 snapshot genuinely justifies
+        # (area, cells, the raw wns/tns/power it parsed), null what it cannot,
+        # and say why.
+        meta["summary_metrics"] = dict(
+            stored,
+            fmax_mhz=None,
+            worst_slack_ns=None,
+            clock_period_min_ns=None,
+            timing_met=None,
+            timing_corner=None,
+            timing_note=(
+                "legacy snapshot (metrics schema v1); this run's reports are no "
+                "longer on disk, so the real worst slack and achieved Fmax cannot "
+                "be recovered — the v1 fmax was derived from ORFS's clamped wns "
+                "and has been dropped rather than kept as a target echo"
+            ),
+            metrics_schema_version=METRICS_SCHEMA_VERSION,
+        )
+    try:
+        _persist_run_meta(run_dir, meta)
+    except Exception:
+        pass
+    return True
+
+
+def _auto_checks_for_read(run_dir: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The persisted auto_checks, with the timing term filled in read-side.
+
+    Runs finalized before Wave C carry no ``timing`` key at all, and B3's rule
+    is that the term is never ABSENT for a run that has timing evidence on
+    disk. Derived here from that same evidence rather than written back: the
+    stored dict is what that run's finalizer actually recorded, and the honest
+    place to correct the omission is the answer, not the history.
+    """
+    checks = dict(meta.get("auto_checks") or {})
+    for name in _FINAL_OK_CHECKS:
+        checks.setdefault(name, "skip")
+    if "timing" not in checks:
+        checks["timing"] = (
+            _timing_guardrail(run_dir, meta)["status"]
+            if meta.get("status") in _TERMINAL_SYNTH_STATES
+            else "skip"
+        )
+    return checks
+
+
 def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
     index = _load_index(workspace)
     items: List[Dict[str, Any]] = []
@@ -2970,20 +3334,7 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
         # after the response returned) using on-disk finish artifacts, so a
         # finished run doesn't read as "running" forever.
         meta = _reconcile_stale_status(run_dir, meta, workspace=workspace)
-        # Self-heal: re-finalize PPA for completed runs whose stored
-        # summary_metrics predate the shared finalizer (missing cell_count or the
-        # derived fmax_mhz). This repairs historical runs on read without a
-        # migration, so the runs list shows correct PPA for old + new runs alike.
-        if meta.get("status") == "completed":
-            sm = meta.get("summary_metrics") or {}
-            if sm.get("cell_count") is None or sm.get("fmax_mhz") is None:
-                recomputed = _compute_summary_metrics(run_dir, meta)
-                if recomputed.get("cell_count") is not None or recomputed.get("fmax_mhz") is not None:
-                    meta["summary_metrics"] = recomputed
-                    try:
-                        _persist_run_meta(run_dir, meta)
-                    except Exception:
-                        pass
+        _ensure_current_summary_metrics(run_dir, meta)
         report_path = os.path.join(run_dir, "design_report.md")
         items.append(
             {
@@ -2996,7 +3347,13 @@ def list_synthesis_runs(workspace: str) -> List[Dict[str, Any]]:
                 "platform": meta.get("platform"),
                 "elapsed_sec": meta.get("elapsed_sec"),
                 "summary_metrics": meta.get("summary_metrics"),
-                "auto_checks": meta.get("auto_checks"),
+                # Same read-side fill as the status payload (_build_status_response
+                # calls this unconditionally), so the card and the poll response
+                # cannot differ on whether timing was judged. The old ``if
+                # meta.get("auto_checks")`` guard was exactly that difference: a
+                # terminal run finalized before auto_checks existed showed null on
+                # the run card and a full verdict in the poll payload.
+                "auto_checks": _auto_checks_for_read(run_dir, meta),
                 # Failing stage + reason so a failed run is legible in the list
                 # without opening logs (F12). Absent in run_meta → null.
                 "current_stage": meta.get("current_stage"),
@@ -3277,6 +3634,13 @@ def get_cts_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, A
     ):
         summary[key] = _normalize_report_time_ns(summary[key], run_meta)
 
+    # Same OpenSTA sentinel the finish-report path nulls: "period_min = 0.00
+    # fmax = inf" means no register-to-register path — 0.0 published as a real
+    # minimum period reads as "infinite frequency achievable". The fmax regex
+    # already can't match "inf" (correctly None); period must pair with it.
+    if re.search(r"fmax\s*=\s*inf", text, re.IGNORECASE) or summary["clock_period_min_ns"] == 0.0:
+        summary["clock_period_min_ns"] = None
+
     startpoints = re.findall(r"^Startpoint:\s+(.+)$", text, re.MULTILINE)
     endpoints = re.findall(r"^Endpoint:\s+(.+)$", text, re.MULTILINE)
     clock_names = re.findall(r"^Clock\s+(\S+)\s*$", text, re.MULTILINE)
@@ -3504,6 +3868,10 @@ def compare_pd_runs(
     child_values = child_metrics.get("metrics", {})
     metric_preferences = {
         "wns_ns": "higher",
+        # The real margin: two runs that both MET timing have the same clamped
+        # wns (0.00), so without this a retry that gained 1.5 ns of slack
+        # compared as "unchanged" on the only number that moved.
+        "worst_slack_ns": "higher",
         "tns_ns": "higher",
         "area_um2": "lower",
         "cell_count": "lower",
@@ -3630,10 +3998,19 @@ def compare_pd_runs(
     }
 
 
+_INF_TOKEN_RE = re.compile(r"^[+-]?inf(inity)?$", re.IGNORECASE)
+
+
 def _parse_finish_report(path: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "wns_ns": None,
         "tns_ns": None,
+        "worst_slack_ns": None,
+        "clock_period_min_ns": None,
+        "clock_fmax_mhz": None,
+        "timing_unconstrained": False,
+        "clock_fmax_unbounded": False,
+        "clock_count": 0,
         "power_uw": None,
         "violations": {
             "setup": None,
@@ -3667,8 +4044,46 @@ def _parse_finish_report(path: str) -> Dict[str, Any]:
         except Exception:
             return None
 
+    def _mtoken(pattern: str) -> Optional[str]:
+        m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        return m.group(1) if m else None
+
+    def _tofloat(token: Optional[str]) -> Optional[float]:
+        # float("inf") parses, so INF must be rejected explicitly — it is a
+        # sentinel, not a magnitude.
+        if token is None or _INF_TOKEN_RE.match(token):
+            return None
+        try:
+            return float(token)
+        except Exception:
+            return None
+
     out["wns_ns"] = _mfloat(r"^\s*wns\s+max\s+([0-9.eE+-]+)")
     out["tns_ns"] = _mfloat(r"^\s*tns\s+max\s+([0-9.eE+-]+)")
+
+    # The REAL worst slack and ORFS's own achieved-Fmax line sit in this same
+    # report, right next to the clamped wns (report_wns clamps positive slack to
+    # 0 BY DESIGN — OpenSTA search/Search.tcl). Regexes lifted from
+    # get_cts_summary, which has parsed these three lines since Wave sc#63.
+    # The two INF cases are DIFFERENT facts and must not be conflated:
+    #   * ``worst slack max INF`` — the design has no constrained timing paths
+    #     at all (OpenROAD #4425), so there is no slack to judge;
+    #   * ``fmax = inf`` — no register-to-register path (a combinational block),
+    #     which says nothing about the IO-constrained paths: their slack is
+    #     finite, possibly negative, and ORFS still counts their violations.
+    # Keying "unconstrained" off the fmax line silently downgraded a failing
+    # combinational design to "no timing data".
+    # Single-clock assumption: the regexes take the FIRST clock's line, and
+    # clock_count lets the caller disclose that when there are more.
+    slack_token = _mtoken(r"^\s*worst\s+slack\s+max\s+(\S+)")
+    fmax_token = _mtoken(r"fmax\s*=\s*(\S+)")
+    out["timing_unconstrained"] = bool(slack_token is not None and _INF_TOKEN_RE.match(slack_token))
+    out["clock_fmax_unbounded"] = bool(fmax_token is not None and _INF_TOKEN_RE.match(fmax_token))
+    out["worst_slack_ns"] = _tofloat(slack_token)
+    out["clock_fmax_mhz"] = _tofloat(fmax_token)
+    out["clock_period_min_ns"] = _mfloat(r"period_min\s*=\s*([0-9.eE+-]+)")
+    out["clock_count"] = len(re.findall(r"period_min\s*=", text, re.IGNORECASE))
+
     out["violations"]["setup"] = _mint(r"setup\s+violation\s+count\s+([0-9]+)")
     out["violations"]["hold"] = _mint(r"hold\s+violation\s+count\s+([0-9]+)")
     out["violations"]["max_slew"] = _mint(r"max\s+slew\s+violation\s+count\s+([0-9]+)")
@@ -3734,19 +4149,203 @@ def _derive_fmax_mhz(clock_period_ns: Optional[float], wns_ns: Optional[float]) 
 
 
 def _normalize_report_time_ns(value: Optional[float], run_meta: Dict[str, Any]) -> Optional[float]:
-    """A time value parsed from THIS run's STA reports -> canonical ns.
+    """A time value FRESHLY PARSED from this run's STA reports -> canonical ns.
 
     Reports are written in the platform's liberty time unit (ps on asap7),
-    recorded per-run as the ``sdc_time_unit`` marker at dispatch. Legacy runs
-    have no marker and are returned UNSCALED: their persisted values were
-    produced under the old behavior and must not be silently reinterpreted
-    (issue #63).
+    recorded per-run as the ``sdc_time_unit`` marker at dispatch. Runs finalized
+    before that marker existed have none — and the unit of the text sitting in
+    6_finish.rpt is a property of the PDK that wrote it, not of the snapshot, so
+    the platform's own unit is the fallback.
+
+    This does NOT reopen issue #63's rule. That rule protects STORED values (a
+    persisted summary_metrics number produced under the old behavior must not be
+    silently rescaled); every caller here hands in a number it just parsed out of
+    the report text, which carries its unit with it. Leaving those unscaled is
+    what published asap7 picoseconds as nanoseconds: a legacy asap7 run read back
+    "worst_slack_ns = 9876.69" and "timing met" against a 0.31 ns clock, and
+    _ensure_current_summary_metrics then froze it under the current schema stamp.
     """
-    unit = (run_meta or {}).get("sdc_time_unit")
-    if value is None or not unit or unit == "ns":
+    if value is None:
+        return None
+    unit = (run_meta or {}).get("sdc_time_unit") or platform_time_unit((run_meta or {}).get("platform"))
+    if unit == "ns":
         return value
     ns = time_unit_to_ns(value, unit)
     return round(ns, 6) if ns is not None else None
+
+
+# Bumped whenever summary_metrics gains fields or changes meaning, so the runs
+# list can re-finalize snapshots written by an older finalizer (a run card and
+# the detail panel must never disagree about the same run).
+# v3: the legacy-unit fallback (platform_time_unit when sdc_time_unit is
+# absent) changed what the normalizer computes — v2 snapshots of marker-less
+# asap7 runs hold ps published as ns and must be re-derived, or the card
+# serves 1000x-wrong slack next to a corrected detail panel forever.
+METRICS_SCHEMA_VERSION = 3
+
+# ORFS runs each platform at its config.mk default corner: asap7 ships
+# ``CORNER ?= BC`` (FF libraries — best case, optimistic), sky130hd ships TT.
+# An unlabelled 8-GHz figure from a best-case corner is its own kind of lie, so
+# the label travels with the number. Platforms whose default corner we have not
+# confirmed from ORFS's own config stay unlabelled rather than guessed.
+#
+# ``honors_corner`` is the SECOND fact this table has to carry: CORNER is not a
+# generic ORFS knob. asap7's platform config selects its liberty/lef set FROM
+# ``$(CORNER)``; sky130hd's config.mk hard-wires the TT libraries and ORFS's
+# variables.mk declares no CORNER at all. _write_orfs_config exports every
+# override it is given, so ``orfs_overrides={"CORNER": "WC"}`` on sky130hd lands
+# in config.mk and is then ignored by ORFS — labelling that run "overridden: WC"
+# invents a corner the run was never measured at.
+# Keyed platform -> (ORFS corner code, human label, honors CORNER).
+_PLATFORM_TIMING_CORNER = {
+    "asap7": ("BC", "BC/FF (best-case)", True),
+    "sky130hd": ("TT", "TT (typical)", False),
+}
+
+
+def _timing_corner_fields(
+    platform: Optional[str], run_meta: Optional[Dict[str, Any]] = None
+) -> Dict[str, Optional[str]]:
+    """The corner this run's timing was measured at, plus any disclosure.
+
+    Returns ``{"label": ..., "note": ...}``; either may be None.
+
+    A retry can pass ``orfs_overrides={"CORNER": "WC"}``, which _write_orfs_config
+    genuinely exports. On a platform whose ORFS config is CORNER-driven (asap7)
+    that override is real, so the platform DEFAULT would be a wrong label —
+    worse than no label — and the override is reported. On a platform that
+    ignores CORNER the opposite is true: the run really did execute at the
+    platform default, and the honest answer is that label plus a note that the
+    override did nothing. On a platform we have no entry for we can verify
+    NEITHER claim, so there is no label at all — only the note.
+    """
+    entry = _PLATFORM_TIMING_CORNER.get((platform or "").strip().lower())
+    default_label = entry[1] if entry else None
+    override = ((run_meta or {}).get("orfs_overrides") or {}).get("CORNER")
+    override = str(override).strip() if override is not None else ""
+    if not override:
+        return {"label": default_label, "note": None}
+
+    if entry is None:
+        return {
+            "label": None,
+            "note": (
+                f"CORNER override '{override}' cannot be verified on this platform: "
+                "SiliconCrew only knows asap7's ORFS config to be CORNER-driven, so "
+                "whether this run honored the override is unknown and the timing "
+                "corner is left unlabelled"
+            ),
+        }
+    if not entry[2]:
+        return {
+            "label": default_label,
+            "note": (
+                f"CORNER override '{override}' has no effect on this platform (only "
+                "asap7's ORFS config is CORNER-driven); timing is at the platform "
+                "default corner"
+            ),
+        }
+    if override.upper() != entry[0]:
+        return {"label": f"overridden: {override}", "note": None}
+    return {"label": default_label, "note": None}
+
+
+def _timing_corner_label(platform: Optional[str], run_meta: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Just the corner label — see _timing_corner_fields for the whole answer."""
+    return _timing_corner_fields(platform, run_meta)["label"]
+
+
+def _timing_metric_fields(
+    finish_data: Dict[str, Any],
+    run_meta: Dict[str, Any],
+    clock_period_ns: Optional[float],
+    have_finish_report: bool,
+) -> Dict[str, Any]:
+    """The honest timing block, shared by both metric assembly sites.
+
+    ``wns_ns`` keeps ORFS's clamped ``report_wns`` semantics (unchanged); the
+    real margin is ``worst slack max``. Fmax is ORFS's own ``fmax =`` value when
+    the report carries it, a LABELLED derivation from the real slack otherwise,
+    and ``None`` when there is no slack data at all — never the clock target
+    echoed back as an achieved frequency (issue dev#70).
+
+    Returns the metric fields plus ``notes``: disclosure the caller must surface
+    (parse_notes on the read path, ``timing_note`` in the persisted snapshot).
+    """
+    notes: List[str] = []
+    unconstrained = bool(finish_data.get("timing_unconstrained"))
+    worst_slack_ns = _normalize_report_time_ns(finish_data.get("worst_slack_ns"), run_meta)
+    clock_period_min_ns = _normalize_report_time_ns(finish_data.get("clock_period_min_ns"), run_meta)
+    wns_ns = _normalize_report_time_ns(finish_data.get("wns_ns"), run_meta)
+
+    # report_wns clamps POSITIVE slack to 0; a NEGATIVE value passes through
+    # unclamped and therefore IS the worst slack. A zero or positive wns without
+    # a worst-slack line carries no margin information at all — that absence is
+    # exactly what used to be laundered into "fmax = the clock target".
+    effective_slack = worst_slack_ns
+    if effective_slack is None and not unconstrained and wns_ns is not None and wns_ns < 0:
+        effective_slack = wns_ns
+
+    fmax_mhz = finish_data.get("clock_fmax_mhz")  # MHz on every platform: never rescaled
+    if unconstrained:
+        effective_slack = None
+        fmax_mhz = None
+        # OpenSTA prints the sentinel PAIR ``period_min = 0.00 fmax = inf``. 0.0
+        # published as a real metric reads as "infinite frequency achievable" —
+        # the same laundering of an absent fact that the fmax handling below
+        # exists to prevent.
+        clock_period_min_ns = None
+        notes.append(
+            "no constrained timing paths (the report reads INF): slack and Fmax are "
+            "undefined for this design, not merely unknown"
+        )
+    elif finish_data.get("clock_fmax_unbounded"):
+        # No register-to-register path (combinational block): there is no
+        # maximum frequency to state, and deriving one from the IO-path slack
+        # would invent a number ORFS explicitly declined to give. The slack
+        # itself is still real and still governs timing_met below.
+        fmax_mhz = None
+        # Same sentinel pair as above: no reg-to-reg path means there is no
+        # minimum period either, and 0.00 is how OpenSTA says so.
+        clock_period_min_ns = None
+        notes.append(
+            "no maximum frequency: ORFS reports fmax = INF (no register-to-register "
+            "paths); any timing here comes from IO-constrained paths"
+        )
+    elif fmax_mhz is None and effective_slack is not None and clock_period_ns:
+        fmax_mhz = _derive_fmax_mhz(clock_period_ns, effective_slack)
+        if fmax_mhz is not None:
+            notes.append(
+                "fmax_mhz is APPROXIMATE: derived as 1000/(clock period - worst slack) "
+                "because this report carries no 'fmax =' line (OpenSTA's own "
+                "find_clk_min_period iterates instead of dividing once)"
+            )
+    elif fmax_mhz is None and have_finish_report:
+        notes.append(
+            "fmax_mhz unavailable: this report carries neither an 'fmax =' line nor a "
+            "'worst slack max' line, and ORFS's clamped wns cannot stand in for the "
+            "achieved frequency"
+        )
+
+    clock_count = finish_data.get("clock_count") or 0
+    if clock_count > 1:
+        notes.append(
+            f"this report covers {clock_count} clocks; clock_period_min_ns and "
+            "fmax_mhz are the FIRST clock's, not the design's worst"
+        )
+
+    corner = _timing_corner_fields(run_meta.get("platform"), run_meta)
+    if corner["note"]:
+        notes.append(corner["note"])
+
+    return {
+        "worst_slack_ns": worst_slack_ns,
+        "clock_period_min_ns": clock_period_min_ns,
+        "fmax_mhz": fmax_mhz,
+        "timing_met": None if effective_slack is None else effective_slack >= 0,
+        "timing_corner": corner["label"],
+        "notes": notes,
+    }
 
 
 def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -3773,6 +4372,7 @@ def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str
     )
     power_uw = finish_data.get("power_uw")
     power_mw = round(power_uw / 1000.0, 6) if power_uw is not None else None
+    timing = _timing_metric_fields(finish_data, run_meta, clock_period_ns, bool(finish_path))
 
     return {
         "area_um2": stat_data.get("area_um2"),
@@ -3781,7 +4381,16 @@ def _compute_summary_metrics(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str
         "tns_ns": _normalize_report_time_ns(finish_data.get("tns_ns"), run_meta),
         "power_uw": power_uw,
         "power_mw": power_mw,
-        "fmax_mhz": _derive_fmax_mhz(clock_period_ns, wns_ns),
+        "fmax_mhz": timing["fmax_mhz"],
+        "worst_slack_ns": timing["worst_slack_ns"],
+        "clock_period_min_ns": timing["clock_period_min_ns"],
+        "timing_met": timing["timing_met"],
+        "timing_corner": timing["timing_corner"],
+        # The runs list renders THIS snapshot, not the read path's parse_notes,
+        # so the disclosure has to travel with it — otherwise a run card reads
+        # as more certain than the detail panel for the same run.
+        "timing_note": "; ".join(timing["notes"]) or None,
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
     }
 
 
@@ -3808,6 +4417,7 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
     )
     power_uw = finish_data.get("power_uw")
     wns_ns = _normalize_report_time_ns(finish_data.get("wns_ns"), run_meta)
+    timing = _timing_metric_fields(finish_data, run_meta, clock_period_ns, bool(finish))
     metrics = {
         "area_um2": stat_data.get("area_um2"),
         "cell_count": stat_data.get("cell_count"),
@@ -3815,7 +4425,15 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
         "tns_ns": _normalize_report_time_ns(finish_data.get("tns_ns"), run_meta),
         "power_uw": power_uw,
         "power_mw": round(power_uw / 1000.0, 6) if power_uw is not None else None,
-        "fmax_mhz": _derive_fmax_mhz(clock_period_ns, wns_ns),
+        "fmax_mhz": timing["fmax_mhz"],
+        "worst_slack_ns": timing["worst_slack_ns"],
+        "clock_period_min_ns": timing["clock_period_min_ns"],
+        "timing_met": timing["timing_met"],
+        "timing_corner": timing["timing_corner"],
+        # Same key, same construction as the persisted snapshot's, so the runs
+        # card (which reads summary_metrics) and the detail panel (which reads
+        # this) cannot disagree about the caveats on the same run.
+        "timing_note": "; ".join(timing["notes"]) or None,
     }
     sources = {
         "area_um2": stat,
@@ -3825,12 +4443,21 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
         "power_uw": finish,
         "power_mw": finish,
         "fmax_mhz": finish,
+        "worst_slack_ns": finish,
+        "clock_period_min_ns": finish,
+        "timing_met": finish,
+        # Not parsed from an artifact: the corner is a property of the platform
+        # config ORFS ran with. Named only when a label was actually derived —
+        # claiming a source for a value we don't have is its own small lie.
+        "timing_corner": (
+            f"platform config ({run_meta.get('platform')})" if metrics["timing_corner"] else None
+        ),
     }
     # Completeness is judged on the core PPA fields; fmax/power_mw are derived
     # and may legitimately be absent without the run being "incomplete".
     core = ("area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw")
     missing = [k for k in core if metrics.get(k) is None]
-    notes = []
+    notes = list(timing["notes"])
     if not finish:
         notes.append("6_finish.rpt not found")
     if not stat:

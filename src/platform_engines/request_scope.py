@@ -66,6 +66,32 @@ def session_request_scope(
                     sync_fn(session_id)
 
 
+def resolve_workspace_path(session_id: str, provider=None, fallback=None) -> str:
+    """Where a tool bound to ``session_id`` will act — WITHOUT materializing it.
+
+    Same provider selection ``session_request_scope`` uses, so a reported or
+    logged path can never disagree with the path work lands in (dev#43). Hosted
+    that is the provider's scratch tree, not the session manager's logical
+    layout; self-host the two coincide.
+
+    ``fallback`` covers duck-typed providers injected by tests that predate the
+    pure accessor: the caller's logical path, i.e. today's behavior.
+    """
+    if provider is None:
+        from src.platform_engines.workspace_provider import get_workspace_provider
+
+        provider = get_workspace_provider()
+
+    path_for = getattr(provider, "workspace_path_for", None)
+    if callable(path_for):
+        return path_for(session_id)
+    if fallback is not None:
+        return fallback(session_id)
+    raise AttributeError(
+        f"{type(provider).__name__} has no workspace_path_for(); pass fallback="
+    )
+
+
 async def run_in_session(
     session_id: str,
     fn: Callable[..., Any],

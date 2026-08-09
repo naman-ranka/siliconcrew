@@ -271,6 +271,82 @@ def test_runs_list_surfaces_failing_stage_and_notes(client):
     assert synth["checkNotes"] == "Clock tree synthesis failed (see 4_1_cts.log)."
 
 
+def test_runs_card_and_run_detail_agree_on_the_timing_fields(client):
+    """B1's claim, made testable: the runs list renders the PERSISTED snapshot
+    while the detail panel recomputes from the reports. If the two disagree the
+    same run shows two different Fmax values in one UI — which is exactly what
+    the pre-Wave-C self-heal condition allowed."""
+    c, ws = client
+    run_dir = os.path.join(ws, "synth_runs", "synth_0001")
+    base = os.path.join(run_dir, "orfs_reports", "asap7", "counter", "base")
+    os.makedirs(base, exist_ok=True)
+    with open(os.path.join(base, "6_finish.rpt"), "w") as f:
+        f.write("tns max 0.00\nwns max 0.00\nworst slack max 9876.69\n"
+                "clk period_min = 123.31 fmax = 8109.80\n"
+                "setup violation count 0\nhold violation count 0\n"
+                "Total 1.0e-3 1.0e-3 1.0e-9 2.0e-3 100.0%\n")
+    with open(os.path.join(base, "synth_stat.txt"), "w") as f:
+        f.write("  10 1.0E+02 cells\nChip area for module '\\counter': 100.0\n")
+    # A snapshot from the PRE-Wave-C finalizer: the target echoed as fmax.
+    with open(os.path.join(run_dir, "run_meta.json"), "w") as f:
+        json.dump({"run_id": "synth_0001", "status": "completed", "top_module": "counter",
+                   "platform": "asap7", "clock_period_ns": 10.0, "sdc_time_unit": "ps",
+                   "summary_metrics": {"area_um2": 100.0, "cell_count": 10, "wns_ns": 0.0,
+                                       "tns_ns": 0.0, "fmax_mhz": 100.0}}, f)
+    with open(os.path.join(ws, "synth_runs", "index.json"), "w") as f:
+        json.dump({"runs": [{"run_id": "synth_0001", "status": "completed",
+                             "updated_at": _iso(1)}]}, f)
+
+    card = next(r for r in c.get(f"/api/workspace/{SID}/runs?kind=synth").json()["runs"]
+                if r["id"] == "synth_0001")["ppa"]
+    detail = c.get(f"/api/workspace/{SID}/runs/synth_0001").json()["run"]["ppa"]
+    # The third surface: the poll payload the Report tab and agents read. It
+    # served the stored snapshot verbatim, so on staging it answered 100.0 MHz
+    # for the run the other two already reported at 8109.8.
+    job = c.get(f"/api/workspace/{SID}/runs/synth_0001/status").json()["job"]
+    status_metrics = job["summary_metrics"]
+
+    for field in ("fmaxMhz", "wnsNs", "worstSlackNs", "timingMet", "timingCorner"):
+        assert card[field] == detail[field], f"{field}: card {card[field]} vs detail {detail[field]}"
+    for api_field, metric_field in (
+        ("fmaxMhz", "fmax_mhz"), ("wnsNs", "wns_ns"), ("worstSlackNs", "worst_slack_ns"),
+        ("timingMet", "timing_met"), ("timingCorner", "timing_corner"),
+    ):
+        assert card[api_field] == status_metrics[metric_field], (
+            f"{metric_field}: card {card[api_field]} vs status {status_metrics[metric_field]}"
+        )
+    assert card["fmaxMhz"] == pytest.approx(8109.80)
+    assert card["worstSlackNs"] == pytest.approx(9.87669)
+    assert card["timingMet"] is True
+    assert card["timingCorner"] == "BC/FF (best-case)"
+    assert job["auto_checks"]["timing"] == "pass"
+
+
+def test_runs_compare_reads_the_nested_metrics_dict(client):
+    """C6: get_synthesis_metrics nests PPA under "metrics"; the diff endpoint
+    read the wrapper's top level, so every value and deltaPct came back None."""
+    c, ws = client
+    for run_id, area, wns in (("synth_0001", 100.0, "0.50"), ("synth_0002", 120.0, "0.25")):
+        base = os.path.join(ws, "synth_runs", run_id, "orfs_reports", "sky130hd", "counter", "base")
+        os.makedirs(base, exist_ok=True)
+        with open(os.path.join(base, "6_finish.rpt"), "w") as f:
+            f.write(f"tns max 0.00\nwns max {wns}\nworst slack max {wns}\n"
+                    "Total 1.0e-3 1.0e-3 1.0e-9 2.0e-3 100.0%\n")
+        with open(os.path.join(base, "synth_stat.txt"), "w") as f:
+            f.write(f"  10 1.0E+02 cells\nChip area for module '\\counter': {area}\n")
+        with open(os.path.join(ws, "synth_runs", run_id, "run_meta.json"), "w") as f:
+            json.dump({"run_id": run_id, "status": "completed", "top_module": "counter",
+                       "platform": "sky130hd", "clock_period_ns": 10.0}, f)
+
+    r = c.get(f"/api/workspace/{SID}/runs/compare", params={"a": "synth_0001", "b": "synth_0002"})
+    assert r.status_code == 200
+    rows = {row["metric"]: row for row in r.json()["diff"]["rows"]}
+    assert rows["Area (µm²)"]["a"] == 100.0
+    assert rows["Area (µm²)"]["b"] == 120.0
+    assert rows["Area (µm²)"]["deltaPct"] == 20.0
+    assert rows["Cells"]["a"] == 10
+
+
 def test_run_status_route_unknown_run(client):
     c, ws = client
     r = c.get(f"/api/workspace/{SID}/runs/synth_9999/status")

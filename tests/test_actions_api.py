@@ -230,3 +230,49 @@ def test_lint_and_simulate_end_to_end(client):
 
     runs = c.get(f"/api/workspace/{SID}/runs").json()["runs"]
     assert any(r["id"] == "sim_0001" for r in runs)
+
+
+# --- Duplicate-module warnings reach the IDE, not just the agent -------------
+
+REF_COPY = "module counter(input clk, output reg [7:0] q); initial q=1; always @(posedge clk) q<=q+2; endmodule\n"
+
+
+@pytest.mark.requires_eda
+@pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog not installed")
+def test_simulate_response_carries_the_collision_warning(client):
+    """The IDE's Simulate button calls run_sim_isolated directly, bypassing the
+    agent wrapper — sc#66's protagonist is an IDE user, so the REST reply must
+    carry the same warning."""
+    c, ws = client
+    with open(os.path.join(ws, "counter.v"), "w") as f:
+        f.write(DUT)
+    with open(os.path.join(ws, "counter_tb.v"), "w") as f:
+        f.write(TB)
+    os.makedirs(os.path.join(ws, "given"), exist_ok=True)
+    with open(os.path.join(ws, "given", "counter_ref.v"), "w") as f:
+        f.write(REF_COPY)
+    c.get(f"/api/workspace/{SID}/manifest")
+
+    body = c.post(f"/api/workspace/{SID}/simulate", json={}).json()
+    warnings = body["manifestWarnings"]
+    assert len(warnings) == 1
+    assert "counter.v" in warnings[0] and "given/counter_ref.v" in warnings[0]
+    assert "ignore" in warnings[0]
+
+    # Ignoring the reference copy clears it on the next dispatch.
+    c.put(f"/api/workspace/{SID}/manifest", json={"ignore": ["given/**"]})
+    body2 = c.post(f"/api/workspace/{SID}/simulate", json={}).json()
+    assert body2["manifestWarnings"] == []
+
+
+def test_simulate_response_has_no_warnings_when_clean(client):
+    c, ws = client
+    with open(os.path.join(ws, "counter.v"), "w") as f:
+        f.write(DUT)
+    with open(os.path.join(ws, "counter_tb.v"), "w") as f:
+        f.write(TB)
+    c.get(f"/api/workspace/{SID}/manifest")
+
+    from src.api import actions as actions_mod
+
+    assert actions_mod._compile_set_warnings(ws, ["counter.v", "counter_tb.v"]) == []
