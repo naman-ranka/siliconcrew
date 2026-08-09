@@ -237,3 +237,79 @@ def test_cloud_provider_path_accessor_does_not_touch_the_store(tmp_path):
     path = provider.workspace_path_for("s1")
     assert path == os.path.join(str(tmp_path / "scratch"), "s1")
     assert not os.path.exists(path)
+
+
+# ---------------------------------------------------------------------------
+# 4. Durability ordering: a mutating call's RESULT event must be written
+#    BEFORE the scope's exit sync, or every successful mutating call's
+#    "finished" card sits on instance disk unscheduled (lost to a recycle).
+#    Fails pre-fix: the result was logged after run_in_session returned.
+# ---------------------------------------------------------------------------
+
+
+class SyncSnapshotProvider(ScratchProvider):
+    """Records what attempt_events.jsonl contained AT SYNC TIME."""
+
+    def __init__(self, scratch_dir):
+        super().__init__(scratch_dir)
+        self.synced_event_kinds = []
+
+    def sync(self, session_id):
+        events = os.path.join(self.workspace_path_for(session_id), "attempt_events.jsonl")
+        kinds = []
+        if os.path.isfile(events):
+            with open(events, encoding="utf-8") as f:
+                kinds = [json.loads(line)["event_type"] for line in f if line.strip()]
+        self.synced_event_kinds.append(kinds)
+
+
+def test_mutating_calls_sync_covers_its_own_result_event(server, tmp_path, provider_reset):
+    provider = SyncSnapshotProvider(tmp_path / "scratch")
+    provider_reset.set_workspace_provider(provider)
+
+    asyncio.run(server.call_tool("create_session_tool", {"session_name": "d1"}))
+    provider.synced_event_kinds.clear()
+
+    asyncio.run(server.call_tool("write_file", {"filename": "d.v", "content": "module d; endmodule\n"}))
+
+    assert provider.synced_event_kinds, "a mutating call must sync"
+    last_sync = provider.synced_event_kinds[-1]
+    assert "tool_call" in last_sync
+    assert "tool_result" in last_sync, (
+        "the result event was appended AFTER the sync — it would be lost to an "
+        "instance recycle (the durability this surface exists to provide)"
+    )
+
+
+def test_fallback_provider_gets_both_events_in_one_file(server, tmp_path, provider_reset):
+    """A provider without workspace_path_for used to get the call event in the
+    bound workspace and the result event in the logical fallback path — one
+    call, two half-complete event files."""
+    provider = LegacyProvider(tmp_path / "scratch")
+    provider_reset.set_workspace_provider(provider)
+
+    asyncio.run(server.call_tool("create_session_tool", {"session_name": "d1"}))
+    sid = server.current_session
+    asyncio.run(server.call_tool("write_file", {"filename": "d.v", "content": "module d; endmodule\n"}))
+
+    bound = os.path.join(provider.workspace_for(sid), "attempt_events.jsonl")
+    with open(bound, encoding="utf-8") as f:
+        kinds = [json.loads(line)["event_type"] for line in f if line.strip()]
+    assert kinds.count("tool_call") >= 1 and kinds.count("tool_result") >= 1, (
+        f"one call's events split across files (bound file has only {kinds})"
+    )
+
+
+def test_tool_error_inside_scope_logs_exactly_one_error_event(server, tmp_path, provider_reset):
+    provider = ScratchProvider(tmp_path / "scratch")
+    provider_reset.set_workspace_provider(provider)
+
+    asyncio.run(server.call_tool("create_session_tool", {"session_name": "d1"}))
+    sid = server.current_session
+    out = _text(asyncio.run(server.call_tool("read_file", {"filename": "does_not_exist.v"})))
+
+    events = os.path.join(provider.workspace_path_for(sid), "attempt_events.jsonl")
+    with open(events, encoding="utf-8") as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+    results = [r for r in rows if r["event_type"] == "tool_result" and r.get("tool") == "read_file"]
+    assert len(results) == 1, f"expected exactly one result event, got {len(results)}"

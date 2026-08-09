@@ -927,20 +927,31 @@ Ready to design! What would you like to create?"""
         # Execute the tool
         tool_func = tool_map[name]
         active_session = self.current_session
-        # THE path activity events are written to. It MUST be the workspace the
-        # tool runs in (below, via run_in_session): attempt_logger drops the event
-        # when the dir is absent and otherwise writes attempt_events.jsonl there,
-        # so a logical path meant hosted MCP activity vanished or landed on
-        # never-synced instance disk (invariants 3 + 9). The RESULT event uses
-        # this resolved path (the scope has materialized it by then); the CALL
-        # event is logged INSIDE the bound scope below — logging it out here
-        # dropped the first call event per (instance, session), because on a
-        # cold instance the scratch dir does not exist until run_in_session
-        # hydrates it. Cost stated plainly: on a cold hosted session the
-        # "started" card appears after hydration, not before.
+        # Pre-resolved path for the ONE place events may still be written
+        # outside the bound scope: the scope-entry failure fallback in the
+        # except handler below. Both normal-path events (call AND result) are
+        # logged inside the bound scope via _invoke_with_call_log — attempt_
+        # logger drops an event when the dir is absent and otherwise writes
+        # attempt_events.jsonl there, so logging outside the scope either
+        # vanished on a cold instance or landed on never-synced instance disk
+        # (invariants 3 + 9). Cost stated plainly: on a cold hosted session
+        # the "started" card appears after hydration, not before.
         active_workspace = self._workspace_path(active_session)
         identity = self._current_identity()
         uid = auth_engine.scoped_user_id(identity)
+
+        # Both events are logged INSIDE the bound scope, before the scope's
+        # exit sync — so a mutating call's synchronous sync covers its own
+        # result event (previously the result was appended AFTER the sync and
+        # sat on instance disk unscheduled: every successful mutating call's
+        # "finished" card was lost to an instance recycle). It also pins both
+        # events to the SAME workspace resolution (the bound scope's), so a
+        # fallback provider can no longer split one call's events across two
+        # files. This mirrors /invoke, which logs call+result inside
+        # run_scoped. ``logged_result`` tells the outer handler whether the
+        # error path still needs a best-effort event (scope-entry failures —
+        # e.g. hydration — never reach the inner logging).
+        logged_result = {"done": False}
 
         def _invoke_with_call_log(args):
             log_tool_call(
@@ -950,7 +961,32 @@ Ready to design! What would you like to create?"""
                 tool=name,
                 arguments=args,
             )
-            return tool_func.invoke(args)
+            try:
+                result = tool_func.invoke(args)
+            except Exception as exc:
+                log_tool_result(
+                    workspace=get_workspace_path(),
+                    session_id=active_session,
+                    source="mcp",
+                    tool=name,
+                    result=None,
+                    status="error",
+                    error=str(exc),
+                    arguments=args,
+                )
+                logged_result["done"] = True
+                raise
+            log_tool_result(
+                workspace=get_workspace_path(),
+                session_id=active_session,
+                source="mcp",
+                tool=name,
+                result=str(result),
+                status="success",
+                arguments=args,
+            )
+            logged_result["done"] = True
+            return result
 
         try:
             # Run the sync LangChain tool inside a per-call session scope bound in
@@ -984,39 +1020,36 @@ Ready to design! What would you like to create?"""
                 tier=identity.tier,
                 sync=mutates and not self.defer_workspace_sync,
             )
-            log_tool_result(
-                workspace=active_workspace,
-                session_id=active_session,
-                source="mcp",
-                tool=name,
-                result=str(result),
-                status="success",
-                arguments=arguments,
-            )
             # Read-only calls append activity events with NO sync of their own
             # (the F2 gate above). Mark the flusher so those appends ride the
             # background incremental flush instead of waiting for the next
             # mutating call — otherwise an instance recycle, or another
             # writer's manifest bump forcing a hydration swap, deletes them.
-            # Mutating calls just synced synchronously inside the scope, so
-            # only the non-synced paths need marking. Self-host: the flusher
-            # no-ops (LocalWorkspaceProvider has no sync), so this is free.
+            # Mutating calls synced synchronously inside the scope, AFTER both
+            # events were logged (see _invoke_with_call_log) — so only the
+            # non-synced paths need marking, and that claim is now true by
+            # ordering, not by hope. Self-host: the flusher no-ops
+            # (LocalWorkspaceProvider has no sync), so this is free.
             if not (mutates and not self.defer_workspace_sync):
                 get_workspace_flusher().mark_dirty(active_session)
 
             return [TextContent(type="text", text=str(result))]
-            
+
         except Exception as e:
-            log_tool_result(
-                workspace=active_workspace,
-                session_id=active_session,
-                source="mcp",
-                tool=name,
-                result=None,
-                status="error",
-                error=str(e),
-                arguments=arguments,
-            )
+            if not logged_result["done"]:
+                # The scope itself failed (hydration, provider error) before
+                # the inner logging could run: best-effort error event at the
+                # pre-resolved path so the failure is not invisible.
+                log_tool_result(
+                    workspace=active_workspace,
+                    session_id=active_session,
+                    source="mcp",
+                    tool=name,
+                    result=None,
+                    status="error",
+                    error=str(e),
+                    arguments=arguments,
+                )
             get_workspace_flusher().mark_dirty(active_session)
             return [TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
 
