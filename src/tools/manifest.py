@@ -352,11 +352,17 @@ _SCAN_CACHE_MAX = 64  # bounded: a hosted instance serves many workspaces
 
 
 def _scan_fingerprint(workspace: str, files: List[DesignFile]) -> tuple:
-    """(path, mtime_ns, size) for every file the sweep would read, sorted.
+    """(path, mtime_ns, size, ctime_ns, ino) per file the sweep would read.
 
     Size alongside mtime because a filesystem's mtime granularity can hide a
-    same-tick rewrite; an unstat-able file fingerprints as missing, which
-    differs from any real state and so forces a rescan.
+    same-tick rewrite. ctime_ns and inode close the hole mtime+size leave open:
+    ``shutil.copy2`` PRESERVES mtime (this repo's documented sharp edge —
+    bundles.py restores workspaces with it deliberately), so a same-size
+    mtime-preserved overwrite fingerprinted as unchanged and served a stale
+    scan. The kernel bumps ctime on every write/replace and userspace cannot
+    backdate it, so the fingerprint stays stat-only — no content I/O, which is
+    the entire point of the cache (sc#81). An unstat-able file fingerprints as
+    missing, which differs from any real state and so forces a rescan.
     """
     out = []
     for f in files:
@@ -364,9 +370,9 @@ def _scan_fingerprint(workspace: str, files: List[DesignFile]) -> tuple:
             continue
         try:
             st = os.stat(os.path.join(workspace, f.path))
-            out.append((f.path, st.st_mtime_ns, st.st_size))
+            out.append((f.path, st.st_mtime_ns, st.st_size, st.st_ctime_ns, st.st_ino))
         except OSError:
-            out.append((f.path, None, None))
+            out.append((f.path, None, None, None, None))
     return tuple(sorted(out))
 
 

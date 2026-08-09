@@ -87,3 +87,35 @@ def test_build_manifest_reads_each_file_once(tmp_path, monkeypatch):
     calls = _counting_read_text(monkeypatch)
     m.build_manifest(ws, session_id="s1")
     assert len(calls) == len(set(calls)), f"duplicate reads: {calls}"
+
+
+def test_copy2_mtime_preserving_overwrite_invalidates_the_cache(tmp_path):
+    """shutil.copy2 preserves mtime (the repo's documented sharp edge —
+    bundles.py restores workspaces with it deliberately). A same-size,
+    mtime-preserved overwrite must still invalidate: the fingerprint keys on
+    ctime/inode too, which the kernel bumps on every replace."""
+    import shutil
+
+    ws = str(tmp_path / "ws")
+    os.makedirs(os.path.join(ws, "rtl"))
+    _write(ws, "rtl/m0.v", "module m0 (input clk);\nendmodule\n")
+    m._SCAN_CACHE.clear()
+    assert m.read_manifest(ws, session_id="s1").warnings == []
+
+    # Same byte count, same mtime as the original, different content: after the
+    # copy the file declares m1 a SECOND time alongside rtl/m1.v below.
+    _write(ws, "rtl/m1.v", "module m1 (input clk);\nendmodule\n")
+    m.read_manifest(ws, session_id="s1")  # cache the two-file state
+
+    src = str(tmp_path / "staged_m0.v")
+    with open(src, "w", encoding="utf-8") as f:
+        f.write("module m1 (input rst);\nendmodule\n")  # same length as m0's text
+    orig = os.stat(os.path.join(ws, "rtl/m0.v"))
+    os.utime(src, ns=(orig.st_atime_ns, orig.st_mtime_ns))
+    assert os.path.getsize(src) == orig.st_size
+    shutil.copy2(src, os.path.join(ws, "rtl/m0.v"))
+
+    warnings = m.read_manifest(ws, session_id="s1").warnings
+    assert len(warnings) == 1 and "m1" in warnings[0], (
+        "stale scan served after a copy2 overwrite"
+    )
