@@ -52,8 +52,17 @@ _MAX_SCAN_DEPTH = 6
 _RTL_EXTS = {".v", ".sv"}
 _INCLUDE_EXTS = {".vh", ".svh"}
 
-_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
-_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+# One position-ordered alternation instead of two passes: precedence between
+# strings, `//` and `/* */` falls out of scan order, exactly as a lexer sees
+# them. Two passes cannot get this right in both directions — stripping block
+# comments first let a `/*` INSIDE a `//` comment open a match that swallowed
+# real code up to the next `*/` anywhere later in the file.
+_COMMENT_OR_STRING_RE = re.compile(
+    r'"(?:\\.|[^"\\\n])*"'  # string literal (kept as an empty "")
+    r"|//[^\n]*"            # line comment
+    r"|/\*.*?\*/",          # block comment
+    re.DOTALL,
+)
 
 _MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)", re.MULTILINE)
 # Instantiation: `module_name #(...) inst (...)` or `module_name inst (...)`.
@@ -165,20 +174,26 @@ def _list_source_files(workspace: str, ignore: Optional[List[str]] = None) -> Li
 
 
 def _strip_comments(text: str) -> str:
-    """Blank out Verilog comments so the regexes above only ever see code.
+    """Blank out Verilog comments/strings so the regexes above only see code.
+
+    Single pass, position-ordered: whichever of a string, ``//`` or ``/*``
+    starts first claims the region, so ``/*`` inside a line comment or ``//``
+    inside a block comment can never open a bogus region (a two-pass version
+    deleted real module declarations when a ``//`` comment contained ``/*``).
 
     Block comments collapse to their own newlines rather than "": ``_INSTANCE_RE``
     is ``^\\s*``-anchored per line, so dropping the line breaks would splice a
-    following instantiation onto the preceding line and lose it. Block comments
-    are removed before line comments because ``//`` inside a ``/* … */`` (URLs,
-    commented-out code) is far more common than ``/*`` inside a ``//``.
-
-    No string-literal awareness: a ``"// module fake"`` inside a Verilog string
-    is an accepted false negative — comment density in generated RTL is the
-    actual threat, and a real lexer here would be machinery.
+    following instantiation onto the preceding line and lose it. String literals
+    collapse to an empty ``""`` — their contents are display text, and a
+    ``$display("module gcn booting")`` must not read as a declaration.
     """
-    text = _BLOCK_COMMENT_RE.sub(lambda mo: "\n" * mo.group(0).count("\n"), text)
-    return _LINE_COMMENT_RE.sub("", text)
+    def _sub(mo: "re.Match[str]") -> str:
+        tok = mo.group(0)
+        if tok.startswith('"'):
+            return '""'
+        return "\n" * tok.count("\n")
+
+    return _COMMENT_OR_STRING_RE.sub(_sub, text)
 
 
 def _read_text(path: str) -> str:

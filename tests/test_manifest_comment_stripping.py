@@ -110,3 +110,45 @@ module harness;
 endmodule
 """
     assert m.derive_role("harness.v", text) == "tb"
+
+
+def test_block_open_inside_line_comment_does_not_swallow_code(tmp_path):
+    # `/*` inside a `//` comment must NOT open a block comment: with two-pass
+    # stripping (block first) it ran to the next `*/` anywhere later in the
+    # file, deleting the real module declaration in between.
+    ws = str(tmp_path)
+    _write(ws, "core.v", """
+// disabled: /* old pipelined variant, restore after the retime fix
+module vxm_core (input clk, output q);
+  sub u_sub (.clk(clk), .q(q));
+endmodule
+
+/* Revision history:
+ *   2026-05: added the retime fix
+ */
+module vxm_wrap (input clk, output q);
+  vxm_core u_core (.clk(clk), .q(q));
+endmodule
+""")
+    _write(ws, "sub.v", "module sub (input clk, output q); assign q = clk; endmodule\n")
+
+    manifest = m.build_manifest(ws)
+    # vxm_core must survive as a declared module and vxm_wrap stays the root.
+    assert manifest.synthTop == "vxm_wrap"
+    scans = m._scan_design_files(ws, manifest.files)
+    assert "vxm_core" in scans["core.v"].modules
+    assert "sub" in scans["core.v"].instances
+
+
+def test_string_containing_module_keyword_is_not_a_declaration():
+    text = 'module real_mod;\n  initial $display("module fake_mod booting");\nendmodule\n'
+    assert m._modules_in(m._strip_comments(text)) == ["real_mod"]
+
+
+def test_line_comment_url_does_not_corrupt_the_line():
+    # "https://example.com" inside a string: the `//` must not be taken as a
+    # comment start (it would delete the rest of the line, string quote and all).
+    text = 'module a;\n  initial $display("see https://example.com/x");\n  b u_b (.c(1));\nendmodule\nmodule b(input c); endmodule\n'
+    stripped = m._strip_comments(text)
+    assert m._modules_in(stripped) == ["a", "b"]
+    assert "u_b" not in stripped or "b" in [i for i in m._instances_in(stripped)]
