@@ -68,13 +68,11 @@ jobs:
       - name: Run staging e2e
         env:
           STAGING_BASE_URL: ${{ inputs.base_url || 'https://siliconcrew-frontend-psp2dkllmq-uc.a.run.app' }}
-          # TEMPORARY, REMOVE BEFORE MERGE: throwaway staging TEST-ACCOUNT
-          # credentials, owner-provided for this branch's e2e. The dispatch
-          # path couldn't run pre-merge (see the trigger note above) and this
-          # repo has no STAGING_E2E_* secrets yet. Rotate the password and
-          # move these to repo secrets when this branch merges.
-          STAGING_EMAIL: ${{ secrets.STAGING_E2E_EMAIL || inputs.email || 'rockstarme.the5@gmail.com' }}
-          STAGING_PASSWORD: ${{ secrets.STAGING_E2E_PASSWORD || inputs.password || 'claude@test' }}
+          # Credentials come from repo secrets (preferred) or dispatch inputs.
+          # The spec self-skips when neither is provided, so the push-trigger
+          # runs stay green pre-secrets instead of failing on empty creds.
+          STAGING_EMAIL: ${{ secrets.STAGING_E2E_EMAIL || inputs.email }}
+          STAGING_PASSWORD: ${{ secrets.STAGING_E2E_PASSWORD || inputs.password }}
         run: |
           echo "::add-mask::$STAGING_EMAIL"
           echo "::add-mask::$STAGING_PASSWORD"
