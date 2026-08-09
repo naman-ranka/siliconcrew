@@ -184,3 +184,33 @@ def test_running_run_is_not_healed_or_stamped():
         # terminal response.
         assert status["status"] == "completed"
         assert status["summary_metrics"]["fmax_mhz"] == pytest.approx(8109.80)
+
+
+def test_v2_stamped_legacy_asap7_snapshot_is_rehealed_at_v3():
+    """A snapshot the PRE-unit-fix healer already stamped v2 holds ps published
+    as ns (worst_slack_ns 9876.69 on a sub-ns asap7 clock). Without a schema
+    bump it would be frozen forever while every fresh-parse surface serves the
+    corrected values — the exact card/poll disagreement the stamp exists to
+    prevent."""
+    with tempfile.TemporaryDirectory() as workspace:
+        run_dir = _seed_legacy_run(workspace)
+        meta_path = os.path.join(run_dir, "run_meta.json")
+        meta = json.loads(open(meta_path, encoding="utf-8").read())
+        # What the v2 (pre-unit-fix) healer computed for a marker-less asap7
+        # run: raw report numbers, stamped current.
+        meta["summary_metrics"] = dict(
+            V1_SNAPSHOT,
+            worst_slack_ns=9876.69,
+            clock_period_min_ns=123.31,
+            fmax_mhz=8109.8,
+            timing_met=True,
+            metrics_schema_version=2,
+        )
+        _write_file(meta_path, json.dumps(meta))
+
+        status = sm.get_synthesis_status("synth_0003", workspace=workspace)
+        healed = status["summary_metrics"]
+        assert healed["metrics_schema_version"] == sm.METRICS_SCHEMA_VERSION
+        assert healed["worst_slack_ns"] == pytest.approx(9.87669, abs=1e-4)
+        assert healed["clock_period_min_ns"] == pytest.approx(0.12331, abs=1e-4)
+        assert healed["fmax_mhz"] == pytest.approx(8109.8, abs=0.1)

@@ -603,6 +603,9 @@ _UNVERIFIED_CLOCK_SOURCES = {
     "default_module_mismatch",
     "spec_fallback_port",
     "requested_period_fallback_port",
+    # No spec at all + explicit period: the port is the guessed literal "clk",
+    # exactly bypass_default's situation with a user-supplied period.
+    "requested_period_default_port",
 }
 
 
@@ -684,11 +687,23 @@ def _constraints_guardrail(
         _write_default_sdc(
             sdc_path=sdc_path, clock_period_ns=fallback_clock_period_ns, clock_port="clk", platform=platform
         )
+        # Same guess as bypass_default: the port is the literal "clk", never
+        # verified against the netlist, and _write_default_sdc guards
+        # create_clock behind the port existing — a differently-named clock
+        # yields NO clock at all. The period was requested; the PORT was not,
+        # so the source must be in _UNVERIFIED_CLOCK_SOURCES and the note must
+        # say what happens when the guess is wrong.
         result.update({
             "status": "pass",
-            "note": "No spec found; generated fallback constraints.sdc from explicit clock period.",
+            "note": (
+                "No spec found; generated fallback constraints.sdc from the explicit "
+                "clock period on port 'clk'. The clock port was NOT verified against "
+                "the netlist — if this design's clock is named differently the run is "
+                "unconstrained."
+            ),
             "sdc_path": sdc_path,
             "effective_clock_period_ns": fallback_clock_period_ns,
+            "clock_source": "requested_period_default_port",
         })
         return result
 
@@ -3619,6 +3634,13 @@ def get_cts_summary(workspace: str, run_id: Optional[str] = None) -> Dict[str, A
     ):
         summary[key] = _normalize_report_time_ns(summary[key], run_meta)
 
+    # Same OpenSTA sentinel the finish-report path nulls: "period_min = 0.00
+    # fmax = inf" means no register-to-register path — 0.0 published as a real
+    # minimum period reads as "infinite frequency achievable". The fmax regex
+    # already can't match "inf" (correctly None); period must pair with it.
+    if re.search(r"fmax\s*=\s*inf", text, re.IGNORECASE) or summary["clock_period_min_ns"] == 0.0:
+        summary["clock_period_min_ns"] = None
+
     startpoints = re.findall(r"^Startpoint:\s+(.+)$", text, re.MULTILINE)
     endpoints = re.findall(r"^Endpoint:\s+(.+)$", text, re.MULTILINE)
     clock_names = re.findall(r"^Clock\s+(\S+)\s*$", text, re.MULTILINE)
@@ -4155,7 +4177,11 @@ def _normalize_report_time_ns(value: Optional[float], run_meta: Dict[str, Any]) 
 # Bumped whenever summary_metrics gains fields or changes meaning, so the runs
 # list can re-finalize snapshots written by an older finalizer (a run card and
 # the detail panel must never disagree about the same run).
-METRICS_SCHEMA_VERSION = 2
+# v3: the legacy-unit fallback (platform_time_unit when sdc_time_unit is
+# absent) changed what the normalizer computes — v2 snapshots of marker-less
+# asap7 runs hold ps published as ns and must be re-derived, or the card
+# serves 1000x-wrong slack next to a corrected detail panel forever.
+METRICS_SCHEMA_VERSION = 3
 
 # ORFS runs each platform at its config.mk default corner: asap7 ships
 # ``CORNER ?= BC`` (FF libraries — best case, optimistic), sky130hd ships TT.

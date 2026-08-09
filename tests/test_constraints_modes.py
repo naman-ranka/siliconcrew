@@ -398,3 +398,22 @@ def test_carry_helper_is_idempotent_and_silent_on_a_verified_clock():
     assert sm._carry_unverified_clock_note(verified, "rollup") == "rollup"
     # No note recorded at all (legacy meta): nothing to carry, nothing invented.
     assert sm._carry_unverified_clock_note({"clock_source": "bypass_default"}, "rollup") == "rollup"
+
+
+def test_no_spec_explicit_period_is_an_unverified_clock(tmp_path):
+    """No spec + explicit period guesses the literal port 'clk' — the same
+    unverified guess as bypass_default, and _write_default_sdc yields NO
+    create_clock when the guess is wrong. The source must warn."""
+    workspace = str(tmp_path / "ws_nospec")
+    os.makedirs(workspace, exist_ok=True)
+    run_dir = os.path.join(workspace, "synth_runs", "synth_0001")
+    os.makedirs(run_dir, exist_ok=True)
+
+    result = sm._constraints_guardrail(
+        workspace=workspace, run_dir=run_dir, top_module="counter",
+        fallback_clock_period_ns=5.0, platform="sky130hd",
+    )
+    assert result["status"] == "pass"
+    assert result["clock_source"] == "requested_period_default_port"
+    assert result["clock_source"] in sm._UNVERIFIED_CLOCK_SOURCES
+    assert "not verified" in result["note"].lower()
