@@ -18,5 +18,11 @@ export default defineConfig({
     screenshot: "on",
     trace: "retain-on-failure",
     video: "retain-on-failure",
+    // Bounded per-action/navigation ceilings: Playwright's defaults are
+    // unlimited, so one stuck wait can silently consume a whole test budget
+    // (a networkidle hang burned 35 minutes once). Long waits in these specs
+    // are explicit polling loops, never a single action.
+    actionTimeout: 30_000,
+    navigationTimeout: 60_000,
   },
 });

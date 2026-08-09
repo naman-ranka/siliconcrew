@@ -59,11 +59,14 @@ export async function signIn(page: Page, prefix = "") {
   await expect(email).toBeVisible({ timeout: 30_000 });
   await email.fill(EMAIL);
   await email.press("Enter");
-  await page.waitForLoadState("networkidle").catch(() => {});
-  await dumpAuthState(page, "after-email");
-
+  // No networkidle wait: AuthKit keeps connections open, so "networkidle"
+  // can simply never fire — with Playwright's unlimited default navigation
+  // timeout that ate an entire 35-minute test budget once. The password
+  // field appearing IS the after-email signal (the web-assertion pattern
+  // Playwright's own docs recommend over networkidle).
   const pwd = page.locator('input[type="password"]').first();
   await expect(pwd).toBeVisible({ timeout: 30_000 });
+  await dumpAuthState(page, "after-email");
   await pwd.fill(PASSWORD);
   await shot(page, `${prefix}02-authkit-filled`);
   await pwd.press("Enter");
