@@ -81,25 +81,29 @@ WORKDIR /app
 COPY . .
 
 # ---- Bake stdcell simulation models into the image ----
-# Hosted scale-from-zero boots spent ~46s downloading the pinned stdcell
-# models from GitHub on every cold start (entrypoint.sh bootstraps when
-# /workspace/_stdcells/<platform>/sim is empty). Baking them at build time
-# makes entrypoint's skip-if-present check a no-op on hosted; self-host is
-# unchanged (its /workspace bind mount shadows the baked copy and the runtime
-# bootstrap remains the fallback). The manifest check fails the BUILD on any
-# partial download: bootstrap_stdcells only raises when the cache is fully
-# empty, so without it a thin bake would look fixed while silently
-# reintroducing the runtime fetch. Expected counts: asap7=7, sky130hd=622.
+# Standard-cell models are the PDK: read-only, identical bytes for every session
+# and user. They bake into the INSTALL ROOT (/app == repo root), the fixed
+# location every caller resolves from via stdcells.stdcell_root() — never
+# RTL_WORKSPACE, which means "where session workspaces live" and is legitimately
+# re-pointed per session (issue #59). Because /app is not bind-mounted, the baked
+# copy is always present for both hosted and self-host — the /workspace bind
+# mount no longer shadows it, so entrypoint's runtime bootstrap is now only a
+# fallback for lean BAKE_STDCELLS=0 images. The manifest check fails the BUILD on
+# any partial download: bootstrap_stdcells only raises when the cache is fully
+# empty, so without it a thin bake would look fixed while silently reintroducing
+# the runtime fetch. Expected counts: asap7=7, sky130hd=622.
 # For a leaner local image: docker build --build-arg BAKE_STDCELLS=0 ...
 ARG BAKE_STDCELLS=1
 RUN if [ "$BAKE_STDCELLS" = "1" ]; then set -eux; \
       PYTHONPATH=/app python /app/scripts/bootstrap_stdcells.py \
-        --workspace /workspace --platform asap7 && \
+        --workspace /app --platform asap7 && \
       PYTHONPATH=/app python /app/scripts/bootstrap_stdcells.py \
-        --workspace /workspace --platform sky130hd && \
-      python /app/scripts/verify_stdcell_bake.py --workspace /workspace; \
+        --workspace /app --platform sky130hd && \
+      python /app/scripts/verify_stdcell_bake.py --workspace /app; \
     fi
 
+# RTL_WORKSPACE is the session-workspace root ONLY (where per-session dirs live);
+# it no longer governs stdcell resolution (issue #59). See stdcells.stdcell_root.
 ENV RTL_WORKSPACE=/workspace
 
 EXPOSE 3000 8000 8080

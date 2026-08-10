@@ -21,6 +21,11 @@ deploy/terraform/terraform.tfvars
 .vscode/
 workspace/
 workspace*/
+# Locally bootstrapped PDK models. They moved out of workspace/ (which this
+# file already excluded) to the install root in issue #59, so without this a
+# developer's local cache — ~630 files — rides into every build context, and a
+# lean BAKE_STDCELLS=0 image would ship it instead of the pinned download.
+/_stdcells/
 C/
 data/
 node_modules/
