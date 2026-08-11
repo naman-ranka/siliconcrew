@@ -30,7 +30,7 @@ import re
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from src.api.activity import read_activity
@@ -507,23 +507,62 @@ def build_actions_router(
         return _ok({"manifest": manifest.model_dump()})
 
     @router.post("/files")
-    async def upload_files(session_id: str, files: List[UploadFile] = File(...), identity=Depends(require_signed_in)):
+    async def upload_files(
+        session_id: str,
+        files: List[UploadFile] = File(...),
+        target_dir: str = Form("", alias="dir"),
+        identity=Depends(require_signed_in),
+    ):
+        """Upload into the workspace root, or into ``dir`` (workspace-relative).
+
+        The uploaded FILENAME is still basenamed — allowing a target directory
+        must not also start honouring paths inside a client-supplied filename,
+        which is the classic zip-slip shape. So traversal can only be attempted
+        through ``dir``, which is containment-checked ONCE here, before any
+        directory is created (checking after mkdir would already have made a
+        directory outside the workspace).
+        """
         uid = require_owned(session_id, identity)
         workspace = await require_workspace(session_id)
         os.makedirs(workspace, exist_ok=True)
+
+        rel_dir = (target_dir or "").strip().rstrip("/")
+        if rel_dir:
+            # Same contract as the inline "New file" input
+            # (frontend/lib/fileTree.ts validateNewFilePath): workspace-relative,
+            # no leading slash, no "."/".." segments. REJECT rather than
+            # sanitize — quietly rewriting "/etc" to "etc" would write somewhere
+            # the caller never asked for, which is the kind of silent
+            # reinterpretation that makes a path bug invisible.
+            if rel_dir.startswith("/") or any(seg in ("", ".", "..") for seg in rel_dir.split("/")):
+                _err(
+                    "invalid_path",
+                    f"Target directory must be workspace-relative, with no '.' or '..' segments: {target_dir}",
+                    status=400,
+                )
+        dest_dir = os.path.join(workspace, rel_dir) if rel_dir else workspace
+        # Defence in depth behind the syntactic check above: catches a symlinked
+        # subdirectory pointing out of the workspace, which no amount of string
+        # validation would see.
+        if not is_within(workspace, dest_dir):
+            _err("invalid_path", f"Refusing to write outside the workspace: {target_dir}", status=400)
+        os.makedirs(dest_dir, exist_ok=True)
 
         saved: List[str] = []
         for upload in files:
             name = os.path.basename(upload.filename or "")
             if not name:
                 continue
-            dest = os.path.join(workspace, name)
+            dest = os.path.join(dest_dir, name)
             if not is_within(workspace, dest):
                 _err("invalid_path", f"Refusing to write outside the workspace: {name}", status=400)
             content = await upload.read()
             with open(dest, "wb") as f:
                 f.write(content)
-            saved.append(name)
+            # Workspace-relative POSIX path, matching how the manifest names
+            # files (it walks recursively) — so the caller's "stored but not
+            # shown" comparison stays meaningful for subdirectory uploads.
+            saved.append(os.path.relpath(dest, workspace).replace(os.sep, "/"))
 
         # Files were written to the workspace above (outside run_scoped), so this
         # call must persist them → mutates=True even though read_manifest reads.

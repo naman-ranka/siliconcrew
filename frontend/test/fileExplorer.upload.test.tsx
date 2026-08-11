@@ -10,6 +10,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { useStore } from "@/lib/store";
+import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { FileExplorer } from "@/components/workbench/FileExplorer";
 
 const SESSION = {
@@ -70,6 +71,47 @@ describe("FileExplorer upload", () => {
 
     await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(1));
     expect(uploadFiles.mock.calls[0][0].map((f: File) => f.name)).toEqual([file.name]);
+  });
+
+  it("uploads into the directory a context-menu request names", async () => {
+    const uploadFiles = vi.fn().mockResolvedValue({ uploaded: ["rtl/a.v"], notShown: [] });
+    useStore.setState({ uploadFiles } as any);
+    const clicked = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => {});
+    render(<FileExplorer />);
+
+    // "Upload files here…" on a folder row posts the target through the UI store.
+    useWorkbenchUiStore.getState().requestUpload("rtl");
+    await waitFor(() => expect(clicked).toHaveBeenCalled());
+    // One-shot: consumed immediately, so a later render can't re-open the picker.
+    expect(useWorkbenchUiStore.getState().uploadRequestDir).toBeNull();
+
+    const file = new File(["x"], "a.v", { type: "text/plain" });
+    const input = screen.getByLabelText(UPLOAD_LABEL, { selector: "input" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(1));
+    expect(uploadFiles.mock.calls[0][1]).toBe("rtl");
+    clicked.mockRestore();
+  });
+
+  it("does not let the header button inherit a previous folder target", async () => {
+    const uploadFiles = vi.fn().mockResolvedValue({ uploaded: [], notShown: [] });
+    useStore.setState({ uploadFiles } as any);
+    const clicked = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => {});
+    render(<FileExplorer />);
+
+    // A folder request that the user then abandons (no file chosen)…
+    useWorkbenchUiStore.getState().requestUpload("rtl");
+    await waitFor(() => expect(clicked).toHaveBeenCalled());
+
+    // …must not silently redirect the NEXT header-button upload into that folder.
+    fireEvent.click(screen.getByRole("button", { name: UPLOAD_LABEL }));
+    const input = screen.getByLabelText(UPLOAD_LABEL, { selector: "input" });
+    fireEvent.change(input, { target: { files: [new File(["x"], "b.v")] } });
+
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(1));
+    expect(uploadFiles.mock.calls[0][1]).toBe("");
+    clicked.mockRestore();
   });
 
   it("uploads files dropped on the tree", async () => {

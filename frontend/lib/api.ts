@@ -449,9 +449,12 @@ export const workbenchApi = {
       body: JSON.stringify(updates),
     }).then((r) => r.manifest),
 
-  uploadFiles: async (sessionId: string, files: File[]) => {
+  uploadFiles: async (sessionId: string, files: File[], dir = "") => {
     const form = new FormData();
     for (const f of files) form.append("files", f, f.name);
+    // Workspace-relative target directory; omitted (not sent empty) so the
+    // endpoint's default keeps root uploads byte-identical to before.
+    if (dir) form.append("dir", dir);
     // FormData sets its own multipart Content-Type (with boundary) — only add
     // Authorization here, never Content-Type.
     const response = await fetchWithAuthRecovery(() => fetch(`${getApiBase()}${ws(sessionId)}/files`, {

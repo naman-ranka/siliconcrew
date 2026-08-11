@@ -237,6 +237,8 @@ export function FileExplorer() {
   const pushToast = useStore((s) => s.pushToast);
   const setContextMenu = useWorkbenchUiStore((s) => s.setContextMenu);
   const newFilePrefix = useWorkbenchUiStore((s) => s.newFilePrefix);
+  const uploadRequestDir = useWorkbenchUiStore((s) => s.uploadRequestDir);
+  const requestUpload = useWorkbenchUiStore((s) => s.requestUpload);
   const setNewFilePrefix = useWorkbenchUiStore((s) => s.setNewFilePrefix);
 
   const sessionId = currentSession?.id ?? null;
@@ -277,24 +279,28 @@ export function FileExplorer() {
   }, [expandedDirs, toggleDir]);
 
   // ── Upload ──────────────────────────────────────────────────────────────
-  // The backend basenames every filename, so uploads land in the workspace
-  // ROOT wherever the drop happened — the copy says that instead of pretending
-  // folder targeting works. No progress bar: the multipart POST reports no
-  // progress, so in-flight state is an honest count, never a percentage.
+  // Filenames are basenamed server-side, but the TARGET DIRECTORY is the
+  // caller's: the header button and a drop both mean the workspace root, while
+  // "Upload files here…" on a folder's context menu means that folder. One
+  // hidden input serves all three, so the pending target is held in a ref and
+  // set immediately before the picker opens. No progress bar: the multipart
+  // POST reports no progress, so in-flight state is an honest count, never a
+  // percentage.
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingUploadDir = useRef("");
   const [uploadCount, setUploadCount] = useState(0);
   const [dragActive, setDragActive] = useState(false);
   const uploading = uploadCount > 0;
   const canAcceptDrop = !!sessionId && !uploading;
 
   const startUpload = useCallback(
-    async (files: File[]) => {
+    async (files: File[], dir = "") => {
       if (!sessionId || files.length === 0) return;
       setUploadCount(files.length);
       try {
         // store.uploadFiles owns the success toast, the manifest and the
         // workspace refresh — don't duplicate any of it here.
-        await uploadFiles(files);
+        await uploadFiles(files, dir);
       } catch (e) {
         pushToast({
           kind: "error",
@@ -307,6 +313,18 @@ export function FileExplorer() {
     },
     [sessionId, uploadFiles, pushToast]
   );
+
+  // "Upload files here…" (folder context menu) routes through the UI store so
+  // the menu doesn't need its own file input. Clearing the slot immediately
+  // makes it a one-shot request: re-picking the same folder fires again, and a
+  // stale value can never re-open the picker on a later render.
+  useEffect(() => {
+    if (uploadRequestDir == null) return;
+    requestUpload(null);
+    if (!sessionId || uploading) return;
+    pendingUploadDir.current = uploadRequestDir;
+    fileInputRef.current?.click();
+  }, [uploadRequestDir, requestUpload, sessionId, uploading]);
 
   const onDragEnter = useCallback(
     (e: React.DragEvent) => {
@@ -490,7 +508,10 @@ export function FileExplorer() {
           </HeaderButton>
           <HeaderButton
             label="Upload files to workspace root"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => {
+              pendingUploadDir.current = "";
+              fileInputRef.current?.click();
+            }}
             disabled={!sessionId || uploading}
           >
             {uploading ? (
@@ -509,7 +530,11 @@ export function FileExplorer() {
               const files = Array.from(e.target.files ?? []);
               // Clear the input so re-picking the same file fires change again.
               e.target.value = "";
-              void startUpload(files);
+              // Read AND reset the target: a later picker opened by any other
+              // path must not inherit this one's directory.
+              const dir = pendingUploadDir.current;
+              pendingUploadDir.current = "";
+              void startUpload(files, dir);
             }}
           />
           <HeaderButton label="Refresh" onClick={refresh} disabled={!sessionId}>

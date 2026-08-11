@@ -14,6 +14,7 @@ import {
   RefreshCw,
   SearchCheck,
   Settings2,
+  Upload,
 } from "lucide-react";
 
 import { useStore } from "@/lib/store";
@@ -76,6 +77,7 @@ function Menu({ menu }: { menu: ContextMenuState }) {
   const setContextMenu = useWorkbenchUiStore((s) => s.setContextMenu);
   const setCommandModal = useWorkbenchUiStore((s) => s.setCommandModal);
   const setNewFilePrefix = useWorkbenchUiStore((s) => s.setNewFilePrefix);
+  const requestUpload = useWorkbenchUiStore((s) => s.requestUpload);
   const currentSession = useStore((s) => s.currentSession);
   const manifest = useStore((s) => s.manifest);
   const pushToast = useStore((s) => s.pushToast);
@@ -143,6 +145,13 @@ function Menu({ menu }: { menu: ContextMenuState }) {
     close();
   };
 
+  // The explorer owns the file input; this only names the target directory
+  // ("" = workspace root). Files land in THIS folder, not the root.
+  const doUpload = (dir: string) => {
+    requestUpload(dir);
+    close();
+  };
+
   const doCopyPath = () => {
     void navigator.clipboard?.writeText(path).then(
       () => pushToast({ kind: "success", title: "Path copied", detail: path }),
@@ -201,6 +210,11 @@ function Menu({ menu }: { menu: ContextMenuState }) {
             icon={<FolderPlus className="h-3.5 w-3.5" />}
             label="New folder…"
           />
+          <MenuItem
+            onSelect={() => doUpload("")}
+            icon={<Upload className="h-3.5 w-3.5" />}
+            label="Upload files…"
+          />
           <Separator />
           <MenuItem
             onSelect={() => {
@@ -228,6 +242,11 @@ function Menu({ menu }: { menu: ContextMenuState }) {
             }}
             icon={<FolderPlus className="h-3.5 w-3.5" />}
             label="New folder in folder"
+          />
+          <MenuItem
+            onSelect={() => doUpload(path)}
+            icon={<Upload className="h-3.5 w-3.5" />}
+            label="Upload files here…"
           />
           <MenuItem onSelect={doCopyPath} icon={<LinkIcon className="h-3.5 w-3.5" />} label="Copy path" />
         </>

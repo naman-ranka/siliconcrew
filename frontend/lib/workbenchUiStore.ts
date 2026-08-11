@@ -112,6 +112,11 @@ interface WorkbenchUiState {
   newFilePrefix: string | null;
   /** What the inline creator makes: a file, or a folder (via its .gitkeep). */
   newFileKind: "file" | "folder";
+  /** Set to a workspace-relative dir ("" = root) to ask the FileExplorer to
+   *  open its file picker for THAT directory; it clears the slot once opened.
+   *  A request slot rather than shared state — the picker is a one-shot
+   *  gesture, and the hidden input lives with the explorer that owns it. */
+  uploadRequestDir: string | null;
 
   // Actions
   openTab: (sessionId: string, key: string) => void;
@@ -135,6 +140,7 @@ interface WorkbenchUiState {
   setCommandSurfaceOpen: (open: boolean) => void;
   setContextMenu: (menu: ContextMenuState | null) => void;
   setNewFilePrefix: (prefix: string | null, kind?: "file" | "folder") => void;
+  requestUpload: (dir: string | null) => void;
   clearFlash: () => void;
 }
 
@@ -167,6 +173,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         contextMenu: null,
         newFilePrefix: null,
         newFileKind: "file",
+        uploadRequestDir: null,
 
         openTab: (sessionId, key) => {
           updateSession(sessionId, (ui) => ({
@@ -257,6 +264,7 @@ export const useWorkbenchUiStore = create<WorkbenchUiState>()(
         setContextMenu: (menu) => set({ contextMenu: menu }),
         setNewFilePrefix: (prefix, kind) =>
           set({ newFilePrefix: prefix, newFileKind: prefix == null ? "file" : kind ?? "file" }),
+        requestUpload: (dir) => set({ uploadRequestDir: dir }),
         clearFlash: () => set({ flashKey: null }),
       };
     },
