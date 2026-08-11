@@ -54,6 +54,24 @@ test("issue #93 bug 4: the frontend's /api/health proxy reaches the backend", as
   expect((body as { status?: string })?.status).toBe("healthy");
 });
 
+/** Bug 5, the half that needs no session: a deep link that cannot be opened
+ *  must still mount the recovery UI. Signed out, tenancy hides every session,
+ *  so the app shows the sign-in screen — and ⌘O, the key that was dead here
+ *  on the live app, must open the switcher on it. */
+test("issue #93 bug 5: a failure screen is escapable even signed out", async ({ page }) => {
+  await page.goto(`/w/ghost_${Date.now().toString(36)}`);
+  const screen = page.getByTestId("workbench-signin-required").or(page.getByTestId("workbench-not-found"));
+  await expect(screen).toBeVisible({ timeout: 60_000 });
+  log("failure screen:", JSON.stringify((await page.locator("main").innerText()).slice(0, 200)));
+
+  await expect(page.getByRole("button", { name: /Open another session/ })).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+o");
+  // The exact live symptom: this dialog never appeared on an error screen.
+  await expect(page.getByRole("dialog")).toBeVisible({ timeout: 15_000 });
+  await shot(page, "i93-06-signed-out-escape");
+});
+
+
 test("issue #93 bugs 1 & 5: uploads land, and a dead deep link is honest and escapable", async ({
   page,
 }) => {
