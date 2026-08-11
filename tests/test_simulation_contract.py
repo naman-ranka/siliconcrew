@@ -322,7 +322,7 @@ def test_post_synth_asap7_compat_profile_uses_compat_selection(monkeypatch):
         open(compat_stdcell, "w", encoding="utf-8").write("module compat_dff; endmodule")
 
         monkeypatch.setattr(rs, "resolve_stdcell_models", lambda workspace_arg, platform_arg: ([stdcell], {"files": []}))
-        monkeypatch.setattr(rs, "_asap7_compat_stdcell_files", lambda stdcells, netlist_path: [compat_stdcell])
+        monkeypatch.setattr(rs, "_asap7_compat_stdcell_files", lambda stdcells, netlist_path, scratch_dir=None: [compat_stdcell])
 
         captured = {}
 
@@ -361,7 +361,7 @@ def test_post_synth_asap7_auto_profile_defaults_to_compat(monkeypatch):
         open(compat_stdcell, "w", encoding="utf-8").write("module compat_dff; endmodule")
 
         monkeypatch.setattr(rs, "resolve_stdcell_models", lambda workspace_arg, platform_arg: ([stdcell], {"files": []}))
-        monkeypatch.setattr(rs, "_asap7_compat_stdcell_files", lambda stdcells, netlist_path: [compat_stdcell])
+        monkeypatch.setattr(rs, "_asap7_compat_stdcell_files", lambda stdcells, netlist_path, scratch_dir=None: [compat_stdcell])
         monkeypatch.setattr(rs, "_compile", lambda **kwargs: {"returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"})
         monkeypatch.setattr(rs, "_simulate", lambda **kwargs: {"returncode": 0, "stdout": "TEST PASSED\n", "stderr": "", "command": "vvp"})
 
@@ -437,3 +437,93 @@ def test_post_synth_stdcells_resolve_when_agent_repoints_rtl_workspace(monkeypat
         assert result["status"] == "test_passed"
         assert result["outcome"] == "test_passed"
 
+
+
+# --- ASAP7 compat fallback: an override must override, not collide -----------
+
+def _asap7_libs(tmpdir):
+    """A vendor SEQ library defining two cells, and the behavioral override for
+    one of them — the shape that broke ASAP7 post-synth simulation in
+    production."""
+    seq = os.path.join(tmpdir, "asap7sc7p5t_SEQ_RVT_TT_220101.v")
+    with open(seq, "w", encoding="utf-8") as f:
+        f.write(
+            "module DFFASRHQNx1_ASAP7_75t_R (output QN, input D, CLK);\n"
+            "  // vendor version, relies on timing checks Icarus lacks\n"
+            "endmodule\n"
+            "module DFFHQNx1_ASAP7_75t_R (output QN, input D, CLK);\n"
+            "endmodule\n"
+        )
+    compat = os.path.join(tmpdir, "DFFASRHQNx1_behavioral.v")
+    with open(compat, "w", encoding="utf-8") as f:
+        f.write("module DFFASRHQNx1_ASAP7_75t_R (output QN, input D, CLK);\nendmodule\n")
+    return seq, compat
+
+
+def test_asap7_compat_fallback_never_declares_a_cell_twice(tmp_path, monkeypatch):
+    """Regression: the netlist needs a cell only SEQ defines, so SEQ comes back —
+    and the old code returned SEQ *and* compat, so iverilog died with
+    "'DFFASRHQNx1_ASAP7_75t_R' has already been declared in this scope" and no
+    ASAP7 gate-level sim could compile at all.
+
+    The override must still win, so SEQ is used with the overridden cell removed.
+    """
+    import src.tools.run_simulation as rs
+
+    d = str(tmp_path)
+    seq, compat = _asap7_libs(d)
+    monkeypatch.setattr(rs, "get_asap7_compat_model_files", lambda: [compat])
+
+    # Netlist instantiates a cell the compat set does NOT cover -> fallback path.
+    netlist = os.path.join(d, "6_final.v")
+    with open(netlist, "w", encoding="utf-8") as f:
+        f.write("module top; DFFHQNx1_ASAP7_75t_R u0(); DFFASRHQNx1_ASAP7_75t_R u1(); endmodule\n")
+
+    scratch = str(tmp_path / "scratch")
+    os.makedirs(scratch, exist_ok=True)
+    files = rs._asap7_compat_stdcell_files([seq], netlist, scratch_dir=scratch)
+
+    # No module may be declared by two different files in the compile set.
+    seen = {}
+    for fpath in files:
+        for mod in rs._collect_defined_modules([fpath]):
+            assert mod not in seen, (
+                f"{mod} declared twice: {seen.get(mod)} and {fpath}")
+            seen[mod] = fpath
+
+    # Both required cells are still available...
+    assert "DFFASRHQNx1_ASAP7_75t_R" in seen and "DFFHQNx1_ASAP7_75t_R" in seen
+    # ...and the overridden one comes from the behavioral model, not the vendor file.
+    assert seen["DFFASRHQNx1_ASAP7_75t_R"] == compat
+    assert seq not in files  # the raw vendor file is replaced by the stripped copy
+
+
+def test_asap7_compat_no_fallback_when_compat_covers_the_netlist(tmp_path, monkeypatch):
+    """Unchanged behaviour: if compat covers everything the netlist needs, the
+    vendor SEQ library is not pulled in at all."""
+    import src.tools.run_simulation as rs
+
+    d = str(tmp_path)
+    seq, compat = _asap7_libs(d)
+    monkeypatch.setattr(rs, "get_asap7_compat_model_files", lambda: [compat])
+
+    netlist = os.path.join(d, "6_final.v")
+    with open(netlist, "w", encoding="utf-8") as f:
+        f.write("module top; DFFASRHQNx1_ASAP7_75t_R u1(); endmodule\n")
+
+    files = rs._asap7_compat_stdcell_files([seq], netlist, scratch_dir=d)
+    assert files == [compat]
+
+
+def test_strip_modules_removes_only_the_named_blocks(tmp_path):
+    import src.tools.run_simulation as rs
+
+    src = str(tmp_path / "lib.v")
+    with open(src, "w", encoding="utf-8") as f:
+        f.write("module A; endmodule\nmodule B;\n  wire x;\nendmodule\nmodule C; endmodule\n")
+    out = str(tmp_path / "lib_stripped.v")
+
+    assert rs._strip_modules(src, {"B"}, out) is True
+    assert rs._collect_defined_modules([out]) == {"A", "C"}
+    # Nothing to strip -> reports False and writes nothing.
+    assert rs._strip_modules(src, {"ZZZ"}, str(tmp_path / "none.v")) is False

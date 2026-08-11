@@ -112,7 +112,64 @@ def _collect_defined_modules(file_paths: List[str]) -> set[str]:
     return mods
 
 
-def _asap7_compat_stdcell_files(stdcells: List[str], netlist_path: str) -> List[str]:
+def _strip_modules(src_path: str, drop: set, out_path: str) -> bool:
+    """Copy ``src_path`` to ``out_path`` minus whole ``module <name> … endmodule``
+    blocks whose name is in ``drop``. Returns False if nothing was stripped.
+
+    Verilog modules do not nest, so a line-wise scan is exact here: the vendor
+    ASAP7 libraries are generated files with one ``module``/``endmodule`` pair
+    per cell, each at the start of its line.
+    """
+    start = re.compile(r"^\s*module\s+([A-Za-z_][A-Za-z0-9_$]*)\b")
+    end = re.compile(r"^\s*endmodule\b")
+    try:
+        with open(src_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+    except Exception:
+        return False
+
+    kept, skipping, stripped = [], False, False
+    for line in lines:
+        if skipping:
+            if end.match(line):
+                skipping = False
+            continue
+        m = start.match(line)
+        if m and m.group(1) in drop:
+            skipping, stripped = True, True
+            continue
+        kept.append(line)
+
+    if not stripped:
+        return False
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.writelines(kept)
+    except Exception:
+        return False
+    return True
+
+
+def _asap7_compat_stdcell_files(stdcells: List[str], netlist_path: str,
+                                scratch_dir: Optional[str] = None) -> List[str]:
+    """Gate-level ASAP7 cell set: behavioral overrides first, vendor library for
+    the rest.
+
+    The compat models exist because the vendor SEQ cells rely on delayed/timing
+    -check behavior Icarus does not implement, which leaves QN stuck at X. So an
+    override must actually take effect — including on the fallback path, where
+    the netlist needs sequential cells the compat set does not cover and the
+    full SEQ library has to come back in.
+
+    Emitting SEQ *and* compat together is what the old code did, and iverilog
+    rejects it outright ("'DFFASRHQNx1_ASAP7_75t_R' has already been declared in
+    this scope") — so ASAP7 post-synth simulation could not compile at all for
+    any netlist wider than the compat set. Strip the overridden cells out of a
+    scratch copy of SEQ instead: the override wins, every other cell still comes
+    from the vendor library, and no module is declared twice. If the strip
+    cannot be written, fall back to SEQ alone — a sim that runs on unmodified
+    vendor cells beats one that does not compile.
+    """
     compat = get_asap7_compat_model_files()
     seq_file = None
     base = []
@@ -128,10 +185,20 @@ def _asap7_compat_stdcell_files(stdcells: List[str], netlist_path: str) -> List[
     required = set(_extract_asap7_required_modules(netlist_path))
     available = _collect_defined_modules(base + compat)
     missing = sorted([m for m in required if m not in available])
-    if missing and seq_file:
-        # If required modules are not covered by compat+base, fall back to full SEQ file.
-        base.append(seq_file)
-    return base + compat
+    if not (missing and seq_file):
+        return base + compat
+
+    # Fallback: the netlist needs cells only SEQ defines. Keep the overrides by
+    # removing the cells they replace from a scratch copy of SEQ.
+    overridden = _collect_defined_modules(compat) & _collect_defined_modules([seq_file])
+    if overridden and scratch_dir:
+        stripped_seq = os.path.join(scratch_dir, "asap7_seq_stripped.v")
+        if _strip_modules(seq_file, overridden, stripped_seq):
+            return base + [stripped_seq] + compat
+    if overridden:
+        # Cannot strip — vendor library alone, so the compile still succeeds.
+        return base + [seq_file]
+    return base + [seq_file] + compat
 
 
 def _compile(
@@ -449,7 +516,8 @@ def run_simulation(
         stdcells_for_compile = list(stdcells)
         netlist_abs = resolved_netlist_abs
         if platform == "asap7" and effective_sim_profile == "compat":
-            stdcells_for_compile = _asap7_compat_stdcell_files(stdcells_for_compile, netlist_abs)
+            stdcells_for_compile = _asap7_compat_stdcell_files(
+                stdcells_for_compile, netlist_abs, scratch_dir=cwd)
 
         # Drop the design RTL the gate netlist replaces. The manifest's simulate
         # set is [design RTL, testbench]; compiling that RTL beside the gate
