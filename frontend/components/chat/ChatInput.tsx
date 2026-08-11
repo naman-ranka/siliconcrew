@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, KeyboardEvent } from "react";
+import Link from "next/link";
 import { Send, Square, X, Clock, Loader2, Paperclip, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelPicker } from "./ModelPicker";
@@ -54,6 +55,24 @@ export function ChatInput() {
   return (
     <div className={cn("border-t border-border bg-surface-0", compact ? "px-3 py-3" : "px-4 py-4")}>
       <div className="max-w-3xl mx-auto">
+        {/* A disabled composer with no way forward is a trap (#93 Bug 3): when
+            no session is resolved, say so and point at the one place sessions
+            are created — the launcher. Posture-independent on purpose (the
+            IDE's ⌘O QuickSwitch is not mounted in the agent shell). */}
+        {!currentSession && (
+          <div
+            data-testid="chat-no-session-cta"
+            className="mb-2 flex items-center justify-between gap-3 rounded-md border border-border bg-surface-1 px-3 py-2"
+          >
+            <span className="text-xs text-muted-foreground">No session open yet.</span>
+            <Link
+              href="/"
+              className="h-7 shrink-0 rounded-md bg-primary px-2.5 text-xs font-medium leading-7 text-primary-foreground hover:bg-primary/90"
+            >
+              Start a session
+            </Link>
+          </div>
+        )}
         <div className="relative">
           {queuedMessages.length > 0 && (
             <div className="flex flex-col gap-1.5 mb-2" data-testid="queued-messages">

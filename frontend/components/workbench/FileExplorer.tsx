@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -20,6 +21,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Upload,
 } from "lucide-react";
 
 import { useStore } from "@/lib/store";
@@ -78,6 +80,12 @@ function fileIconFor(name: string) {
 
 function roleForRootFile(name: string, manifest: DesignManifest | null): FileRole | null {
   return manifest?.files.find((f) => f.name === name)?.role ?? null;
+}
+
+/** True only for drags actually carrying files — text/link drags are ignored. */
+function dragHasFiles(e: React.DragEvent): boolean {
+  const types = e.dataTransfer?.types;
+  return !!types && Array.from(types).includes("Files");
 }
 
 /** Small header icon button (h-8 header, compact density). */
@@ -226,6 +234,8 @@ export function FileExplorer() {
   const dirCache = useStore((s) => s.dirCache);
   const loadDir = useStore((s) => s.loadDir);
   const invalidateDirs = useStore((s) => s.invalidateDirs);
+  const uploadFiles = useStore((s) => s.uploadFiles);
+  const pushToast = useStore((s) => s.pushToast);
   const setContextMenu = useWorkbenchUiStore((s) => s.setContextMenu);
   const newFilePrefix = useWorkbenchUiStore((s) => s.newFilePrefix);
   const setNewFilePrefix = useWorkbenchUiStore((s) => s.setNewFilePrefix);
@@ -266,6 +276,81 @@ export function FileExplorer() {
   const collapseAll = useCallback(() => {
     for (const dir of expandedDirs) toggleDir(dir);
   }, [expandedDirs, toggleDir]);
+
+  // ── Upload ──────────────────────────────────────────────────────────────
+  // The backend basenames every filename, so uploads land in the workspace
+  // ROOT wherever the drop happened — the copy says that instead of pretending
+  // folder targeting works. No progress bar: the multipart POST reports no
+  // progress, so in-flight state is an honest count, never a percentage.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadCount, setUploadCount] = useState(0);
+  const [dragActive, setDragActive] = useState(false);
+  // dragenter/dragleave also fire crossing child rows — count depth so the
+  // overlay doesn't flicker while the pointer moves over the tree.
+  const dragDepth = useRef(0);
+  const uploading = uploadCount > 0;
+  const canAcceptDrop = !!sessionId && !uploading;
+
+  const startUpload = useCallback(
+    async (files: File[]) => {
+      if (!sessionId || files.length === 0) return;
+      setUploadCount(files.length);
+      try {
+        // store.uploadFiles owns the success toast, the manifest and the
+        // workspace refresh — don't duplicate any of it here.
+        await uploadFiles(files);
+      } catch (e) {
+        pushToast({
+          kind: "error",
+          title: "Upload failed",
+          detail: e instanceof Error ? e.message : String(e),
+        });
+      } finally {
+        setUploadCount(0);
+      }
+    },
+    [sessionId, uploadFiles, pushToast]
+  );
+
+  const onDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      if (canAcceptDrop) setDragActive(true);
+    },
+    [canAcceptDrop]
+  );
+
+  const onDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      // Always preventDefault on a file drag, even when we can't accept it —
+      // otherwise the drop falls through to the document and the browser
+      // navigates away to the dropped file.
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = canAcceptDrop ? "copy" : "none";
+    },
+    [canAcceptDrop]
+  );
+
+  const onDragLeave = useCallback(() => {
+    if (dragDepth.current === 0) return;
+    dragDepth.current -= 1;
+    if (dragDepth.current === 0) setDragActive(false);
+  }, []);
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragActive(false);
+      if (!canAcceptDrop) return;
+      void startUpload(Array.from(e.dataTransfer.files));
+    },
+    [canAcceptDrop, startUpload]
+  );
 
   const openNode = useCallback(
     (node: FlatNode) => {
@@ -366,6 +451,30 @@ export function FileExplorer() {
           >
             <Plus className="h-3 w-3" />
           </HeaderButton>
+          <HeaderButton
+            label="Upload files to workspace root"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!sessionId || uploading}
+          >
+            {uploading ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Upload className="h-3 w-3" />
+            )}
+          </HeaderButton>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            aria-label="Upload files to workspace root"
+            className="hidden"
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              // Clear the input so re-picking the same file fires change again.
+              e.target.value = "";
+              void startUpload(files);
+            }}
+          />
           <HeaderButton label="Refresh" onClick={refresh} disabled={!sessionId}>
             <RefreshCw className="h-3 w-3" />
           </HeaderButton>
@@ -382,189 +491,241 @@ export function FileExplorer() {
       {/* Inline "New file" input — keyed so a new prefix resets the draft. */}
       {newFilePrefix != null && <NewFileRow key={newFilePrefix} prefix={newFilePrefix} />}
 
-      {/* Body */}
+      {/* Upload in flight — a count, not a percentage (see startUpload). */}
+      {uploading && (
+        <div
+          role="status"
+          className="flex items-center gap-1.5 border-b border-border px-2 py-1.5 text-xs text-muted-foreground"
+        >
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+          <span className="truncate">Uploading {uploadCount} file(s)…</span>
+        </div>
+      )}
+
+      {/* Body — also the drop target for uploads. */}
       <div
-        ref={scrollRef}
-        role="tree"
-        aria-label="Workspace files"
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-        onContextMenu={(e) => {
-          // Empty-space right-click (rows stopPropagation) → workspace menu.
-          e.preventDefault();
-          setContextMenu({ x: e.clientX, y: e.clientY, path: "", kind: "empty" });
-        }}
-        className="thin-scrollbar relative flex-1 overflow-y-auto overflow-x-hidden py-1 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/40"
+        className={cn(
+          "relative flex min-h-0 flex-1 flex-col",
+          dragActive && "ring-2 ring-inset ring-primary/60"
+        )}
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
       >
-        {rootLoading ? (
-          <div aria-hidden="true">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="flex h-[26px] items-center gap-2 px-2">
-                <Skeleton className="h-3.5 w-3.5 shrink-0 rounded" />
-                <Skeleton className="h-3" style={{ width: `${72 - (i % 4) * 12}%` }} />
-              </div>
-            ))}
-          </div>
-        ) : rootError ? (
-          <div className="flex h-[26px] items-center gap-2 px-2 text-xs text-muted-foreground">
-            <AlertCircle className="h-3.5 w-3.5 shrink-0 text-status-fail" />
-            <span className="truncate">Couldn’t load files.</span>
-            <button
-              type="button"
-              onClick={() => void loadDir("", { revalidate: true })}
-              className="shrink-0 rounded px-1 text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/60"
+        <div
+          ref={scrollRef}
+          role="tree"
+          aria-label="Workspace files"
+          tabIndex={0}
+          onKeyDown={onKeyDown}
+          onContextMenu={(e) => {
+            // Empty-space right-click (rows stopPropagation) → workspace menu.
+            e.preventDefault();
+            setContextMenu({ x: e.clientX, y: e.clientY, path: "", kind: "empty" });
+          }}
+          className="thin-scrollbar relative flex-1 overflow-y-auto overflow-x-hidden py-1 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/40"
+        >
+          {!sessionId ? (
+            /* Every header action is session-scoped, so with no session the
+               panel is inert — say why and point at the fix instead of leaving
+               a wall of greyed-out buttons (#93 Bug 3). */
+            <div
+              data-testid="files-no-session"
+              className="px-3 py-6 text-center text-xs text-muted-foreground"
             >
-              Retry
-            </button>
-          </div>
-        ) : rootEmpty ? (
-          <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            No files yet — ask the assistant to scaffold a design.
-          </div>
-        ) : (
-          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-            {virtualizer.getVirtualItems().map((vi) => {
-              const node = rows[vi.index];
-              if (!node) return null;
-              const { entry } = node;
-              const isDir = entry.kind === "dir";
-              const runId = isDir ? runIdForDirEntry(entry) : null;
-              const run = runId ? runs.find((r) => r.id === runId) : undefined;
-              const role = !isDir && node.depth === 0 ? roleForRootFile(entry.name, manifest) : null;
-              const synthTop = !isDir && node.depth === 0 && isSynthTopFile(entry.name, manifest);
-              const simTop = !isDir && node.depth === 0 && isSimTopFile(entry.name, manifest);
-              const active = !isDir && activeTab != null && artifactKeyForFile(entry.path) === activeTab;
-              const focused = vi.index === focusIdx;
-
-              return (
-                <div
-                  key={entry.path || vi.index}
-                  ref={(el) => {
-                    if (el) rowEls.current.set(vi.index, el);
-                    else rowEls.current.delete(vi.index);
-                  }}
-                  role="treeitem"
-                  aria-level={node.depth + 1}
-                  aria-expanded={isDir ? node.expanded : undefined}
-                  aria-selected={active || undefined}
-                  tabIndex={focused ? 0 : -1}
-                  title={entry.path}
-                  style={{
-                    height: ROW_H,
-                    transform: `translateY(${vi.start}px)`,
-                    paddingLeft: 8 + node.depth * INDENT,
-                  }}
-                  className={cn(
-                    "absolute left-0 top-0 flex w-full cursor-pointer select-none items-center gap-1.5 pr-2 outline-none",
-                    "transition-colors duration-fast ease-swift",
-                    active ? "bg-primary/10 text-foreground" : "hover:bg-surface-2",
-                    "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/60"
-                  )}
-                  onClick={() => {
-                    setFocusedIndex(vi.index);
-                    if (isDir) toggleNode(node);
-                    else openNode(node);
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation(); // keep the body's empty-space menu from overriding
-                    setFocusedIndex(vi.index);
-                    setContextMenu({
-                      x: e.clientX,
-                      y: e.clientY,
-                      path: entry.path,
-                      kind: isDir ? "dir" : "file",
-                    });
-                  }}
+              No session open yet.
+              <div className="mt-2">
+                <Link
+                  href="/"
+                  className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
                 >
-                  {/* Left accent for the active file. */}
-                  {active && (
-                    <span
-                      aria-hidden="true"
-                      className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary"
-                    />
-                  )}
-
-                  {isDir ? (
-                    <>
-                      <span className="shrink-0 text-muted-foreground" aria-hidden="true">
-                        {node.loading ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : node.expanded ? (
-                          <ChevronDown className="h-3 w-3" />
-                        ) : (
-                          <ChevronRight className="h-3 w-3" />
-                        )}
-                      </span>
-                      <span className="shrink-0 text-muted-foreground">
-                        {node.expanded ? (
-                          <FolderOpen className="h-3.5 w-3.5" />
-                        ) : (
-                          <Folder className="h-3.5 w-3.5" />
-                        )}
-                      </span>
-                      <span className="min-w-0 truncate font-mono text-xs">{entry.name}</span>
-                      {runId && (
-                        <span
-                          aria-hidden="true"
-                          title={run ? `${runId}: ${run.status}` : runId}
-                          className={cn(
-                            "ml-0.5 h-1.5 w-1.5 shrink-0 rounded-full",
-                            statusDotClass(run?.status)
-                          )}
-                        />
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      {/* Files have no chevron — keep the 12px gutter aligned. */}
-                      <span className="w-3 shrink-0" aria-hidden="true" />
-                      <span
-                        className={cn(
-                          "shrink-0",
-                          active ? "text-primary" : "text-muted-foreground"
-                        )}
-                      >
-                        {fileIconFor(entry.name)}
-                      </span>
-                      <span className={cn("min-w-0 truncate font-mono text-xs", active && "font-medium")}>
-                        {entry.name}
-                      </span>
-                      {synthTop && (
-                        <span
-                          className="shrink-0 inline-flex"
-                          role="img"
-                          aria-label="synth top"
-                          title="synth top"
-                        >
-                          <Crown className="h-3 w-3 text-info" />
-                        </span>
-                      )}
-                      {simTop && (
-                        <span
-                          className="shrink-0 inline-flex"
-                          role="img"
-                          aria-label="sim top"
-                          title="sim top"
-                        >
-                          <FlaskConical className="h-3 w-3 text-primary" />
-                        </span>
-                      )}
-                      {role && (
-                        <span
-                          className={cn(
-                            "ml-auto inline-flex shrink-0 items-center justify-center rounded border px-1.5 py-0.5 text-[9px] font-semibold leading-none tracking-wide",
-                            ROLE_BADGE[role]
-                          )}
-                        >
-                          {ROLE_LABEL[role]}
-                        </span>
-                      )}
-                    </>
-                  )}
+                  Start a session
+                </Link>
+              </div>
+            </div>
+          ) : rootLoading ? (
+            <div aria-hidden="true">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="flex h-[26px] items-center gap-2 px-2">
+                  <Skeleton className="h-3.5 w-3.5 shrink-0 rounded" />
+                  <Skeleton className="h-3" style={{ width: `${72 - (i % 4) * 12}%` }} />
                 </div>
-              );
-            })}
+              ))}
+            </div>
+          ) : rootError ? (
+            <div className="flex h-[26px] items-center gap-2 px-2 text-xs text-muted-foreground">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 text-status-fail" />
+              <span className="truncate">Couldn’t load files.</span>
+              <button
+                type="button"
+                onClick={() => void loadDir("", { revalidate: true })}
+                className="shrink-0 rounded px-1 text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/60"
+              >
+                Retry
+              </button>
+            </div>
+          ) : rootEmpty ? (
+            <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+              No files yet — ask the assistant to scaffold a design.
+              <div className="mt-1 text-[11px]">
+                Or drop files here to upload them into the workspace root.
+              </div>
+            </div>
+          ) : (
+            <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+              {virtualizer.getVirtualItems().map((vi) => {
+                const node = rows[vi.index];
+                if (!node) return null;
+                const { entry } = node;
+                const isDir = entry.kind === "dir";
+                const runId = isDir ? runIdForDirEntry(entry) : null;
+                const run = runId ? runs.find((r) => r.id === runId) : undefined;
+                const role = !isDir && node.depth === 0 ? roleForRootFile(entry.name, manifest) : null;
+                const synthTop = !isDir && node.depth === 0 && isSynthTopFile(entry.name, manifest);
+                const simTop = !isDir && node.depth === 0 && isSimTopFile(entry.name, manifest);
+                const active = !isDir && activeTab != null && artifactKeyForFile(entry.path) === activeTab;
+                const focused = vi.index === focusIdx;
+
+                return (
+                  <div
+                    key={entry.path || vi.index}
+                    ref={(el) => {
+                      if (el) rowEls.current.set(vi.index, el);
+                      else rowEls.current.delete(vi.index);
+                    }}
+                    role="treeitem"
+                    aria-level={node.depth + 1}
+                    aria-expanded={isDir ? node.expanded : undefined}
+                    aria-selected={active || undefined}
+                    tabIndex={focused ? 0 : -1}
+                    title={entry.path}
+                    style={{
+                      height: ROW_H,
+                      transform: `translateY(${vi.start}px)`,
+                      paddingLeft: 8 + node.depth * INDENT,
+                    }}
+                    className={cn(
+                      "absolute left-0 top-0 flex w-full cursor-pointer select-none items-center gap-1.5 pr-2 outline-none",
+                      "transition-colors duration-fast ease-swift",
+                      active ? "bg-primary/10 text-foreground" : "hover:bg-surface-2",
+                      "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/60"
+                    )}
+                    onClick={() => {
+                      setFocusedIndex(vi.index);
+                      if (isDir) toggleNode(node);
+                      else openNode(node);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation(); // keep the body's empty-space menu from overriding
+                      setFocusedIndex(vi.index);
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        path: entry.path,
+                        kind: isDir ? "dir" : "file",
+                      });
+                    }}
+                  >
+                    {/* Left accent for the active file. */}
+                    {active && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary"
+                      />
+                    )}
+
+                    {isDir ? (
+                      <>
+                        <span className="shrink-0 text-muted-foreground" aria-hidden="true">
+                          {node.loading ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : node.expanded ? (
+                            <ChevronDown className="h-3 w-3" />
+                          ) : (
+                            <ChevronRight className="h-3 w-3" />
+                          )}
+                        </span>
+                        <span className="shrink-0 text-muted-foreground">
+                          {node.expanded ? (
+                            <FolderOpen className="h-3.5 w-3.5" />
+                          ) : (
+                            <Folder className="h-3.5 w-3.5" />
+                          )}
+                        </span>
+                        <span className="min-w-0 truncate font-mono text-xs">{entry.name}</span>
+                        {runId && (
+                          <span
+                            aria-hidden="true"
+                            title={run ? `${runId}: ${run.status}` : runId}
+                            className={cn(
+                              "ml-0.5 h-1.5 w-1.5 shrink-0 rounded-full",
+                              statusDotClass(run?.status)
+                            )}
+                          />
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {/* Files have no chevron — keep the 12px gutter aligned. */}
+                        <span className="w-3 shrink-0" aria-hidden="true" />
+                        <span
+                          className={cn(
+                            "shrink-0",
+                            active ? "text-primary" : "text-muted-foreground"
+                          )}
+                        >
+                          {fileIconFor(entry.name)}
+                        </span>
+                        <span className={cn("min-w-0 truncate font-mono text-xs", active && "font-medium")}>
+                          {entry.name}
+                        </span>
+                        {synthTop && (
+                          <span
+                            className="shrink-0 inline-flex"
+                            role="img"
+                            aria-label="synth top"
+                            title="synth top"
+                          >
+                            <Crown className="h-3 w-3 text-info" />
+                          </span>
+                        )}
+                        {simTop && (
+                          <span
+                            className="shrink-0 inline-flex"
+                            role="img"
+                            aria-label="sim top"
+                            title="sim top"
+                          >
+                            <FlaskConical className="h-3 w-3 text-primary" />
+                          </span>
+                        )}
+                        {role && (
+                          <span
+                            className={cn(
+                              "ml-auto inline-flex shrink-0 items-center justify-center rounded border px-1.5 py-0.5 text-[9px] font-semibold leading-none tracking-wide",
+                              ROLE_BADGE[role]
+                            )}
+                          >
+                            {ROLE_LABEL[role]}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {dragActive && (
+          <div
+            role="status"
+            className="pointer-events-none absolute inset-0 flex items-center justify-center bg-primary/5 px-3 text-center text-xs font-medium text-primary"
+          >
+            Drop to upload into the workspace root
           </div>
         )}
       </div>

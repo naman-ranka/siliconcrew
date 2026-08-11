@@ -97,6 +97,16 @@ function newestArtifactTab(files: FileInfo[]): ArtifactTab | null {
   return best?.tab ?? null;
 }
 
+/**
+ * Outcome of resolving a `/w/{id}` deep link. A failure says WHY so the
+ * workbench can tell "this session does not exist" (a dead link) apart from
+ * "the backend did not answer" (retryable) — rendering the latter as the
+ * former told users their work was gone (issue #93 Bug 2).
+ */
+export type SessionResolution =
+  | { ok: true }
+  | { ok: false; reason: "not_found" | "unreachable"; message: string };
+
 // --- Workbench v2 SWR slices -------------------------------------------------
 // The iron rule for every slice below: a populated slice NEVER goes back to
 // "loading" — a refetch is "revalidating" (old data stays visible) and a failed
@@ -422,9 +432,10 @@ interface AppState {
   selectSession: (session: Session | null) => Promise<void>;
   /** URL-driven selection (S1): resolve a session id → Session (via the list,
    * falling back to a direct fetch for fresh deep links) and select it.
-   * Returns false when the id doesn't resolve so the /w page can render an
-   * honest "Session not found" state instead of an empty workbench. */
-  selectSessionById: (sessionId: string) => Promise<boolean>;
+   * A miss returns the REASON so the /w page can render an honest state
+   * instead of an empty workbench — and can tell a dead link ("not_found")
+   * apart from a backend that never answered ("unreachable", retryable). */
+  selectSessionById: (sessionId: string) => Promise<SessionResolution>;
 
   loadChatHistory: () => Promise<void>;
   sendMessage: (content: string, images?: string[]) => void;
@@ -895,8 +906,9 @@ export const useStore = create<AppState>((set, get) => ({
   selectSessionById: async (sessionId: string) => {
     // The URL is the source of truth (S1). Resolve against the session list
     // (loaded anyway for the picker); a deep link to a session not in the list
-    // yet falls back to a direct fetch. A miss returns false — no silent
-    // "empty new session" for a bad URL.
+    // yet falls back to a direct fetch. A miss reports WHY: only a real 404
+    // means "not found" — a transport/5xx failure must never be rendered as
+    // "your session is gone" (honest state), it is a retryable outage.
     let list = get().sessions;
     if (list.length === 0) {
       await get().loadSessions();
@@ -907,14 +919,19 @@ export const useStore = create<AppState>((set, get) => ({
       try {
         target = await sessionsApi.get(sessionId);
         set((state) => ({ sessions: [target as Session, ...state.sessions] }));
-      } catch {
-        return false; // 404 (or unreachable) → caller renders "Session not found"
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        const message = err instanceof Error ? err.message : String(err);
+        // 401/403 are the auth layer's business (the caller renders the
+        // sign-in screen); everything that is not a 404 is an outage.
+        if (status === 404) return { ok: false, reason: "not_found" as const, message };
+        return { ok: false, reason: "unreachable" as const, message };
       }
     }
     // Back/forward no-op: already on this session — compare before dispatch.
-    if (get().currentSession?.id === sessionId) return true;
+    if (get().currentSession?.id === sessionId) return { ok: true as const };
     await get().selectSession(target);
-    return true;
+    return { ok: true as const };
   },
 
   // Chat actions
@@ -2100,6 +2117,11 @@ export const useStore = create<AppState>((set, get) => ({
     setTimeout(() => {
       if (_uploadNoticeToken === token) useStore.setState({ uploadNotice: null });
     }, 5000);
+    // The v2 explorer reads dirCache, which refreshWorkspace does NOT touch —
+    // without this the uploaded files stay invisible in the tree. Uploads are
+    // basenamed server-side (src/api/actions.py), so the workspace root is the
+    // only directory that can change.
+    get().invalidateDirs([""]);
     await get().refreshWorkspace();
     return { uploaded: res.uploaded, notShown };
   },

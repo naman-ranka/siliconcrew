@@ -57,8 +57,16 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
   // The assistant rail is collapsible (per-session, persisted) so the artifact
   // center gets full width when the user is driving the pipeline themselves.
   const { chatOpen, setChatOpen } = useSessionUi(currentSession?.id);
-  // Honest 404 for a dead deep link — never an empty-looking workbench.
-  const [notFound, setNotFound] = useState(false);
+  // Honest failure for a dead deep link — never an empty-looking workbench,
+  // and never "not found" for a backend that simply did not answer (#93).
+  const [loadFailure, setLoadFailure] = useState<
+    { reason: "not_found" | "unreachable"; message: string } | null
+  >(null);
+  // Bumped by the failure screen's Retry — re-runs the whole load effect
+  // (session → threads → ?chat= sync), not just the session fetch.
+  const [retryNonce, setRetryNonce] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  const notFound = loadFailure !== null;
   // One workbench refresh per mount when the session was already selected
   // (client-side remount); thread-only URL changes must not re-hydrate.
   const booted = useRef(false);
@@ -68,7 +76,10 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
   useWorkbenchSync();
   // Agent posture claims only ⌘P/⌘O (viewing); the IDE gets the full set —
   // ⌘K/⌘L/⌘R/⌘Y/⌘E/⌘J must NOT fire in the agent shell (revision 3).
-  useWorkbenchShortcuts(view === "agent" ? "agent" : "ide", !notFound);
+  // The failure screens below mount QuickSwitch, so ⌘O keeps working there;
+  // they force the "ide" scope because the agent posture's ⌘O target (the
+  // NavRail, which lives inside AgentShell) is not mounted on them.
+  useWorkbenchShortcuts(notFound || view !== "agent" ? "ide" : "agent", true);
 
   // Store follows the URL: session + thread from props, re-run on back/forward
   // (prop changes). Compares before dispatching so URL-sync writes from the
@@ -82,14 +93,18 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
       if (useStore.getState().currentSession?.id === sessionId) {
         // Same session (remount or thread-only change) → refresh once per mount.
         if (!booted.current) await loadWorkbench();
-        if (!cancelled) setNotFound(false);
+        if (!cancelled) setLoadFailure(null);
       } else {
-        const ok = await selectSessionById(sessionId);
+        const res = await selectSessionById(sessionId);
         if (cancelled) return;
-        setNotFound(!ok);
-        if (!ok) return;
+        setLoadFailure(res.ok ? null : { reason: res.reason, message: res.message });
+        if (!res.ok) {
+          setRetrying(false);
+          return;
+        }
       }
       booted.current = true;
+      if (!cancelled) setRetrying(false);
       useWorkbenchUiStore.getState().setLastSessionId(sessionId);
       // Thread follows the ?chat= param (compare first) — VALIDATED against
       // the loaded list: a stale/crafted id must not be selected (the WS
@@ -117,9 +132,29 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authStatus, sessionId, threadId]);
+  }, [authStatus, sessionId, threadId, retryNonce]);
 
-  if (notFound) {
+  if (loadFailure) {
+    // Every failure screen mounts QuickSwitch + Toaster so ⌘O (and any toast
+    // a retry raises) still works here — a dead deep link must not be a trap
+    // with no way out but the URL bar (#93 Bug 5).
+    const escapeHatches = (
+      <>
+        <button
+          type="button"
+          onClick={() => useWorkbenchUiStore.getState().setQuickSwitchOpen(true)}
+          className="text-sm text-primary hover:underline"
+        >
+          Open another session (⌘O)
+        </button>
+        <Link href="/" className="text-sm text-primary hover:underline">
+          Back to home
+        </Link>
+        <QuickSwitch />
+        <Toaster />
+      </>
+    );
+
     // Blind-test finding S5: for a signed-out visitor, tenancy hides every
     // session — "not found" would tell a returning user (expired/failed
     // token refresh) that their work is GONE. Say the true cause and offer
@@ -142,12 +177,42 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
           >
             Sign in
           </button>
-          <Link href="/" className="text-sm text-primary hover:underline">
-            Back to home
-          </Link>
+          {escapeHatches}
         </main>
       );
     }
+
+    // The backend never answered (transport error, 5xx, proxy hiccup). Saying
+    // "not found" here is a lie: the session may be perfectly alive.
+    if (loadFailure.reason === "unreachable") {
+      return (
+        <main
+          data-testid="workbench-unreachable"
+          className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-surface-0"
+        >
+          <p className="text-sm text-muted-foreground">
+            Could not reach the backend to open{" "}
+            <span className="font-mono text-foreground">{sessionId}</span>.
+          </p>
+          <p className="max-w-md px-6 text-center text-xs text-muted-foreground/80">
+            {loadFailure.message}
+          </p>
+          <button
+            type="button"
+            disabled={retrying}
+            onClick={() => {
+              setRetrying(true);
+              setRetryNonce((n) => n + 1);
+            }}
+            className="h-8 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {retrying ? "Retrying…" : "Retry"}
+          </button>
+          {escapeHatches}
+        </main>
+      );
+    }
+
     return (
       <main
         data-testid="workbench-not-found"
@@ -156,9 +221,7 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
         <p className="text-sm text-muted-foreground">
           Session <span className="font-mono text-foreground">{sessionId}</span> was not found.
         </p>
-        <Link href="/" className="text-sm text-primary hover:underline">
-          Back to home
-        </Link>
+        {escapeHatches}
       </main>
     );
   }

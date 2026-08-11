@@ -109,7 +109,7 @@ beforeEach(() => {
     activity: { serverEvents: [], localEvents: [], status: "ready", nextBefore: null, error: null },
     // Neutralize data loading — this is a layout smoke test.
     loadWorkbench: async () => {},
-    selectSessionById: async () => true,
+    selectSessionById: async () => ({ ok: true }),
     selectThread: async () => {},
     loadModels: async () => {},
     loadSessions: async () => {},
