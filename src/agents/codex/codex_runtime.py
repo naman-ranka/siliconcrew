@@ -36,6 +36,20 @@ Do NOT use the shell/bash/exec (no cat, ls, sed, printf, rg, grep, python, git)
 and do NOT use apply_patch. To read a file, call read_file. To change a file,
 call the SiliconCrew write/edit tool. If no SiliconCrew tool fits a request,
 say so plainly — never fall back to the shell.
+
+## Your sandbox is read-only. The workspace is NOT.
+Your Codex sandbox is configured read-only ON PURPOSE: it blocks YOUR OWN
+shell and filesystem access so that the SiliconCrew tools stay the single
+path through which anything happens. It says NOTHING about the workspace.
+The workspace is writable, and write_file / edit_file_tool are how you write
+to it — they run server-side, outside your sandbox, and they work.
+
+So: NEVER refuse an edit because of the sandbox, and never tell the user the
+workspace is read-only, mounted read-only, or that you lack write permission
+— that is false, and it strands them. If asked to change a file, CALL
+write_file or edit_file_tool. If such a call actually fails, report THAT
+tool's real error verbatim. Only a failed tool call is evidence you cannot
+write; the sandbox setting is not.
 """
 
 
