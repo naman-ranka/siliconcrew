@@ -347,12 +347,17 @@ export function FileExplorer() {
       // Chrome puts directories in `files` too, and the backend would write
       // each one as a zero-byte file named after the folder. Say plainly that
       // folders aren't supported rather than uploading junk.
-      const items = Array.from(e.dataTransfer.items ?? []);
+      //
+      // Align against the FILE items only: `items` also carries string items
+      // (text/plain, text/uri-list — common when the drag came from a web page
+      // rather than the OS file manager) while `files` never does, so indexing
+      // `items` directly would shift the two lists apart and silently discard
+      // a file the user meant to upload.
+      const fileItems = Array.from(e.dataTransfer.items ?? []).filter((it) => it.kind === "file");
       const dropped = Array.from(e.dataTransfer.files);
-      const folders = items.filter((it) => it.webkitGetAsEntry?.()?.isDirectory).length;
-      const files = folders
-        ? dropped.filter((_f, i) => !items[i]?.webkitGetAsEntry?.()?.isDirectory)
-        : dropped;
+      const isDir = (i: number) => !!fileItems[i]?.webkitGetAsEntry?.()?.isDirectory;
+      const folders = fileItems.filter((_it, i) => isDir(i)).length;
+      const files = folders ? dropped.filter((_f, i) => !isDir(i)) : dropped;
       if (folders) {
         pushToast({
           kind: "info",

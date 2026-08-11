@@ -69,7 +69,7 @@ describe("FileExplorer upload", () => {
     fireEvent.change(input, { target: { files: [file] } });
 
     await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(1));
-    expect(uploadFiles.mock.calls[0][0]).toEqual([file]);
+    expect(uploadFiles.mock.calls[0][0].map((f: File) => f.name)).toEqual([file.name]);
   });
 
   it("uploads files dropped on the tree", async () => {
@@ -86,7 +86,7 @@ describe("FileExplorer upload", () => {
     fireEvent.drop(tree, { dataTransfer });
 
     await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(1));
-    expect(uploadFiles.mock.calls[0][0]).toEqual([file]);
+    expect(uploadFiles.mock.calls[0][0].map((f: File) => f.name)).toEqual([file.name]);
   });
 
   it("ignores drags without files and disables the button with no session", () => {
@@ -125,7 +125,12 @@ describe("FileExplorer upload", () => {
 
     const dir = new File([""], "rtl");
     const file = new File(["x"], "ok.v");
-    const entry = (isDirectory: boolean) => ({ webkitGetAsEntry: () => ({ isDirectory }) });
+    // Real DataTransferItems always carry a `kind`; only the "file" ones have
+    // a counterpart in `dataTransfer.files`.
+    const entry = (isDirectory: boolean) => ({
+      kind: "file",
+      webkitGetAsEntry: () => ({ isDirectory }),
+    });
     fireEvent.drop(screen.getByRole("tree"), {
       dataTransfer: {
         types: ["Files"],
@@ -135,8 +140,35 @@ describe("FileExplorer upload", () => {
     });
 
     await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(1));
-    expect(uploadFiles.mock.calls[0][0]).toEqual([file]);
+    expect(uploadFiles.mock.calls[0][0].map((f: File) => f.name)).toEqual([file.name]);
     expect(pushToast.mock.calls[0][0]).toMatchObject({ title: "Skipped 1 folder(s)" });
+  });
+
+  it("keeps every real file when the drag also carries a string item", async () => {
+    // Re-review nit, and worse than it looks: `dataTransfer.items` carries
+    // string items (text/plain, text/uri-list — normal when the drag came from
+    // a web page) that never appear in `files`. Indexing `items` directly
+    // shifted the lists apart and silently discarded a file the user dropped.
+    const uploadFiles = vi.fn().mockResolvedValue({ uploaded: ["keep.v"], notShown: [] });
+    useStore.setState({ uploadFiles, pushToast: vi.fn() } as any);
+    render(<FileExplorer />);
+
+    const dir = new File([""], "rtl");
+    const keep = new File(["x"], "keep.v");
+    fireEvent.drop(screen.getByRole("tree"), {
+      dataTransfer: {
+        types: ["Files", "text/plain"],
+        files: [dir, keep],
+        items: [
+          { kind: "string", webkitGetAsEntry: () => null },
+          { kind: "file", webkitGetAsEntry: () => ({ isDirectory: true }) },
+          { kind: "file", webkitGetAsEntry: () => ({ isDirectory: false }) },
+        ],
+      },
+    });
+
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(1));
+    expect(uploadFiles.mock.calls[0][0].map((f: File) => f.name)).toEqual(["keep.v"]);
   });
 
   it("swallows a near-miss file drop so the browser never navigates away", async () => {
