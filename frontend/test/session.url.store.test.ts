@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // S1: URL-driven session selection — selectSessionById resolves an id from
 // the URL (list → direct fetch fallback) and reports a miss honestly so the
-// /w page can render "Session not found" instead of an empty workbench.
+// /w page can render "Session not found" instead of an empty workbench. The
+// miss carries a REASON: only a real 404 is "not found"; anything else is a
+// retryable outage and must not claim the session is gone (#93 Bug 2).
 vi.mock("@/lib/api", () => {
   return {
     projectsApi: { list: vi.fn().mockResolvedValue([]) },
@@ -55,8 +57,8 @@ beforeEach(() => {
 describe("selectSessionById (S1 URL-driven selection)", () => {
   it("loads the session list when empty and selects the matching session", async () => {
     (sessionsApi.list as any).mockResolvedValue([session("a"), session("b")]);
-    const ok = await useStore.getState().selectSessionById("b");
-    expect(ok).toBe(true);
+    const res = await useStore.getState().selectSessionById("b");
+    expect(res).toEqual({ ok: true });
     expect(useStore.getState().currentSession?.id).toBe("b");
     expect(sessionsApi.get).not.toHaveBeenCalled();
   });
@@ -64,28 +66,64 @@ describe("selectSessionById (S1 URL-driven selection)", () => {
   it("falls back to a direct fetch for a deep link not in the list", async () => {
     (sessionsApi.list as any).mockResolvedValue([session("a")]);
     (sessionsApi.get as any).mockResolvedValue(session("proj/blk"));
-    const ok = await useStore.getState().selectSessionById("proj/blk");
-    expect(ok).toBe(true);
-    expect(sessionsApi.get).toHaveBeenCalledWith("proj/blk");
+    const res = await useStore.getState().selectSessionById("proj/blk");
+    expect(res).toEqual({ ok: true });
+    // Bounded so a hung backend cannot leave the resolve pending forever.
+    expect((sessionsApi.get as any).mock.calls[0][0]).toBe("proj/blk");
+    expect((sessionsApi.get as any).mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
     expect(useStore.getState().currentSession?.id).toBe("proj/blk");
     // The fetched session joins the list (picker shows it).
     expect(useStore.getState().sessions.some((s) => s.id === "proj/blk")).toBe(true);
   });
 
-  it("returns false for an unknown id (honest not-found, no silent empty session)", async () => {
+  it("reports not_found for a real 404 (no silent empty session)", async () => {
     (sessionsApi.list as any).mockResolvedValue([session("a")]);
-    (sessionsApi.get as any).mockRejectedValue(new Error("404"));
-    const ok = await useStore.getState().selectSessionById("nope");
-    expect(ok).toBe(false);
+    const err = Object.assign(new Error("Session not found"), { status: 404 });
+    (sessionsApi.get as any).mockRejectedValue(err);
+    const res = await useStore.getState().selectSessionById("nope");
+    expect(res).toEqual({ ok: false, reason: "not_found", message: "Session not found" });
     expect(useStore.getState().currentSession).toBeNull();
+  });
+
+  it("reports unreachable — not not_found — when the backend fails to answer", async () => {
+    // A proxy 502 / transport error is indistinguishable from a 404 to a bare
+    // catch; claiming "not found" told users their work was gone (#93).
+    (sessionsApi.list as any).mockResolvedValue([session("a")]);
+    (sessionsApi.get as any).mockRejectedValue(new TypeError("fetch failed"));
+    const res = await useStore.getState().selectSessionById("alive");
+    expect(res).toEqual({ ok: false, reason: "unreachable", message: "fetch failed" });
+    expect(useStore.getState().currentSession).toBeNull();
+  });
+
+  it("reports unreachable when the bounded resolve times out", async () => {
+    // Adversarial review: an unbounded fetch left the workbench on its empty
+    // shell forever and the Retry button stuck at "Retrying…". The wiring of
+    // the AbortSignal is asserted above; this pins the mapping of the abort
+    // it produces (no wall-clock wait — the timeout value is not the contract).
+    (sessionsApi.list as any).mockResolvedValue([session("a")]);
+    (sessionsApi.get as any).mockRejectedValue(
+      Object.assign(new Error("The operation was aborted due to timeout"), {
+        name: "TimeoutError",
+      })
+    );
+    const res = await useStore.getState().selectSessionById("hung");
+    expect(res).toMatchObject({ ok: false, reason: "unreachable" });
+  });
+
+  it("reports unreachable for a backend 5xx", async () => {
+    (sessionsApi.list as any).mockResolvedValue([session("a")]);
+    const err = Object.assign(new Error("Bad Gateway"), { status: 502 });
+    (sessionsApi.get as any).mockRejectedValue(err);
+    const res = await useStore.getState().selectSessionById("alive");
+    expect(res).toEqual({ ok: false, reason: "unreachable", message: "Bad Gateway" });
   });
 
   it("no-ops when the session is already current (back/forward, URL sync)", async () => {
     (sessionsApi.list as any).mockResolvedValue([session("a")]);
     await useStore.getState().selectSessionById("a");
     useStore.setState({ messages: [{ id: "m1" } as any] } as any);
-    const ok = await useStore.getState().selectSessionById("a");
-    expect(ok).toBe(true);
+    const res = await useStore.getState().selectSessionById("a");
+    expect(res).toEqual({ ok: true });
     // Compare-before-dispatch: no re-select, conversation state untouched.
     expect(useStore.getState().messages).toHaveLength(1);
   });

@@ -97,6 +97,19 @@ function newestArtifactTab(files: FileInfo[]): ArtifactTab | null {
   return best?.tab ?? null;
 }
 
+/**
+ * Outcome of resolving a `/w/{id}` deep link. A failure says WHY so the
+ * workbench can tell "this session does not exist" (a dead link) apart from
+ * "the backend did not answer" (retryable) — rendering the latter as the
+ * former told users their work was gone (issue #93 Bug 2).
+ */
+/** How long a `/w/{id}` resolve may hang before it is called unreachable. */
+const SESSION_RESOLVE_TIMEOUT_MS = 20_000;
+
+export type SessionResolution =
+  | { ok: true }
+  | { ok: false; reason: "not_found" | "unreachable"; message: string };
+
 // --- Workbench v2 SWR slices -------------------------------------------------
 // The iron rule for every slice below: a populated slice NEVER goes back to
 // "loading" — a refetch is "revalidating" (old data stays visible) and a failed
@@ -422,9 +435,10 @@ interface AppState {
   selectSession: (session: Session | null) => Promise<void>;
   /** URL-driven selection (S1): resolve a session id → Session (via the list,
    * falling back to a direct fetch for fresh deep links) and select it.
-   * Returns false when the id doesn't resolve so the /w page can render an
-   * honest "Session not found" state instead of an empty workbench. */
-  selectSessionById: (sessionId: string) => Promise<boolean>;
+   * A miss returns the REASON so the /w page can render an honest state
+   * instead of an empty workbench — and can tell a dead link ("not_found")
+   * apart from a backend that never answered ("unreachable", retryable). */
+  selectSessionById: (sessionId: string) => Promise<SessionResolution>;
 
   loadChatHistory: () => Promise<void>;
   sendMessage: (content: string, images?: string[]) => void;
@@ -485,7 +499,6 @@ interface AppState {
   manifestLoading: boolean;
   reportLoading: boolean;
   codeLoading: boolean;
-  uploadNotice: string | null;
   toasts: Toast[];
   pushToast: (t: Omit<Toast, "id">, ttlMs?: number) => void;
   dismissToast: (id: string) => void;
@@ -643,7 +656,6 @@ export const useStore = create<AppState>((set, get) => ({
   manifestLoading: false,
   reportLoading: false,
   codeLoading: false,
-  uploadNotice: null,
   toasts: [],
 
   // Workbench v2 data-layer state
@@ -895,8 +907,9 @@ export const useStore = create<AppState>((set, get) => ({
   selectSessionById: async (sessionId: string) => {
     // The URL is the source of truth (S1). Resolve against the session list
     // (loaded anyway for the picker); a deep link to a session not in the list
-    // yet falls back to a direct fetch. A miss returns false — no silent
-    // "empty new session" for a bad URL.
+    // yet falls back to a direct fetch. A miss reports WHY: only a real 404
+    // means "not found" — a transport/5xx failure must never be rendered as
+    // "your session is gone" (honest state), it is a retryable outage.
     let list = get().sessions;
     if (list.length === 0) {
       await get().loadSessions();
@@ -905,16 +918,27 @@ export const useStore = create<AppState>((set, get) => ({
     let target = list.find((s) => s.id === sessionId) ?? null;
     if (!target) {
       try {
-        target = await sessionsApi.get(sessionId);
+        // Bounded: a backend that accepts the connection and never answers
+        // (hung worker) would otherwise leave this pending forever — the
+        // workbench would sit on the empty shell it promises never to show,
+        // and the failure screen's Retry would stick at "Retrying…".
+        target = await sessionsApi.get(sessionId, {
+          signal: AbortSignal.timeout(SESSION_RESOLVE_TIMEOUT_MS),
+        });
         set((state) => ({ sessions: [target as Session, ...state.sessions] }));
-      } catch {
-        return false; // 404 (or unreachable) → caller renders "Session not found"
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        const message = err instanceof Error ? err.message : String(err);
+        // 401/403 are the auth layer's business (the caller renders the
+        // sign-in screen); everything that is not a 404 is an outage.
+        if (status === 404) return { ok: false, reason: "not_found" as const, message };
+        return { ok: false, reason: "unreachable" as const, message };
       }
     }
     // Back/forward no-op: already on this session — compare before dispatch.
-    if (get().currentSession?.id === sessionId) return true;
+    if (get().currentSession?.id === sessionId) return { ok: true as const };
     await get().selectSession(target);
-    return true;
+    return { ok: true as const };
   },
 
   // Chat actions
@@ -2079,27 +2103,30 @@ export const useStore = create<AppState>((set, get) => ({
   uploadFiles: async (files: File[]) => {
     const { currentSession } = get();
     if (!currentSession || files.length === 0) return { uploaded: [], notShown: [] };
-    const res = await workbenchApi.uploadFiles(currentSession.id, files);
+    const sid = currentSession.id;
+    const res = await workbenchApi.uploadFiles(sid, files);
+    // Stale-response guard, same as every sibling loader: an upload started in
+    // A and landing after the user switched to B must not cross-write A's
+    // manifest (and A's success toast) into B. The files ARE uploaded — the
+    // guard only stops this session's state from being overwritten.
+    if (get().currentSession?.id !== sid) return { uploaded: res.uploaded, notShown: [] };
     set({ manifest: res.manifest });
     // Files the server stored but the manifest doesn't surface (non-design types
     // like .txt) — so the upload isn't a silent black box (hobbyist feedback).
     const shown = new Set(res.manifest.files.map((f) => f.name));
     const notShown = res.uploaded.filter((n) => !shown.has(n));
-    const notice =
-      `✓ Uploaded ${res.uploaded.length} file(s)` +
-      (notShown.length ? ` · ${notShown.length} non-design file(s) stored, not shown` : "");
     // Store-driven so the confirmation shows regardless of which surface triggered
-    // the upload (file-tree button, drag-drop, or the onboarding CTA).
-    set({ uploadNotice: notice });
+    // the upload (file-tree button or drag-drop).
     get().pushToast({
       kind: "success",
       title: `Uploaded ${res.uploaded.length} file(s)`,
       detail: notShown.length ? `${notShown.length} non-design file(s) stored, not shown` : undefined,
     });
-    const token = ++_uploadNoticeToken;
-    setTimeout(() => {
-      if (_uploadNoticeToken === token) useStore.setState({ uploadNotice: null });
-    }, 5000);
+    // The v2 explorer reads dirCache, which refreshWorkspace does NOT touch —
+    // without this the uploaded files stay invisible in the tree. Uploads are
+    // basenamed server-side (src/api/actions.py), so the workspace root is the
+    // only directory that can change.
+    get().invalidateDirs([""]);
     await get().refreshWorkspace();
     return { uploaded: res.uploaded, notShown };
   },
@@ -2615,4 +2642,3 @@ export function toSynthJobStatus(runId: string, job: Record<string, unknown>): S
 }
 
 // Token so a newer upload notice isn't cleared early by an older timeout.
-let _uploadNoticeToken = 0;

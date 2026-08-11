@@ -141,7 +141,8 @@ export const sessionsApi = {
       body: JSON.stringify({ name, model, project_id: projectId ?? null }),
     }),
 
-  get: (sessionId: string) => apiFetch<Session>(`/api/sessions/${encodeSessionId(sessionId)}`),
+  get: (sessionId: string, init?: RequestInit) =>
+    apiFetch<Session>(`/api/sessions/${encodeSessionId(sessionId)}`, init),
 
   // S0: PATCH accepts `name` (display-only rename — the workspace dir/id never
   // changes) and/or `project_id` (explicit null removes from the group).

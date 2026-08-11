@@ -57,8 +57,21 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
   // The assistant rail is collapsible (per-session, persisted) so the artifact
   // center gets full width when the user is driving the pipeline themselves.
   const { chatOpen, setChatOpen } = useSessionUi(currentSession?.id);
-  // Honest 404 for a dead deep link — never an empty-looking workbench.
-  const [notFound, setNotFound] = useState(false);
+  // Honest failure for a dead deep link — never an empty-looking workbench,
+  // and never "not found" for a backend that simply did not answer (#93).
+  // Carries the id it is about: the QuickSwitch mounted on the failure screen
+  // changes `sessionId` without remounting Workbench, and a failure left over
+  // from the old id would accuse the healthy session the user just picked
+  // ("Session healthy-block was not found") for the whole of its load.
+  const [loadFailure, setLoadFailure] = useState<{
+    sessionId: string;
+    reason: "not_found" | "unreachable";
+    message: string;
+  } | null>(null);
+  // Bumped by the failure screen's Retry — re-runs the whole load effect
+  // (session → threads → ?chat= sync), not just the session fetch.
+  const [retryNonce, setRetryNonce] = useState(0);
+  const [retrying, setRetrying] = useState(false);
   // One workbench refresh per mount when the session was already selected
   // (client-side remount); thread-only URL changes must not re-hydrate.
   const booted = useRef(false);
@@ -68,7 +81,12 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
   useWorkbenchSync();
   // Agent posture claims only ⌘P/⌘O (viewing); the IDE gets the full set —
   // ⌘K/⌘L/⌘R/⌘Y/⌘E/⌘J must NOT fire in the agent shell (revision 3).
-  useWorkbenchShortcuts(view === "agent" ? "agent" : "ide", !notFound);
+  // The failure screen below mounts QuickSwitch and nothing else, so it gets
+  // the "recovery" scope: ⌘O works there, and every other key falls through
+  // to the browser (adversarial review — the IDE scope would have let ⌘R run
+  // a simulation on the previously-loaded session from an error page).
+  const showingFailure = loadFailure?.sessionId === sessionId;
+  useWorkbenchShortcuts(showingFailure ? "recovery" : view === "agent" ? "agent" : "ide");
 
   // Store follows the URL: session + thread from props, re-run on back/forward
   // (prop changes). Compares before dispatching so URL-sync writes from the
@@ -82,14 +100,18 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
       if (useStore.getState().currentSession?.id === sessionId) {
         // Same session (remount or thread-only change) → refresh once per mount.
         if (!booted.current) await loadWorkbench();
-        if (!cancelled) setNotFound(false);
+        if (!cancelled) setLoadFailure(null);
       } else {
-        const ok = await selectSessionById(sessionId);
+        const res = await selectSessionById(sessionId);
         if (cancelled) return;
-        setNotFound(!ok);
-        if (!ok) return;
+        setLoadFailure(res.ok ? null : { sessionId, reason: res.reason, message: res.message });
+        if (!res.ok) {
+          setRetrying(false);
+          return;
+        }
       }
       booted.current = true;
+      if (!cancelled) setRetrying(false);
       useWorkbenchUiStore.getState().setLastSessionId(sessionId);
       // Thread follows the ?chat= param (compare first) — VALIDATED against
       // the loaded list: a stale/crafted id must not be selected (the WS
@@ -117,48 +139,77 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authStatus, sessionId, threadId]);
+  }, [authStatus, sessionId, threadId, retryNonce]);
 
-  if (notFound) {
+  // Only ever shown for the id it was recorded against (see the state decl).
+  if (loadFailure && loadFailure.sessionId === sessionId) {
+    // ONE screen for every way a deep link can fail to open, with the verdict
+    // in the headline — the reason is honest, the layout is not duplicated.
+    // All of them mount QuickSwitch + Toaster so ⌘O still works: a dead deep
+    // link must not be a trap with no way out but the URL bar (#93 Bug 5).
+    //
     // Blind-test finding S5: for a signed-out visitor, tenancy hides every
-    // session — "not found" would tell a returning user (expired/failed
-    // token refresh) that their work is GONE. Say the true cause and offer
-    // the fix; when sign-in completes, the load effect re-runs (authStatus
-    // is a dep) and the workspace opens without a manual reload.
-    if (authEnabled && authStatus === "anonymous") {
-      return (
-        <main
-          data-testid="workbench-signin-required"
-          className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-surface-0"
-        >
-          <p className="text-sm text-muted-foreground">
-            Sign in to open{" "}
-            <span className="font-mono text-foreground">{sessionId}</span>.
-          </p>
-          <button
-            type="button"
-            onClick={() => void signIn()}
-            className="h-8 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-          >
-            Sign in
-          </button>
-          <Link href="/" className="text-sm text-primary hover:underline">
-            Back to home
-          </Link>
-        </main>
-      );
-    }
+    // session — "not found" would tell a returning user (expired/failed token
+    // refresh) that their work is GONE. Say the true cause and offer the fix;
+    // when sign-in completes, the load effect re-runs (authStatus is a dep)
+    // and the workspace opens without a manual reload.
+    const signedOut = authEnabled && authStatus === "anonymous";
+    const screen = signedOut
+      ? { testId: "workbench-signin-required", title: `Sign in to open ${sessionId}.` }
+      : loadFailure.reason === "unreachable"
+        ? {
+            testId: "workbench-unreachable",
+            // "not found" here would be a lie: the session may be perfectly
+            // alive and only the server unreachable.
+            title: `Couldn't reach the server to open ${sessionId}.`,
+            detail: `${loadFailure.message} — the session may still be there.`,
+          }
+        : { testId: "workbench-not-found", title: `Session ${sessionId} was not found.` };
+
     return (
       <main
-        data-testid="workbench-not-found"
+        data-testid={screen.testId}
         className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-surface-0"
       >
-        <p className="text-sm text-muted-foreground">
-          Session <span className="font-mono text-foreground">{sessionId}</span> was not found.
-        </p>
+        <p className="text-sm text-muted-foreground">{screen.title}</p>
+        {screen.detail && (
+          <p className="max-w-md px-6 text-center text-xs text-muted-foreground/80">
+            {screen.detail}
+          </p>
+        )}
+
+        {signedOut ? (
+          <Button size="sm" onClick={() => void signIn()}>
+            Sign in
+          </Button>
+        ) : (
+          // Retry is offered for a 404 too: a fresh deep link can lose a race
+          // with the instance that created the session, and one GET is cheap.
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={retrying}
+            onClick={() => {
+              setRetrying(true);
+              setRetryNonce((n) => n + 1);
+            }}
+          >
+            {retrying ? "Retrying…" : "Retry"}
+          </Button>
+        )}
+
+        <button
+          type="button"
+          onClick={() => useWorkbenchUiStore.getState().setQuickSwitchOpen(true)}
+          className="text-sm text-primary hover:underline"
+        >
+          Open another session (⌘O)
+        </button>
         <Link href="/" className="text-sm text-primary hover:underline">
           Back to home
         </Link>
+        <QuickSwitch />
+        <Toaster />
       </main>
     );
   }
