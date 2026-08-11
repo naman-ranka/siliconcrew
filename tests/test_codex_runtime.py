@@ -363,3 +363,36 @@ def test_register_wires_cleanup_hook(tmp_path):
     rr.notify_thread_deleted("thX", "alice")
     assert store.list_messages("thX") == []
     assert store.get_external_thread_id("thX") is None
+
+
+# --- tool policy: the read-only sandbox must not read as a read-only workspace -
+
+def test_tool_policy_disambiguates_sandbox_from_workspace(wiring, monkeypatch):
+    """The sandbox is read-only by design; the WORKSPACE is not.
+
+    Regression for the failure seen in production: Codex read its own
+    ``sandbox=read-only`` setting as "the workspace is mounted read-only",
+    refused every edit, never attempted write_file, and doubled down when the
+    user pushed back. The composed prompt must say, in so many words, that the
+    sandbox governs only Codex's own shell/FS and that the SiliconCrew write
+    tools work — otherwise the model has no way to resolve the conflict.
+    """
+    monkeypatch.delenv("CODEX_TOOL_POLICY", raising=False)
+    prompt = _handler(wiring, []) ._system_prompt()
+
+    # The write tools are named as the sanctioned path.
+    assert "write_file" in prompt and "edit_file_tool" in prompt
+    # The sandbox/workspace distinction is stated, not left to inference.
+    assert "The workspace is NOT" in prompt
+    assert "outside your sandbox" in prompt
+    # And refusing on sandbox grounds is explicitly forbidden.
+    assert "NEVER refuse an edit because of the sandbox" in prompt
+    assert "Only a failed tool call is evidence you cannot" in prompt
+
+
+def test_tool_policy_still_opt_out_via_env(wiring, monkeypatch):
+    """CODEX_TOOL_POLICY=0 keeps dropping the whole block (unchanged contract)."""
+    monkeypatch.setenv("CODEX_TOOL_POLICY", "0")
+    prompt = _handler(wiring, [])._system_prompt()
+    assert prompt == "system"
+    assert "sandbox" not in prompt
