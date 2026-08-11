@@ -18,10 +18,23 @@ import { runCommand } from "@/lib/commands";
 // the run shortcuts don't, so typing "l" in the chat never lints. ⌘R
 // deliberately shadows browser reload while the IDE workbench is focused.
 
+export type Scope = "ide" | "agent" | "recovery";
+
 const ALWAYS_KEYS = new Set(["k", "o", "p", "j"]);
 
-/** Keys the agent posture claims — viewing/navigation only, never invocation. */
-const AGENT_KEYS = new Set(["o", "p"]);
+/** Keys each non-IDE scope claims. Everything outside the set falls through to
+ *  the browser untouched — the scope must never claim a key whose target it
+ *  does not mount, or the keypress arms a store flag that pops a stale overlay
+ *  on the NEXT session (and, for the run keys, silently dispatches work
+ *  against whatever session the store still holds). */
+const SCOPE_KEYS: Record<Exclude<Scope, "ide">, Set<string>> = {
+  // Agent posture: viewing/navigation only, never invocation.
+  agent: new Set(["o", "p"]),
+  // The deep-link failure screen mounts QuickSwitch and nothing else, so ⌘O
+  // is the ONLY key it may claim. ⌘R/⌘L/⌘Y would run lint/sim/synth on the
+  // previously-loaded session; ⌘K/⌘P would arm overlays that are not there.
+  recovery: new Set(["o"]),
+};
 
 function isEditable(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -29,14 +42,8 @@ function isEditable(target: EventTarget | null): boolean {
   return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
 }
 
-export function useWorkbenchShortcuts(
-  scope: "ide" | "agent" = "ide",
-  enabled: boolean = true
-): void {
+export function useWorkbenchShortcuts(scope: Scope = "ide", enabled: boolean = true): void {
   useEffect(() => {
-    // Disabled on the session-not-found branch: its tree mounts none of the
-    // overlays, so a keypress would flip store state that pops a stale
-    // overlay on the NEXT session. No listeners at all is the honest state.
     if (!enabled) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -44,8 +51,8 @@ export function useWorkbenchShortcuts(
       // stay with the browser.
       if (!mod || e.shiftKey || e.altKey) return;
       const key = e.key.toLowerCase();
-      // Agent shell: everything except ⌘P/⌘O stays with the browser.
-      if (scope === "agent" && !AGENT_KEYS.has(key)) return;
+      // Narrowed scopes claim only the keys whose targets they mount.
+      if (scope !== "ide" && !SCOPE_KEYS[scope].has(key)) return;
       if (isEditable(e.target) && !ALWAYS_KEYS.has(key)) return;
 
       const ui = useWorkbenchUiStore.getState();

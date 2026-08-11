@@ -106,10 +106,49 @@ describe("FileExplorer upload", () => {
     fireEvent.drop(tree, { dataTransfer: { types: ["Files"], files: [file] } });
     expect(uploadFiles).not.toHaveBeenCalled();
 
-    // …and the panel is not just a wall of greyed-out buttons: it says why
-    // and offers the way out (#93 Bug 3).
-    expect(screen.getByTestId("files-no-session")).toHaveTextContent("No session open yet.");
-    expect(screen.getByRole("link", { name: "Start a session" })).toHaveAttribute("href", "/");
+    // Review finding: the panel must NOT claim "no session" here. On a hard
+    // load of /w/{sid} this is also the state while the session is still
+    // resolving, so a confident verdict would be a lie (invariant #4) —
+    // the honest surface is the loading skeleton the tree already shows.
+    expect(screen.queryByText(/No session open yet/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /session/i })).not.toBeInTheDocument();
+  });
+
+  it("skips dropped folders instead of writing zero-byte junk files", async () => {
+    // Adversarial review: Chrome lists directories in `dataTransfer.files`,
+    // and the backend basenames and writes whatever arrives — dropping `rtl/`
+    // produced an empty file called `rtl` and a "Uploaded 1 file(s)" toast.
+    const uploadFiles = vi.fn().mockResolvedValue({ uploaded: ["ok.v"], notShown: [] });
+    const pushToast = vi.fn();
+    useStore.setState({ uploadFiles, pushToast } as any);
+    render(<FileExplorer />);
+
+    const dir = new File([""], "rtl");
+    const file = new File(["x"], "ok.v");
+    const entry = (isDirectory: boolean) => ({ webkitGetAsEntry: () => ({ isDirectory }) });
+    fireEvent.drop(screen.getByRole("tree"), {
+      dataTransfer: {
+        types: ["Files"],
+        files: [dir, file],
+        items: [entry(true), entry(false)],
+      },
+    });
+
+    await waitFor(() => expect(uploadFiles).toHaveBeenCalledTimes(1));
+    expect(uploadFiles.mock.calls[0][0]).toEqual([file]);
+    expect(pushToast.mock.calls[0][0]).toMatchObject({ title: "Skipped 1 folder(s)" });
+  });
+
+  it("swallows a near-miss file drop so the browser never navigates away", async () => {
+    // The tree is the app's only drop target; an uncaught drop anywhere else
+    // makes the tab navigate to file:///… and tears down the workbench.
+    useStore.setState({ uploadFiles: vi.fn() } as any);
+    render(<FileExplorer />);
+
+    const ev = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, "dataTransfer", { value: { types: ["Files"], files: [] } });
+    window.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
   });
 
   it("pushes an error toast when the upload rejects", async () => {

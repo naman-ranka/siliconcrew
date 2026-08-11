@@ -68,7 +68,9 @@ describe("selectSessionById (S1 URL-driven selection)", () => {
     (sessionsApi.get as any).mockResolvedValue(session("proj/blk"));
     const res = await useStore.getState().selectSessionById("proj/blk");
     expect(res).toEqual({ ok: true });
-    expect(sessionsApi.get).toHaveBeenCalledWith("proj/blk");
+    // Bounded so a hung backend cannot leave the resolve pending forever.
+    expect((sessionsApi.get as any).mock.calls[0][0]).toBe("proj/blk");
+    expect((sessionsApi.get as any).mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
     expect(useStore.getState().currentSession?.id).toBe("proj/blk");
     // The fetched session joins the list (picker shows it).
     expect(useStore.getState().sessions.some((s) => s.id === "proj/blk")).toBe(true);
@@ -91,6 +93,21 @@ describe("selectSessionById (S1 URL-driven selection)", () => {
     const res = await useStore.getState().selectSessionById("alive");
     expect(res).toEqual({ ok: false, reason: "unreachable", message: "fetch failed" });
     expect(useStore.getState().currentSession).toBeNull();
+  });
+
+  it("reports unreachable when the bounded resolve times out", async () => {
+    // Adversarial review: an unbounded fetch left the workbench on its empty
+    // shell forever and the Retry button stuck at "Retrying…". The wiring of
+    // the AbortSignal is asserted above; this pins the mapping of the abort
+    // it produces (no wall-clock wait — the timeout value is not the contract).
+    (sessionsApi.list as any).mockResolvedValue([session("a")]);
+    (sessionsApi.get as any).mockRejectedValue(
+      Object.assign(new Error("The operation was aborted due to timeout"), {
+        name: "TimeoutError",
+      })
+    );
+    const res = await useStore.getState().selectSessionById("hung");
+    expect(res).toMatchObject({ ok: false, reason: "unreachable" });
   });
 
   it("reports unreachable for a backend 5xx", async () => {

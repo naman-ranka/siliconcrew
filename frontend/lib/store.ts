@@ -103,6 +103,9 @@ function newestArtifactTab(files: FileInfo[]): ArtifactTab | null {
  * "the backend did not answer" (retryable) — rendering the latter as the
  * former told users their work was gone (issue #93 Bug 2).
  */
+/** How long a `/w/{id}` resolve may hang before it is called unreachable. */
+const SESSION_RESOLVE_TIMEOUT_MS = 20_000;
+
 export type SessionResolution =
   | { ok: true }
   | { ok: false; reason: "not_found" | "unreachable"; message: string };
@@ -496,7 +499,6 @@ interface AppState {
   manifestLoading: boolean;
   reportLoading: boolean;
   codeLoading: boolean;
-  uploadNotice: string | null;
   toasts: Toast[];
   pushToast: (t: Omit<Toast, "id">, ttlMs?: number) => void;
   dismissToast: (id: string) => void;
@@ -654,7 +656,6 @@ export const useStore = create<AppState>((set, get) => ({
   manifestLoading: false,
   reportLoading: false,
   codeLoading: false,
-  uploadNotice: null,
   toasts: [],
 
   // Workbench v2 data-layer state
@@ -917,7 +918,13 @@ export const useStore = create<AppState>((set, get) => ({
     let target = list.find((s) => s.id === sessionId) ?? null;
     if (!target) {
       try {
-        target = await sessionsApi.get(sessionId);
+        // Bounded: a backend that accepts the connection and never answers
+        // (hung worker) would otherwise leave this pending forever — the
+        // workbench would sit on the empty shell it promises never to show,
+        // and the failure screen's Retry would stick at "Retrying…".
+        target = await sessionsApi.get(sessionId, {
+          signal: AbortSignal.timeout(SESSION_RESOLVE_TIMEOUT_MS),
+        });
         set((state) => ({ sessions: [target as Session, ...state.sessions] }));
       } catch (err) {
         const status = (err as { status?: number }).status;
@@ -2096,27 +2103,25 @@ export const useStore = create<AppState>((set, get) => ({
   uploadFiles: async (files: File[]) => {
     const { currentSession } = get();
     if (!currentSession || files.length === 0) return { uploaded: [], notShown: [] };
-    const res = await workbenchApi.uploadFiles(currentSession.id, files);
+    const sid = currentSession.id;
+    const res = await workbenchApi.uploadFiles(sid, files);
+    // Stale-response guard, same as every sibling loader: an upload started in
+    // A and landing after the user switched to B must not cross-write A's
+    // manifest (and A's success toast) into B. The files ARE uploaded — the
+    // guard only stops this session's state from being overwritten.
+    if (get().currentSession?.id !== sid) return { uploaded: res.uploaded, notShown: [] };
     set({ manifest: res.manifest });
     // Files the server stored but the manifest doesn't surface (non-design types
     // like .txt) — so the upload isn't a silent black box (hobbyist feedback).
     const shown = new Set(res.manifest.files.map((f) => f.name));
     const notShown = res.uploaded.filter((n) => !shown.has(n));
-    const notice =
-      `✓ Uploaded ${res.uploaded.length} file(s)` +
-      (notShown.length ? ` · ${notShown.length} non-design file(s) stored, not shown` : "");
     // Store-driven so the confirmation shows regardless of which surface triggered
-    // the upload (file-tree button, drag-drop, or the onboarding CTA).
-    set({ uploadNotice: notice });
+    // the upload (file-tree button or drag-drop).
     get().pushToast({
       kind: "success",
       title: `Uploaded ${res.uploaded.length} file(s)`,
       detail: notShown.length ? `${notShown.length} non-design file(s) stored, not shown` : undefined,
     });
-    const token = ++_uploadNoticeToken;
-    setTimeout(() => {
-      if (_uploadNoticeToken === token) useStore.setState({ uploadNotice: null });
-    }, 5000);
     // The v2 explorer reads dirCache, which refreshWorkspace does NOT touch —
     // without this the uploaded files stay invisible in the tree. Uploads are
     // basenamed server-side (src/api/actions.py), so the workspace root is the
@@ -2637,4 +2642,3 @@ export function toSynthJobStatus(runId: string, job: Record<string, unknown>): S
 }
 
 // Token so a newer upload notice isn't cleared early by an older timeout.
-let _uploadNoticeToken = 0;

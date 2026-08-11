@@ -31,10 +31,15 @@ vi.mock("@/lib/auth", () => ({
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
 }));
+vi.mock("@/lib/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/commands")>()),
+  runCommand: vi.fn(),
+}));
 
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { Workbench } from "@/components/workbench/Workbench";
+import { runCommand } from "@/lib/commands";
 
 class RO {
   observe() {}
@@ -98,7 +103,9 @@ describe("deep-link failure screens", () => {
 
     expect(await screen.findByTestId("workbench-unreachable")).toBeInTheDocument();
     expect(screen.queryByTestId("workbench-not-found")).toBeNull();
-    expect(screen.getByText("fetch failed")).toBeInTheDocument();
+    // The real cause is shown, and the copy does not claim the session is gone.
+    expect(screen.getByText(/fetch failed/)).toBeInTheDocument();
+    expect(screen.getByText(/may still be there/)).toBeInTheDocument();
 
     // Retry resolves in place — no page reload needed once the backend is back.
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -120,6 +127,64 @@ describe("deep-link failure screens", () => {
     // …and the overlay that consumes that state is actually on screen, so the
     // keypress opens something instead of arming a stale flag.
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("stops accusing the old id the moment the URL moves to another session", async () => {
+    // Adversarial review: Workbench is not keyed by sid, so navigating away
+    // from the failure screen (via the QuickSwitch it now mounts) left the old
+    // failure on screen reading the NEW id — "Session healthy-block was not
+    // found" about a session that is merely still loading.
+    let resolve: (v: unknown) => void = () => {};
+    useStore.setState(
+      baseState(async (id: string) =>
+        id === "ghost"
+          ? { ok: false, reason: "not_found", message: "Session not found" }
+          : new Promise((r) => {
+              resolve = r;
+            })
+      )
+    );
+    const { rerender } = render(<Workbench sessionId="ghost" />);
+    await screen.findByTestId("workbench-not-found");
+
+    rerender(<Workbench sessionId="healthy-block" />);
+    await waitFor(() => expect(screen.queryByTestId("workbench-not-found")).toBeNull());
+    expect(screen.queryByText(/healthy-block was not found/)).toBeNull();
+    resolve({ ok: true });
+  });
+
+  it("claims ONLY ⌘O — no run key may fire against the previous session", async () => {
+    // Adversarial review, HIGH: the failure screen does not clear
+    // `currentSession`. With the IDE scope, ⌘R on an error page swallowed the
+    // browser reload and dispatched a real simulation against whichever
+    // session the store still held; ⌘K/⌘P armed overlays that are not mounted
+    // here and popped open over the NEXT session.
+    useStore.setState({
+      ...(baseState(async () => ({
+        ok: false,
+        reason: "not_found",
+        message: "Session not found",
+      })) as object),
+      currentSession: { id: "previously-open" },
+    } as never);
+    render(<Workbench sessionId="ghost" />);
+    await screen.findByTestId("workbench-not-found");
+
+    for (const key of ["r", "l", "y", "e", "j", "k", "p"]) {
+      const ev = new KeyboardEvent("keydown", {
+        key,
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      window.dispatchEvent(ev);
+      // Not claimed → the browser keeps the key (⌘R must still reload).
+      expect(ev.defaultPrevented, `⌘${key} must fall through`).toBe(false);
+    }
+    const ui = useWorkbenchUiStore.getState();
+    expect(ui.paletteOpen).toBe(false);
+    expect(ui.quickOpenOpen).toBe(false);
+    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it("offers an explicit escape hatch button, not just the hotkey", async () => {

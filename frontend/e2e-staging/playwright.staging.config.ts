@@ -27,17 +27,15 @@ export default defineConfig({
     {
       name: "chromium",
       use: {
-        // chrome-headless-shell (Playwright's headless default) cannot get a
-        // TLS session through such a proxy — use the full chromium build, and
-        // set PW_TLS_MAX=tls1.2 where the proxy's MITM also resets Chromium's
-        // TLS 1.3 handshake. Neither is needed against a direct connection.
-        channel: process.env.PW_CHANNEL || "chromium",
+        // Same conditional idiom as playwright.config.ts: unset env leaves
+        // CI on Playwright's defaults. Behind such a proxy, set
+        // PW_CHANNEL=chromium (chrome-headless-shell can't complete the TLS
+        // session) and PW_ARGS=--ssl-version-max=tls1.2 (the MITM resets
+        // Chromium's TLS 1.3 handshake).
+        ...(process.env.PW_CHANNEL ? { channel: process.env.PW_CHANNEL } : {}),
         launchOptions: {
           ...(process.env.PW_EXECUTABLE ? { executablePath: process.env.PW_EXECUTABLE } : {}),
-          args: [
-            ...(process.env.PW_NO_SANDBOX ? ["--no-sandbox"] : []),
-            ...(process.env.PW_TLS_MAX ? [`--ssl-version-max=${process.env.PW_TLS_MAX}`] : []),
-          ],
+          args: process.env.PW_ARGS ? process.env.PW_ARGS.split(/\s+/) : [],
         },
       },
     },

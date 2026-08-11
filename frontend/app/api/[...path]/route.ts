@@ -41,14 +41,13 @@ const BODYLESS_METHODS = ["GET", "HEAD", "OPTIONS"];
 
 const RETRY_ATTEMPTS = 3; // 1 try + 2 retries, safe methods only
 const RETRY_BACKOFF_MS = [150, 500];
-const REQUEST_TIMEOUT_MS = Number(process.env.API_PROXY_TIMEOUT_MS || 120_000);
+// One request must never outlive the platform's own ceiling. Not configurable:
+// a knob on a route with this little traffic is a setting nobody would tune.
+const REQUEST_TIMEOUT_MS = 60_000;
 
-// Hop-by-hop headers: undici already decoded/handled the wire framing, so
-// copying these onto our own response makes the body unreadable downstream.
-const HOP_BY_HOP = new Set([
+// Hop-by-hop headers belong to one connection, never to the proxied one.
+const HOP_BY_HOP = [
   "connection",
-  "content-encoding",
-  "content-length",
   "keep-alive",
   "proxy-authenticate",
   "proxy-authorization",
@@ -56,7 +55,22 @@ const HOP_BY_HOP = new Set([
   "trailer",
   "transfer-encoding",
   "upgrade",
-]);
+];
+
+// On the REQUEST side only `content-length` goes: the body is re-buffered, so
+// the incoming length no longer frames it. `content-encoding` must survive —
+// undici decodes responses, not requests, so the bytes we forward are still
+// encoded and stripping the header would hand the backend garbage.
+const DROP_FROM_REQUEST = new Set([...HOP_BY_HOP, "host", "content-length"]);
+
+// On the RESPONSE side `content-encoding`/`content-length` also go: undici has
+// already decoded the body, so copying them makes it unreadable downstream.
+const DROP_FROM_RESPONSE = new Set([...HOP_BY_HOP, "content-encoding", "content-length"]);
+
+// Statuses whose response MUST have a null body — `new Response(blob, {status})`
+// throws for these, and that TypeError would be caught below and misreported as
+// an unreachable backend.
+const NULL_BODY_STATUS = new Set([204, 205, 304]);
 
 /**
  * Backend origin, read at REQUEST time. `API_URL` is the runtime variable the
@@ -84,9 +98,7 @@ async function handleProxy(request: NextRequest, pathSegments: string[]) {
   // connection, not to the proxied one).
   const headers = new Headers();
   request.headers.forEach((value, key) => {
-    if (key.toLowerCase() !== "host" && !HOP_BY_HOP.has(key.toLowerCase())) {
-      headers.set(key, value);
-    }
+    if (!DROP_FROM_REQUEST.has(key.toLowerCase())) headers.set(key, value);
   });
 
   const bodyless = BODYLESS_METHODS.includes(request.method);
@@ -110,30 +122,35 @@ async function handleProxy(request: NextRequest, pathSegments: string[]) {
       const responseBody = await response.blob();
       const responseHeaders = new Headers();
       response.headers.forEach((value, key) => {
-        if (!HOP_BY_HOP.has(key.toLowerCase())) responseHeaders.set(key, value);
+        if (!DROP_FROM_RESPONSE.has(key.toLowerCase())) responseHeaders.set(key, value);
       });
 
-      return new NextResponse(responseBody, {
+      return new NextResponse(NULL_BODY_STATUS.has(response.status) ? null : responseBody, {
         status: response.status,
         statusText: response.statusText,
         headers: responseHeaders,
       });
     } catch (error: unknown) {
       lastError = error;
-      if (attempt < attempts - 1) {
-        await sleep(RETRY_BACKOFF_MS[Math.min(attempt, RETRY_BACKOFF_MS.length - 1)]);
-      }
+      // A timeout is not a transport failure: the backend may well be alive
+      // and slow, so replaying would just hold the caller for another full
+      // ceiling. Only a connection that never landed is retried.
+      const timedOut = error instanceof Error && error.name === "TimeoutError";
+      if (timedOut || attempt >= attempts - 1) break;
+      await sleep(RETRY_BACKOFF_MS[Math.min(attempt, RETRY_BACKOFF_MS.length - 1)]);
     }
   }
 
   const message = lastError instanceof Error ? lastError.message : String(lastError);
-  console.error(`Next.js proxy error for ${request.method} /api/${path}:`, lastError);
+  // The origin we dialled goes to the server log ONLY — echoing it would
+  // publish the internal backend host to any anonymous caller of the public
+  // frontend origin.
+  console.error(
+    `Next.js proxy error for ${request.method} /api/${path} → ${backendOrigin()}:`,
+    lastError
+  );
   return NextResponse.json(
-    {
-      detail:
-        `Failed to proxy request to backend after ${attempts} attempt(s): ${message}. ` +
-        `Backend origin: ${backendOrigin()}`,
-    },
+    { detail: `Failed to proxy request to backend after ${attempts} attempt(s): ${message}` },
     { status: 502 }
   );
 }

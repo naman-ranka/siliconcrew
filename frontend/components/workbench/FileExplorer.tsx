@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -285,9 +284,6 @@ export function FileExplorer() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadCount, setUploadCount] = useState(0);
   const [dragActive, setDragActive] = useState(false);
-  // dragenter/dragleave also fire crossing child rows — count depth so the
-  // overlay doesn't flicker while the pointer moves over the tree.
-  const dragDepth = useRef(0);
   const uploading = uploadCount > 0;
   const canAcceptDrop = !!sessionId && !uploading;
 
@@ -316,7 +312,6 @@ export function FileExplorer() {
     (e: React.DragEvent) => {
       if (!dragHasFiles(e)) return;
       e.preventDefault();
-      dragDepth.current += 1;
       if (canAcceptDrop) setDragActive(true);
     },
     [canAcceptDrop]
@@ -334,23 +329,60 @@ export function FileExplorer() {
     [canAcceptDrop]
   );
 
-  const onDragLeave = useCallback(() => {
-    if (dragDepth.current === 0) return;
-    dragDepth.current -= 1;
-    if (dragDepth.current === 0) setDragActive(false);
+  // dragenter/dragleave also fire crossing child rows: only a leave that
+  // actually exits the container clears the overlay. A depth counter would
+  // desync the first time a drag leaves the window without a matching leave.
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    setDragActive(false);
   }, []);
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       if (!dragHasFiles(e)) return;
       e.preventDefault();
-      dragDepth.current = 0;
       setDragActive(false);
       if (!canAcceptDrop) return;
-      void startUpload(Array.from(e.dataTransfer.files));
+
+      // Chrome puts directories in `files` too, and the backend would write
+      // each one as a zero-byte file named after the folder. Say plainly that
+      // folders aren't supported rather than uploading junk.
+      const items = Array.from(e.dataTransfer.items ?? []);
+      const dropped = Array.from(e.dataTransfer.files);
+      const folders = items.filter((it) => it.webkitGetAsEntry?.()?.isDirectory).length;
+      const files = folders
+        ? dropped.filter((_f, i) => !items[i]?.webkitGetAsEntry?.()?.isDirectory)
+        : dropped;
+      if (folders) {
+        pushToast({
+          kind: "info",
+          title: `Skipped ${folders} folder(s)`,
+          detail: "Folders aren't supported — drop the files themselves.",
+        });
+      }
+      void startUpload(files);
     },
-    [canAcceptDrop, startUpload]
+    [canAcceptDrop, startUpload, pushToast]
   );
+
+  // The tree is the app's only drop target, so a near-miss — the panel header,
+  // the artifact center, the chat rail — otherwise falls through to the
+  // document and the browser navigates the tab to file:///…, tearing down the
+  // workbench. Swallow file drops everywhere else; this listener does nothing
+  // to drops the tree itself already handled (they preventDefault first).
+  useEffect(() => {
+    const swallow = (e: DragEvent) => {
+      if (e.defaultPrevented) return;
+      if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+      e.preventDefault();
+    };
+    window.addEventListener("dragover", swallow);
+    window.addEventListener("drop", swallow);
+    return () => {
+      window.removeEventListener("dragover", swallow);
+      window.removeEventListener("drop", swallow);
+    };
+  }, []);
 
   const openNode = useCallback(
     (node: FlatNode) => {
@@ -526,25 +558,7 @@ export function FileExplorer() {
           }}
           className="thin-scrollbar relative flex-1 overflow-y-auto overflow-x-hidden py-1 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/40"
         >
-          {!sessionId ? (
-            /* Every header action is session-scoped, so with no session the
-               panel is inert — say why and point at the fix instead of leaving
-               a wall of greyed-out buttons (#93 Bug 3). */
-            <div
-              data-testid="files-no-session"
-              className="px-3 py-6 text-center text-xs text-muted-foreground"
-            >
-              No session open yet.
-              <div className="mt-2">
-                <Link
-                  href="/"
-                  className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
-                >
-                  Start a session
-                </Link>
-              </div>
-            </div>
-          ) : rootLoading ? (
+          {rootLoading ? (
             <div aria-hidden="true">
               {Array.from({ length: 8 }).map((_, i) => (
                 <div key={i} className="flex h-[26px] items-center gap-2 px-2">
