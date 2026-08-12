@@ -84,6 +84,61 @@ def test_file_upload_then_manifest_tags_roles(client):
     assert roles["counter_tb.v"] == "tb"
 
 
+def test_file_upload_into_subdirectory(client):
+    """`dir` targets a subdirectory; the returned names are workspace-relative
+    so they line up with the manifest (which walks recursively)."""
+    c, ws = client
+    files = [("files", ("counter.v", DUT, "text/plain"))]
+    r = c.post(f"/api/workspace/{SID}/files", files=files, data={"dir": "rtl/core"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["uploaded"] == ["rtl/core/counter.v"]
+    assert os.path.exists(os.path.join(ws, "rtl", "core", "counter.v"))
+    # NOT also at the root — a subdirectory upload must not double-write.
+    assert not os.path.exists(os.path.join(ws, "counter.v"))
+    # `name` is a display basename (may collide across dirs); `path` is the
+    # canonical workspace-relative key, and that is what `uploaded` matches.
+    assert "rtl/core/counter.v" in {f["path"] for f in body["manifest"]["files"]}
+
+
+def test_file_upload_dir_traversal_is_refused(client):
+    """`dir` is the only client-controlled path segment, so it carries the whole
+    traversal risk — and nothing may be created outside the workspace."""
+    c, ws = client
+    outside = os.path.join(os.path.dirname(ws.rstrip("/")), "escaped")
+    for bad in ("../escaped", "/etc", "rtl/../../escaped"):
+        r = c.post(
+            f"/api/workspace/{SID}/files",
+            files=[("files", ("counter.v", DUT, "text/plain"))],
+            data={"dir": bad},
+        )
+        assert r.status_code == 400, f"{bad!r} was accepted: {r.text}"
+        assert not os.path.exists(outside), f"{bad!r} created a directory outside the workspace"
+
+
+def test_file_upload_filename_is_still_basenamed(client):
+    """Allowing a target dir must NOT start honouring paths in the filename —
+    the classic zip-slip shape. The name collapses to its basename, under dir."""
+    c, ws = client
+    r = c.post(
+        f"/api/workspace/{SID}/files",
+        files=[("files", ("../../evil.v", DUT, "text/plain"))],
+        data={"dir": "rtl"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["uploaded"] == ["rtl/evil.v"]
+    assert os.path.exists(os.path.join(ws, "rtl", "evil.v"))
+
+
+def test_file_upload_without_dir_still_lands_at_root(client):
+    """The no-dir path stays byte-identical to the pre-change behaviour."""
+    c, ws = client
+    r = c.post(f"/api/workspace/{SID}/files", files=[("files", ("counter.v", DUT, "text/plain"))])
+    assert r.status_code == 200, r.text
+    assert r.json()["uploaded"] == ["counter.v"]
+    assert os.path.exists(os.path.join(ws, "counter.v"))
+
+
 def test_simulate_requires_sim_top(client):
     c, ws = client
     # empty workspace → no simTop, no files

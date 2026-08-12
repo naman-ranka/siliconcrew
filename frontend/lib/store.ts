@@ -506,7 +506,7 @@ interface AppState {
   loadWorkbench: () => Promise<void>;
   loadManifest: () => Promise<void>;
   setFileRole: (name: string, role: FileRole) => Promise<void>;
-  uploadFiles: (files: File[]) => Promise<{ uploaded: string[]; notShown: string[] }>;
+  uploadFiles: (files: File[], dir?: string) => Promise<{ uploaded: string[]; notShown: string[] }>;
   loadRuns: () => Promise<void>;
   selectRun: (runId: string | null, opts?: { keepTab?: boolean }) => Promise<void>;
   pinRun: (runId: string, pinned: boolean) => Promise<void>;
@@ -2100,11 +2100,11 @@ export const useStore = create<AppState>((set, get) => ({
     set({ manifest });
   },
 
-  uploadFiles: async (files: File[]) => {
+  uploadFiles: async (files: File[], dir = "") => {
     const { currentSession } = get();
     if (!currentSession || files.length === 0) return { uploaded: [], notShown: [] };
     const sid = currentSession.id;
-    const res = await workbenchApi.uploadFiles(sid, files);
+    const res = await workbenchApi.uploadFiles(sid, files, dir);
     // Stale-response guard, same as every sibling loader: an upload started in
     // A and landing after the user switched to B must not cross-write A's
     // manifest (and A's success toast) into B. The files ARE uploaded — the
@@ -2113,7 +2113,10 @@ export const useStore = create<AppState>((set, get) => ({
     set({ manifest: res.manifest });
     // Files the server stored but the manifest doesn't surface (non-design types
     // like .txt) — so the upload isn't a silent black box (hobbyist feedback).
-    const shown = new Set(res.manifest.files.map((f) => f.name));
+    // Compare on `path`, the manifest's canonical workspace-relative key —
+    // `name` is a display basename that collides across directories, so a
+    // subdirectory upload would otherwise be reported as "not shown".
+    const shown = new Set(res.manifest.files.map((f) => f.path));
     const notShown = res.uploaded.filter((n) => !shown.has(n));
     // Store-driven so the confirmation shows regardless of which surface triggered
     // the upload (file-tree button or drag-drop).
@@ -2123,10 +2126,10 @@ export const useStore = create<AppState>((set, get) => ({
       detail: notShown.length ? `${notShown.length} non-design file(s) stored, not shown` : undefined,
     });
     // The v2 explorer reads dirCache, which refreshWorkspace does NOT touch —
-    // without this the uploaded files stay invisible in the tree. Uploads are
-    // basenamed server-side (src/api/actions.py), so the workspace root is the
-    // only directory that can change.
-    get().invalidateDirs([""]);
+    // without this the uploaded files stay invisible in the tree. Filenames are
+    // basenamed server-side, so exactly ONE directory changes: the upload
+    // target ("" = root).
+    get().invalidateDirs([dir]);
     await get().refreshWorkspace();
     return { uploaded: res.uploaded, notShown };
   },
