@@ -17,6 +17,7 @@ user/agent overridable via :func:`write_manifest`.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import logging
 import os
@@ -125,6 +126,13 @@ class DesignManifest(BaseModel):
     # the manifest can see (today: duplicate module declarations). Recomputed on
     # every read/reconcile — any user edit is overwritten.
     warnings: List[str] = Field(default_factory=list)
+    # DERIVED, never user-maintained: digest of the design-file scan fingerprint
+    # (see _scan_fingerprint) at the last time _infer_tops ran. This is what
+    # tells "inferred: none found" apart from "not yet inferred" — without it,
+    # a workspace whose simTop is legitimately empty (no testbench) re-ran the
+    # full inference on EVERY read (sc#81). Not a source of truth: losing the
+    # field (hand edit, older writer) costs exactly one re-inference.
+    topsInferredFingerprint: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -414,8 +422,23 @@ def _scan_fingerprint(workspace: str, files: List[DesignFile]) -> tuple:
     return tuple(sorted(out))
 
 
+def _fingerprint_digest(fingerprint: tuple) -> str:
+    """Compact, persistable form of a scan fingerprint.
+
+    The raw fingerprint is one stat tuple per design file — persisting it
+    verbatim would bloat manifest.json linearly with the file count. The digest
+    is derived metadata only ever compared for equality, so a hash loses
+    nothing. Reuses THE fingerprint (ctime/inode terms included), so it stays
+    safe against ``shutil.copy2``'s preserved mtimes — no second fingerprint.
+    """
+    return hashlib.sha256(repr(fingerprint).encode("utf-8")).hexdigest()
+
+
 def _scan_design_files(
-    workspace: str, files: List[DesignFile], texts: Optional[Dict[str, str]] = None
+    workspace: str,
+    files: List[DesignFile],
+    texts: Optional[Dict[str, str]] = None,
+    fingerprint: Optional[tuple] = None,
 ) -> Dict[str, _FileScan]:
     """ONE pass over the rtl/tb text per reconcile, keyed by workspace-relative path.
 
@@ -424,9 +447,13 @@ def _scan_design_files(
     reconcile cost a multiple of the file count for no new information.
 
     ``texts`` lets a caller that has ALREADY read a file (role derivation) hand
-    the stripped text over instead of paying for a second read.
+    the stripped text over instead of paying for a second read. ``fingerprint``
+    does the same for a caller that already computed the scan fingerprint —
+    the stat sweep is cheap but not free, and reconcile needs the fingerprint
+    anyway for the inference marker.
     """
-    fingerprint = _scan_fingerprint(workspace, files)
+    if fingerprint is None:
+        fingerprint = _scan_fingerprint(workspace, files)
     cached = _SCAN_CACHE.get(workspace)
     if cached is not None and cached[0] == fingerprint:
         return cached[1]
@@ -706,7 +733,8 @@ def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
         texts[rel] = text  # hand it to the sweep instead of reading twice
         files.append(DesignFile(name=os.path.basename(rel), role=derive_role(rel, text), path=rel))
 
-    scans = _scan_design_files(workspace, files, texts=texts)
+    fingerprint = _scan_fingerprint(workspace, files)
+    scans = _scan_design_files(workspace, files, texts=texts, fingerprint=fingerprint)
     synth_top, sim_top = _infer_tops(files, scans)
     clock = _spec_clock_period(workspace) or 10.0
     return DesignManifest(
@@ -718,6 +746,7 @@ def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
         platform="sky130hd",
         testbenches=_derive_testbenches(files, scans),
         warnings=_collision_warnings(scans, _roles_by_path(files)),
+        topsInferredFingerprint=_fingerprint_digest(fingerprint),
     )
 
 
@@ -783,7 +812,7 @@ def _manifest_from_raw(raw: Dict[str, Any]) -> tuple[DesignManifest, bool]:
     """
     manifest = DesignManifest()
     manifest.files, coerced = _coerce_files(raw.get("files"))
-    for key in ("sessionId", "synthTop", "simTop", "platform"):
+    for key in ("sessionId", "synthTop", "simTop", "platform", "topsInferredFingerprint"):
         value = raw.get(key)
         if isinstance(value, str):
             setattr(manifest, key, value)
@@ -852,11 +881,20 @@ def _reconcile(workspace: str, stored: DesignManifest) -> DesignManifest:
 
     stored.files = merged
 
-    scans = _scan_design_files(workspace, merged, texts=texts)
+    fingerprint = _scan_fingerprint(workspace, merged)
+    scans = _scan_design_files(workspace, merged, texts=texts, fingerprint=fingerprint)
     if not stored.synthTop or not stored.simTop:
-        synth_top, sim_top = _infer_tops(merged, scans)
-        stored.synthTop = stored.synthTop or synth_top
-        stored.simTop = stored.simTop or sim_top
+        # A top may be EMPTY because inference already ran and found nothing
+        # (e.g. no testbench -> simTop stays ""). The persisted marker tells
+        # that apart from "not yet inferred": re-infer only when the design
+        # file set actually changed since inference last ran (sc#81). A
+        # user-set top is never overwritten either way (`or` keeps it).
+        digest = _fingerprint_digest(fingerprint)
+        if stored.topsInferredFingerprint != digest:
+            synth_top, sim_top = _infer_tops(merged, scans)
+            stored.synthTop = stored.synthTop or synth_top
+            stored.simTop = stored.simTop or sim_top
+            stored.topsInferredFingerprint = digest
     stored.testbenches = _derive_testbenches(merged, scans)
     stored.warnings = _collision_warnings(scans, _roles_by_path(merged))
     return stored
