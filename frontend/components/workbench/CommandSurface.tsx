@@ -643,8 +643,16 @@ export function CommandSurface() {
       const res = await runSurfaceCommand(cmd, userVals);
       if (res === null) {
         // null now means exactly one thing: an async core dispatch succeeded
-        // (dev#51) — the note below is truthful by construction.
+        // (dev#51) — the note below is truthful by construction. Drop any
+        // stale result from a previous failed attempt so the pane doesn't
+        // contradict the dispatch note.
         setDispatched((prev) => ({ ...prev, [cmd.id]: true }));
+        setResults((prev) => {
+          if (!(cmd.id in prev)) return prev;
+          const next = { ...prev };
+          delete next[cmd.id];
+          return next;
+        });
       } else {
         setResults((prev) => ({ ...prev, [cmd.id]: res }));
         setFieldErrs((prev) => ({

@@ -205,3 +205,32 @@ def test_auth_frame_null_token_authenticates_like_no_token(harness):
         frames = _drain_to_done(ws)
     assert any(f["type"] == "done" for f in frames)
     assert harness.tokens_seen == [None]
+
+
+def test_non_dict_json_first_frame_gets_a_structured_error(harness):
+    """PR #88 review: a valid-JSON first frame that isn't an object (list /
+    string / number) is replayed into the main loop, which must answer with a
+    structured error frame — never an AttributeError traceback."""
+    with TestClient(api.app).websocket_connect(
+        f"/api/chat/sess1?token={VALID_TOKEN}"
+    ) as ws:
+        ws.send_json(["not", "an", "object"])
+        err = ws.receive_json()
+        assert err["type"] == "error"
+        assert "JSON object" in err["error"]
+        # The connection survives — a real message still runs a turn.
+        ws.send_json({"message": "hi"})
+        frames = _drain_to_done(ws)
+    assert any(f["type"] == "done" for f in frames)
+
+
+def test_null_first_frame_is_rejected_not_swallowed(harness):
+    """PR #88 review: a literal JSON null first frame must not vanish into the
+    no-pending-frame sentinel — the client is told what was wrong."""
+    with TestClient(api.app).websocket_connect(
+        f"/api/chat/sess1?token={VALID_TOKEN}"
+    ) as ws:
+        ws.send_json(None)
+        err = ws.receive_json()
+        assert err["type"] == "error"
+        assert "JSON object" in err["error"]

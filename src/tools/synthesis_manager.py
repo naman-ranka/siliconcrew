@@ -2694,7 +2694,9 @@ def _liveness_elapsed_sec(meta: Dict[str, Any], status: str) -> Optional[float]:
         return None
     start = _parse_iso_utc(meta.get("dispatched_at") or meta.get("created_at"))
     if start is not None:
-        return round((datetime.now(timezone.utc) - start).total_seconds(), 2)
+        # Clamp: another instance's clock can stamp dispatched_at slightly
+        # ahead of ours — a fresh dispatch must never read as negative time.
+        return round(max(0.0, (datetime.now(timezone.utc) - start).total_seconds()), 2)
     return None
 
 
@@ -4498,12 +4500,13 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
 
     # Progress fact from the same file trail the status path renders: this
     # run's completed stages out of its planned flow (out-of-plan stages are
-    # "skipped" and don't count toward the denominator).
+    # "skipped" and don't count toward the denominator; PD-retry stages
+    # "inherited" from the parent run are completed upstream work, so they
+    # count toward the numerator — otherwise a finished retry never reads N/N).
     progress = stage_progress_from_files(run_dir, run_meta)
     planned = [h for h in progress["stage_history"] if h.get("status") != "skipped"]
-    stages_completed = (
-        f"{sum(1 for h in planned if h.get('status') == 'completed')}/{len(planned)}"
-    )
+    done = sum(1 for h in planned if h.get("status") in ("completed", "inherited"))
+    stages_completed = f"{done}/{len(planned)}"
 
     if run_status in ("queued", "running") and missing:
         elapsed_txt = (

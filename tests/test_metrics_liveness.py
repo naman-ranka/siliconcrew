@@ -246,3 +246,42 @@ def test_finished_on_disk_run_is_adopted_completed_by_the_metrics_read(tmp_path)
     assert resp["metrics"]["wns_ns"] == pytest.approx(-1.20)
     assert not any("in progress" in n for n in resp["parse_notes"])
     assert sm._read_run_meta(run_dir)["status"] == "completed"
+
+
+def test_inherited_stages_count_toward_stages_completed(tmp_path, monkeypatch):
+    """PR #88 review: PD-retry stages "inherited" from the parent are completed
+    upstream work — they must count toward the numerator, or a finished retry
+    tops out at 5/8 and reads mid-flight forever."""
+    workspace = str(tmp_path / "ws")
+    meta = dict(BASE_META, status="running", dispatched_at=_iso_ago(90), timeout_sec=3600)
+    _seed_run(workspace, meta)
+    canned = {
+        "stage_history": [
+            {"stage": "constraints", "status": "inherited"},
+            {"stage": "synth", "status": "inherited"},
+            {"stage": "floorplan", "status": "inherited"},
+            {"stage": "place", "status": "completed"},
+            {"stage": "cts", "status": "completed"},
+            {"stage": "grt", "status": "skipped"},
+            {"stage": "route", "status": "completed"},
+            {"stage": "finish", "status": "completed"},
+        ]
+    }
+    monkeypatch.setattr(sm, "stage_progress_from_files", lambda run_dir, run_meta: canned)
+
+    resp = sm.get_synthesis_metrics(workspace=workspace, run_id="synth_0001")
+
+    # 3 inherited + 4 completed over 7 planned (the skipped stage is out of plan).
+    assert resp["stages_completed"] == "7/7"
+
+
+def test_elapsed_sec_clamped_at_zero_on_clock_skew(tmp_path):
+    """PR #88 review: dispatched_at stamped by an instance whose clock runs
+    ahead of ours must read 0.0, never a negative elapsed."""
+    workspace = str(tmp_path / "ws")
+    meta = dict(BASE_META, status="running", dispatched_at=_iso_ago(-30), timeout_sec=3600)
+    _seed_run(workspace, meta)
+
+    resp = sm.get_synthesis_metrics(workspace=workspace, run_id="synth_0001")
+
+    assert resp["elapsed_sec"] == 0.0

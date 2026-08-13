@@ -1726,6 +1726,10 @@ def _friendly_agent_error(exc: BaseException, key_source: Optional[str] = None) 
 # generous headroom for slow networks without holding unauthenticated sockets.
 WS_AUTH_TIMEOUT_SEC = 10.0
 
+# "No replayed handshake frame" marker for the chat WS main loop — distinct
+# from None because a legacy client's first frame can be literal JSON null.
+_WS_NO_FRAME = object()
+
 
 @app.websocket("/api/chat/{session_id:path}")
 async def chat_websocket(websocket: WebSocket, session_id: str):
@@ -1746,7 +1750,9 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
     # old client mid-deploy — authenticate it from the legacy ?token= query
     # param and replay the frame as its first chat message. Remove this branch
     # (and the query-param read) one release after the handshake ships.
-    pending_frame = None
+    # Sentinel (not None): a replayed frame can legitimately BE null JSON, and
+    # it must reach the main loop's shape check rather than vanish.
+    pending_frame = _WS_NO_FRAME
     try:
         first = await asyncio.wait_for(
             websocket.receive_json(), timeout=WS_AUTH_TIMEOUT_SEC
@@ -1816,13 +1822,21 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
         while True:
             # Receive message from client. A frame replayed from the legacy
             # (no-auth-frame) handshake above is consumed first.
-            if pending_frame is not None:
-                data, pending_frame = pending_frame, None
+            if pending_frame is not _WS_NO_FRAME:
+                data, pending_frame = pending_frame, _WS_NO_FRAME
             else:
                 data = await websocket.receive_json()
 
             # A late `stop` after the turn already ended is a no-op, not an error.
             if isinstance(data, dict) and data.get("type") == "stop":
+                continue
+
+            # Valid JSON that isn't an object (string/number/list/null) has no
+            # message shape — reject it honestly instead of AttributeError-ing.
+            if not isinstance(data, dict):
+                await websocket.send_json(
+                    {"type": "error", "error": "Expected a JSON object message"}
+                )
                 continue
 
             message = data.get("message", "")
