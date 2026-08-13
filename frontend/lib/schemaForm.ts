@@ -91,7 +91,20 @@ export function editorFor(key: string, prop: SchemaProperty): SurfaceParam["edit
   if (p.type === "boolean") return "bool";
   if (p.type === "integer" || p.type === "number") return "number";
   if (p.type === "array" && p.items?.type === "string") return "multi";
+  // W7/A24: dict (build_interactive_sim.parameters) and list[dict]
+  // (write_spec.ports) get a validated JSON textarea — they were untypeable
+  // through the plain text input.
+  if (p.type === "object") return "json";
+  if (p.type === "array" && p.items?.type === "object") return "json";
   return "text";
+}
+
+/** The shape a json editor validates against (see SurfaceParam.jsonKind). */
+export function jsonKindFor(prop: SchemaProperty): "object" | "array" | undefined {
+  const p = unwrapOptional(prop).prop;
+  if (p.type === "object") return "object";
+  if (p.type === "array" && p.items?.type === "object") return "array";
+  return undefined;
 }
 
 /** Where the value comes from — drives the source badge next to the label. */
@@ -336,6 +349,16 @@ export function buildFormModel(entry: ToolCatalogEntry, ctx: SurfaceCtx): Surfac
 
     const manifestVal = manifestValueFor(key, ctx, entry.name);
     const valueKind = valueKindFor(key);
+    const jsonKind = editor === "json" ? jsonKindFor(prop) : undefined;
+    // json editors hold TEXT: a structured schema default renders as pretty
+    // JSON; empty/absent stays "" (omitted from the payload).
+    let def = defaultFor(key, raw ?? {}, ctx, required, entry.name);
+    if (editor === "json" && typeof def !== "string") {
+      def =
+        def == null || (Array.isArray(def) && def.length === 0)
+          ? ""
+          : JSON.stringify(def, null, 2);
+    }
     // HLS top_module has NO suggestions by design — say why, honestly.
     const hlsTopHint =
       key === "top_module" && HLS_TOP_TOOLS.has(entry.name)
@@ -347,11 +370,12 @@ export function buildFormModel(entry: ToolCatalogEntry, ctx: SurfaceCtx): Surfac
       editor,
       source: paramSourceFor(key, raw ?? {}, hasConv, manifestVal !== undefined, entry.name),
       ...(options ? { options } : {}),
-      def: defaultFor(key, raw ?? {}, ctx, required, entry.name),
+      def,
       ...(min !== undefined ? { min } : {}),
       ...(step !== undefined ? { step } : {}),
       adv: basicOrAdvanced(key, required, hasConv) === "advanced",
       optional: !required,
+      ...(jsonKind ? { jsonKind } : {}),
       ...(valueKind ? { valueKind } : {}),
       ...(valueKind ? { subtitles: (c: SurfaceCtx) => suggestionSubtitles(key, c) } : {}),
       ...(typeof prop.description === "string" && prop.description

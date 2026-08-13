@@ -55,6 +55,7 @@ import {
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { useAuth } from "@/lib/auth";
+import { useElapsedSeconds } from "@/lib/useElapsed";
 import { stashAuthIntent, takeAuthIntent } from "@/lib/authIntent";
 import {
   ComboInput,
@@ -380,6 +381,23 @@ function ParamEditor({
           className="w-52"
         />
       );
+    case "json":
+      // W7/A24: dict / list[dict] params get a real JSON textarea (validated
+      // client-side by jsonParamErrors before anything is sent).
+      return (
+        <textarea
+          value={String(value ?? "")}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label={param.label}
+          rows={5}
+          spellCheck={false}
+          placeholder={param.jsonKind === "array" ? '[{ "name": "clk", "dir": "input" }]' : '{ "WIDTH": 8 }'}
+          className={cn(
+            "w-64 rounded-md border border-border bg-surface-1 p-2 font-mono text-[11px] leading-relaxed text-foreground",
+            "outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/60"
+          )}
+        />
+      );
     case "multi": {
       const arr = Array.isArray(value) ? (value as string[]) : [];
       // ONE selector everywhere (W2): chips + a suggesting combo to add
@@ -490,7 +508,9 @@ export function CommandSurface() {
   const [resultOpen, setResultOpen] = React.useState(true);
   const [running, setRunning] = React.useState(false);
   const [results, setResults] = React.useState<Record<string, SurfaceRunResult>>({});
-  const [dispatched, setDispatched] = React.useState<Record<string, boolean>>({});
+  // Per-command last successful async dispatch (W5/A20): the run id feeds the
+  // dispatch note + "View in Runs". Absent = nothing dispatched.
+  const [dispatched, setDispatched] = React.useState<Record<string, { runId: string | null } | undefined>>({});
   // Server-side field errors from the last invoke, keyed cmd.id → field →
   // message. A field's message clears as soon as the user edits it.
   const [fieldErrs, setFieldErrs] = React.useState<Record<string, Record<string, string>>>({});
@@ -500,6 +520,9 @@ export function CommandSurface() {
   const centerRef = React.useRef<HTMLDivElement>(null);
   const filterRef = React.useRef<HTMLInputElement>(null);
   const { status: authStatus, signIn } = useAuth();
+  // W5: client-side clock for the sync "Running — Ns" indicator (a clock,
+  // never a poller — invariant 6).
+  const elapsed = useElapsedSeconds(running);
 
   // Esc closes (window-level while open; no global shortcut registration).
   React.useEffect(() => {
@@ -683,16 +706,16 @@ export function CommandSurface() {
   const invoke = async () => {
     if (running || missingRun) return;
     setRunning(true);
-    setDispatched((prev) => ({ ...prev, [cmd.id]: false }));
+    setDispatched((prev) => ({ ...prev, [cmd.id]: undefined }));
     try {
       // Pass only the user-touched values — runSurfaceCommand merges defaults.
       const res = await runSurfaceCommand(cmd, userVals);
-      if (res === null) {
-        // null now means exactly one thing: an async core dispatch succeeded
-        // (dev#51) — the note below is truthful by construction. Drop any
-        // stale result from a previous failed attempt so the pane doesn't
-        // contradict the dispatch note.
-        setDispatched((prev) => ({ ...prev, [cmd.id]: true }));
+      if (res.dispatched) {
+        // A successful async core dispatch (W5/A20 — explicit flag + run id,
+        // replacing the old null contract): the note below is truthful by
+        // construction. Drop any stale result from a previous failed attempt
+        // so the pane doesn't contradict the dispatch note.
+        setDispatched((prev) => ({ ...prev, [cmd.id]: { runId: res.runId ?? null } }));
         setResults((prev) => {
           if (!(cmd.id in prev)) return prev;
           const next = { ...prev };
@@ -712,6 +735,15 @@ export function CommandSurface() {
     } finally {
       setRunning(false);
     }
+  };
+
+  // W5/A22: an explicit user gesture — open the dock's Runs tab (expanding a
+  // collapsed dock) and close the Surface. Never automatic (invariant 4).
+  const viewInRuns = () => {
+    const ui = useWorkbenchUiStore.getState();
+    ui.setDockTab(currentSession.id, "runs");
+    ui.setDockCollapsed(currentSession.id, false);
+    setOpen(false);
   };
 
   return (
@@ -909,7 +941,7 @@ export function CommandSurface() {
                   <div className="space-y-1">
                     {cmd.autoArgs.map((a) => (
                       <div key={a.key} className="flex gap-2 font-mono text-[11px]">
-                        <span className="w-28 shrink-0 text-muted-foreground">{a.key}</span>
+                        <span className="w-28 shrink-0 text-muted-foreground">{a.label ?? a.key}</span>
                         <span className="min-w-0 flex-1 break-words text-foreground">
                           {a.describe(ctx)}
                         </span>
@@ -978,6 +1010,15 @@ export function CommandSurface() {
 
             <div ref={rightBodyRef} className="flex-1 overflow-auto p-3">
               <JsonView value={payload} ariaLabel="tool call payload" />
+
+              {running && !cmd.async && (
+                <p
+                  data-testid="command-surface-elapsed"
+                  className="mt-3 border-t border-border pt-2 font-mono text-[11px] text-muted-foreground"
+                >
+                  Running — {elapsed}s
+                </p>
+              )}
 
               {result && (
                 <div className="mt-3 border-t border-border pt-2">
@@ -1051,9 +1092,21 @@ export function CommandSurface() {
                 {cmd.async && cmd.core ? "Dispatch job" : "Invoke"}
               </Button>
               {wasDispatched && (
-                <p className="text-[10px] text-muted-foreground">
-                  Dispatched — follow it in Activity/Runs
-                </p>
+                <div data-testid="command-surface-dispatch-note" className="space-y-1.5">
+                  <p className="font-mono text-[10px] text-muted-foreground">
+                    Dispatched{wasDispatched.runId ? ` — ${wasDispatched.runId}` : ""} · follow
+                    it in Activity/Runs
+                  </p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-6 w-full gap-1 text-[11px]"
+                    onClick={viewInRuns}
+                  >
+                    View in Runs
+                  </Button>
+                </div>
               )}
             </div>
           </div>

@@ -40,8 +40,10 @@ export interface SurfaceParam {
   key: string;
   label: string;
   /** "combo" = text input with filtered suggestions (resolveOptions); free
-   *  entry always allowed — the "search ≻ suggest ≻ type anything" editor. */
-  editor: "enum" | "number" | "bool" | "text" | "multi" | "combo";
+   *  entry always allowed — the "search ≻ suggest ≻ type anything" editor.
+   *  "json" = a validated JSON textarea (W7/A24) for dict / list[dict]
+   *  params the plain editors can't type — parsed client-side before send. */
+  editor: "enum" | "number" | "bool" | "text" | "multi" | "combo" | "json";
   source: SurfaceParamSource;
   options?: readonly string[] | ((ctx: SurfaceCtx) => string[]);
   def: unknown | ((ctx: SurfaceCtx) => unknown);
@@ -56,6 +58,10 @@ export interface SurfaceParam {
   /** Module-valued vs file-valued — rendered as a tiny tag next to the source
    *  badge so the ".v here but not there" question answers itself. */
   valueKind?: "module" | "file";
+  /** json editors only: the shape the backend expects — "object" (a dict,
+   *  e.g. build_interactive_sim.parameters) or "array" (list[dict], e.g.
+   *  write_spec.ports). Drives client-side validation. */
+  jsonKind?: "object" | "array";
   /** Per-value subtitles for combo suggestions (module → its file;
    *  file → its manifest role). Display-only decoration. */
   subtitles?: (ctx: SurfaceCtx) => Record<string, string>;
@@ -63,6 +69,8 @@ export interface SurfaceParam {
 
 export interface SurfaceAutoArg {
   key: string;
+  /** Display label (W7 clarity: "Top module" over the raw key); key if absent. */
+  label?: string;
   /** Human-readable resolution shown in the "Supplied by manifest" box. */
   describe: (ctx: SurfaceCtx) => string;
   /** Included in the displayed/sent payload when the tool expects it client-side. */
@@ -112,7 +120,9 @@ export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
     params: [
       { key: "mode", label: "mode", editor: "enum", options: ["rtl", "post_synth"], def: "rtl", source: "choice" },
       {
-        key: "simTop", label: "sim_top", editor: "combo", source: "manifest",
+        // W7: named for what it IS — a testbench MODULE (subtitles show each
+        // module's defining file, so the ".v or not" question never comes up).
+        key: "simTop", label: "Testbench (module)", editor: "combo", source: "manifest",
         options: (c: SurfaceCtx) => testbenchChoices(c.manifest),
         def: (c: SurfaceCtx) => c.manifest?.simTop ?? "",
         optional: true, // empty → backend falls back to the manifest default
@@ -132,7 +142,7 @@ export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
     desc: "Async ORFS job → { run_id } immediately; completion arrives via activity events / Refresh (no client polling).",
     autoArgs: [
       { key: "verilog_files", describe: (c: SurfaceCtx) => rtlFiles(c).join(", ") || "—" },
-      { key: "top_module", describe: (c: SurfaceCtx) => c.manifest?.synthTop ?? "—" },
+      { key: "top_module", label: "Top module", describe: (c: SurfaceCtx) => c.manifest?.synthTop ?? "—" },
     ],
     params: [
       { key: "platform", label: "platform", editor: "enum", options: PLATFORMS, def: (c: SurfaceCtx) => c.manifest?.platform ?? "sky130hd", source: "manifest" },
@@ -271,6 +281,19 @@ export function buildSurfacePayload(
   cmd.params.forEach((p) => {
     if (p.when && !p.when(merged)) return;
     let v = merged[p.key];
+    if (p.editor === "json" && typeof v === "string") {
+      // W7/A24: the textarea holds TEXT; the backend needs the parsed value
+      // (`parameters` as dict, `ports` as list[dict]). Empty = omitted;
+      // unparseable text stays visible as-is (jsonParamErrors blocks the
+      // actual send with a field error, so this never reaches the wire).
+      const trimmed = v.trim();
+      if (!trimmed) return;
+      try {
+        v = JSON.parse(trimmed);
+      } catch {
+        /* keep the raw string for the live preview */
+      }
+    }
     if (p.optional && (v === "" || v == null || (Array.isArray(v) && v.length === 0))) return;
     if (v === undefined) return;
     if (p.editor === "number" && v !== "") v = Number(v);
@@ -280,6 +303,33 @@ export function buildSurfacePayload(
     if (a.value) args[a.key] = a.value(ctx);
   });
   return { tool: cmd.tool, arguments: args };
+}
+
+/** Client-side validation for json-editor fields (W7/A24): empty = omitted;
+ *  anything present must parse AND match the param's jsonKind. */
+export function jsonParamErrors(
+  cmd: SurfaceCommand,
+  vals: Record<string, unknown>
+): SurfaceFieldError[] {
+  const out: SurfaceFieldError[] = [];
+  for (const p of cmd.params) {
+    if (p.editor !== "json") continue;
+    const v = vals[p.key];
+    if (typeof v !== "string" || !v.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v.trim());
+    } catch {
+      out.push({ field: p.key, message: "not valid JSON" });
+      continue;
+    }
+    if (p.jsonKind === "object" && (parsed == null || typeof parsed !== "object" || Array.isArray(parsed))) {
+      out.push({ field: p.key, message: "must be a JSON object" });
+    } else if (p.jsonKind === "array" && !Array.isArray(parsed)) {
+      out.push({ field: p.key, message: "must be a JSON array" });
+    }
+  }
+  return out;
 }
 
 // --- execution ----------------------------------------------------------------
@@ -315,6 +365,12 @@ export interface SurfaceRunResult {
    *  /invoke 401 envelope and the core twins' 403 detail, W4/A17) — the
    *  Surface renders a "Sign in to run this" CTA, never a raw error. */
   signinRequired?: boolean;
+  /** An ASYNC core dispatch succeeded (W5/A20) — nothing "completed"; the
+   *  run id is what to follow. Replaces the old `null` return, which carried
+   *  no run id for the dispatch note. */
+  dispatched?: boolean;
+  /** The dispatched run's durable key (dispatched=true only). */
+  runId?: string | null;
 }
 
 // The api layer's actionFetch throws a plain Error carrying only the message
@@ -346,19 +402,28 @@ function storeCtx(): SurfaceCtx {
  * Execute a surface command. Core flow commands delegate to runCommand (which
  * owns unread/toasts) and are AWAITED so the caller's spinner and result pane
  * reflect what actually happened; the rest go through POST /invoke and return
- * their result for the inline result pane.
+ * their result for the inline result pane. Always resolves to a
+ * SurfaceRunResult (W5/A20 — the old `null`-means-dispatched contract is
+ * gone): a successful async dispatch is `{ok:true, dispatched:true, runId}`.
  */
 export async function runSurfaceCommand(
   cmd: SurfaceCommand,
   vals: Record<string, unknown>
-): Promise<SurfaceRunResult | null> {
+): Promise<SurfaceRunResult> {
   const store = useStore.getState();
   const session = store.currentSession;
-  // Honest nothing-ran outcome — `null` from this function means exactly one
-  // thing (async core dispatch succeeded), so the Surface's "Dispatched" note
-  // can never appear when nothing was dispatched (dev#51 follow-up).
+  // Honest nothing-ran outcome (dev#51 follow-up): the "Dispatched" note can
+  // only ever render off an explicit dispatched:true result.
   if (!session) return { ok: false, result: "No active session" };
   const ctx = storeCtx();
+
+  // W7/A24: json-editor fields are validated CLIENT-SIDE before anything is
+  // sent — `parameters` must arrive as a dict, `ports` as a list[dict]; an
+  // unparseable field blocks the call with a field-level message.
+  const jsonErrs = jsonParamErrors(cmd, { ...surfaceDefaults(cmd, ctx), ...vals });
+  if (jsonErrs.length > 0) {
+    return { ok: false, result: "Invalid JSON in the highlighted field(s).", fieldErrors: jsonErrs };
+  }
 
   if (cmd.core) {
     // dev#51 (1): await the core engine so the Invoke spinner is truthful and
@@ -376,10 +441,12 @@ export async function runSurfaceCommand(
         ...(outcome.signinRequired ? { signinRequired: true } : {}),
       };
     }
-    // Async dispatches keep the "Dispatched — follow it in Activity/Runs"
-    // note (now rendered only after the dispatch actually succeeded); sync
-    // cores render their real completion summary inline.
-    return cmd.async ? null : { ok: true, result: outcome.summary };
+    // Async dispatches return the run id for the dispatch note + "View in
+    // Runs" (W5 — rendered only after the dispatch actually succeeded);
+    // sync cores render their real completion summary inline.
+    return cmd.async
+      ? { ok: true, dispatched: true, runId: outcome.runId, result: outcome.summary }
+      : { ok: true, result: outcome.summary };
   }
 
   const { tool, arguments: args } = buildSurfacePayload(cmd, vals, ctx);

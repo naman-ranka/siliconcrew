@@ -31,6 +31,7 @@ import {
   CORE_TWIN_TOOLS,
   buildSurfaceCommands,
   buildSurfacePayload,
+  jsonParamErrors,
   prettifyToolName,
   runSurfaceCommand,
   surfaceDefaults,
@@ -342,7 +343,7 @@ describe("runSurfaceCommand", () => {
     expect(res).toEqual({ ok: false, result: "HTTP 500 — lint backend down" });
   });
 
-  it("async core dispatch success returns null — the 'Dispatched' note is now truthful", async () => {
+  it("async core dispatch success returns {ok, dispatched, runId} — W5/A20 replaces the null contract", async () => {
     vi.mocked(workbenchApi.synthesize).mockResolvedValue({
       ok: true,
       runId: "synth_0009",
@@ -351,7 +352,9 @@ describe("runSurfaceCommand", () => {
     const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
     const res = await runSurfaceCommand(synth, {});
     expect(workbenchApi.synthesize).toHaveBeenCalled(); // resolved BEFORE returning
-    expect(res).toBeNull();
+    // The run id rides the result so the dispatch note can name it and
+    // "View in Runs" has something to point at.
+    expect(res).toMatchObject({ ok: true, dispatched: true, runId: "synth_0009" });
   });
 
   it("async core dispatch failure surfaces inline instead of a false 'Dispatched'", async () => {
@@ -373,8 +376,9 @@ describe("runSurfaceCommand", () => {
     const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
     const first = runSurfaceCommand(sim, {}); // holds the in-flight guard
     const second = await runSurfaceCommand(sim, {});
-    expect(second).not.toBeNull(); // null would render "Dispatched"
+    // dispatched:true would render the "Dispatched" note — must be absent.
     expect(second).toMatchObject({ ok: false });
+    expect(second.dispatched).toBeUndefined();
     expect(String(second!.result)).toMatch(/already running/i);
     // Only ONE simulate call ever reached the backend.
     expect(workbenchApi.simulate).toHaveBeenCalledTimes(1);
@@ -426,6 +430,88 @@ describe("runSurfaceCommand", () => {
     const res = await runSurfaceCommand(synth, {});
     expect(res).toMatchObject({ ok: false });
     expect(res && "signinRequired" in res && res.signinRequired).toBeFalsy();
+  });
+});
+
+// ---- json editor params (W7/A24) --------------------------------------------------------
+
+const SIM_BUILD_ENTRY = entry({
+  name: "build_interactive_sim",
+  category: "verification",
+  mutates: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      verilog_files: { type: "array", items: { type: "string" } },
+      top_module: { type: "string" },
+      parameters: { anyOf: [{ type: "object" }, { type: "null" }], default: null },
+    },
+    required: ["verilog_files", "top_module"],
+  },
+});
+
+describe("json editor params (W7/A24)", () => {
+  it("buildSurfacePayload parses json text into a real dict; empty text is omitted", () => {
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    const p = cmd.params.find((x) => x.key === "parameters")!;
+    expect(p.editor).toBe("json");
+    expect(p.jsonKind).toBe("object");
+    const withParams = buildSurfacePayload(
+      cmd,
+      { top_module: "alu", parameters: '{ "WIDTH": 8 }' },
+      CTX
+    );
+    expect(withParams.arguments.parameters).toEqual({ WIDTH: 8 }); // dict, not text
+    const without = buildSurfacePayload(cmd, { top_module: "alu", parameters: "  " }, CTX);
+    expect(without.arguments).not.toHaveProperty("parameters");
+  });
+
+  it("jsonParamErrors: unparseable text and wrong shapes get field-level messages", () => {
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    expect(jsonParamErrors(cmd, { parameters: "{oops" })).toEqual([
+      { field: "parameters", message: "not valid JSON" },
+    ]);
+    expect(jsonParamErrors(cmd, { parameters: "[1, 2]" })).toEqual([
+      { field: "parameters", message: "must be a JSON object" },
+    ]);
+    expect(jsonParamErrors(cmd, { parameters: '{ "WIDTH": 8 }' })).toEqual([]);
+    expect(jsonParamErrors(cmd, { parameters: "" })).toEqual([]); // empty = omitted
+  });
+
+  it("an array-kind json param (write_spec.ports) requires a JSON array", () => {
+    const portsEntry = entry({
+      name: "write_spec",
+      category: "essential",
+      argsSchema: {
+        type: "object",
+        properties: {
+          module_name: { type: "string" },
+          ports: { type: "array", items: { type: "object" } },
+        },
+        required: ["module_name", "ports"],
+      },
+    });
+    const cmd = toolToSurfaceCommand(portsEntry, CTX);
+    const ports = cmd.params.find((x) => x.key === "ports")!;
+    expect(ports.editor).toBe("json");
+    expect(ports.jsonKind).toBe("array");
+    expect(jsonParamErrors(cmd, { ports: '{ "name": "clk" }' })).toEqual([
+      { field: "ports", message: "must be a JSON array" },
+    ]);
+    expect(
+      jsonParamErrors(cmd, { ports: '[{ "name": "clk", "dir": "input" }]' })
+    ).toEqual([]);
+  });
+
+  it("runSurfaceCommand blocks invalid JSON client-side — the backend is never called", async () => {
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    const res = await runSurfaceCommand(cmd, {
+      top_module: "alu",
+      parameters: "{not json",
+    });
+    expect(res).toMatchObject({ ok: false });
+    expect(res.fieldErrors).toEqual([{ field: "parameters", message: "not valid JSON" }]);
+    expect(workbenchApi.invokeTool).not.toHaveBeenCalled();
   });
 });
 

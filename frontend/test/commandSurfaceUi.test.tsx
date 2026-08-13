@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 
 // Command Surface COMPONENT tests (W4+W6, command-surface-simplification):
 // the hand-rolled rail filter + keyboard nav, the A23 Esc discipline, the
@@ -134,6 +134,72 @@ describe("CommandSurface — rail filter + keyboard (W6)", () => {
     // Empty filter: Esc is unconsumed → the Surface closes.
     fireEvent.keyDown(filter(), { key: "Escape" });
     expect(useWorkbenchUiStore.getState().commandSurfaceOpen).toBe(false);
+  });
+});
+
+describe("CommandSurface — honest async/sync affordances (W5)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("a sync run shows the live 'Running — Ns' client clock, then the inline result", async () => {
+    vi.useFakeTimers();
+    let resolveLint!: (v: unknown) => void;
+    vi.mocked(workbenchApi.lint).mockReturnValue(
+      new Promise((r) => {
+        resolveLint = r;
+      }) as never
+    );
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Lint")!);
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    // The counter appears immediately (running state is synchronous)…
+    expect(screen.getByTestId("command-surface-elapsed")).toHaveTextContent("Running — 0s");
+    // …and advances on the CLIENT clock alone — no fetches involved.
+    act(() => {
+      vi.advanceTimersByTime(2100);
+    });
+    expect(screen.getByTestId("command-surface-elapsed")).toHaveTextContent("Running — 2s");
+    await act(async () => {
+      resolveLint({
+        ok: true,
+        status: "passed",
+        warnings: [],
+        errors: [],
+        byFile: {},
+        command: "iverilog alu.v",
+        files: ["alu.v"],
+        engine: "iverilog",
+      });
+    });
+    expect(screen.queryByTestId("command-surface-elapsed")).toBeNull();
+    expect(screen.getByText(/passed \(iverilog\)/)).toBeInTheDocument();
+  });
+
+  it("async dispatch note names the run id; 'View in Runs' opens the dock Runs tab and closes (A22)", async () => {
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue({
+      ok: true,
+      runId: "synth_0042",
+      pollAfterSec: 5,
+    } as never);
+    // Prove the gesture EXPANDS a collapsed dock, not just switches tabs.
+    useWorkbenchUiStore.getState().setDockTab("s1", "activity");
+    useWorkbenchUiStore.getState().setDockCollapsed("s1", true);
+    render(<CommandSurface />);
+    fireEvent.click(screen.getByTestId("command-surface-invoke")); // synth is the default selection
+    const note = await screen.findByTestId("command-surface-dispatch-note");
+    expect(note).toHaveTextContent("synth_0042");
+    fireEvent.click(screen.getByRole("button", { name: "View in Runs" }));
+    const ui = useWorkbenchUiStore.getState();
+    expect(ui.commandSurfaceOpen).toBe(false); // explicit user gesture closed it
+    expect(ui.perSession["s1"].dockTab).toBe("runs");
+    expect(ui.perSession["s1"].dockCollapsed).toBe(false);
+  });
+
+  it("a failed async dispatch renders the error inline — no dispatch note", async () => {
+    vi.mocked(workbenchApi.synthesize).mockRejectedValue(new Error("Quota exceeded."));
+    render(<CommandSurface />);
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    await screen.findByText("Quota exceeded.");
+    expect(screen.queryByTestId("command-surface-dispatch-note")).toBeNull();
   });
 });
 
