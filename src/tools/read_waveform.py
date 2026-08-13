@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Optional
+from typing import Any, Dict, Optional
 
 # Removing the old end_time=1000 default means an unbounded VCD can produce an
 # unbounded table; cap the rows and say what was withheld rather than silently
@@ -8,37 +8,16 @@ from typing import Optional
 MAX_OUTPUT_ROWS = 2000
 
 
-def read_waveform(vcd_file: str, signals: list[str], start_time: int = 0,
-                  end_time: Optional[int] = None) -> str:
-    """
-    Reads a VCD file and extracts the values of specified signals within a time window.
-    Pure Python implementation (no external dependencies).
+def _parse_vcd_header(lines: list[str]) -> tuple[list[tuple[str, str]], int]:
+    """Parse a VCD header into ``([(code, full_dotted_path), ...], header_end)``.
 
-    Args:
-        vcd_file: Path to the .vcd file.
-        signals: List of signal names to extract (e.g., ['clk', 'rst', 'count']).
-        start_time: Start of the time window.
-        end_time: End of the time window; None (default) reads to the end of the VCD.
-
-    Returns:
-        A string representation of the signal changes.
+    THE header parser — shared by :func:`read_waveform` and
+    :func:`scan_vcd_for_x` so there is exactly one reading of the $scope/$var
+    grammar. A list, not a dict: one VCD identifier code legitimately appears
+    under several paths when a signal is connected across the hierarchy, and a
+    dict keyed either way would drop half the story.
     """
-    if not os.path.exists(vcd_file):
-        return f"Error: File {vcd_file} does not exist."
-        
-    # (code, full dotted path), in header order. A list, not a dict: one VCD
-    # identifier code legitimately appears under several paths when a signal is
-    # connected across the hierarchy, and a dict keyed either way would drop
-    # half the story.
     var_paths: list[tuple[str, str]] = []
-
-    try:
-        with open(vcd_file, 'r') as f:
-            lines = f.readlines()
-    except Exception as e:
-        return f"Error reading file: {e}"
-
-    # 1. Parse Header
     header_end = 0
     scope_stack: list[str] = []
     for i, line in enumerate(lines):
@@ -65,6 +44,127 @@ def read_waveform(vcd_file: str, signals: list[str], start_time: int = 0,
         if line.startswith("$enddefinitions"):
             header_end = i
             break
+    return var_paths, header_end
+
+
+# Bound on the post-run X scan (sc dev#76). A VCD past this is skipped with an
+# explicit "skipped (size)" — an honest refusal, never a partial scan
+# pretending to be a full one. 64 MiB keeps the line-split cost in the tens of
+# milliseconds-to-seconds range on the sim path that every run pays.
+X_SCAN_MAX_BYTES = 64 * 1024 * 1024
+# The sample of affected signal paths carried on the run record stays small —
+# it is a pointer for waveform_tool, not a dump.
+X_SCAN_MAX_SIGNAL_SAMPLE = 10
+_XZ_CHARS = set("xXzZ")
+
+
+def scan_vcd_for_x(vcd_file: str, max_bytes: int = X_SCAN_MAX_BYTES) -> Dict[str, Any]:
+    """Scan a VCD for x/z value changes AFTER time 0 — a warning surface.
+
+    Why (dev#76): ``x !== x`` evaluates FALSE, so a testbench comparing an
+    undefined expected value against an undefined output silently counts the
+    vector as checked and still prints its pass marker. The VCD is the one
+    artifact that shows the undefinedness, and this scan turns it into honest
+    fields on the run record. It is NOT a verdict: the pass/fail stays what
+    the testbench printed.
+
+    The t=0 initial dump is excluded on purpose: every uninitialized reg dumps
+    as x there, so counting it would flag literally every 4-state run and the
+    warning would mean nothing. Known limit, stated honestly: a signal that is
+    x from t=0 and NEVER changes emits no later value change and is not seen
+    here.
+
+    Returns one of:
+      * ``{"status": "scanned", "xDetected": bool, "xEventCount": int,
+          "xSignalCount": int, "xSignals": [dotted paths, bounded sample]}``
+      * ``{"status": "skipped (size)", "sizeBytes": int, "maxBytes": int}``
+      * ``{"status": "skipped (unreadable)"}``
+    """
+    try:
+        size = os.path.getsize(vcd_file)
+    except OSError:
+        return {"status": "skipped (unreadable)"}
+    if size > max_bytes:
+        return {"status": "skipped (size)", "sizeBytes": size, "maxBytes": max_bytes}
+    try:
+        with open(vcd_file, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+    except Exception:
+        return {"status": "skipped (unreadable)"}
+
+    var_paths, header_end = _parse_vcd_header(lines)
+    path_by_code: Dict[str, str] = {}
+    for code, path in var_paths:
+        path_by_code.setdefault(code, path)  # first (outermost) path per code
+
+    current_time = 0
+    event_count = 0
+    seen_codes: list[str] = []
+    seen: set[str] = set()
+    for i in range(header_end + 1, len(lines)):
+        line = lines[i].strip()
+        if not line:
+            continue
+        if line[0] == "#":
+            try:
+                current_time = int(line[1:])
+            except ValueError:
+                pass
+            continue
+        if current_time <= 0 or line[0] == "$":
+            continue
+        code = None
+        if line[0] in "bB":
+            # Vector: b<bits> <code>
+            parts = line.split()
+            if len(parts) >= 2 and _XZ_CHARS.intersection(parts[0][1:]):
+                code = parts[1]
+        elif line[0] in _XZ_CHARS:
+            # Scalar: <value><code>, value one of 0 1 x z (case-insensitive)
+            code = line[1:]
+        if code:
+            event_count += 1
+            if code not in seen:
+                seen.add(code)
+                seen_codes.append(code)
+
+    return {
+        "status": "scanned",
+        "xDetected": event_count > 0,
+        "xEventCount": event_count,
+        "xSignalCount": len(seen_codes),
+        "xSignals": [
+            path_by_code.get(c, c) for c in seen_codes[:X_SCAN_MAX_SIGNAL_SAMPLE]
+        ],
+    }
+
+
+def read_waveform(vcd_file: str, signals: list[str], start_time: int = 0,
+                  end_time: Optional[int] = None) -> str:
+    """
+    Reads a VCD file and extracts the values of specified signals within a time window.
+    Pure Python implementation (no external dependencies).
+
+    Args:
+        vcd_file: Path to the .vcd file.
+        signals: List of signal names to extract (e.g., ['clk', 'rst', 'count']).
+        start_time: Start of the time window.
+        end_time: End of the time window; None (default) reads to the end of the VCD.
+
+    Returns:
+        A string representation of the signal changes.
+    """
+    if not os.path.exists(vcd_file):
+        return f"Error: File {vcd_file} does not exist."
+
+    try:
+        with open(vcd_file, 'r') as f:
+            lines = f.readlines()
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+    # 1. Parse Header (shared grammar — see _parse_vcd_header)
+    var_paths, header_end = _parse_vcd_header(lines)
 
     # Resolve wanted signals
     final_codes = {} # code -> user_friendly_name

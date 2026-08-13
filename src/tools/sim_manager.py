@@ -22,6 +22,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from src.tools.read_waveform import scan_vcd_for_x
 from src.tools.run_simulation import resolve_pass_marker, run_simulation
 
 RUNS_DIRNAME = "sim_runs"
@@ -266,6 +267,8 @@ def _persist_resolution_failure(
         "provenance": _provenance(platform),
         "mode": mode,
         "vcdPath": "",
+        "xDetected": None,  # nothing ran: no VCD, honestly unknown
+        "xScan": None,
         "stagedDataFiles": [],  # nothing ran, so nothing was staged
         "passMarkerFound": False,
         "passMarker": "",
@@ -384,6 +387,23 @@ def run_sim_isolated(
     vcd_abs = _find_vcd(run_dir)
     vcd_rel = os.path.relpath(vcd_abs, workspace) if vcd_abs else ""
 
+    # X-propagation warning surface (dev#76): `x !== x` is FALSE, so a
+    # testbench comparing undefined values silently passes — the VCD is the
+    # one artifact that shows it. This NEVER changes the verdict (invariant 4:
+    # no ambiguous verdicts — the pass/fail stays what the testbench printed);
+    # it adds honest state beside it. No VCD -> fields stay None (unknown, not
+    # a fake false); oversized/unreadable VCDs report a "skipped" xScan status
+    # rather than pretending a full scan happened.
+    x_scan: Optional[Dict[str, Any]] = None
+    if vcd_abs:
+        try:
+            x_scan = scan_vcd_for_x(vcd_abs)
+        except Exception:
+            x_scan = {"status": "skipped (scan error)"}
+    x_detected: Optional[bool] = None
+    if x_scan is not None and x_scan.get("status") == "scanned":
+        x_detected = bool(x_scan.get("xDetected"))
+
     status = _to_run_status(sim_result.get("status", "compile_failed"))
     failure = None
     if status == "failed":
@@ -404,6 +424,10 @@ def run_sim_isolated(
         "provenance": _provenance(platform),
         "mode": mode,
         "vcdPath": vcd_rel,
+        # Warning surface, not a verdict: x/z seen in the VCD after t=0.
+        # None = no VCD (or scan skipped) — honestly unknown, never false.
+        "xDetected": x_detected,
+        "xScan": x_scan,
         # Evidence: exactly which data files this run could see, and where.
         "stagedDataFiles": staged_data,
         # run_simulation reports the marker it actually grepped (post manifest/

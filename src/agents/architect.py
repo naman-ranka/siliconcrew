@@ -124,6 +124,9 @@ trust a green self-test, earn it.
   as a mechanical checklist you assert.
 - Cover generic corner classes even if the spec is silent: reset mid-operation, back-to-back
   transactions, empty/full, min/max/overflow, max-latency/stall, and X-injection on inputs.
+- `!==`-style self-checks are blind to X — `x !== x` is FALSE (and out-of-range array reads yield
+  x), so a comparison against an undefined expected value silently counts as passing; add
+  $isunknown checks on every checked DUT output (e.g. `if ($isunknown(dut_out)) $fatal;`).
 - Non-termination is a FAILURE: a sim that hangs or yields no result is a failing design (comb loop /
   missing liveness) — fix it, never report it as success or "unknown".
 - Distrust your own PASS: before declaring done, list what you did and did NOT verify. For
