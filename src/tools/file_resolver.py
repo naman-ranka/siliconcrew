@@ -8,8 +8,13 @@ looks like. Now there is exactly one resolution contract:
 
   * a workspace-relative path is honored as an exact address (never fuzzily
     re-routed to a different directory — that would silently run other code);
-  * a bare basename is searched across the manifest file list first, then the
-    workspace tree (same exclusion policy as every listing endpoint);
+  * a bare basename is resolved MANIFEST-FIRST (invariant 1: the manifest is
+    the single source of truth for design files): the stored manifest file
+    list decides on its own, and the workspace tree (same exclusion policy as
+    every listing endpoint) is searched ONLY when the manifest matches
+    nothing. A stray untracked copy — ``old/alu.v`` next to the manifest's
+    ``rtl/alu.v`` — therefore cannot make a tracked design file ambiguous;
+    ambiguity is reported only when the index that WON is itself ambiguous;
   * a basename without extension is completed from ``exts`` when given;
   * ambiguous -> an error naming every candidate; missing -> an error naming
     what was searched (the message always contains "does not exist" — pinned
@@ -62,15 +67,26 @@ def _stored_manifest_paths(workspace: str) -> List[str]:
     return out
 
 
-def _search_index(workspace: str) -> List[str]:
-    """Manifest file list first, then the workspace tree, deduped in order."""
-    seen: dict = {}
-    for rel in _stored_manifest_paths(workspace):
-        seen.setdefault(rel, None)
+def _tree_paths(workspace: str) -> List[str]:
+    """Workspace-relative paths from the tree walk (listing exclusion policy)."""
     ignore = manifest_mod.stored_ignore(workspace)
-    for rel in manifest_mod.iter_workspace_files(workspace, ignore):
-        seen.setdefault(rel, None)
-    return list(seen)
+    return list(manifest_mod.iter_workspace_files(workspace, ignore))
+
+
+def _basename_matches(
+    workspace: str,
+    index: Sequence[str],
+    value: str,
+    exts: Sequence[str],
+) -> List[str]:
+    """Files in ``index`` whose basename is ``value`` (or ``value`` + one of
+    ``exts`` when nothing matched exactly), deduped, sorted, and filtered to
+    what is really on disk (the stored manifest can lag a delete)."""
+    matches = [rel for rel in index if os.path.basename(rel) == value]
+    if not matches and exts:
+        wanted = {value + ext for ext in exts}
+        matches = [rel for rel in index if os.path.basename(rel) in wanted]
+    return sorted({rel for rel in matches if os.path.isfile(os.path.join(workspace, rel))})
 
 
 def resolve_workspace_file(
@@ -127,13 +143,12 @@ def resolve_workspace_file(
             f"File '{value}' does not exist in the workspace{ext_note}."
         )
 
-    index = _search_index(workspace)
-    matches = [rel for rel in index if os.path.basename(rel) == value]
-    if not matches and exts:
-        wanted = {value + ext for ext in exts}
-        matches = [rel for rel in index if os.path.basename(rel) in wanted]
-    # Only files really on disk (the stored manifest can lag a delete).
-    matches = sorted({rel for rel in matches if os.path.isfile(os.path.join(workspace, rel))})
+    # Manifest-first (invariant 1): a tracked design file is never made
+    # ambiguous by an untracked copy sitting elsewhere in the tree. The tree is
+    # a FALLBACK for files the manifest does not carry, not a co-equal index.
+    matches = _basename_matches(workspace, _stored_manifest_paths(workspace), value, exts)
+    if not matches:
+        matches = _basename_matches(workspace, _tree_paths(workspace), value, exts)
 
     if len(matches) == 1:
         return _posix(matches[0])

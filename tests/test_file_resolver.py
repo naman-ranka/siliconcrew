@@ -174,3 +174,65 @@ def test_override_drop_notes_name_each_dropped_file():
 
 def test_override_drop_notes_empty_when_superset():
     assert override_drop_notes("simulate", ["a.v"], ["a.v", "b.v"]) == []
+
+
+# --- manifest-first resolution (adversarial-review F6) -------------------------
+
+def _write_manifest(ws, paths, ignore=None):
+    import json
+
+    from src.tools.manifest import MANIFEST_FILENAME
+
+    with open(os.path.join(ws, MANIFEST_FILENAME), "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "files": [{"name": os.path.basename(p), "path": p, "role": "rtl"} for p in paths],
+                "ignore": ignore or [],
+            },
+            f,
+        )
+
+
+def test_stray_untracked_copy_never_shadows_a_manifest_file(tmp_path):
+    """The documented contract is manifest-FIRST: a leftover old/alu.v must not
+    make the manifest's rtl/alu.v ambiguous (before the fix both indexes were
+    merged, so every stray copy broke a tracked basename)."""
+    ws = str(tmp_path)
+    _mk(ws, "rtl/alu.v")
+    _mk(ws, "old/alu.v")
+    _write_manifest(ws, ["rtl/alu.v"])
+    assert resolve_workspace_file(ws, "alu.v") == "rtl/alu.v"
+    assert resolve_workspace_files(ws, ["alu"], exts=(".v", ".sv")) == ["rtl/alu.v"]
+
+
+def test_manifest_itself_ambiguous_still_errors(tmp_path):
+    ws = str(tmp_path)
+    _mk(ws, "rtl/alu.v")
+    _mk(ws, "given/alu.v")
+    _write_manifest(ws, ["rtl/alu.v", "given/alu.v"])
+    with pytest.raises(FileResolutionError) as ei:
+        resolve_workspace_file(ws, "alu.v")
+    msg = str(ei.value)
+    assert "Ambiguous" in msg and "rtl/alu.v" in msg and "given/alu.v" in msg
+
+
+def test_tree_fallback_ambiguity_still_errors_when_manifest_has_none(tmp_path):
+    """Manifest yields zero → the tree decides, and an ambiguous tree is still
+    an honest error (the fallback is not a licence to guess)."""
+    ws = str(tmp_path)
+    _mk(ws, "rtl/alu.v")
+    _mk(ws, "old/alu.v")
+    _write_manifest(ws, ["rtl/counter.v"])
+    _mk(ws, "rtl/counter.v")
+    with pytest.raises(FileResolutionError) as ei:
+        resolve_workspace_file(ws, "alu.v")
+    assert "Ambiguous" in str(ei.value)
+
+
+def test_manifest_entry_deleted_on_disk_falls_through_to_the_tree(tmp_path):
+    """The stored manifest can lag a delete — a manifest hit that is gone must
+    not win over a real file."""
+    ws = str(tmp_path)
+    _mk(ws, "old/alu.v")
+    _write_manifest(ws, ["rtl/alu.v"])  # rtl/alu.v never created
+    assert resolve_workspace_file(ws, "alu.v") == "old/alu.v"

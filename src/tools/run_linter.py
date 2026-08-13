@@ -23,7 +23,19 @@ added):
       "stdout": str, "stderr": str, "command": str,   # legacy
       "engine": "iverilog"|"verilator",               # what actually ran
       "diagnostics": [ {file, line, severity, message, code|None} ],
+      "notes": [str],             # honest scope notes (see file_scoped below)
     }
+
+``file_scoped=True`` says out loud what the caller already knows: the file set
+being linted deliberately leaves out design files the manifest would have
+supplied (the explorer's "lint THIS file" gesture). Both engines report a
+module that is instantiated but absent from the file set as an ERROR
+("Unknown module type" / "Cannot find file containing module") — a true
+statement about the compile, but a FALSE verdict about the file the user
+asked about. In that mode those specific diagnostics are removed and replaced
+by one note naming the modules that were not elaborated. Nothing else is
+softened: a syntax error in the linted file still fails, and any other error
+diagnostic still fails.
 """
 import os
 import re
@@ -98,6 +110,40 @@ def parse_verilator_diagnostics(output: str, cwd: Optional[str] = None) -> List[
     return out
 
 
+# "This module is instantiated but is not in the file set I was given" — the
+# ONE diagnostic class a deliberately file-scoped lint must not turn into a
+# FAILED verdict. iverilog: "Unknown module type: alu"; verilator:
+# "Cannot find file containing module: 'alu'" (code MODNOTFOUND on 5.x).
+_UNRESOLVED_MODULE_PATS = (
+    re.compile(r"^Unknown module type:\s*(?P<mod>\S+)"),
+    re.compile(r"^Cannot find file containing module:\s*'?(?P<mod>[^'\s]+)'?"),
+)
+
+
+def split_unresolved_module_diagnostics(diagnostics: List[Dict[str, Any]]):
+    """Split ``diagnostics`` into (kept, missing_module_names).
+
+    Only ERROR diagnostics matching the unresolved-module signatures move to
+    the second list; warnings and every other error stay in ``kept``.
+    """
+    kept: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    for d in diagnostics:
+        name = None
+        if d.get("severity") == "error":
+            message = (d.get("message") or "").strip()
+            for pat in _UNRESOLVED_MODULE_PATS:
+                m = pat.match(message)
+                if m:
+                    name = m.group("mod").strip("'\"")
+                    break
+        if name is None:
+            kept.append(d)
+        elif name not in missing:
+            missing.append(name)
+    return kept, missing
+
+
 def resolve_engine(engine: str = "auto") -> Dict[str, Any]:
     """Pick the engine to run. Honest failure when an explicit choice is missing."""
     engine = (engine or "auto").lower()
@@ -137,8 +183,14 @@ def _run(cmd: List[str], cwd: str, timeout: int) -> Dict[str, Any]:
             proc.kill()
 
 
-def run_linter(verilog_files, cwd=None, timeout=30, engine="auto"):
+def run_linter(verilog_files, cwd=None, timeout=30, engine="auto", file_scoped=False):
     """Lint ``verilog_files`` with the chosen engine.
+
+    ``file_scoped=True``: the caller knows this file set deliberately omits
+    design files (see the module docstring) — unresolved-module errors are
+    reported as a note instead of a failure. Off by default, so the agent /
+    MCP path (which chooses its own file set and is told to include the
+    dependencies) keeps today's behavior exactly.
 
     Returns the structured contract documented in the module docstring. The
     legacy keys (success/stdout/stderr/command) are preserved so existing
@@ -156,6 +208,7 @@ def run_linter(verilog_files, cwd=None, timeout=30, engine="auto"):
             "command": f"lint --engine {engine}",
             "engine": None,
             "diagnostics": [{"file": None, "line": None, "severity": "error", "message": resolved["error"], "code": "ENGINE"}],
+            "notes": [],
         }
     eng = resolved["engine"]
 
@@ -185,12 +238,27 @@ def run_linter(verilog_files, cwd=None, timeout=30, engine="auto"):
         raw = _run(cmd, cwd, timeout)
         diagnostics = parse_iverilog_diagnostics(raw["stderr"], cwd)
 
+    notes: List[str] = []
+    if file_scoped:
+        diagnostics, missing = split_unresolved_module_diagnostics(diagnostics)
+        if missing:
+            notes.append(
+                "File-scoped lint: "
+                + ", ".join(missing)
+                + " instantiated but not in the linted file set — external modules were not "
+                "elaborated. Lint the whole design to check them."
+            )
+
     has_errors = any(d["severity"] == "error" for d in diagnostics)
+    # The engine's exit code counted the errors we just explained away, so a
+    # file-scoped run that dropped some of them judges itself on what is LEFT.
+    exit_ok = raw["returncode"] == 0 or bool(notes)
     return {
-        "success": raw["returncode"] == 0 and not has_errors,
+        "success": exit_ok and not has_errors,
         "stdout": raw["stdout"],
         "stderr": raw["stderr"],
         "command": raw["command"],
         "engine": eng,
         "diagnostics": diagnostics,
+        "notes": notes,
     }
