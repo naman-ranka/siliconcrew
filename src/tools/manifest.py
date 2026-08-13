@@ -116,6 +116,13 @@ class DesignManifest(BaseModel):
     # (files AND directories), e.g. "vendor/**" or "vendor". Matching files are
     # excluded from the scan; matching directories are pruned entirely.
     ignore: List[str] = Field(default_factory=list)
+    # User/agent-editable, free-entry: the stdout substring that marks a passing
+    # simulation for THIS design (e.g. "TEST_PASS"). A design's pass criterion
+    # is a property of the design, not of the invocation (dev#44) — so it lives
+    # here rather than being a per-call argument each caller must remember.
+    # Empty means "no design-specific marker": simulation falls back to its
+    # default ("TEST PASSED"). An explicit per-call pass_marker still wins.
+    passMarker: str = ""
     # DERIVED, never user-maintained: one entry per role=="tb" file as
     # {"file": <workspace-relative path>, "module": <TB top module name>}.
     # Recomputed on every read/reconcile — any user edit is overwritten.
@@ -812,7 +819,7 @@ def _manifest_from_raw(raw: Dict[str, Any]) -> tuple[DesignManifest, bool]:
     """
     manifest = DesignManifest()
     manifest.files, coerced = _coerce_files(raw.get("files"))
-    for key in ("sessionId", "synthTop", "simTop", "platform", "topsInferredFingerprint"):
+    for key in ("sessionId", "synthTop", "simTop", "platform", "passMarker", "topsInferredFingerprint"):
         value = raw.get(key)
         if isinstance(value, str):
             setattr(manifest, key, value)
@@ -848,6 +855,18 @@ def stored_ignore(workspace: str) -> List[str]:
     if not isinstance(ignore, list):
         return []
     return [p for p in ignore if isinstance(p, str) and p]
+
+
+def stored_pass_marker(workspace: str) -> str:
+    """The persisted ``passMarker``, WITHOUT a reconcile.
+
+    Same rationale as :func:`stored_ignore`: the simulation runner needs one
+    string, not a rescan of the workspace. Returns "" when no manifest exists
+    or no marker is set — the caller falls back to its default.
+    """
+    raw = _load_raw(workspace)
+    marker = raw.get("passMarker") if isinstance(raw, dict) else None
+    return marker if isinstance(marker, str) else ""
 
 
 def _persist(workspace: str, manifest: DesignManifest) -> None:
@@ -1009,6 +1028,11 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
     for key in ("synthTop", "simTop", "platform", "sessionId"):
         if key in updates and isinstance(updates[key], str) and updates[key]:
             setattr(current, key, updates[key])
+    # passMarker accepts the empty string on purpose: clearing it means "back
+    # to the simulation default", which is a legitimate edit (unlike blanking
+    # a top, which would just be re-inferred).
+    if "passMarker" in updates and isinstance(updates["passMarker"], str):
+        current.passMarker = updates["passMarker"]
     if "clockPeriodNs" in updates:
         try:
             current.clockPeriodNs = float(updates["clockPeriodNs"])

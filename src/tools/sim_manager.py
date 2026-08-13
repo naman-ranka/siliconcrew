@@ -22,7 +22,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from src.tools.run_simulation import run_simulation
+from src.tools.run_simulation import resolve_pass_marker, run_simulation
 
 RUNS_DIRNAME = "sim_runs"
 INDEX_FILENAME = "index.json"
@@ -297,7 +297,9 @@ def run_sim_isolated(
     netlist_file: Optional[str] = None,
     platform: Optional[str] = None,
     sim_profile: str = "auto",
-    pass_marker: str = "TEST PASSED",
+    # None/"" = resolve from the manifest's passMarker, then the default.
+    # An explicit marker still wins (dev#44 precedence chain).
+    pass_marker: Optional[str] = None,
     timeout: int = 60,
     parent_run_id: Optional[str] = None,
     _runner=run_simulation,
@@ -353,6 +355,12 @@ def run_sim_isolated(
         stdcell_source = resolution.stdcell_source
         forward_run_id = None  # already resolved; don't re-resolve under cwd
 
+    # Resolve the marker HERE, against the real workspace: the runner executes
+    # with cwd=run_dir (no manifest there), and the runner contract does not
+    # carry `workspace` — so run_simulation's own fallback would look in the
+    # wrong directory. Explicit arg > manifest passMarker > default (dev#44).
+    pass_marker = resolve_pass_marker(pass_marker, workspace)
+
     # Runtime data ($readmem*) must be in place BEFORE the run — vvp's cwd is
     # the run dir, not the workspace.
     staged_data = _stage_data_files(workspace, run_dir)
@@ -398,8 +406,11 @@ def run_sim_isolated(
         "vcdPath": vcd_rel,
         # Evidence: exactly which data files this run could see, and where.
         "stagedDataFiles": staged_data,
+        # run_simulation reports the marker it actually grepped (post manifest/
+        # default resolution); the raw argument is only a fallback for legacy
+        # runners that predate the field. "" = honestly unknown, never a guess.
         "passMarkerFound": bool(sim_result.get("pass_marker_found")),
-        "passMarker": sim_result.get("pass_marker") or pass_marker,
+        "passMarker": sim_result.get("pass_marker") or pass_marker or "",
         "failure": failure,
         # Honest echo of what post-synth resolution actually ran (invariant #4):
         # which run, which gate netlist (workspace-relative), which stdcell set.

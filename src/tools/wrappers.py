@@ -209,7 +209,7 @@ def simulation_tool(
     netlist_file: str = None,
     platform: str = None,
     sim_profile: str = "auto",
-    pass_marker: str = "TEST PASSED",
+    pass_marker: str = "",
 ) -> str:
     """
     Runs RTL or post-synthesis simulation with strict status contracts.
@@ -221,7 +221,9 @@ def simulation_tool(
         netlist_file: Optional explicit netlist path.
         platform: Optional platform override for post-synth mode.
         sim_profile: 'auto' (default), 'pinned', or 'compat'. Auto selects 'compat' for ASAP7 post-synth.
-        pass_marker: Explicit pass marker required for test_passed status.
+        pass_marker: stdout substring required for test_passed status. Leave empty
+            to use the manifest's passMarker field (set it with update_manifest so
+            it matches what your testbench $displays), else "TEST PASSED".
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
@@ -270,7 +272,9 @@ def get_manifest() -> str:
 def update_manifest(updates_json: str) -> str:
     """
     Upserts manifest fields. Pass a JSON object with any of:
-    synthTop, simTop, clockPeriodNs, platform, or files: [{name, role}] to override roles.
+    synthTop, simTop, clockPeriodNs, platform, passMarker (the stdout substring
+    your testbench prints on success — simulations use it as their default pass
+    marker), or files: [{name, role}] to override roles.
     Roles: {roles}. An unknown role is rejected and nothing is written.
     """
     workspace = get_workspace_path()
@@ -320,7 +324,7 @@ def run_isolated_simulation(
     mode: str = "rtl",
     run_id: str = None,
     sim_profile: str = "auto",
-    pass_marker: str = "TEST PASSED",
+    pass_marker: str = "",
 ) -> str:
     """
     Runs a manifest-driven simulation in an isolated sim_runs/sim_NNNN/ directory
@@ -331,7 +335,9 @@ def run_isolated_simulation(
         mode: 'rtl' or 'post_synth'.
         run_id: optional synthesis run id for post_synth mode (resolves the netlist).
         sim_profile: 'auto' (default), 'pinned', or 'compat'.
-        pass_marker: explicit pass marker required for a passing status.
+        pass_marker: stdout substring required for a passing status. Leave empty
+            to use the manifest's passMarker field (set it with update_manifest so
+            it matches what your testbench $displays), else "TEST PASSED".
     """
     workspace = get_workspace_path()
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
