@@ -483,18 +483,28 @@ export const workbenchApi = {
       ...(body ? { body: JSON.stringify(body) } : {}),
     }),
 
+  // Returns the run PLUS any duplicate-module collision warnings the backend
+  // attached to the dispatch (sc#66: `manifestWarnings` — advisory only, they
+  // never alter the run result).
   simulate: (sessionId: string, body: { simTop?: string; mode?: string; runId?: string } = {}) =>
-    actionFetch<{ ok: true; run: RunSummary }>(`${ws(sessionId)}/simulate`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }).then((r) => r.run),
+    actionFetch<{ ok: true; run: RunSummary; manifestWarnings?: string[] }>(
+      `${ws(sessionId)}/simulate`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    ).then((r) => ({ run: r.run, manifestWarnings: r.manifestWarnings ?? [] })),
 
-  // Dispatch-only: returns the durable run key immediately (no job_id).
+  // Dispatch-only: returns the durable run key immediately (no job_id), plus
+  // the same advisory manifestWarnings as /simulate.
   synthesize: (sessionId: string, body: Record<string, unknown> = {}) =>
-    actionFetch<{ ok: true; runId: string; pollAfterSec?: number }>(`${ws(sessionId)}/synthesize`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    actionFetch<{ ok: true; runId: string; pollAfterSec?: number; manifestWarnings?: string[] }>(
+      `${ws(sessionId)}/synthesize`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      }
+    ),
 
   listRuns: (sessionId: string, kind: "all" | "sim" | "synth" = "all") =>
     actionFetch<{ ok: true; runs: RunSummary[] }>(`${ws(sessionId)}/runs?kind=${kind}`).then((r) => r.runs),

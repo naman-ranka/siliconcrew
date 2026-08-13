@@ -250,6 +250,25 @@ function errText(e: unknown): string {
   return String(e);
 }
 
+/** Advisory manifest warnings (sc#66: duplicate-module collisions) attached to
+ *  a sim/synth dispatch reply. Surfaced as warnings ONLY — one toast per
+ *  warning, never blocking and never changing the run's own pass/fail
+ *  narration (invariant 4: warnings render as warnings). */
+function notifyManifestWarnings(
+  store: ReturnType<typeof useStore.getState>,
+  warnings: string[] | undefined
+): void {
+  for (const w of warnings ?? []) {
+    store.pushToast({ kind: "info", title: "Manifest warning", detail: w });
+  }
+}
+
+/** "· N manifest warning(s)" suffix for activity summaries (empty when none). */
+function warningsSuffix(warnings: string[] | undefined): string {
+  const n = warnings?.length ?? 0;
+  return n > 0 ? ` · ${n} manifest warning${n === 1 ? "" : "s"}` : "";
+}
+
 /**
  * Run a command. `values` omitted → manifest-derived defaults (the ⌘K fast
  * path); the param modal passes explicit values. Results surface through the
@@ -312,7 +331,7 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
 
       case "sim": {
         const simTop = String(vals.simTop ?? "").trim();
-        const run = await workbenchApi.simulate(sessionId, {
+        const { run, manifestWarnings } = await workbenchApi.simulate(sessionId, {
           mode: String(vals.mode ?? "rtl"),
           // Empty = let the backend fall back to the manifest's default TB.
           ...(simTop ? { simTop } : {}),
@@ -321,9 +340,10 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
           status: run.status === "passed" ? "ok" : "error",
           runId: run.id,
           resultSummary:
-            run.status === "passed"
+            (run.status === "passed"
               ? `${run.id} passed`
-              : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`,
+              : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`) +
+            warningsSuffix(manifestWarnings),
         });
         ui.markUnread(sessionId, run.id);
         store.pushToast(
@@ -335,6 +355,7 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
                 detail: [run.id, run.failure?.firstFailureLine].filter(Boolean).join(" — ") || undefined,
               }
         );
+        notifyManifestWarnings(store, manifestWarnings);
         break;
       }
 
@@ -361,13 +382,18 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
                 maxStage: String(vals.maxStage ?? "finish"),
               });
         const { runId } = dispatch;
+        // /synthesize carries advisory manifestWarnings; /runs/{id}/retry does
+        // not (a PD retry reuses the source run's netlist — no compile set).
+        const manifestWarnings =
+          id === "synth" ? (dispatch as { manifestWarnings?: string[] }).manifestWarnings : undefined;
         inFlight.delete(id); // dispatched — a second job may now be queued
-        done({ runId, resultSummary: `${runId} dispatched` });
+        done({ runId, resultSummary: `${runId} dispatched${warningsSuffix(manifestWarnings)}` });
         store.pushToast({
           kind: "info",
           title: id === "synth" ? "Synthesis dispatched" : "P&R retry dispatched",
           detail: `run ${runId}`,
         });
+        notifyManifestWarnings(store, manifestWarnings);
         // Dispatch-only: the finally-block refresh() below pulls the run list
         // once so the new queued/running row appears. No polling — completion
         // reaches the runs slice via activity events / user Refresh / focus

@@ -179,13 +179,13 @@ describe("runCommand request bodies", () => {
   });
 
   it("sim sends the manifest-default simTop on the fast path", async () => {
-    vi.mocked(workbenchApi.simulate).mockResolvedValue(SIM_RUN);
+    vi.mocked(workbenchApi.simulate).mockResolvedValue({ run: SIM_RUN, manifestWarnings: [] });
     await runCommand("sim");
     expect(workbenchApi.simulate).toHaveBeenCalledWith("s1", { mode: "rtl", simTop: "cpu_tb" });
   });
 
   it("sim carries an overridden testbench (and omits an empty one)", async () => {
-    vi.mocked(workbenchApi.simulate).mockResolvedValue(SIM_RUN);
+    vi.mocked(workbenchApi.simulate).mockResolvedValue({ run: SIM_RUN, manifestWarnings: [] });
     await runCommand("sim", { simTop: "alu_tb" });
     expect(workbenchApi.simulate).toHaveBeenLastCalledWith("s1", {
       mode: "rtl",
@@ -248,5 +248,55 @@ describe("runCommand synth is dispatch-only", () => {
       maxStage: "finish",
     });
     expect(useStore.getState().toasts.some((t) => t.title === "P&R retry dispatched")).toBe(true);
+  });
+});
+
+// ---- manifestWarnings surfacing (sc#66: the remaining frontend hop) --------------
+
+describe("runCommand surfaces manifestWarnings", () => {
+  const WARNING =
+    "module 'GCN' is declared by both given/gcn.sv and solution/gcn.sv — " +
+    "ignore one (manifest `ignore` glob) or change its role.";
+
+  it("sim: warnings become toasts + an activity suffix, without altering the run result", async () => {
+    vi.mocked(workbenchApi.simulate).mockResolvedValue({
+      run: SIM_RUN, // still a PASSED run — warnings must not flip it
+      manifestWarnings: [WARNING],
+    });
+    await runCommand("sim");
+    const toasts = useStore.getState().toasts;
+    // The warning renders as a warning (its own toast, full remedy text)...
+    expect(toasts.some((t) => t.title === "Manifest warning" && t.detail === WARNING)).toBe(true);
+    // ...and the run's own narration is unchanged (passed stays passed).
+    expect(toasts.some((t) => t.kind === "success" && t.title === "Simulation passed")).toBe(true);
+    const locals = useStore.getState().activity.localEvents;
+    const ev = locals.find((e) => e.runId === "sim_0001" && e.status === "ok");
+    expect(ev?.resultSummary).toBe("sim_0001 passed · 1 manifest warning");
+  });
+
+  it("synth: dispatch replies carry warnings too", async () => {
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue({
+      ok: true,
+      runId: "synth_0001",
+      pollAfterSec: 5,
+      manifestWarnings: [WARNING],
+    });
+    await runCommand("synth");
+    const toasts = useStore.getState().toasts;
+    expect(toasts.some((t) => t.title === "Manifest warning" && t.detail === WARNING)).toBe(true);
+    // The dispatch itself still reads as a dispatch, not a failure.
+    expect(toasts.some((t) => t.title === "Synthesis dispatched")).toBe(true);
+    const locals = useStore.getState().activity.localEvents;
+    expect(
+      locals.some((e) => e.resultSummary === "synth_0001 dispatched · 1 manifest warning")
+    ).toBe(true);
+  });
+
+  it("no warnings → no warning toast, no suffix", async () => {
+    vi.mocked(workbenchApi.simulate).mockResolvedValue({ run: SIM_RUN, manifestWarnings: [] });
+    await runCommand("sim");
+    expect(useStore.getState().toasts.some((t) => t.title === "Manifest warning")).toBe(false);
+    const locals = useStore.getState().activity.localEvents;
+    expect(locals.some((e) => e.resultSummary === "sim_0001 passed")).toBe(true);
   });
 });
