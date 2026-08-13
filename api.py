@@ -1721,20 +1721,67 @@ def _friendly_agent_error(exc: BaseException, key_source: Optional[str] = None) 
     return text
 
 
+# How long a freshly-accepted chat WebSocket may sit silent before we close it
+# unauthenticated. Clients send the auth frame immediately on open, so 10s is
+# generous headroom for slow networks without holding unauthenticated sockets.
+WS_AUTH_TIMEOUT_SEC = 10.0
+
+# "No replayed handshake frame" marker for the chat WS main loop — distinct
+# from None because a legacy client's first frame can be literal JSON null.
+_WS_NO_FRAME = object()
+
+
 @app.websocket("/api/chat/{session_id:path}")
 async def chat_websocket(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for streaming chat."""
     await websocket.accept()
 
-    # Authenticate the connection. Browsers can't set headers on a WebSocket, so
-    # the token rides a query param (?token=...). Self-host needs none (local
-    # trusted user); hosted verifies the OAuth token or grants an anonymous trial.
-    token = websocket.query_params.get("token")
+    # Authenticate the connection (naman-ranka/siliconcrew-dev#59). Browsers
+    # can't set headers on a WebSocket, so the token arrives as the FIRST frame:
+    # {"type": "auth", "token": "..."} — never in the URL, where Cloud Run
+    # would log it verbatim. The client must send that frame (token null in
+    # self-host / signed-out) within WS_AUTH_TIMEOUT_SEC of connecting; the
+    # frontend sends it immediately on open, before the first chat message.
+    # Self-host needs no token (local trusted user); hosted verifies the OAuth
+    # token or grants an anonymous trial — validation is unchanged from the
+    # old query-param path.
+    #
+    # DEPRECATED fallback (#59): a first frame that is NOT an auth frame is an
+    # old client mid-deploy — authenticate it from the legacy ?token= query
+    # param and replay the frame as its first chat message. Remove this branch
+    # (and the query-param read) one release after the handshake ships.
+    # Sentinel (not None): a replayed frame can legitimately BE null JSON, and
+    # it must reach the main loop's shape check rather than vanish.
+    pending_frame = _WS_NO_FRAME
+    try:
+        first = await asyncio.wait_for(
+            websocket.receive_json(), timeout=WS_AUTH_TIMEOUT_SEC
+        )
+    except asyncio.TimeoutError:
+        await websocket.close(code=1008, reason="Auth handshake timeout")
+        return
+    except WebSocketDisconnect:
+        return
+    except (ValueError, KeyError):
+        # A malformed first frame — non-JSON text (json.JSONDecodeError is a
+        # ValueError) or a binary frame (starlette's receive_json raises
+        # KeyError('text')) — must be a controlled close, not an unhandled
+        # ASGI exception: this runs BEFORE auth, so any unauthenticated
+        # client could otherwise trigger server tracebacks at will.
+        await websocket.close(code=1008, reason="Invalid handshake frame")
+        return
+
+    if isinstance(first, dict) and first.get("type") == "auth":
+        token = first.get("token") or None
+    else:
+        token = websocket.query_params.get("token")
+        pending_frame = first
+
     try:
         identity = auth_engine.authenticate(token, session_hint=session_id)
     except AuthError as e:
         await websocket.send_json({"type": "error", "error": e.message, "code": e.code})
-        await websocket.close()
+        await websocket.close(code=1008, reason="Authentication failed")
         return
     uid = _uid(identity)
 
@@ -1773,11 +1820,23 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
 
     try:
         while True:
-            # Receive message from client
-            data = await websocket.receive_json()
+            # Receive message from client. A frame replayed from the legacy
+            # (no-auth-frame) handshake above is consumed first.
+            if pending_frame is not _WS_NO_FRAME:
+                data, pending_frame = pending_frame, _WS_NO_FRAME
+            else:
+                data = await websocket.receive_json()
 
             # A late `stop` after the turn already ended is a no-op, not an error.
             if isinstance(data, dict) and data.get("type") == "stop":
+                continue
+
+            # Valid JSON that isn't an object (string/number/list/null) has no
+            # message shape — reject it honestly instead of AttributeError-ing.
+            if not isinstance(data, dict):
+                await websocket.send_json(
+                    {"type": "error", "error": "Expected a JSON object message"}
+                )
                 continue
 
             message = data.get("message", "")

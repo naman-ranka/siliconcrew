@@ -319,6 +319,9 @@ export interface SynthJobStatus {
   stageHistory?: { stage: string; status: string; ended_at?: string | null }[];
   dispatchedAt?: string | null;
   lastLogLines?: string[];
+  /** Backend provenance of the tail: "final", "none", or a staleness-labeled
+   *  "partial (updated Ns ago)" — rendered verbatim (honest state). */
+  lastLogSource?: string | null;
   elapsedSec?: number | null;
   checkNotes?: string | null;
   backend?: string | null;

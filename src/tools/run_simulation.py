@@ -10,6 +10,22 @@ from src.tools.stdcells import get_asap7_compat_model_files, resolve_stdcell_mod
 PASS_MARKER_DEFAULT = "TEST PASSED"
 
 
+def resolve_pass_marker(explicit: Optional[str], workspace: str) -> str:
+    """Precedence: explicit per-call marker > manifest ``passMarker`` > default.
+
+    A design's pass criterion is a property of the design (manifest, invariant
+    1), not of the invocation — the per-call argument silently disagreeing
+    with what agent testbenches actually print ("TEST_PASS" vs "TEST PASSED")
+    turned genuine passes into reported failures (dev#44). The manifest read
+    is the raw stored field (no reconcile) — one string, not a rescan.
+    """
+    if explicit:
+        return explicit
+    from src.tools.manifest import stored_pass_marker
+
+    return stored_pass_marker(workspace) or PASS_MARKER_DEFAULT
+
+
 def _is_stdcell_cache_error(exc: Exception) -> bool:
     msg = str(exc or "")
     return ("Standard-cell cache missing" in msg) or ("No stdcell model files found" in msg)
@@ -361,7 +377,7 @@ def run_simulation(
     netlist_file: Optional[str] = None,
     platform: Optional[str] = None,
     sim_profile: str = "auto",
-    pass_marker: str = PASS_MARKER_DEFAULT,
+    pass_marker: Optional[str] = None,
     max_lines_per_stream: int = 40,
     max_chars_per_stream: int = 4000,
     workspace: Optional[str] = None,
@@ -386,11 +402,24 @@ def run_simulation(
     ``log_path``, when given, receives the full compile + run streams (this is
     the only place that holds them un-truncated). Early returns that never
     reach the toolchain write nothing there.
+
+    ``pass_marker`` left unset (None/"") resolves to the manifest's
+    ``passMarker`` field, then to ``PASS_MARKER_DEFAULT`` — see
+    :func:`resolve_pass_marker`. The result always carries the marker that
+    was actually grepped.
     """
     if cwd is None:
         cwd = os.getcwd()
     if workspace is None:
         workspace = cwd
+
+    # Explicit arg > manifest passMarker > PASS_MARKER_DEFAULT. Resolved here,
+    # at the single runner every surface funnels through (agent tool, MCP,
+    # REST /invoke, the IDE's Simulate action), so no caller can drift.
+    # run_sim_isolated resolves BEFORE calling (its exec cwd is the run dir,
+    # not the workspace, and its runner contract doesn't carry `workspace`) —
+    # re-resolving an already-explicit marker here is a no-op.
+    pass_marker = resolve_pass_marker(pass_marker, workspace)
 
     verilog_files = verilog_files or []
     compile_files = [os.path.abspath(p) for p in verilog_files]

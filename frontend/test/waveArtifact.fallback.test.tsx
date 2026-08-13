@@ -59,3 +59,72 @@ describe("WaveArtifact fallback for a cleaned-up run (#7)", () => {
     expect(screen.getByText(/isn't in the run list/)).toBeInTheDocument();
   });
 });
+
+// dev#51 (3): the no-VCD hint must diagnose the actual cause — a run whose
+// compile failed never ran iverilog, so "add $dumpvars" was a misdiagnosis.
+describe("WaveArtifact no-VCD hint branches on the run's failure", () => {
+  const baseRun = {
+    kind: "sim",
+    createdAt: null,
+    top: "sync_fifo_tb",
+    pinned: false,
+    vcdPath: "",
+  };
+
+  it("compile_failed → names the compile failure, never suggests $dumpvars", () => {
+    useStore.setState({
+      runs: [
+        {
+          ...baseRun,
+          id: "sim_0100",
+          status: "failed",
+          failure: { type: "compile_failed", firstFailureLine: null, timeNs: null },
+        },
+      ] as any,
+    });
+    render(<WaveArtifact runId="sim_0100" />);
+    expect(screen.getByText(/Compilation failed — the simulation never ran/)).toBeInTheDocument();
+    expect(screen.queryByText(/\$dumpvars/)).toBeNull();
+  });
+
+  it("sim crash → names the failure type and first failure line", () => {
+    useStore.setState({
+      runs: [
+        {
+          ...baseRun,
+          id: "sim_0101",
+          status: "failed",
+          failure: { type: "sim_failed", firstFailureLine: "vvp: fatal at 120ns", timeNs: 120 },
+        },
+      ] as any,
+    });
+    render(<WaveArtifact runId="sim_0101" />);
+    expect(
+      screen.getByText(/failed before producing a waveform \(sim_failed\) — vvp: fatal at 120ns/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/\$dumpvars/)).toBeNull();
+  });
+
+  it("a completed run with no dump keeps the genuine $dumpvars hint", () => {
+    useStore.setState({
+      runs: [{ ...baseRun, id: "sim_0102", status: "passed", failure: null }] as any,
+    });
+    render(<WaveArtifact runId="sim_0102" />);
+    expect(screen.getByText(/add \$dumpvars to the testbench/)).toBeInTheDocument();
+  });
+
+  it("test_failed also gets the $dumpvars hint — the sim DID run to its assertion", () => {
+    useStore.setState({
+      runs: [
+        {
+          ...baseRun,
+          id: "sim_0103",
+          status: "failed",
+          failure: { type: "test_failed", firstFailureLine: "FAIL: y=1", timeNs: 40 },
+        },
+      ] as any,
+    });
+    render(<WaveArtifact runId="sim_0103" />);
+    expect(screen.getByText(/add \$dumpvars to the testbench/)).toBeInTheDocument();
+  });
+});

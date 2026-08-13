@@ -17,6 +17,7 @@ user/agent overridable via :func:`write_manifest`.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import logging
 import os
@@ -115,6 +116,13 @@ class DesignManifest(BaseModel):
     # (files AND directories), e.g. "vendor/**" or "vendor". Matching files are
     # excluded from the scan; matching directories are pruned entirely.
     ignore: List[str] = Field(default_factory=list)
+    # User/agent-editable, free-entry: the stdout substring that marks a passing
+    # simulation for THIS design (e.g. "TEST_PASS"). A design's pass criterion
+    # is a property of the design, not of the invocation (dev#44) — so it lives
+    # here rather than being a per-call argument each caller must remember.
+    # Empty means "no design-specific marker": simulation falls back to its
+    # default ("TEST PASSED"). An explicit per-call pass_marker still wins.
+    passMarker: str = ""
     # DERIVED, never user-maintained: one entry per role=="tb" file as
     # {"file": <workspace-relative path>, "module": <TB top module name>}.
     # Recomputed on every read/reconcile — any user edit is overwritten.
@@ -125,6 +133,13 @@ class DesignManifest(BaseModel):
     # the manifest can see (today: duplicate module declarations). Recomputed on
     # every read/reconcile — any user edit is overwritten.
     warnings: List[str] = Field(default_factory=list)
+    # DERIVED, never user-maintained: digest of the design-file scan fingerprint
+    # (see _scan_fingerprint) at the last time _infer_tops ran. This is what
+    # tells "inferred: none found" apart from "not yet inferred" — without it,
+    # a workspace whose simTop is legitimately empty (no testbench) re-ran the
+    # full inference on EVERY read (sc#81). Not a source of truth: losing the
+    # field (hand edit, older writer) costs exactly one re-inference.
+    topsInferredFingerprint: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -414,8 +429,30 @@ def _scan_fingerprint(workspace: str, files: List[DesignFile]) -> tuple:
     return tuple(sorted(out))
 
 
+def _fingerprint_digest(fingerprint: tuple, files: List[DesignFile]) -> str:
+    """Compact, persistable form of the tops-inference input.
+
+    The raw fingerprint is one stat tuple per design file — persisting it
+    verbatim would bloat manifest.json linearly with the file count. The digest
+    is derived metadata only ever compared for equality, so a hash loses
+    nothing. Reuses THE fingerprint (ctime/inode terms included), so it stays
+    safe against ``shutil.copy2``'s preserved mtimes — no second fingerprint.
+
+    Roles are digested ALONGSIDE the stat fingerprint: fixing a misclassified
+    file via ``write_manifest`` (rtl -> tb) changes what inference would
+    conclude without touching a single stat, so a stat-only marker left simTop
+    stale forever (sc#81 follow-up). Including every file's (path, role) costs
+    exactly one re-inference per role edit — the honest price.
+    """
+    payload = (fingerprint, tuple(sorted((f.path, f.role) for f in files)))
+    return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+
+
 def _scan_design_files(
-    workspace: str, files: List[DesignFile], texts: Optional[Dict[str, str]] = None
+    workspace: str,
+    files: List[DesignFile],
+    texts: Optional[Dict[str, str]] = None,
+    fingerprint: Optional[tuple] = None,
 ) -> Dict[str, _FileScan]:
     """ONE pass over the rtl/tb text per reconcile, keyed by workspace-relative path.
 
@@ -424,9 +461,13 @@ def _scan_design_files(
     reconcile cost a multiple of the file count for no new information.
 
     ``texts`` lets a caller that has ALREADY read a file (role derivation) hand
-    the stripped text over instead of paying for a second read.
+    the stripped text over instead of paying for a second read. ``fingerprint``
+    does the same for a caller that already computed the scan fingerprint —
+    the stat sweep is cheap but not free, and reconcile needs the fingerprint
+    anyway for the inference marker.
     """
-    fingerprint = _scan_fingerprint(workspace, files)
+    if fingerprint is None:
+        fingerprint = _scan_fingerprint(workspace, files)
     cached = _SCAN_CACHE.get(workspace)
     if cached is not None and cached[0] == fingerprint:
         return cached[1]
@@ -706,7 +747,8 @@ def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
         texts[rel] = text  # hand it to the sweep instead of reading twice
         files.append(DesignFile(name=os.path.basename(rel), role=derive_role(rel, text), path=rel))
 
-    scans = _scan_design_files(workspace, files, texts=texts)
+    fingerprint = _scan_fingerprint(workspace, files)
+    scans = _scan_design_files(workspace, files, texts=texts, fingerprint=fingerprint)
     synth_top, sim_top = _infer_tops(files, scans)
     clock = _spec_clock_period(workspace) or 10.0
     return DesignManifest(
@@ -718,6 +760,7 @@ def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
         platform="sky130hd",
         testbenches=_derive_testbenches(files, scans),
         warnings=_collision_warnings(scans, _roles_by_path(files)),
+        topsInferredFingerprint=_fingerprint_digest(fingerprint, files),
     )
 
 
@@ -783,7 +826,7 @@ def _manifest_from_raw(raw: Dict[str, Any]) -> tuple[DesignManifest, bool]:
     """
     manifest = DesignManifest()
     manifest.files, coerced = _coerce_files(raw.get("files"))
-    for key in ("sessionId", "synthTop", "simTop", "platform"):
+    for key in ("sessionId", "synthTop", "simTop", "platform", "passMarker", "topsInferredFingerprint"):
         value = raw.get(key)
         if isinstance(value, str):
             setattr(manifest, key, value)
@@ -821,6 +864,18 @@ def stored_ignore(workspace: str) -> List[str]:
     return [p for p in ignore if isinstance(p, str) and p]
 
 
+def stored_pass_marker(workspace: str) -> str:
+    """The persisted ``passMarker``, WITHOUT a reconcile.
+
+    Same rationale as :func:`stored_ignore`: the simulation runner needs one
+    string, not a rescan of the workspace. Returns "" when no manifest exists
+    or no marker is set — the caller falls back to its default.
+    """
+    raw = _load_raw(workspace)
+    marker = raw.get("passMarker") if isinstance(raw, dict) else None
+    return marker if isinstance(marker, str) else ""
+
+
 def _persist(workspace: str, manifest: DesignManifest) -> None:
     os.makedirs(workspace, exist_ok=True)
     with open(_manifest_path(workspace), "w", encoding="utf-8") as f:
@@ -852,11 +907,21 @@ def _reconcile(workspace: str, stored: DesignManifest) -> DesignManifest:
 
     stored.files = merged
 
-    scans = _scan_design_files(workspace, merged, texts=texts)
+    fingerprint = _scan_fingerprint(workspace, merged)
+    scans = _scan_design_files(workspace, merged, texts=texts, fingerprint=fingerprint)
     if not stored.synthTop or not stored.simTop:
-        synth_top, sim_top = _infer_tops(merged, scans)
-        stored.synthTop = stored.synthTop or synth_top
-        stored.simTop = stored.simTop or sim_top
+        # A top may be EMPTY because inference already ran and found nothing
+        # (e.g. no testbench -> simTop stays ""). The persisted marker tells
+        # that apart from "not yet inferred": re-infer only when the design
+        # file set — content stats OR roles — actually changed since inference
+        # last ran (sc#81). A user-set top is never overwritten either way
+        # (`or` keeps it).
+        digest = _fingerprint_digest(fingerprint, merged)
+        if stored.topsInferredFingerprint != digest:
+            synth_top, sim_top = _infer_tops(merged, scans)
+            stored.synthTop = stored.synthTop or synth_top
+            stored.simTop = stored.simTop or sim_top
+            stored.topsInferredFingerprint = digest
     stored.testbenches = _derive_testbenches(merged, scans)
     stored.warnings = _collision_warnings(scans, _roles_by_path(merged))
     return stored
@@ -971,6 +1036,11 @@ def write_manifest(workspace: str, updates: Dict[str, Any], session_id: str = ""
     for key in ("synthTop", "simTop", "platform", "sessionId"):
         if key in updates and isinstance(updates[key], str) and updates[key]:
             setattr(current, key, updates[key])
+    # passMarker accepts the empty string on purpose: clearing it means "back
+    # to the simulation default", which is a legitimate edit (unlike blanking
+    # a top, which would just be re-inferred).
+    if "passMarker" in updates and isinstance(updates["passMarker"], str):
+        current.passMarker = updates["passMarker"]
     if "clockPeriodNs" in updates:
         try:
             current.clockPeriodNs = float(updates["clockPeriodNs"])

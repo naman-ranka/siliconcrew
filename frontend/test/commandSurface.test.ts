@@ -14,6 +14,12 @@ vi.mock("@/lib/api", () => ({
     getManifest: vi.fn(),
     getToolCatalog: vi.fn(),
     getActivity: vi.fn().mockResolvedValue({ ok: true, events: [], nextBefore: null }),
+    // Core-command engine deps (runSurfaceCommand now AWAITS runCommand).
+    lint: vi.fn(),
+    simulate: vi.fn(),
+    synthesize: vi.fn(),
+    retryRun: vi.fn(),
+    listRuns: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -314,11 +320,78 @@ describe("runSurfaceCommand", () => {
     expect(workbenchApi.updateManifest).not.toHaveBeenCalled();
   });
 
-  it("core commands delegate to runCommand and return null (Activity/Runs observe them)", async () => {
-    // lint is core: no /invoke call, nothing to render inline.
+  // dev#51 (1): core commands are AWAITED — the Surface's spinner and result
+  // pane reflect what actually happened instead of a detached void promise.
+
+  it("core sync commands are awaited and return their real completion inline", async () => {
+    vi.mocked(workbenchApi.lint).mockResolvedValue({
+      ok: true,
+      status: "passed",
+      warnings: [],
+      errors: [],
+      byFile: {},
+      command: "verilator --lint-only -Wall alu.v",
+      files: ["alu.v"],
+      engine: "verilator",
+    } as never);
     const res = await runSurfaceCommand(CORE_SURFACE_COMMANDS[0], {});
-    expect(res).toBeNull();
+    // lint is core: no /invoke call — but the outcome IS rendered inline now.
     expect(workbenchApi.invokeTool).not.toHaveBeenCalled();
+    expect(res).toEqual({ ok: true, result: "passed (verilator) · 0 error(s), 0 warning(s)" });
+  });
+
+  it("core command failures surface inline as ok:false (never silent)", async () => {
+    vi.mocked(workbenchApi.lint).mockRejectedValue(new Error("HTTP 500 — lint backend down"));
+    const res = await runSurfaceCommand(CORE_SURFACE_COMMANDS[0], {});
+    expect(res).toEqual({ ok: false, result: "HTTP 500 — lint backend down" });
+  });
+
+  it("async core dispatch success returns null — the 'Dispatched' note is now truthful", async () => {
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue({
+      ok: true,
+      runId: "synth_0009",
+      pollAfterSec: 5,
+    } as never);
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    const res = await runSurfaceCommand(synth, {});
+    expect(workbenchApi.synthesize).toHaveBeenCalled(); // resolved BEFORE returning
+    expect(res).toBeNull();
+  });
+
+  it("async core dispatch failure surfaces inline instead of a false 'Dispatched'", async () => {
+    vi.mocked(workbenchApi.synthesize).mockRejectedValue(new Error("Quota exceeded."));
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    const res = await runSurfaceCommand(synth, {});
+    expect(res).toEqual({ ok: false, result: "Quota exceeded." });
+  });
+
+  // dev#51 (follow-up): runCommand's nothing-ran cases used to come back as
+  // the SAME null as a successful async dispatch, so the Surface rendered
+  // "Dispatched — follow it in Activity/Runs" when nothing was dispatched.
+
+  it("duplicate in-flight core command reports honestly, never a false 'Dispatched'", async () => {
+    let resolveSim!: (v: unknown) => void;
+    vi.mocked(workbenchApi.simulate).mockReturnValue(
+      new Promise((r) => { resolveSim = r; }) as never
+    );
+    const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
+    const first = runSurfaceCommand(sim, {}); // holds the in-flight guard
+    const second = await runSurfaceCommand(sim, {});
+    expect(second).not.toBeNull(); // null would render "Dispatched"
+    expect(second).toMatchObject({ ok: false });
+    expect(String(second!.result)).toMatch(/already running/i);
+    // Only ONE simulate call ever reached the backend.
+    expect(workbenchApi.simulate).toHaveBeenCalledTimes(1);
+    resolveSim({ run: { id: "sim_0001", status: "passed" }, manifestWarnings: [] });
+    await first;
+  });
+
+  it("no active session reports honestly instead of null", async () => {
+    useStore.setState({ currentSession: null as never });
+    const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
+    const res = await runSurfaceCommand(sim, {});
+    expect(res).toEqual({ ok: false, result: "No active session" });
+    expect(workbenchApi.simulate).not.toHaveBeenCalled();
   });
 });
 

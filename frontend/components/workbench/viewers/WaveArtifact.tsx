@@ -5,8 +5,32 @@ import { Activity } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { WaveformViewer } from "@/components/artifacts/WaveformViewer";
 import { cn } from "@/lib/utils";
-import type { WaveformData } from "@/types";
+import type { RunSummary, WaveformData } from "@/types";
 import { ViewerEmpty, ViewerError, ViewerSkeleton } from "./panels";
+
+/**
+ * Why THIS run has no waveform — branched on the run's recorded failure so the
+ * hint diagnoses the actual cause (dev#51 (3): a compile_failed run was told to
+ * "add $dumpvars" even though iverilog never ran). The $dumpvars hint is
+ * reserved for runs whose simulation actually executed to completion (passed,
+ * or test_failed — the assertion fired but the sim ran) yet dumped nothing.
+ */
+function noVcdDetail(run: RunSummary): string {
+  const failure = run.failure;
+  if (run.status === "failed" && failure?.type === "compile_failed") {
+    return (
+      "Compilation failed — the simulation never ran, so no VCD could exist. " +
+      "Fix the compile error (see this run in the Runs panel) and re-run."
+    );
+  }
+  if (run.status === "failed" && failure?.type && failure.type !== "test_failed") {
+    // sim_failed (runtime crash) or a typed resolution failure (e.g. post-synth
+    // netlist missing): name it honestly instead of guessing at $dumpvars.
+    const firstLine = failure.firstFailureLine ? ` — ${failure.firstFailureLine}` : "";
+    return `This run failed before producing a waveform (${failure.type})${firstLine}.`;
+  }
+  return "This run produced no VCD dump — add $dumpvars to the testbench and re-run.";
+}
 
 const STATUS_CHIP: Record<string, string> = {
   passed: "bg-status-pass/15 text-status-pass",
@@ -60,7 +84,7 @@ export function WaveArtifact({ runId }: { runId: string }) {
         title="No waveform for this run"
         detail={
           run
-            ? "This run produced no VCD dump — add $dumpvars to the testbench and re-run."
+            ? noVcdDetail(run)
             : `Run ${runId} isn't in the run list (it may have been cleaned up).`
         }
       />

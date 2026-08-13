@@ -210,6 +210,29 @@ export function manifestFacts(
   }
 }
 
+/**
+ * Values for running a command FROM a specific file (the explorer's context
+ * menu) — dev#51 (2): right-click → Simulate on a testbench must run THAT
+ * testbench, not silently fall back to the manifest default.
+ *
+ * Only mappings the REST contracts can honestly express are made: sim gets
+ * `simTop` when the clicked file is a known testbench (manifest.testbenches
+ * carries file → module). Lint/synth bodies have no per-file field — the
+ * backend re-resolves their sets from the manifest — so they pass nothing
+ * rather than a pretend argument the backend would ignore.
+ */
+export function commandValuesForFile(
+  id: CommandId,
+  path: string,
+  manifest: DesignManifest | null
+): CommandValues {
+  if (id === "sim") {
+    const tb = (manifest?.testbenches ?? []).find((t) => t.file === path);
+    if (tb?.module) return { simTop: tb.module };
+  }
+  return {};
+}
+
 /** Map an activity-feed tool name back to its command (for "Re-run"). */
 export function commandForTool(tool: string): CommandId | null {
   switch (tool) {
@@ -250,6 +273,40 @@ function errText(e: unknown): string {
   return String(e);
 }
 
+/** Advisory manifest warnings (sc#66: duplicate-module collisions) attached to
+ *  a sim/synth dispatch reply. Surfaced as warnings ONLY — one toast per
+ *  warning, never blocking and never changing the run's own pass/fail
+ *  narration (invariant 4: warnings render as warnings). */
+function notifyManifestWarnings(
+  store: ReturnType<typeof useStore.getState>,
+  warnings: string[] | undefined
+): void {
+  for (const w of warnings ?? []) {
+    store.pushToast({ kind: "info", title: "Manifest warning", detail: w });
+  }
+}
+
+/** "· N manifest warning(s)" suffix for activity summaries (empty when none). */
+function warningsSuffix(warnings: string[] | undefined): string {
+  const n = warnings?.length ?? 0;
+  return n > 0 ? ` · ${n} manifest warning${n === 1 ? "" : "s"}` : "";
+}
+
+/** What a runCommand call amounted to — mirrored back to callers (the Command
+ *  Surface) so their own chrome (spinner, result pane) can be truthful. The
+ *  nothing-ran cases (no session, duplicate while in flight) return `ok:false`
+ *  with `ran:false` — never `null`, which callers used to conflate with a
+ *  successful async dispatch (dev#51). */
+export interface CommandOutcome {
+  ok: boolean;
+  /** The same one-liner recorded on the local activity event. */
+  summary: string;
+  runId: string | null;
+  /** False when nothing was executed at all (no session / duplicate in-flight)
+   *  — no activity event, no toast, nothing to follow in Activity/Runs. */
+  ran: boolean;
+}
+
 /**
  * Run a command. `values` omitted → manifest-derived defaults (the ⌘K fast
  * path); the param modal passes explicit values. Results surface through the
@@ -261,25 +318,50 @@ function errText(e: unknown): string {
 // through dispatch (queuing a second synth job behind a running one is valid).
 const inFlight = new Set<CommandId>();
 
-export async function runCommand(id: CommandId, values?: CommandValues): Promise<void> {
+export async function runCommand(
+  id: CommandId,
+  values?: CommandValues
+): Promise<CommandOutcome> {
   const store = useStore.getState();
   const session = store.currentSession;
-  if (!session) return;
-  if (inFlight.has(id)) return;
+  const cmd = COMMANDS[id];
+  // Nothing-ran guards return a distinguishable outcome instead of null
+  // (dev#51): callers that render "Dispatched" on a successful async dispatch
+  // must be able to tell these apart from one.
+  if (!session) {
+    return { ok: false, summary: "No active session", runId: null, ran: false };
+  }
+  if (inFlight.has(id)) {
+    return {
+      ok: false,
+      summary: `${cmd.label} is already running — wait for it to finish`,
+      runId: null,
+      ran: false,
+    };
+  }
   inFlight.add(id);
   const sessionId = session.id;
   const ui = useWorkbenchUiStore.getState();
-  const cmd = COMMANDS[id];
   const vals = { ...defaultValues(id, { manifest: store.manifest, runs: store.runs }), ...(values ?? {}) };
 
   const ev = localEvent(cmd.tool, vals);
   store.appendLocalActivity(ev);
-  const done = (patch: Partial<ActivityEvent>) =>
+  let outcome: CommandOutcome | null = null;
+  const done = (patch: Partial<ActivityEvent>) => {
+    // Every terminal narration doubles as the caller-visible outcome (dev#51:
+    // the Command Surface awaits this instead of fire-and-forgetting).
+    outcome = {
+      ok: patch.status !== "error",
+      summary: patch.resultSummary ?? "",
+      runId: patch.runId ?? null,
+      ran: true,
+    };
     useStore.getState().appendLocalActivity({
       ...ev,
       durationMs: Date.now() - new Date(ev.ts).getTime(),
       ...patch,
     });
+  };
   const refresh = () => {
     const s = useStore.getState();
     void s.loadActivity();
@@ -312,7 +394,7 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
 
       case "sim": {
         const simTop = String(vals.simTop ?? "").trim();
-        const run = await workbenchApi.simulate(sessionId, {
+        const { run, manifestWarnings } = await workbenchApi.simulate(sessionId, {
           mode: String(vals.mode ?? "rtl"),
           // Empty = let the backend fall back to the manifest's default TB.
           ...(simTop ? { simTop } : {}),
@@ -321,9 +403,10 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
           status: run.status === "passed" ? "ok" : "error",
           runId: run.id,
           resultSummary:
-            run.status === "passed"
+            (run.status === "passed"
               ? `${run.id} passed`
-              : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`,
+              : `${run.id} failed${run.failure?.timeNs != null ? ` @ ${run.failure.timeNs}ns` : ""}`) +
+            warningsSuffix(manifestWarnings),
         });
         ui.markUnread(sessionId, run.id);
         store.pushToast(
@@ -335,6 +418,7 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
                 detail: [run.id, run.failure?.firstFailureLine].filter(Boolean).join(" — ") || undefined,
               }
         );
+        notifyManifestWarnings(store, manifestWarnings);
         break;
       }
 
@@ -361,13 +445,18 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
                 maxStage: String(vals.maxStage ?? "finish"),
               });
         const { runId } = dispatch;
+        // /synthesize carries advisory manifestWarnings; /runs/{id}/retry does
+        // not (a PD retry reuses the source run's netlist — no compile set).
+        const manifestWarnings =
+          id === "synth" ? (dispatch as { manifestWarnings?: string[] }).manifestWarnings : undefined;
         inFlight.delete(id); // dispatched — a second job may now be queued
-        done({ runId, resultSummary: `${runId} dispatched` });
+        done({ runId, resultSummary: `${runId} dispatched${warningsSuffix(manifestWarnings)}` });
         store.pushToast({
           kind: "info",
           title: id === "synth" ? "Synthesis dispatched" : "P&R retry dispatched",
           detail: `run ${runId}`,
         });
+        notifyManifestWarnings(store, manifestWarnings);
         // Dispatch-only: the finally-block refresh() below pulls the run list
         // once so the new queued/running row appears. No polling — completion
         // reaches the runs slice via activity events / user Refresh / focus
@@ -383,4 +472,7 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
     inFlight.delete(id);
     refresh();
   }
+  // Every switch arm narrates through done() (the catch does too), so outcome
+  // is always set by here; the fallback only satisfies the type system.
+  return outcome ?? { ok: false, summary: "", runId: null, ran: false };
 }

@@ -527,15 +527,28 @@ class RTLDesignMCPServer:
         """
         if name == "rtl_design_workflow":
             session_id = arguments.get("session_id") if arguments else None
-            
-            # If no session provided, generate a new one
-            if not session_id:
-                import datetime
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                session_id = f"mcp_session_{timestamp}"
-            session_id = self.session_manager.ensure_session(
-                tag=session_id, model_name="claude-via-mcp", user_id=self._scoped_user_id()
-            )
+
+            # Bound-session isolation (naman-ranka/siliconcrew#77): mirror the
+            # call_tool guard. A bound server must never mint (or ensure) a
+            # session from a prompts/get — an explicit different session_id is
+            # refused exactly like call_tool refuses it, and no session_id
+            # defaults to the bound session, which the constructor already
+            # verified exists and is owned. Unbound behavior is unchanged.
+            if self.bound_session:
+                if session_id and session_id != self.bound_session:
+                    raise ValueError(
+                        f"Access denied; this server is bound to session '{self.bound_session}'."
+                    )
+                session_id = self.bound_session
+            else:
+                # If no session provided, generate a new one
+                if not session_id:
+                    import datetime
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    session_id = f"mcp_session_{timestamp}"
+                session_id = self.session_manager.ensure_session(
+                    tag=session_id, model_name="claude-via-mcp", user_id=self._scoped_user_id()
+                )
             
             workspace = self._workspace_path(session_id)
             

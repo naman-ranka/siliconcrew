@@ -22,7 +22,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from src.tools.run_simulation import run_simulation
+from src.tools.read_waveform import scan_vcd_for_x
+from src.tools.run_simulation import resolve_pass_marker, run_simulation
 
 RUNS_DIRNAME = "sim_runs"
 INDEX_FILENAME = "index.json"
@@ -266,6 +267,8 @@ def _persist_resolution_failure(
         "provenance": _provenance(platform),
         "mode": mode,
         "vcdPath": "",
+        "xDetected": None,  # nothing ran: no VCD, honestly unknown
+        "xScan": None,
         "stagedDataFiles": [],  # nothing ran, so nothing was staged
         "passMarkerFound": False,
         "passMarker": "",
@@ -297,7 +300,9 @@ def run_sim_isolated(
     netlist_file: Optional[str] = None,
     platform: Optional[str] = None,
     sim_profile: str = "auto",
-    pass_marker: str = "TEST PASSED",
+    # None/"" = resolve from the manifest's passMarker, then the default.
+    # An explicit marker still wins (dev#44 precedence chain).
+    pass_marker: Optional[str] = None,
     timeout: int = 60,
     parent_run_id: Optional[str] = None,
     _runner=run_simulation,
@@ -353,6 +358,12 @@ def run_sim_isolated(
         stdcell_source = resolution.stdcell_source
         forward_run_id = None  # already resolved; don't re-resolve under cwd
 
+    # Resolve the marker HERE, against the real workspace: the runner executes
+    # with cwd=run_dir (no manifest there), and the runner contract does not
+    # carry `workspace` — so run_simulation's own fallback would look in the
+    # wrong directory. Explicit arg > manifest passMarker > default (dev#44).
+    pass_marker = resolve_pass_marker(pass_marker, workspace)
+
     # Runtime data ($readmem*) must be in place BEFORE the run — vvp's cwd is
     # the run dir, not the workspace.
     staged_data = _stage_data_files(workspace, run_dir)
@@ -376,6 +387,23 @@ def run_sim_isolated(
     vcd_abs = _find_vcd(run_dir)
     vcd_rel = os.path.relpath(vcd_abs, workspace) if vcd_abs else ""
 
+    # X-propagation warning surface (dev#76): `x !== x` is FALSE, so a
+    # testbench comparing undefined values silently passes — the VCD is the
+    # one artifact that shows it. This NEVER changes the verdict (invariant 4:
+    # no ambiguous verdicts — the pass/fail stays what the testbench printed);
+    # it adds honest state beside it. No VCD -> fields stay None (unknown, not
+    # a fake false); oversized/unreadable VCDs report a "skipped" xScan status
+    # rather than pretending a full scan happened.
+    x_scan: Optional[Dict[str, Any]] = None
+    if vcd_abs:
+        try:
+            x_scan = scan_vcd_for_x(vcd_abs)
+        except Exception:
+            x_scan = {"status": "skipped (scan error)"}
+    x_detected: Optional[bool] = None
+    if x_scan is not None and x_scan.get("status") == "scanned":
+        x_detected = bool(x_scan.get("xDetected"))
+
     status = _to_run_status(sim_result.get("status", "compile_failed"))
     failure = None
     if status == "failed":
@@ -396,10 +424,17 @@ def run_sim_isolated(
         "provenance": _provenance(platform),
         "mode": mode,
         "vcdPath": vcd_rel,
+        # Warning surface, not a verdict: x/z seen in the VCD after t=0.
+        # None = no VCD (or scan skipped) — honestly unknown, never false.
+        "xDetected": x_detected,
+        "xScan": x_scan,
         # Evidence: exactly which data files this run could see, and where.
         "stagedDataFiles": staged_data,
+        # run_simulation reports the marker it actually grepped (post manifest/
+        # default resolution); the raw argument is only a fallback for legacy
+        # runners that predate the field. "" = honestly unknown, never a guess.
         "passMarkerFound": bool(sim_result.get("pass_marker_found")),
-        "passMarker": sim_result.get("pass_marker") or pass_marker,
+        "passMarker": sim_result.get("pass_marker") or pass_marker or "",
         "failure": failure,
         # Honest echo of what post-synth resolution actually ran (invariant #4):
         # which run, which gate netlist (workspace-relative), which stdcell set.
