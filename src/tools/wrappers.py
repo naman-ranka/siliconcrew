@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import time
 from typing import Any, Optional
 from langchain_core.tools import tool
@@ -28,6 +29,19 @@ from src.tools.file_patch import apply_unified_patch
 # sites in this file resolve the workspace via get_workspace_path().
 from src.utils.workspace import get_workspace_path, resolve_in_workspace
 from src.utils.session_context import current_session_id
+
+# ONE file-value resolution contract for every tool that takes a file name:
+# ws-relative path, basename, or basename-without-extension all resolve the
+# same way everywhere (manifest list first, then the workspace tree), with the
+# resolver's own is_within containment. See src/tools/file_resolver.py.
+from src.tools.file_resolver import (
+    FileResolutionError,
+    override_drop_notes,
+    resolve_workspace_file,
+    resolve_workspace_files,
+)
+
+_VERILOG_EXTS = (".v", ".sv")
 
 
 def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
@@ -174,12 +188,11 @@ def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
 
-    filepaths = []
-    for item in verilog_files:
-        fp = item if os.path.isabs(item) else os.path.join(workspace, item)
-        if not os.path.exists(fp):
-            return f"Error: File {item} does not exist."
-        filepaths.append(fp)
+    try:
+        rel_files = resolve_workspace_files(workspace, verilog_files, exts=_VERILOG_EXTS)
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    filepaths = [os.path.join(workspace, rel) for rel in rel_files]
 
     result = run_linter(filepaths, cwd=workspace, engine=engine)
 
@@ -227,13 +240,11 @@ def simulation_tool(
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
-    abs_files = []
-    for f in verilog_files or []:
-        abs_files.append(f if os.path.isabs(f) else os.path.join(workspace, f))
-
-    for f in abs_files:
-        if not os.path.exists(f):
-            return f"Error: File {f} does not exist."
+    try:
+        rel_files = resolve_workspace_files(workspace, verilog_files, exts=_VERILOG_EXTS)
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    abs_files = [os.path.join(workspace, rel) for rel in rel_files]
 
     abs_netlist = None
     if netlist_file:
@@ -390,12 +401,11 @@ def start_synthesis(
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
 
-    abs_files = []
-    for f in verilog_files:
-        abs_f = f if os.path.isabs(f) else os.path.join(workspace, f)
-        if not os.path.exists(abs_f):
-            return f"Error: File {f} does not exist."
-        abs_files.append(abs_f)
+    try:
+        rel_files = resolve_workspace_files(workspace, verilog_files, exts=_VERILOG_EXTS)
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    abs_files = [os.path.join(workspace, rel) for rel in rel_files]
 
     result = start_synthesis_job(
         workspace=workspace,
@@ -515,6 +525,32 @@ def wait_for_synthesis(run_id: str, max_wait_sec: int = 30, poll_interval_sec: i
 
 
 
+_SIM_RUN_ID_RE = re.compile(r"^sim_\d{4}$")
+
+
+def _resolve_vcd_arg(workspace: str, vcd_file: str) -> str:
+    """Resolve waveform_tool's vcd_file: a path/basename like any other file
+    value, OR a bare sim run id ('sim_0003') — resolved to that run's dump via
+    the sim-runs index (run dirs are excluded from the workspace tree scan, so
+    the generic resolver can't see them)."""
+    value = (vcd_file or "").strip()
+    if _SIM_RUN_ID_RE.match(value):
+        from src.tools.sim_manager import _find_vcd, get_sim_run_dir
+
+        run_dir = get_sim_run_dir(workspace, value)
+        if not run_dir:
+            raise FileResolutionError(
+                f"Sim run '{value}' does not exist in this workspace."
+            )
+        vcd_abs = _find_vcd(run_dir)
+        if not vcd_abs:
+            raise FileResolutionError(
+                f"Sim run '{value}' produced no VCD — nothing to read."
+            )
+        return os.path.relpath(vcd_abs, workspace).replace(os.sep, "/")
+    return resolve_workspace_file(workspace, value, exts=(".vcd",))
+
+
 @tool
 def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
                   end_time: Optional[int] = None) -> str:
@@ -522,14 +558,19 @@ def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
     Reads a VCD waveform file to inspect signal values.
     Use this when simulation fails to understand WHY.
     Args:
-        vcd_file: Name of the .vcd file (e.g., 'dump.vcd').
+        vcd_file: The .vcd file — a workspace-relative path or basename
+            (e.g., 'dump.vcd', 'sim_runs/sim_0003/counter_tb.vcd'), or a bare
+            sim run id (e.g., 'sim_0003') to read that run's dump.
         signals: List of signal names to inspect (e.g., ['clk', 'rst', 'count']).
         start_time: Start time to view.
         end_time: End time to view; omit to read to the end of the waveform.
     """
     workspace = get_workspace_path()
-    abs_file = os.path.join(workspace, vcd_file)
-    return read_waveform(abs_file, signals, start_time, end_time)
+    try:
+        rel = _resolve_vcd_arg(workspace, vcd_file)
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    return read_waveform(os.path.join(workspace, rel), signals, start_time, end_time)
 
 @tool
 def search_logs_tool(query: str, run_id: str = None) -> str:
@@ -775,8 +816,14 @@ def read_spec(spec_filename: str = None) -> str:
         The spec contents formatted for RTL implementation
     """
     workspace = get_workspace_path()
-    
+
     if spec_filename:
+        try:
+            spec_filename = resolve_workspace_file(
+                workspace, spec_filename, exts=(".yaml", ".yml")
+            )
+        except FileResolutionError as exc:
+            return f"Error: {exc}"
         spec_path = os.path.join(workspace, spec_filename)
     else:
         # Find most recent spec file
@@ -817,7 +864,11 @@ def load_yaml_spec_file(yaml_path: str) -> str:
         Parsed specification ready for implementation
     """
     workspace = get_workspace_path()
-    
+
+    # FENCED OUT of resolve_workspace_file (amendment A4): this tool's
+    # project-root fallback deliberately reads files OUTSIDE the workspace
+    # (bundled hackathon problems), which the resolver's containment would
+    # reject. Keep the historic lookup order: workspace, then project root.
     # Handle relative paths
     if not os.path.isabs(yaml_path):
         # Try workspace first
@@ -881,11 +932,12 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
         )
 
     workspace = get_workspace_path()
-    abs_file = os.path.join(workspace, verilog_file)
-    
-    if not os.path.exists(abs_file):
-        return f"Error: File {verilog_file} does not exist."
-        
+    try:
+        rel_file = resolve_workspace_file(workspace, verilog_file, exts=_VERILOG_EXTS)
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    abs_file = os.path.join(workspace, rel_file)
+
     result = generate_schematic(abs_file, top_module, cwd=workspace)
     
     if result["success"]:
@@ -948,7 +1000,14 @@ def build_interactive_sim(
     Returns the design's port list so you can wire dashboard widgets to real pins.
     """
     workspace = get_workspace_path()
-    files = _normalize_verilog_files_arg(verilog_files)
+    # Pre-resolution only — build_websim_netlist's own name/containment/existence
+    # validation still runs on the resolved workspace-relative paths.
+    try:
+        files = resolve_workspace_files(
+            workspace, _normalize_verilog_files_arg(verilog_files), exts=_VERILOG_EXTS
+        )
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
     result = build_websim_netlist(files, top_module, cwd=workspace, parameters=parameters)
 
     if not result["success"]:
@@ -1089,6 +1148,13 @@ def run_python_analysis(script_file: str, args: list[str] = None) -> str:
     workspace = get_workspace_path()
     from src.tools.run_python import run_python_analysis as _run_python, PythonAnalysisError
 
+    # Pre-resolution only (basename / no-ext convenience). run_python's own
+    # containment + not-found validation still runs on the resolved path.
+    try:
+        script_file = resolve_workspace_file(workspace, script_file, exts=(".py",))
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+
     try:
         result = _run_python(workspace, script_file, args or [])
     except PythonAnalysisError as exc:
@@ -1113,10 +1179,13 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
     """
     workspace = get_workspace_path()
 
-    abs_files = [os.path.join(workspace, f) for f in verilog_files]
-    missing = [f for f in abs_files if not os.path.exists(f)]
-    if missing:
-        return "Error: source file(s) not found: " + ", ".join(missing)
+    try:
+        rel_files = resolve_workspace_files(
+            workspace, _normalize_verilog_files_arg(verilog_files), exts=_VERILOG_EXTS
+        )
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    abs_files = [os.path.join(workspace, rel) for rel in rel_files]
 
     r = run_cocotb(abs_files, top_module, python_module, cwd=workspace)
     status = r.get("status")
@@ -1202,11 +1271,12 @@ def sby_tool(sby_file: str) -> str:
             the properties to prove.
     """
     workspace = get_workspace_path()
-    abs_file = os.path.join(workspace, sby_file)
-    
-    if not os.path.exists(abs_file):
-        return f"Error: File {sby_file} does not exist."
-        
+    try:
+        rel_file = resolve_workspace_file(workspace, sby_file, exts=(".sby",))
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    abs_file = os.path.join(workspace, rel_file)
+
     result = run_sby(abs_file, cwd=workspace)
     status = result["status"]
     tail = ((result.get("stdout") or "") + "\n" + (result.get("stderr") or "")).strip()[-600:]
@@ -1260,6 +1330,22 @@ def sleep_tool(seconds: int) -> str:
     return f"Slept for {wait_s} second(s)."
 
 # New Google XLS / DSLX HLS tools
+
+
+def _xls_resolve(workspace: str, value: str, stage: str, exts: tuple) -> tuple[str, str | None]:
+    """Pre-resolution for the XLS family (amendment A1): basename / no-ext
+    convenience BEFORE run_xls's own validate_safe_relative_path — which still
+    runs on the resolved path, never bypassed. Returns (resolved, error_json);
+    a failure uses the family's structured _failure shape, not prose."""
+    try:
+        return resolve_workspace_file(workspace, value, exts=exts), None
+    except FileResolutionError as exc:
+        return value, json.dumps(
+            {"success": False, "stage": stage, "stdout": "", "stderr": str(exc), "command": ""},
+            indent=2,
+        )
+
+
 @tool
 def run_dslx_interpreter(filename: str) -> str:
     """
@@ -1270,6 +1356,9 @@ def run_dslx_interpreter(filename: str) -> str:
     """
     from src.tools.run_xls import run_dslx_interpreter as run_interpreter
     workspace = get_workspace_path()
+    filename, err = _xls_resolve(workspace, filename, "interpreter", (".x",))
+    if err:
+        return err
     result = run_interpreter(filename, cwd=workspace)
     return json.dumps(result, indent=2)
 
@@ -1283,6 +1372,9 @@ def compile_dslx_to_ir(filename: str, top_module: str) -> str:
     """
     from src.tools.run_xls import compile_dslx_to_ir as compile_to_ir
     workspace = get_workspace_path()
+    filename, err = _xls_resolve(workspace, filename, "ir_conversion", (".x",))
+    if err:
+        return err
     result = compile_to_ir(filename, top_module, cwd=workspace)
     return json.dumps(result, indent=2)
 
@@ -1297,6 +1389,9 @@ def experimental_compile_cpp_to_ir(filename: str, top_name: str, block_from_clas
     """
     from src.tools.run_xls import experimental_compile_cpp_to_ir as compile_cpp
     workspace = get_workspace_path()
+    filename, err = _xls_resolve(workspace, filename, "cpp_ir_conversion", (".cc", ".cpp"))
+    if err:
+        return err
     result = compile_cpp(filename, top_name, block_from_class, cwd=workspace)
     return json.dumps(result, indent=2)
 
@@ -1309,6 +1404,9 @@ def optimize_xls_ir(ir_filename: str) -> str:
     """
     from src.tools.run_xls import optimize_xls_ir as optimize_ir
     workspace = get_workspace_path()
+    ir_filename, err = _xls_resolve(workspace, ir_filename, "optimization", (".ir",))
+    if err:
+        return err
     result = optimize_ir(ir_filename, cwd=workspace)
     return json.dumps(result, indent=2)
 
@@ -1335,6 +1433,9 @@ def codegen_xls(
     """
     from src.tools.run_xls import codegen_xls as run_codegen
     workspace = get_workspace_path()
+    opt_ir_filename, err = _xls_resolve(workspace, opt_ir_filename, "codegen", (".opt.ir", ".ir"))
+    if err:
+        return err
     result = run_codegen(
         opt_ir_filename=opt_ir_filename,
         generator=generator,
@@ -1357,6 +1458,9 @@ def benchmark_xls(opt_ir_filename: str, delay_model: str = "sky130") -> str:
     """
     from src.tools.run_xls import benchmark_xls as run_benchmark
     workspace = get_workspace_path()
+    opt_ir_filename, err = _xls_resolve(workspace, opt_ir_filename, "benchmark", (".opt.ir", ".ir"))
+    if err:
+        return err
     result = run_benchmark(opt_ir_filename, delay_model=delay_model, cwd=workspace)
     return json.dumps(result, indent=2)
 
@@ -1391,6 +1495,9 @@ def run_xls_flow(
     """
     from src.tools.run_xls import run_xls_flow as run_flow
     workspace = get_workspace_path()
+    dslx_file, err = _xls_resolve(workspace, dslx_file, "setup", (".x",))
+    if err:
+        return err
     result = run_flow(
         dslx_file=dslx_file,
         top_module=top_module,

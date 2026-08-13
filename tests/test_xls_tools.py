@@ -100,18 +100,22 @@ def test_validate_xls_options():
 
 
 def test_path_safety_rejection_in_tool(isolated_workspace):
+    # W1 (command-surface-simplification): the shared resolver's containment
+    # now rejects escapes BEFORE the flow starts (stage "setup", one error
+    # vocabulary everywhere). run_xls's own validate_safe_relative_path still
+    # guards the direct-call path (covered above in test_validators).
     flow_res_str = run_xls_flow.invoke({"dslx_file": "../secret.x", "top_module": "my_add"})
     flow_res = json.loads(flow_res_str)
     assert flow_res["success"] is False
-    assert flow_res["stage"] == "interpreter"
-    assert "Path traversal" in flow_res["stderr"]
+    assert flow_res["stage"] == "setup"
+    assert "escapes the workspace" in flow_res["stderr"]
 
 
 def test_experimental_compile_cpp_to_ir_rejects_unsafe_path(isolated_workspace):
     res_str = experimental_compile_cpp_to_ir.invoke({"filename": "../secret.cc", "top_name": "my_func"})
     res = json.loads(res_str)
     assert res["success"] is False
-    assert "Path traversal" in res["stderr"]
+    assert "escapes the workspace" in res["stderr"]
 
 
 def test_get_workspace_path_respects_isolated_workspace(isolated_workspace):
