@@ -1756,6 +1756,14 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
         return
     except WebSocketDisconnect:
         return
+    except (ValueError, KeyError):
+        # A malformed first frame — non-JSON text (json.JSONDecodeError is a
+        # ValueError) or a binary frame (starlette's receive_json raises
+        # KeyError('text')) — must be a controlled close, not an unhandled
+        # ASGI exception: this runs BEFORE auth, so any unauthenticated
+        # client could otherwise trigger server tracebacks at will.
+        await websocket.close(code=1008, reason="Invalid handshake frame")
+        return
 
     if isinstance(first, dict) and first.get("type") == "auth":
         token = first.get("token") or None

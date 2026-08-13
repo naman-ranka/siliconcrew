@@ -2655,49 +2655,6 @@ def _recommended_poll_after_sec(status: str, elapsed_sec: Optional[float]) -> in
     return min(POLL_BACKOFF_MAX_SEC, POLL_BACKOFF_LATE_SEC)
 
 
-def _backoff_elapsed_seconds(meta: Dict[str, Any], elapsed_sec: Optional[float]) -> float:
-    """Elapsed used for the polling cadence, never None.
-
-    ``created_at`` is written by the WORKER, so ``_elapsed_seconds`` is None for
-    the whole queued window; dispatch time is the honest clock there. A run with
-    neither timestamp is treated as brand new rather than guessed at.
-    """
-    if elapsed_sec is not None:
-        return float(elapsed_sec)
-    dispatched = meta.get("dispatched_at")
-    if dispatched:
-        try:
-            started = datetime.fromisoformat(dispatched)
-            if started.tzinfo is None:
-                started = started.replace(tzinfo=timezone.utc)
-            return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
-        except Exception:
-            pass
-    return 0.0
-
-
-def _elapsed_seconds(meta: Dict[str, Any], status: str) -> Optional[float]:
-    """Wall-clock elapsed for a job.
-
-    Once the run is finalized the persisted ``elapsed_sec`` is authoritative; while
-    it is still running we compute live elapsed from ``created_at`` so the UI has a
-    ticking timer instead of ``null``.
-    """
-    persisted = meta.get("elapsed_sec")
-    if persisted is not None and status in {"completed", "failed"}:
-        return persisted
-    created = meta.get("created_at")
-    if created:
-        try:
-            started = datetime.fromisoformat(created)
-            if started.tzinfo is None:
-                started = started.replace(tzinfo=timezone.utc)
-            return round((datetime.now(timezone.utc) - started).total_seconds(), 2)
-        except Exception:
-            pass
-    return persisted
-
-
 def _parse_iso_utc(value: Optional[str]) -> Optional[datetime]:
     """ISO string -> aware datetime; naive timestamps are UTC (sharp edge:
     never call .timestamp() on a naive datetime — it reads as LOCAL time)."""
@@ -2711,12 +2668,19 @@ def _parse_iso_utc(value: Optional[str]) -> Optional[datetime]:
 
 
 def _liveness_elapsed_sec(meta: Dict[str, Any], status: str) -> Optional[float]:
-    """Elapsed wall clock for the metrics response's liveness fields (dev#75).
+    """THE elapsed wall clock for a run — status AND metrics (dev#75).
+
+    Both agent-facing surfaces (``get_synthesis_status`` and
+    ``get_synthesis_metrics``) report this one number; a second created_at-based
+    clock had the same run showing two different elapsed values depending on
+    which endpoint was asked (created_at is written by the WORKER, so it missed
+    the whole queued window).
 
     Terminal runs: the persisted ``elapsed_sec`` is authoritative (the worker's
     own dispatch-to-terminal measurement); an adopted/legacy meta without one
     falls back to dispatched_at -> finished_at. Live runs: dispatched_at -> now
-    (dispatch covers the queued window, when created_at doesn't exist yet).
+    (dispatch covers the queued window, when created_at doesn't exist yet;
+    created_at remains the fallback for legacy metas without dispatched_at).
     ``None`` when the timestamps are absent — never guess.
     """
     if status in _TERMINAL_SYNTH_STATES:
@@ -2767,8 +2731,15 @@ def _build_status_response(
     # tail stays as detail, never as the stage source.
     progress = stage_progress_from_files(run_dir, meta)
     stage = progress["current_stage"]
-    elapsed_sec = _elapsed_seconds(meta, status)
-    poll_after = _recommended_poll_after_sec(status, _backoff_elapsed_seconds(meta, elapsed_sec))
+    # One clock for both agent-facing surfaces (dev#75): this is the same
+    # dispatch-covering helper get_synthesis_metrics uses, so status and
+    # metrics can never disagree about how long the same run has been going.
+    elapsed_sec = _liveness_elapsed_sec(meta, status)
+    # Backoff cadence needs a number, never None: a run with no timestamps at
+    # all is treated as brand new rather than guessed at.
+    poll_after = _recommended_poll_after_sec(
+        status, elapsed_sec if elapsed_sec is not None else 0.0
+    )
 
     next_action = (
         "Use search_logs_tool for detailed PPA/error verification."
@@ -2833,8 +2804,9 @@ def _build_status_response(
         "dispatched_at": meta.get("dispatched_at"),
         "timeout_sec": meta.get("timeout_sec"),
         "top_module": meta.get("top_module"),
-        # Live elapsed while running (computed from created_at), final elapsed
-        # once persisted at finalization. So the UI always has a running timer.
+        # Live elapsed while running (dispatched_at -> now, covering the queued
+        # window), the persisted measurement once terminal — the same clock
+        # get_synthesis_metrics reports. So the UI always has a running timer.
         "elapsed_sec": elapsed_sec,
         "last_log_lines": last_log_lines,
         "last_log_source": last_log_source,

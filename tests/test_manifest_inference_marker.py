@@ -32,6 +32,16 @@ module alu_tb;
 endmodule
 """
 
+# A testbench the heuristics MISCLASSIFY as rtl: has ports, and neither the
+# name nor the content trips _looks_like_tb. The user's role edit is the only
+# way it becomes the sim compile set's testbench.
+MISROLED_TB = """
+module alu_verify(input clk);
+  reg [3:0] a, b; wire [3:0] y;
+  alu dut(.a(a), .b(b), .y(y));
+endmodule
+"""
+
 
 def _w(ws, name, content):
     with open(os.path.join(ws, name), "w", encoding="utf-8") as f:
@@ -104,6 +114,34 @@ def test_reinference_when_a_file_changes(tmp_path, monkeypatch):
     _w(ws, "alu.v", RTL2)  # content change (size differs, ctime bumps)
     mf.read_manifest(ws, "s")
     assert calls["n"] == 2
+
+
+def test_role_edit_retriggers_top_inference(tmp_path, monkeypatch):
+    """Roles are part of the digest: fixing a misclassified file (rtl -> tb)
+    via write_manifest changes what inference would say WITHOUT touching a
+    single stat, so the next read must re-infer simTop. Pre-fix the marker was
+    stat-only and the flipped role never filled simTop in."""
+    ws = str(tmp_path)
+    _w(ws, "alu.v", RTL)
+    _w(ws, "alu_verify.v", MISROLED_TB)
+
+    m1 = mf.read_manifest(ws, "s")
+    roles = {f.path: f.role for f in m1.files}
+    assert roles["alu_verify.v"] == "rtl"  # misclassified, as constructed
+    assert m1.simTop == ""                 # no tb role -> nothing to infer
+
+    # The user fixes the role through the manifest API (agent/MCP/REST/UI all
+    # land here). No file content or stat changes.
+    mf.write_manifest(ws, {"files": [{"path": "alu_verify.v", "role": "tb"}]}, "s")
+
+    calls = _spy_infer(monkeypatch)
+    m2 = mf.read_manifest(ws, "s")
+    assert calls["n"] == 1                 # the role edit re-triggered inference
+    assert m2.simTop == "alu_verify"
+
+    # And the new marker sticks: further unchanged reads stay inference-free.
+    mf.read_manifest(ws, "s")
+    assert calls["n"] == 1
 
 
 def test_marker_survives_reload_from_disk(tmp_path, monkeypatch):

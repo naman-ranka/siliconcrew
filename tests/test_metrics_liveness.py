@@ -160,6 +160,37 @@ def test_naive_timestamps_are_read_as_utc(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# One clock: status and metrics report the SAME elapsed for the same run
+# ---------------------------------------------------------------------------
+
+
+def test_status_and_metrics_report_one_elapsed_clock(tmp_path):
+    """dev#75 follow-up: a queued-then-started run (dispatched 300s ago, worker
+    created_at 100s ago) must read the same elapsed from get_synthesis_status
+    and get_synthesis_metrics. Pre-fix, status ticked from created_at (~100s)
+    while metrics ticked from dispatched_at (~300s) — two clocks, one run."""
+    workspace = str(tmp_path / "ws")
+    meta = dict(
+        BASE_META,
+        status="running",
+        dispatched_at=_iso_ago(300),
+        created_at=_iso_ago(100),
+        timeout_sec=3600,
+    )
+    _seed_run(workspace, meta)
+
+    status_resp = sm.get_synthesis_status(run_id="synth_0001", workspace=workspace)
+    metrics_resp = sm.get_synthesis_metrics(workspace=workspace, run_id="synth_0001")
+
+    assert status_resp["status"] == "running"
+    assert metrics_resp["run_status"] == "running"
+    # Both cover the queued window: dispatch -> now, not worker-start -> now.
+    assert 295 <= status_resp["elapsed_sec"] <= 400
+    assert 295 <= metrics_resp["elapsed_sec"] <= 400
+    assert abs(status_resp["elapsed_sec"] - metrics_resp["elapsed_sec"]) < 5.0
+
+
+# ---------------------------------------------------------------------------
 # Reconcile on read: the metrics response never serves a stale "running"
 # ---------------------------------------------------------------------------
 

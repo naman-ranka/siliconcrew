@@ -429,16 +429,23 @@ def _scan_fingerprint(workspace: str, files: List[DesignFile]) -> tuple:
     return tuple(sorted(out))
 
 
-def _fingerprint_digest(fingerprint: tuple) -> str:
-    """Compact, persistable form of a scan fingerprint.
+def _fingerprint_digest(fingerprint: tuple, files: List[DesignFile]) -> str:
+    """Compact, persistable form of the tops-inference input.
 
     The raw fingerprint is one stat tuple per design file — persisting it
     verbatim would bloat manifest.json linearly with the file count. The digest
     is derived metadata only ever compared for equality, so a hash loses
     nothing. Reuses THE fingerprint (ctime/inode terms included), so it stays
     safe against ``shutil.copy2``'s preserved mtimes — no second fingerprint.
+
+    Roles are digested ALONGSIDE the stat fingerprint: fixing a misclassified
+    file via ``write_manifest`` (rtl -> tb) changes what inference would
+    conclude without touching a single stat, so a stat-only marker left simTop
+    stale forever (sc#81 follow-up). Including every file's (path, role) costs
+    exactly one re-inference per role edit — the honest price.
     """
-    return hashlib.sha256(repr(fingerprint).encode("utf-8")).hexdigest()
+    payload = (fingerprint, tuple(sorted((f.path, f.role) for f in files)))
+    return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
 
 
 def _scan_design_files(
@@ -753,7 +760,7 @@ def build_manifest(workspace: str, session_id: str = "") -> DesignManifest:
         platform="sky130hd",
         testbenches=_derive_testbenches(files, scans),
         warnings=_collision_warnings(scans, _roles_by_path(files)),
-        topsInferredFingerprint=_fingerprint_digest(fingerprint),
+        topsInferredFingerprint=_fingerprint_digest(fingerprint, files),
     )
 
 
@@ -906,9 +913,10 @@ def _reconcile(workspace: str, stored: DesignManifest) -> DesignManifest:
         # A top may be EMPTY because inference already ran and found nothing
         # (e.g. no testbench -> simTop stays ""). The persisted marker tells
         # that apart from "not yet inferred": re-infer only when the design
-        # file set actually changed since inference last ran (sc#81). A
-        # user-set top is never overwritten either way (`or` keeps it).
-        digest = _fingerprint_digest(fingerprint)
+        # file set — content stats OR roles — actually changed since inference
+        # last ran (sc#81). A user-set top is never overwritten either way
+        # (`or` keeps it).
+        digest = _fingerprint_digest(fingerprint, merged)
         if stored.topsInferredFingerprint != digest:
             synth_top, sim_top = _infer_tops(merged, scans)
             stored.synthTop = stored.synthTop or synth_top

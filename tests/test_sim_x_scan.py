@@ -44,6 +44,43 @@ x#
 1!
 """
 
+# A CLEAN run whose dumper paused: `$dumpoff ... $end` checkpoint blocks dump
+# every var as x (dumper bookkeeping, not signal state), then `$dumpon`
+# re-dumps the real values. None of it is real X.
+VCD_DUMPOFF_CLEAN = """$date today $end
+$timescale 1ns $end
+$scope module tb $end
+$var wire 1 ! clk $end
+$var wire 8 " data $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+0!
+b00000000 "
+$end
+#5
+1!
+b00000001 "
+#10
+$dumpoff
+x!
+bx "
+$end
+#20
+$dumpon
+1!
+b00000001 "
+$end
+#25
+0!
+b00000010 "
+"""
+
+# Same dumpoff window, but a REAL x change lands outside it at t=25 — the
+# window exclusion must not hide genuine X propagation.
+VCD_DUMPOFF_WITH_REAL_X = VCD_DUMPOFF_CLEAN.replace('b00000010 "', 'bxxxx0101 "')
+
 # Same shape, but after t=0 every value is defined.
 VCD_CLEAN = """$date today $end
 $timescale 1ns $end
@@ -89,6 +126,71 @@ def test_scan_excludes_t0_initial_dump(tmp_path):
     assert result["xDetected"] is False        # t=0 x dump alone must not flag
     assert result["xEventCount"] == 0
     assert result["xSignals"] == []
+
+
+def test_scan_ignores_dumpoff_checkpoint_blocks(tmp_path):
+    """dev#76 follow-up: $dumpoff dumps EVERY var as x — counting those flagged
+    clean runs whose dumper merely paused."""
+    vcd = _write(str(tmp_path / "dump.vcd"), VCD_DUMPOFF_CLEAN)
+    result = scan_vcd_for_x(vcd)
+    assert result["status"] == "scanned"
+    assert result["xDetected"] is False
+    assert result["xEventCount"] == 0
+    assert result["xSignals"] == []
+
+
+def test_scan_still_detects_real_x_outside_dumpoff_window(tmp_path):
+    vcd = _write(str(tmp_path / "dump.vcd"), VCD_DUMPOFF_WITH_REAL_X)
+    result = scan_vcd_for_x(vcd)
+    assert result["status"] == "scanned"
+    assert result["xDetected"] is True
+    assert result["xEventCount"] == 1        # only the t=25 vector change
+    assert result["xSignals"] == ["tb.data"]
+
+
+def test_scan_streams_and_never_materializes_the_file(tmp_path, monkeypatch):
+    """dev#76 follow-up: readlines() on a short-line VCD cost +1.5 GB RSS for a
+    67 MB file, on the path every run_sim_isolated pays. The scan must consume
+    the open file as an iterator; a file object whose materializing reads blow
+    up proves the list is never built."""
+    import builtins
+
+    vcd = _write(str(tmp_path / "dump.vcd"), VCD_WITH_X)
+    real_open = builtins.open
+
+    class StreamOnly:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def readlines(self, *a, **k):
+            raise AssertionError("scan_vcd_for_x must stream, not readlines()")
+
+        def read(self, *a, **k):
+            raise AssertionError("scan_vcd_for_x must stream, not read()")
+
+        def __iter__(self):
+            return iter(self._fh)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return self._fh.__exit__(*exc)
+
+        def close(self):
+            self._fh.close()
+
+    def guarded_open(path, *a, **k):
+        fh = real_open(path, *a, **k)
+        return StreamOnly(fh) if str(path) == vcd else fh
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+    result = scan_vcd_for_x(vcd)
+    # Pre-fix the readlines() AssertionError was swallowed into
+    # "skipped (unreadable)" — either way the scan visibly fails this.
+    assert result["status"] == "scanned"
+    assert result["xDetected"] is True
+    assert set(result["xSignals"]) == {"tb.data", "tb.dut.out"}
 
 
 def test_scan_bails_honestly_on_oversized_vcd(tmp_path):

@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 # Removing the old end_time=1000 default means an unbounded VCD can produce an
 # unbounded table; cap the rows and say what was withheld rather than silently
@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 MAX_OUTPUT_ROWS = 2000
 
 
-def _parse_vcd_header(lines: list[str]) -> tuple[list[tuple[str, str]], int]:
+def _parse_vcd_header(lines: Iterable[str]) -> tuple[list[tuple[str, str]], int]:
     """Parse a VCD header into ``([(code, full_dotted_path), ...], header_end)``.
 
     THE header parser — shared by :func:`read_waveform` and
@@ -16,6 +16,13 @@ def _parse_vcd_header(lines: list[str]) -> tuple[list[tuple[str, str]], int]:
     grammar. A list, not a dict: one VCD identifier code legitimately appears
     under several paths when a signal is connected across the hierarchy, and a
     dict keyed either way would drop half the story.
+
+    ``lines`` may be a list OR a lazy iterator (an open file object): iteration
+    stops at ``$enddefinitions``, so a file-object caller can simply keep
+    iterating the same handle for the body — that is what lets
+    :func:`scan_vcd_for_x` stream instead of materializing the whole VCD.
+    ``header_end`` (the ``$enddefinitions`` line index) only means something
+    for list callers; streaming callers ignore it.
     """
     var_paths: list[tuple[str, str]] = []
     header_end = 0
@@ -86,47 +93,64 @@ def scan_vcd_for_x(vcd_file: str, max_bytes: int = X_SCAN_MAX_BYTES) -> Dict[str
         return {"status": "skipped (unreadable)"}
     if size > max_bytes:
         return {"status": "skipped (size)", "sizeBytes": size, "maxBytes": max_bytes}
-    try:
-        with open(vcd_file, "r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()
-    except Exception:
-        return {"status": "skipped (unreadable)"}
-
-    var_paths, header_end = _parse_vcd_header(lines)
-    path_by_code: Dict[str, str] = {}
-    for code, path in var_paths:
-        path_by_code.setdefault(code, path)  # first (outermost) path per code
 
     current_time = 0
     event_count = 0
     seen_codes: list[str] = []
     seen: set[str] = set()
-    for i in range(header_end + 1, len(lines)):
-        line = lines[i].strip()
-        if not line:
-            continue
-        if line[0] == "#":
-            try:
-                current_time = int(line[1:])
-            except ValueError:
-                pass
-            continue
-        if current_time <= 0 or line[0] == "$":
-            continue
-        code = None
-        if line[0] in "bB":
-            # Vector: b<bits> <code>
-            parts = line.split()
-            if len(parts) >= 2 and _XZ_CHARS.intersection(parts[0][1:]):
-                code = parts[1]
-        elif line[0] in _XZ_CHARS:
-            # Scalar: <value><code>, value one of 0 1 x z (case-insensitive)
-            code = line[1:]
-        if code:
-            event_count += 1
-            if code not in seen:
-                seen.add(code)
-                seen_codes.append(code)
+    in_dumpoff = False
+    try:
+        # STREAMED, never materialized (dev#76 follow-up): readlines() on a
+        # 67 MB short-line VCD cost +1.5 GB RSS, and this scan runs on EVERY
+        # run_sim_isolated — one sim request could OOM a hosted instance. The
+        # header parser consumes the same iterator up to $enddefinitions and
+        # the body loop continues it line by line; the size guard above is now
+        # purely a time bound.
+        with open(vcd_file, "r", encoding="utf-8", errors="ignore") as f:
+            var_paths, _ = _parse_vcd_header(f)
+            path_by_code: Dict[str, str] = {}
+            for code, path in var_paths:
+                path_by_code.setdefault(code, path)  # first (outermost) path per code
+
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                if line[0] == "#":
+                    try:
+                        current_time = int(line[1:])
+                    except ValueError:
+                        pass
+                    continue
+                if line[0] == "$":
+                    # A $dumpoff ... $end checkpoint block dumps EVERY var as x
+                    # — dumper bookkeeping, not real signal changes — so its
+                    # contents are excluded exactly like the t=0 initial dump.
+                    # ($dumpon re-dumps the ACTUAL current values; those stay
+                    # counted.)
+                    if line.startswith("$dumpoff") and "$end" not in line:
+                        in_dumpoff = True
+                    elif in_dumpoff and line.startswith("$end"):
+                        in_dumpoff = False
+                    continue
+                if current_time <= 0 or in_dumpoff:
+                    continue
+                code = None
+                if line[0] in "bB":
+                    # Vector: b<bits> <code>
+                    parts = line.split()
+                    if len(parts) >= 2 and _XZ_CHARS.intersection(parts[0][1:]):
+                        code = parts[1]
+                elif line[0] in _XZ_CHARS:
+                    # Scalar: <value><code>, value one of 0 1 x z (case-insensitive)
+                    code = line[1:]
+                if code:
+                    event_count += 1
+                    if code not in seen:
+                        seen.add(code)
+                        seen_codes.append(code)
+    except Exception:
+        return {"status": "skipped (unreadable)"}
 
     return {
         "status": "scanned",

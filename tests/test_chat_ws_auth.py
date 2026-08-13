@@ -173,6 +173,29 @@ def test_legacy_query_param_invalid_token_closes_1008(harness):
         assert closed["code"] == 1008
 
 
+def test_garbage_text_first_frame_closes_1008(harness):
+    """A non-JSON first frame runs BEFORE auth, so any unauthenticated client
+    can send one — it must be a controlled 1008 close, never an unhandled
+    json.JSONDecodeError escaping as an ASGI traceback."""
+    with TestClient(api.app).websocket_connect("/api/chat/sess1") as ws:
+        ws.send_text("this is not json {")
+        closed = ws.receive()
+        assert closed["type"] == "websocket.close"
+        assert closed["code"] == 1008
+    assert harness.tokens_seen == []  # never reached authenticate()
+
+
+def test_binary_first_frame_closes_1008(harness):
+    """A binary first frame makes starlette's receive_json raise
+    KeyError('text') — same pre-auth exposure, same controlled close."""
+    with TestClient(api.app).websocket_connect("/api/chat/sess1") as ws:
+        ws.send_bytes(b"\x00\x01\x02")
+        closed = ws.receive()
+        assert closed["type"] == "websocket.close"
+        assert closed["code"] == 1008
+    assert harness.tokens_seen == []
+
+
 def test_auth_frame_null_token_authenticates_like_no_token(harness):
     """Self-host / signed-out clients send {"type":"auth","token":null} — the
     server must authenticate(None) exactly as the old no-query-param path did."""
