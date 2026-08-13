@@ -224,4 +224,62 @@ describe("ReportArtifact", () => {
     expect(screen.getByText("detailed routing hit DRC violations")).toBeInTheDocument();
     expect(screen.getByText(/12 DRC violations/)).toBeInTheDocument();
   });
+
+  it("RUNNING run renders the last-known log tail with the staleness label, not a bare spinner (sc#67)", () => {
+    useStore.setState({
+      runs: [
+        {
+          id: "synth_0010",
+          kind: "synth",
+          status: "running",
+          createdAt: new Date().toISOString(),
+          top: "decoder",
+          pinned: false,
+        },
+      ] as any,
+      // Last-known status — fed only by activity events / user Refresh / focus
+      // revalidate, never a poller (invariant 6).
+      synthJob: {
+        runId: "synth_0010",
+        status: "running",
+        lastLogLines: ["Placement 42% done", "Detailed placement…"],
+        lastLogSource: "partial (updated 12s ago)",
+      } as any,
+      loadReportArtifact: (async () => {}) as any,
+    });
+
+    render(<ReportArtifact runId="synth_0010" />);
+    // The live tail is visible…
+    expect(screen.getByText(/Placement 42% done/)).toBeInTheDocument();
+    // …with the backend's honest staleness provenance, verbatim…
+    expect(screen.getByText(/partial \(updated 12s ago\)/)).toBeInTheDocument();
+    // …and the running framing stays.
+    expect(screen.getByText("Synthesizing…")).toBeInTheDocument();
+  });
+
+  it("RUNNING run without a tracked tail says so honestly instead of spinning", () => {
+    useStore.setState({
+      runs: [
+        {
+          id: "synth_0011",
+          kind: "synth",
+          status: "running",
+          createdAt: new Date().toISOString(),
+          top: "decoder",
+          pinned: false,
+        },
+      ] as any,
+      // The live synthJob tracks a DIFFERENT run — this tab's run has no tail.
+      synthJob: {
+        runId: "synth_0010",
+        status: "running",
+        lastLogLines: ["other run's lines"],
+      } as any,
+      loadReportArtifact: (async () => {}) as any,
+    });
+
+    render(<ReportArtifact runId="synth_0011" />);
+    expect(screen.getByText(/No log tail available for this run yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/other run's lines/)).toBeNull();
+  });
 });

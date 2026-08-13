@@ -2636,6 +2636,7 @@ export function toSynthJobStatus(runId: string, job: Record<string, unknown>): S
     lastLogLines: Array.isArray(job.last_log_lines)
       ? (job.last_log_lines as unknown[]).filter((l): l is string => typeof l === "string")
       : undefined,
+    lastLogSource: str(job.last_log_source),
     elapsedSec: num(job.elapsed_sec),
     checkNotes: str(job.check_notes),
     backend: str(job.backend),
