@@ -322,8 +322,9 @@ function storeCtx(): SurfaceCtx {
 
 /**
  * Execute a surface command. Core flow commands delegate to runCommand (which
- * owns polling/unread/toasts and returns nothing to display inline); the rest
- * go through POST /invoke and return their result for the inline result pane.
+ * owns unread/toasts) and are AWAITED so the caller's spinner and result pane
+ * reflect what actually happened; the rest go through POST /invoke and return
+ * their result for the inline result pane.
  */
 export async function runSurfaceCommand(
   cmd: SurfaceCommand,
@@ -335,8 +336,18 @@ export async function runSurfaceCommand(
   const ctx = storeCtx();
 
   if (cmd.core) {
-    void runCommand(cmd.core, { ...surfaceDefaults(cmd, ctx), ...vals });
-    return null; // observable via Activity/Runs; nothing to render inline
+    // dev#51 (1): await the core engine so the Invoke spinner is truthful and
+    // a failed invoke is visible right here — a detached `void runCommand`
+    // left the Surface claiming "Dispatched" before the POST even ran.
+    // runCommand still owns toasts/activity/unread; this only mirrors its
+    // outcome into the Surface's own result pane.
+    const outcome = await runCommand(cmd.core, { ...surfaceDefaults(cmd, ctx), ...vals });
+    if (!outcome) return null; // nothing ran (no session / duplicate in-flight)
+    if (!outcome.ok) return { ok: false, result: outcome.summary };
+    // Async dispatches keep the "Dispatched — follow it in Activity/Runs"
+    // note (now rendered only after the dispatch actually succeeded); sync
+    // cores render their real completion summary inline.
+    return cmd.async ? null : { ok: true, result: outcome.summary };
   }
 
   const { tool, arguments: args } = buildSurfacePayload(cmd, vals, ctx);

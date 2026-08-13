@@ -22,6 +22,7 @@ import {
   COMMANDS,
   LINT_ENGINES,
   SYNTH_STAGES,
+  commandValuesForFile,
   defaultValues,
   manifestFacts,
   runCommand,
@@ -147,6 +148,24 @@ describe("testbenchChoices", () => {
     expect(testbenchChoices({ ...MANIFEST, testbenches: [] })).toEqual(["cpu_tb"]);
     expect(testbenchChoices({ ...MANIFEST, testbenches: undefined })).toEqual(["cpu_tb"]);
     expect(testbenchChoices(null)).toEqual([]);
+  });
+});
+
+// dev#51 (2): right-click → Simulate on a testbench runs THAT testbench.
+describe("commandValuesForFile", () => {
+  it("sim on a known testbench file resolves its module as simTop", () => {
+    expect(commandValuesForFile("sim", "tb/cpu_tb.v", MANIFEST)).toEqual({ simTop: "cpu_tb" });
+    expect(commandValuesForFile("sim", "alu_tb.v", MANIFEST)).toEqual({ simTop: "alu_tb" });
+  });
+
+  it("sim on a non-testbench file passes nothing (manifest default applies)", () => {
+    expect(commandValuesForFile("sim", "alu.v", MANIFEST)).toEqual({});
+    expect(commandValuesForFile("sim", "alu_tb.v", null)).toEqual({});
+  });
+
+  it("lint/synth pass nothing — their REST bodies have no per-file field", () => {
+    expect(commandValuesForFile("lint", "alu_tb.v", MANIFEST)).toEqual({});
+    expect(commandValuesForFile("synth", "alu.v", MANIFEST)).toEqual({});
   });
 });
 

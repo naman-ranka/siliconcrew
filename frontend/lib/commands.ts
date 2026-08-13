@@ -210,6 +210,29 @@ export function manifestFacts(
   }
 }
 
+/**
+ * Values for running a command FROM a specific file (the explorer's context
+ * menu) — dev#51 (2): right-click → Simulate on a testbench must run THAT
+ * testbench, not silently fall back to the manifest default.
+ *
+ * Only mappings the REST contracts can honestly express are made: sim gets
+ * `simTop` when the clicked file is a known testbench (manifest.testbenches
+ * carries file → module). Lint/synth bodies have no per-file field — the
+ * backend re-resolves their sets from the manifest — so they pass nothing
+ * rather than a pretend argument the backend would ignore.
+ */
+export function commandValuesForFile(
+  id: CommandId,
+  path: string,
+  manifest: DesignManifest | null
+): CommandValues {
+  if (id === "sim") {
+    const tb = (manifest?.testbenches ?? []).find((t) => t.file === path);
+    if (tb?.module) return { simTop: tb.module };
+  }
+  return {};
+}
+
 /** Map an activity-feed tool name back to its command (for "Re-run"). */
 export function commandForTool(tool: string): CommandId | null {
   switch (tool) {
@@ -269,6 +292,16 @@ function warningsSuffix(warnings: string[] | undefined): string {
   return n > 0 ? ` · ${n} manifest warning${n === 1 ? "" : "s"}` : "";
 }
 
+/** What a runCommand call amounted to — mirrored back to callers (the Command
+ *  Surface) so their own chrome (spinner, result pane) can be truthful. `null`
+ *  from runCommand = nothing ran (no session, or a duplicate while in flight). */
+export interface CommandOutcome {
+  ok: boolean;
+  /** The same one-liner recorded on the local activity event. */
+  summary: string;
+  runId: string | null;
+}
+
 /**
  * Run a command. `values` omitted → manifest-derived defaults (the ⌘K fast
  * path); the param modal passes explicit values. Results surface through the
@@ -280,11 +313,14 @@ function warningsSuffix(warnings: string[] | undefined): string {
 // through dispatch (queuing a second synth job behind a running one is valid).
 const inFlight = new Set<CommandId>();
 
-export async function runCommand(id: CommandId, values?: CommandValues): Promise<void> {
+export async function runCommand(
+  id: CommandId,
+  values?: CommandValues
+): Promise<CommandOutcome | null> {
   const store = useStore.getState();
   const session = store.currentSession;
-  if (!session) return;
-  if (inFlight.has(id)) return;
+  if (!session) return null;
+  if (inFlight.has(id)) return null;
   inFlight.add(id);
   const sessionId = session.id;
   const ui = useWorkbenchUiStore.getState();
@@ -293,12 +329,21 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
 
   const ev = localEvent(cmd.tool, vals);
   store.appendLocalActivity(ev);
-  const done = (patch: Partial<ActivityEvent>) =>
+  let outcome: CommandOutcome | null = null;
+  const done = (patch: Partial<ActivityEvent>) => {
+    // Every terminal narration doubles as the caller-visible outcome (dev#51:
+    // the Command Surface awaits this instead of fire-and-forgetting).
+    outcome = {
+      ok: patch.status !== "error",
+      summary: patch.resultSummary ?? "",
+      runId: patch.runId ?? null,
+    };
     useStore.getState().appendLocalActivity({
       ...ev,
       durationMs: Date.now() - new Date(ev.ts).getTime(),
       ...patch,
     });
+  };
   const refresh = () => {
     const s = useStore.getState();
     void s.loadActivity();
@@ -409,4 +454,5 @@ export async function runCommand(id: CommandId, values?: CommandValues): Promise
     inFlight.delete(id);
     refresh();
   }
+  return outcome;
 }

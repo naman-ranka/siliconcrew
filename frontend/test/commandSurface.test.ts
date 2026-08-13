@@ -14,6 +14,12 @@ vi.mock("@/lib/api", () => ({
     getManifest: vi.fn(),
     getToolCatalog: vi.fn(),
     getActivity: vi.fn().mockResolvedValue({ ok: true, events: [], nextBefore: null }),
+    // Core-command engine deps (runSurfaceCommand now AWAITS runCommand).
+    lint: vi.fn(),
+    simulate: vi.fn(),
+    synthesize: vi.fn(),
+    retryRun: vi.fn(),
+    listRuns: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -314,11 +320,49 @@ describe("runSurfaceCommand", () => {
     expect(workbenchApi.updateManifest).not.toHaveBeenCalled();
   });
 
-  it("core commands delegate to runCommand and return null (Activity/Runs observe them)", async () => {
-    // lint is core: no /invoke call, nothing to render inline.
+  // dev#51 (1): core commands are AWAITED — the Surface's spinner and result
+  // pane reflect what actually happened instead of a detached void promise.
+
+  it("core sync commands are awaited and return their real completion inline", async () => {
+    vi.mocked(workbenchApi.lint).mockResolvedValue({
+      ok: true,
+      status: "passed",
+      warnings: [],
+      errors: [],
+      byFile: {},
+      command: "verilator --lint-only -Wall alu.v",
+      files: ["alu.v"],
+      engine: "verilator",
+    } as never);
     const res = await runSurfaceCommand(CORE_SURFACE_COMMANDS[0], {});
-    expect(res).toBeNull();
+    // lint is core: no /invoke call — but the outcome IS rendered inline now.
     expect(workbenchApi.invokeTool).not.toHaveBeenCalled();
+    expect(res).toEqual({ ok: true, result: "passed (verilator) · 0 error(s), 0 warning(s)" });
+  });
+
+  it("core command failures surface inline as ok:false (never silent)", async () => {
+    vi.mocked(workbenchApi.lint).mockRejectedValue(new Error("HTTP 500 — lint backend down"));
+    const res = await runSurfaceCommand(CORE_SURFACE_COMMANDS[0], {});
+    expect(res).toEqual({ ok: false, result: "HTTP 500 — lint backend down" });
+  });
+
+  it("async core dispatch success returns null — the 'Dispatched' note is now truthful", async () => {
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue({
+      ok: true,
+      runId: "synth_0009",
+      pollAfterSec: 5,
+    } as never);
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    const res = await runSurfaceCommand(synth, {});
+    expect(workbenchApi.synthesize).toHaveBeenCalled(); // resolved BEFORE returning
+    expect(res).toBeNull();
+  });
+
+  it("async core dispatch failure surfaces inline instead of a false 'Dispatched'", async () => {
+    vi.mocked(workbenchApi.synthesize).mockRejectedValue(new Error("Quota exceeded."));
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    const res = await runSurfaceCommand(synth, {});
+    expect(res).toEqual({ ok: false, result: "Quota exceeded." });
   });
 });
 

@@ -20,7 +20,7 @@ import {
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore, type ContextMenuState } from "@/lib/workbenchUiStore";
 import { openArtifact, artifactKeyForFile } from "@/lib/openArtifact";
-import { runCommand, COMMANDS } from "@/lib/commands";
+import { runCommand, commandValuesForFile, COMMANDS } from "@/lib/commands";
 import { workspaceApi } from "@/lib/api";
 import { isSynthTopFile } from "@/lib/fileTree";
 import { cn } from "@/lib/utils";
@@ -170,7 +170,11 @@ function Menu({ menu }: { menu: ContextMenuState }) {
   };
 
   const run = (id: "lint" | "sim" | "synth") => {
-    void runCommand(id); // fire-and-forget: toasts/polling/activity handled inside
+    // dev#51 (2): carry the clicked file's context into the command — a
+    // right-clicked testbench simulates ITSELF (simTop from the manifest's
+    // testbenches map), never the manifest default. Fire-and-forget is fine
+    // here: runCommand owns toasts/activity narration for menu gestures.
+    void runCommand(id, commandValuesForFile(id, path, manifest));
     close();
   };
 
