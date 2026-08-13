@@ -310,7 +310,9 @@ update_manifest.description = update_manifest.description.replace(
 )
 
 
-def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -> dict:
+def _with_manifest_warnings(
+    result: dict, workspace: str, compile_files: list, extra_notes: list | None = None
+) -> dict:
     """Front the dispatch reply with any duplicate-module collision in THIS set.
 
     The manifest carries the same warnings, but a run is where they cost
@@ -319,11 +321,16 @@ def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -
     the assembled compile set are reported; the message adds the remedy the
     compiler's own error can't (which file to ignore), it does not restate it.
     Kept INSIDE the JSON so ``/invoke`` still parses a typed result.
+
+    ``extra_notes`` (W3): honest notes about a user file override (e.g. which
+    manifest files it dropped) travel in the same ``manifestWarnings`` channel,
+    ahead of the collision warnings — best-effort, never a dispatch failure.
     """
     try:
         warnings = manifest_mod.compile_set_collisions(workspace, compile_files)
     except Exception:
-        return result
+        warnings = []
+    warnings = [*(extra_notes or []), *warnings]
     if not warnings:
         return result
     return {"manifestWarnings": warnings, **result}
@@ -336,6 +343,7 @@ def run_isolated_simulation(
     run_id: str = None,
     sim_profile: str = "auto",
     pass_marker: str = "",
+    verilog_files: list[str] | str = None,
 ) -> str:
     """
     Runs a manifest-driven simulation in an isolated sim_runs/sim_NNNN/ directory
@@ -349,13 +357,27 @@ def run_isolated_simulation(
         pass_marker: stdout substring required for a passing status. Leave empty
             to use the manifest's passMarker field (set it with update_manifest so
             it matches what your testbench $displays), else "TEST PASSED".
+        verilog_files: optional override of the manifest-driven compile set
+            (workspace-relative paths or basenames). Omit for the manifest's
+            rtl+tb+include set, exactly as before; when set, any manifest file
+            left out is named in a manifestWarnings note.
     """
     workspace = get_workspace_path()
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
     top = sim_top or m.simTop
     if not top:
         return "Error: no simTop in manifest and none provided. Set it with update_manifest."
-    files = manifest_mod.files_for_stage(m, "simulate")
+    manifest_files = manifest_mod.files_for_stage(m, "simulate")
+    override = _normalize_verilog_files_arg(verilog_files) if verilog_files else []
+    notes: list[str] = []
+    if override:
+        try:
+            files = resolve_workspace_files(workspace, override, exts=_VERILOG_EXTS)
+        except FileResolutionError as exc:
+            return f"Error: {exc}"
+        notes = override_drop_notes("simulate", manifest_files, files)
+    else:
+        files = manifest_files
     if not files:
         return "Error: manifest has no rtl/tb files to simulate."
     result = run_sim_isolated(
@@ -368,7 +390,9 @@ def run_isolated_simulation(
         sim_profile=sim_profile,
         pass_marker=pass_marker,
     )
-    return json.dumps(_with_manifest_warnings(result, workspace, files), indent=2)
+    return json.dumps(
+        _with_manifest_warnings(result, workspace, files, extra_notes=notes), indent=2
+    )
 
 
 @tool
