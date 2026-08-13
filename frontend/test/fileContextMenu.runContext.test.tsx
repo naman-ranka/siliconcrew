@@ -122,6 +122,18 @@ describe("FileContextMenu run commands carry the clicked file", () => {
     );
   });
 
+  it("names the gesture 'Lint this file' and drops the whole-design ⌘L badge (F2)", () => {
+    useWorkbenchUiStore.setState({
+      contextMenu: { x: 10, y: 10, path: "sync_fifo.v", kind: "file" },
+    });
+    render(<FileContextMenu />);
+    // The run is file-scoped (external modules are not elaborated) — the label
+    // must not promise the design-wide verdict ⌘L gives.
+    const item = screen.getByRole("menuitem", { name: /Lint/ });
+    expect(item).toHaveTextContent("Lint this file");
+    expect(item).not.toHaveTextContent("⌘L");
+  });
+
   it("Simulate on an rtl row keeps the manifest default (no false file scoping)", async () => {
     useWorkbenchUiStore.setState({
       contextMenu: { x: 10, y: 10, path: "sync_fifo.v", kind: "file" },

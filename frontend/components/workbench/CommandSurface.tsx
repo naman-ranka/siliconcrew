@@ -575,6 +575,14 @@ const CORE_PATHS: Record<string, string> = {
   pnr: "POST /runs/{id}/retry",
 };
 
+// The run kind each PAID async core command produces. Used only to ask the
+// runs slice "is one of these still live?" — a read of already-loaded shared
+// state, never a poll (invariant 6).
+const PAID_RUN_KIND: Record<string, "sim" | "synth"> = {
+  synth: "synth",
+  pnr: "synth",
+};
+
 function endpointLabel(cmd: SurfaceCommand): string {
   if (cmd.tool === "update_manifest") return "PUT /manifest";
   if (cmd.core) return CORE_PATHS[cmd.id] ?? `POST /invoke · ${cmd.tool}`;
@@ -582,6 +590,9 @@ function endpointLabel(cmd: SurfaceCommand): string {
 }
 
 // ---- the surface -----------------------------------------------------------------
+
+/** The rail's opening selection (also where a session switch returns to). */
+const DEFAULT_COMMAND_ID = "synth";
 
 export function CommandSurface() {
   const open = useWorkbenchUiStore((s) => s.commandSurfaceOpen);
@@ -594,7 +605,7 @@ export function CommandSurface() {
   const toolCatalog = useStore((s) => s.toolCatalog);
   const loadToolCatalog = useStore((s) => s.loadToolCatalog);
 
-  const [selectedId, setSelectedId] = React.useState("synth");
+  const [selectedId, setSelectedId] = React.useState(DEFAULT_COMMAND_ID);
   const [values, setValues] = React.useState<Record<string, Record<string, unknown>>>({});
   const [advOpen, setAdvOpen] = React.useState(false);
   const [resultOpen, setResultOpen] = React.useState(true);
@@ -603,6 +614,9 @@ export function CommandSurface() {
   // Per-command last successful async dispatch (W5/A20): the run id feeds the
   // dispatch note + "View in Runs". Absent = nothing dispatched.
   const [dispatched, setDispatched] = React.useState<Record<string, { runId: string | null } | undefined>>({});
+  // F1: the explicit "yes, dispatch a SECOND job" acknowledgement. Never
+  // sticky — cleared on close, on a session switch, and on every dispatch.
+  const [rearmed, setRearmed] = React.useState<Record<string, boolean>>({});
   // Server-side field errors from the last invoke, keyed cmd.id → field →
   // message. A field's message clears as soon as the user edits it.
   const [fieldErrs, setFieldErrs] = React.useState<Record<string, Record<string, string>>>({});
@@ -636,6 +650,34 @@ export function CommandSurface() {
   React.useEffect(() => {
     if (open) filterRef.current?.focus();
   }, [open]);
+
+  // F1 (adversarial review): the Surface stays MOUNTED when it closes, so its
+  // state outlives the dialog. A "Dispatched — synth_0042" note from an
+  // earlier visit is stale on reopen (and the run it names may be long done),
+  // so the note and any re-arm acknowledgement die with the dialog. What
+  // survives is the honest live-run check below, which reads the runs slice.
+  React.useEffect(() => {
+    if (open) return;
+    setDispatched((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setRearmed((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+  }, [open]);
+
+  // F3 (adversarial review): reset per-session form state on a session switch
+  // — the documented sharp edge (run ids collide across sessions, and a
+  // half-filled form for another workspace is a wrong-design hazard). Defined
+  // BEFORE the auth-intent replay host so a restored intent always wins.
+  const sessionIdRef = React.useRef<string | null>(currentSession?.id ?? null);
+  React.useEffect(() => {
+    const sid = currentSession?.id ?? null;
+    if (sessionIdRef.current === sid) return;
+    sessionIdRef.current = sid;
+    setValues({});
+    setResults({});
+    setDispatched({});
+    setRearmed({});
+    setFieldErrs({});
+    setSelectedId(DEFAULT_COMMAND_ID);
+  }, [currentSession?.id]);
 
   // W4/A18: the Surface's auth-intent replay host. After the sign-in round
   // trip (WorkOS full-page redirect via the Launcher re-stash, or Google/GIS
@@ -797,10 +839,30 @@ export function CommandSurface() {
   const result = results[cmd.id];
   const wasDispatched = dispatched[cmd.id];
 
+  // F1: a second click on Dispatch costs a second PAID run. The button is
+  // disarmed — one explicit "Dispatch again?" re-arms it — whenever either
+  // honest read says a job of this kind may still be in flight:
+  //   * this Surface visit dispatched one and the runs slice has not yet
+  //     shown that run reaching a terminal state, or
+  //   * the runs slice carries a live run of the kind this command produces
+  //     (this is what survives close → reopen, where the note is cleared).
+  // Both are reads of already-loaded state; the Surface still never polls.
+  const paidKind = PAID_RUN_KIND[cmd.id];
+  const dispatchedRun = wasDispatched?.runId
+    ? runs.find((r) => r.id === wasDispatched.runId)
+    : undefined;
+  const liveDispatch =
+    Boolean(wasDispatched) && (!dispatchedRun || dispatchedRun.status === "running");
+  const liveRun =
+    Boolean(paidKind) && runs.some((r) => r.kind === paidKind && r.status === "running");
+  const needsRearm = Boolean(paidKind) && (liveDispatch || liveRun) && !rearmed[cmd.id];
+
   const invoke = async () => {
-    if (running || missingRun) return;
+    if (running || missingRun || needsRearm) return;
     setRunning(true);
     setDispatched((prev) => ({ ...prev, [cmd.id]: undefined }));
+    // Each dispatch consumes the acknowledgement — the NEXT one asks again.
+    setRearmed((prev) => (prev[cmd.id] ? { ...prev, [cmd.id]: false } : prev));
     try {
       // Pass only the user-touched values — runSurfaceCommand merges defaults.
       const res = await runSurfaceCommand(cmd, userVals);
@@ -1047,7 +1109,11 @@ export function CommandSurface() {
 
               {overrides.map((p) => (
                 <OverrideBox
-                  key={p.key}
+                  // F4: keyed by COMMAND + param. Lint and Simulate both call
+                  // their override param `files`, so a bare `p.key` let React
+                  // reuse one instance across the switch and carry its
+                  // `editing` state (and focus) into the other command's box.
+                  key={`${cmd.id}:${p.key}`}
                   param={p}
                   options={resolveOptions(p, ctx)}
                   subtitles={p.subtitles?.(ctx)}
@@ -1188,7 +1254,7 @@ export function CommandSurface() {
                 type="button"
                 data-testid="command-surface-invoke"
                 className="h-9 w-full gap-1.5 text-xs"
-                disabled={running || missingRun}
+                disabled={running || missingRun || needsRearm}
                 onClick={() => void invoke()}
               >
                 {running ? (
@@ -1200,6 +1266,25 @@ export function CommandSurface() {
                 )}
                 {cmd.async && cmd.core ? "Dispatch job" : "Invoke"}
               </Button>
+              {needsRearm && (
+                <div data-testid="command-surface-rearm" className="space-y-1.5">
+                  <p className="text-[10px] leading-relaxed text-muted-foreground">
+                    {liveDispatch && wasDispatched?.runId
+                      ? `${wasDispatched.runId} has not finished as far as this view knows.`
+                      : "A run of this kind is still running as far as this view knows."}{" "}
+                    Dispatching again starts a second job.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-6 w-full text-[11px]"
+                    onClick={() => setRearmed((prev) => ({ ...prev, [cmd.id]: true }))}
+                  >
+                    Dispatch again?
+                  </Button>
+                </div>
+              )}
               {wasDispatched && (
                 <div data-testid="command-surface-dispatch-note" className="space-y-1.5">
                   <p className="font-mono text-[10px] text-muted-foreground">

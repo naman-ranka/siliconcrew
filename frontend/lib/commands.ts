@@ -223,7 +223,12 @@ export function manifestFacts(
  *   override the compile set — a testbench needs its dependencies, which the
  *   manifest resolves.
  * - lint gets `files: [clicked]` through the W3 override — "lint this file"
- *   now honestly lints exactly that file.
+ *   now honestly lints exactly that file. The backend runs that override
+ *   FILE-SCOPED (src/api/actions.py → run_linter's `file_scoped`): modules the
+ *   clicked file instantiates but that the override left out are reported as
+ *   a note, not as the false FAILED verdict a single-file elaboration of a
+ *   hierarchical design would otherwise produce. The menu labels the gesture
+ *   accordingly ("Lint this file").
  * - synth passes nothing: a one-file synth override from a right-click would
  *   silently drop the rest of the design.
  */
@@ -397,15 +402,22 @@ export async function runCommand(
         const nWarn = result.warnings.length;
         // Auto resolves server-side — name the engine that actually ran.
         const engineTag = result.engine ? ` (${result.engine})` : "";
+        // Lint carries manifestWarnings too (dropped manifest files, and the
+        // file-scoped-lint note) — surfaced exactly like sim's, never folded
+        // into the pass/fail narration.
+        const manifestWarnings = result.manifestWarnings;
         done({
           status: result.status === "passed" ? "ok" : "error",
-          resultSummary: `${result.status}${engineTag} · ${nErr} error(s), ${nWarn} warning(s)`,
+          resultSummary:
+            `${result.status}${engineTag} · ${nErr} error(s), ${nWarn} warning(s)` +
+            warningsSuffix(manifestWarnings),
         });
         store.pushToast(
           result.status === "passed"
             ? { kind: nWarn ? "info" : "success", title: `Lint passed${engineTag}${nWarn ? ` · ${nWarn} warning(s)` : ""}` }
             : { kind: "error", title: `Lint failed${engineTag} · ${nErr} error(s)` }
         );
+        notifyManifestWarnings(store, manifestWarnings);
         // Keep the structured diagnostics available to the feed/editor.
         useStore.setState({ lintResult: result });
         break;

@@ -332,3 +332,121 @@ describe("CommandSurface — sign-in CTA + form-state restore (W4/L2)", () => {
     expect(useWorkbenchUiStore.getState().commandSurfaceOpen).toBe(false);
   });
 });
+
+// ---- adversarial-review findings F1/F3/F4 -------------------------------------
+
+const SYNTH_DISPATCH = { ok: true, runId: "synth_0042", pollAfterSec: 5 };
+
+const runningSynth = (id: string) => ({
+  id,
+  kind: "synth" as const,
+  status: "running" as const,
+  createdAt: null,
+  top: "alu",
+  pinned: false,
+});
+
+describe("CommandSurface — the Dispatch button never silently re-arms (F1)", () => {
+  it("after a dispatch the button is disarmed; only an explicit re-arm brings it back", async () => {
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue(SYNTH_DISPATCH as never);
+    render(<CommandSurface />);
+    fireEvent.click(screen.getByTestId("command-surface-invoke")); // synth is default
+    await screen.findByTestId("command-surface-dispatch-note");
+
+    // A second click on a still-live PAID job must not fire.
+    expect(screen.getByTestId("command-surface-invoke")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    expect(workbenchApi.synthesize).toHaveBeenCalledTimes(1);
+
+    // The re-arm is an explicit, honest gesture.
+    expect(screen.getByTestId("command-surface-rearm")).toHaveTextContent("synth_0042");
+    fireEvent.click(screen.getByRole("button", { name: "Dispatch again?" }));
+    expect(screen.getByTestId("command-surface-invoke")).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    await waitFor(() => expect(workbenchApi.synthesize).toHaveBeenCalledTimes(2));
+  });
+
+  it("close → reopen drops the stale note but NOT the guard while the run is live", async () => {
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue(SYNTH_DISPATCH as never);
+    render(<CommandSurface />);
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    await screen.findByTestId("command-surface-dispatch-note");
+    // The runs refresh lands: the dispatched job is running.
+    act(() => {
+      useStore.setState({ runs: [runningSynth("synth_0042")] as never });
+    });
+
+    act(() => useWorkbenchUiStore.setState({ commandSurfaceOpen: false }));
+    act(() => useWorkbenchUiStore.setState({ commandSurfaceOpen: true }));
+
+    // Stale "Dispatched — synth_0042" is gone…
+    expect(screen.queryByTestId("command-surface-dispatch-note")).toBeNull();
+    // …and the button is NOT silently re-armed under the live run.
+    expect(screen.getByTestId("command-surface-invoke")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    expect(workbenchApi.synthesize).toHaveBeenCalledTimes(1);
+  });
+
+  it("a finished run leaves the button armed — the guard is live state, not a lock", async () => {
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue(SYNTH_DISPATCH as never);
+    render(<CommandSurface />);
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    await screen.findByTestId("command-surface-dispatch-note");
+    act(() => {
+      useStore.setState({
+        runs: [{ ...runningSynth("synth_0042"), status: "passed" }] as never,
+      });
+    });
+    act(() => useWorkbenchUiStore.setState({ commandSurfaceOpen: false }));
+    act(() => useWorkbenchUiStore.setState({ commandSurfaceOpen: true }));
+    expect(screen.getByTestId("command-surface-invoke")).not.toBeDisabled();
+    expect(screen.queryByTestId("command-surface-rearm")).toBeNull();
+  });
+
+  it("sync commands are never gated by a live synth run", async () => {
+    useStore.setState({ runs: [runningSynth("synth_0007")] as never });
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Lint")!);
+    expect(screen.getByTestId("command-surface-invoke")).not.toBeDisabled();
+  });
+});
+
+describe("CommandSurface — session switch resets the form (F3)", () => {
+  it("values, selection and dispatch state do not leak into the next workspace", async () => {
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue(SYNTH_DISPATCH as never);
+    render(<CommandSurface />);
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    await screen.findByTestId("command-surface-dispatch-note");
+    fireEvent.click(railButton("Lint")!);
+    fireEvent.click(screen.getByRole("button", { name: "verilator" }));
+    expect(screen.getByLabelText("tool call payload").textContent).toContain("verilator");
+
+    act(() => {
+      useStore.setState({ currentSession: { ...SESSION, id: "s2", name: "s2" } as never });
+    });
+
+    // Back to the default command, with nothing carried over.
+    expect(railButton("Synthesize")).toHaveAttribute("aria-current", "true");
+    expect(screen.queryByTestId("command-surface-dispatch-note")).toBeNull();
+    fireEvent.click(railButton("Lint")!);
+    expect(screen.getByLabelText("tool call payload").textContent).not.toContain("verilator");
+  });
+});
+
+describe("CommandSurface — override editors are per command (F4)", () => {
+  it("Lint's open override editor does not follow the switch to Simulate", () => {
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Lint")!);
+    fireEvent.click(screen.getByRole("button", { name: "Override…" }));
+    expect(screen.getByRole("button", { name: "Use manifest set" })).toBeInTheDocument();
+
+    // Both commands name their override param `files` — the box must not be
+    // the SAME React instance carrying `editing` across.
+    fireEvent.click(railButton("Simulate")!);
+    expect(screen.getByTestId("command-surface-override-files")).toHaveTextContent(
+      "Supplied by manifest"
+    );
+    expect(screen.queryByRole("button", { name: "Use manifest set" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Override…" })).toBeInTheDocument();
+  });
+});
