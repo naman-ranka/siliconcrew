@@ -17,11 +17,11 @@ import {
   Gauge,
   GitCompare,
   Info,
-  KeyRound,
   LayoutGrid,
   ListTree,
   Loader2,
   Package,
+  LogIn,
   PenLine,
   RefreshCw,
   Search,
@@ -54,6 +54,8 @@ import {
 } from "@/lib/commandSurface";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
+import { useAuth } from "@/lib/auth";
+import { stashAuthIntent, takeAuthIntent } from "@/lib/authIntent";
 import {
   ComboInput,
   MultiComboInput,
@@ -492,21 +494,49 @@ export function CommandSurface() {
   // Server-side field errors from the last invoke, keyed cmd.id → field →
   // message. A field's message clears as soon as the user edits it.
   const [fieldErrs, setFieldErrs] = React.useState<Record<string, Record<string, string>>>({});
+  // W6: rail filter query (fuzzy over label + tool name + category).
+  const [railQ, setRailQ] = React.useState("");
   const rightBodyRef = React.useRef<HTMLDivElement>(null);
   const centerRef = React.useRef<HTMLDivElement>(null);
+  const filterRef = React.useRef<HTMLInputElement>(null);
+  const { status: authStatus, signIn } = useAuth();
 
   // Esc closes (window-level while open; no global shortcut registration).
   React.useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setOpen(false);
-      }
+      if (e.key !== "Escape") return;
+      // House Esc discipline (A23): consumers (combo dropdowns, the rail
+      // filter clearing its text) preventDefault — check FIRST so the
+      // Surface never closes over an inner consumer's Esc.
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      setOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, setOpen]);
+
+  // W6: opening focuses the rail filter (type-to-filter, mirroring ⌘K).
+  React.useEffect(() => {
+    if (open) filterRef.current?.focus();
+  }, [open]);
+
+  // W4/A18: the Surface's auth-intent replay host. After the sign-in round
+  // trip (WorkOS full-page redirect via the Launcher re-stash, or Google/GIS
+  // in place), restore the exact command + form values the signed-out user
+  // had, and reopen the Surface. Kind-scoped take: other hosts' intents are
+  // left alone; a mismatched session drops the intent (cleared, never
+  // replayed against the wrong workspace).
+  React.useEffect(() => {
+    if (authStatus !== "signed_in" || !currentSession) return;
+    const intent = takeAuthIntent("surfaceCommand");
+    if (!intent || intent.kind !== "surfaceCommand") return;
+    if (intent.sessionId !== currentSession.id) return;
+    setSelectedId(intent.commandId);
+    setValues((prev) => ({ ...prev, [intent.commandId]: intent.values }));
+    setOpen(true);
+  }, [authStatus, currentSession, setOpen]);
 
   // The introspected catalog loads once per app lifetime (store-guarded);
   // the recursive path index loads per session on open (SWR-cached — cheap
@@ -537,6 +567,22 @@ export function CommandSurface() {
     [surfaceGroups]
   );
 
+  // W6: the rail filtered by the query — a group disappears when none of its
+  // commands match; selection is NOT forced to stay in the filtered set (the
+  // rail is selection-stateful — the open form keeps showing).
+  const visibleGroups = React.useMemo(() => {
+    const needle = railQ.trim().toLowerCase();
+    if (!needle) return surfaceGroups;
+    return surfaceGroups
+      .map((g) => ({
+        label: g.label,
+        commands: g.commands.filter((c) =>
+          [c.label, c.tool, g.label].some((t) => t.toLowerCase().includes(needle))
+        ),
+      }))
+      .filter((g) => g.commands.length > 0);
+  }, [surfaceGroups, railQ]);
+
   if (!open || !currentSession) return null;
 
   const catalogLoading =
@@ -558,6 +604,52 @@ export function CommandSurface() {
     setResultOpen(true);
     if (rightBodyRef.current) rightBodyRef.current.scrollTop = 0;
     if (centerRef.current) centerRef.current.scrollTop = 0;
+  };
+
+  // W6: filter-input keyboard nav — ↑/↓ move the SELECTION through the
+  // visible (filtered) list, Enter snaps to the first match when the current
+  // selection was filtered away. Esc with text clears it (consumed — the
+  // Surface's window listener sees defaultPrevented and stays open).
+  const flatVisible = visibleGroups.flatMap((g) => g.commands);
+  const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      if (railQ) {
+        e.preventDefault();
+        e.stopPropagation();
+        setRailQ("");
+      }
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (flatVisible.length === 0) return;
+      const idx = flatVisible.findIndex((c) => c.id === selectedId);
+      const next =
+        idx < 0
+          ? e.key === "ArrowDown"
+            ? 0
+            : flatVisible.length - 1
+          : (idx + (e.key === "ArrowDown" ? 1 : -1) + flatVisible.length) % flatVisible.length;
+      selectCommand(flatVisible[next].id);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (flatVisible.length === 0) return;
+      if (!flatVisible.some((c) => c.id === selectedId)) selectCommand(flatVisible[0].id);
+    }
+  };
+
+  // W4/L2: the sign-in CTA — stash the exact command + form state, then start
+  // sign-in. The replay host above restores both when the round trip lands.
+  const signInToRun = () => {
+    stashAuthIntent({
+      kind: "surfaceCommand",
+      sessionId: currentSession.id,
+      commandId: cmd.id,
+      values: userVals,
+    });
+    void signIn();
   };
 
   const setValue = (key: string, v: unknown) => {
@@ -679,9 +771,29 @@ export function CommandSurface() {
 
         {/* ---- Body: left rail · center form · right payload ---- */}
         <div className="flex min-h-0 flex-1">
-          {/* Left rail — grouped command list (Flow pinned; rest schema-driven) */}
-          <div className="w-[210px] shrink-0 overflow-y-auto border-r border-border bg-surface-0 py-1.5">
-            {surfaceGroups.map((group) => {
+          {/* Left rail — filter + grouped command list (Flow pinned first) */}
+          <div className="flex w-[210px] shrink-0 flex-col border-r border-border bg-surface-0">
+            <div className="shrink-0 border-b border-border p-2">
+              <div className="relative">
+                <Search
+                  className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden
+                />
+                <Input
+                  ref={filterRef}
+                  type="text"
+                  value={railQ}
+                  onChange={(e) => setRailQ(e.target.value)}
+                  onKeyDown={onFilterKeyDown}
+                  placeholder="Filter commands…"
+                  aria-label="Filter commands"
+                  data-testid="command-surface-filter"
+                  className="h-7 pl-6 text-xs"
+                />
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto py-1.5">
+            {visibleGroups.map((group) => {
               if (group.commands.length === 0) return null;
               return (
                 <div key={group.label}>
@@ -720,14 +832,6 @@ export function CommandSurface() {
                         <span className="min-w-0 flex-1 truncate text-xs text-foreground">
                           {c.label}
                         </span>
-                        {c.requiresSignIn && (
-                          <span title="requires sign-in" className="shrink-0">
-                            <KeyRound
-                              className="h-3 w-3 text-muted-foreground/60"
-                              aria-hidden
-                            />
-                          </span>
-                        )}
                         {c.async && (
                           <span className="shrink-0 rounded border border-status-running/30 px-1 py-px font-mono text-[8px] uppercase text-status-running">
                             async
@@ -739,6 +843,11 @@ export function CommandSurface() {
                 </div>
               );
             })}
+            {railQ.trim() !== "" && flatVisible.length === 0 && (
+              <p className="px-3 py-2 text-[11px] italic text-muted-foreground">
+                No matching commands.
+              </p>
+            )}
             {/* Introspected-catalog states below the always-available Flow group. */}
             {catalogLoading && (
               <div data-testid="command-surface-catalog-loading" className="space-y-2 px-3 py-2">
@@ -766,6 +875,7 @@ export function CommandSurface() {
                 </Button>
               </div>
             )}
+            </div>
           </div>
 
           {/* Center — param form */}
@@ -781,15 +891,6 @@ export function CommandSurface() {
                   <span className="inline-flex items-center gap-1 rounded border border-status-running/30 bg-status-running/10 px-1.5 py-px font-mono text-[10px] uppercase text-status-running">
                     <Cpu className="h-3 w-3" aria-hidden />
                     async
-                  </span>
-                )}
-                {cmd.requiresSignIn && (
-                  <span
-                    title="requires sign-in"
-                    className="inline-flex items-center gap-1 rounded border border-border bg-surface-2 px-1.5 py-px font-mono text-[10px] uppercase text-muted-foreground"
-                  >
-                    <KeyRound className="h-3 w-3" aria-hidden />
-                    sign-in
                   </span>
                 )}
               </div>
@@ -886,7 +987,29 @@ export function CommandSurface() {
                     open={resultOpen}
                     onToggle={() => setResultOpen((o) => !o)}
                   >
-                    {typeof result.result === "string" ? (
+                    {result.signinRequired ? (
+                      // W4/L2: the hosted-anonymous rejection renders as a
+                      // sign-in CTA, never a raw error string. The form state
+                      // survives the round trip (surfaceCommand auth intent).
+                      <div
+                        data-testid="command-surface-signin-cta"
+                        className="space-y-2"
+                      >
+                        <p className="text-[11px] leading-relaxed text-muted-foreground">
+                          This command needs a signed-in account. Your filled-in
+                          form comes back after signing in.
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-7 gap-1.5 text-[11px]"
+                          onClick={signInToRun}
+                        >
+                          <LogIn className="h-3 w-3" aria-hidden />
+                          Sign in to run this
+                        </Button>
+                      </div>
+                    ) : typeof result.result === "string" ? (
                       <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground">
                         {result.result}
                       </pre>

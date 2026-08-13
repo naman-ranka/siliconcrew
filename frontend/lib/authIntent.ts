@@ -20,7 +20,18 @@ export type AuthIntent =
    *  workbench-mounted modal still uses the full-fidelity "create" intent. */
   | { kind: "openCreate"; group: string | null }
   | { kind: "fork"; templateId: string }
-  | { kind: "createGroup"; name: string };
+  | { kind: "createGroup"; name: string }
+  /** Command Surface sign-in CTA (W4/A18): the signed-out user's command +
+   *  form state survives the sign-in round trip. WorkOS redirects to `/`, so
+   *  the Launcher RE-STASHES this kind and routes to the workspace, where the
+   *  Surface's kind-scoped replay host restores the form. Google/GIS signs
+   *  in with no navigation — the same host fires on the status transition. */
+  | {
+      kind: "surfaceCommand";
+      sessionId: string;
+      commandId: string;
+      values: Record<string, unknown>;
+    };
 
 const KEY = "sc-auth-intent";
 
@@ -55,7 +66,8 @@ export function takeAuthIntent(kind?: AuthIntent["kind"]): AuthIntent | null {
       (parsed.kind === "create" ||
         parsed.kind === "openCreate" ||
         parsed.kind === "fork" ||
-        parsed.kind === "createGroup");
+        parsed.kind === "createGroup" ||
+        parsed.kind === "surfaceCommand");
     if (!valid) {
       sessionStorage.removeItem(KEY);
       return null;

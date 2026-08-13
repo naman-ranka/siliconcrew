@@ -8,6 +8,9 @@ vi.mock("@/lib/api", () => ({
   threadsApi: {},
   modelsApi: {},
   workspaceApi: {},
+  // Mirrors the real detection: by CODE, never by message (W4/A17).
+  isSignInRequired: (e: unknown) =>
+    (e as { code?: string } | null)?.code === "signin_required",
   workbenchApi: {
     invokeTool: vi.fn(),
     updateManifest: vi.fn(),
@@ -385,6 +388,44 @@ describe("runSurfaceCommand", () => {
     const res = await runSurfaceCommand(sim, {});
     expect(res).toEqual({ ok: false, result: "No active session" });
     expect(workbenchApi.simulate).not.toHaveBeenCalled();
+  });
+
+  // W4/A17: signin_required is detected by CODE across BOTH error shapes and
+  // surfaces as a flag the UI turns into a sign-in CTA — never a raw string
+  // heuristic.
+
+  it("/invoke 401 signin_required (envelope code) → signinRequired on the result", async () => {
+    vi.mocked(workbenchApi.invokeTool).mockRejectedValue(
+      Object.assign(new Error("'write_file' requires signing in."), {
+        code: "signin_required",
+        status: 401,
+      })
+    );
+    const writeFile = toolToSurfaceCommand(CATALOG.find((e) => e.name === "write_file")!, CTX);
+    const res = await runSurfaceCommand(writeFile, { filename: "a.v" });
+    expect(res).toMatchObject({ ok: false, signinRequired: true });
+  });
+
+  it("core twin 403 signin_required (detail code) → signinRequired through runCommand", async () => {
+    vi.mocked(workbenchApi.synthesize).mockRejectedValue(
+      Object.assign(new Error("Sign in to run synthesis."), {
+        code: "signin_required",
+        status: 403,
+      })
+    );
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    const res = await runSurfaceCommand(synth, {});
+    expect(res).toMatchObject({ ok: false, signinRequired: true });
+  });
+
+  it("ordinary failures never carry signinRequired (message text is not a trigger)", async () => {
+    vi.mocked(workbenchApi.synthesize).mockRejectedValue(
+      new Error("'start_synthesis' requires signing in.") // codeless — NOT the CTA
+    );
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    const res = await runSurfaceCommand(synth, {});
+    expect(res).toMatchObject({ ok: false });
+    expect(res && "signinRequired" in res && res.signinRequired).toBeFalsy();
   });
 });
 
