@@ -284,15 +284,24 @@ export const chatApi = {
   // param so the server keys the LangGraph checkpoint by thread while the
   // workspace stays bound from session_id.
   createConnection: (sessionId: string, threadId?: string | null): WebSocket => {
-    // Browsers can't set headers on `new WebSocket`, so the Google ID token
-    // rides a query param. The backend (chat_websocket) already reads
-    // `?token=` → authenticate(). Only appended when signed in.
+    // First-message auth handshake (naman-ranka/siliconcrew-dev#59): the token
+    // must NEVER ride the URL — Cloud Run logs query strings verbatim, which
+    // put bearer JWTs in request logs. Browsers can't set headers on
+    // `new WebSocket`, so the very first frame on the socket is
+    // {"type":"auth","token":...} (token null in self-host / signed-out; the
+    // backend authenticates it exactly like the old query param). Registered
+    // via addEventListener so the store's later `onopen` assignment (which
+    // sends the first chat message) fires AFTER it — auth is always frame one,
+    // on fresh connects and reconnects alike.
     const params = new URLSearchParams();
     if (threadId) params.set("thread_id", threadId);
-    const token = getAuthToken();
-    if (token) params.set("token", token);
     const qs = params.toString();
-    return new WebSocket(`${getWsBase()}/api/chat/${encodeSessionId(sessionId)}${qs ? `?${qs}` : ""}`);
+    const ws = new WebSocket(`${getWsBase()}/api/chat/${encodeSessionId(sessionId)}${qs ? `?${qs}` : ""}`);
+    ws.addEventListener("open", () => {
+      // Read the token at open time so reconnects pick up a refreshed token.
+      ws.send(JSON.stringify({ type: "auth", token: getAuthToken() ?? null }));
+    });
+    return ws;
   },
 };
 
