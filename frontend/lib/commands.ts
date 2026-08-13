@@ -5,10 +5,12 @@ import type { ActivityEvent, DesignManifest, RunSummary } from "@/types";
 
 // The v2 invocation model: every tool run — palette (⌘K), file context menu,
 // activity "Re-run", param modal — goes through this registry. The guiding
-// principle: THE MANIFEST SUPPLIES FILES AND TARGETS; THE USER ONLY SUPPLIES
-// CHOICES. Files are never hand-picked in the UI — the backend re-resolves
-// each command's file set from the manifest (files_for_stage), so the param
-// surface here is choices only (platform, clock, mode, stages…).
+// principle: THE MANIFEST SUPPLIES FILES AND TARGETS BY DEFAULT; the user
+// supplies choices (platform, clock, mode, stages…) and — since L1
+// (command-surface-simplification) REVERSED the old no-hand-picking fence —
+// may OPTIONALLY override the file set (`files` on lint/sim, `verilogFiles`
+// on synth). An empty/absent override keeps the backend's manifest
+// resolution (files_for_stage) exactly as before.
 //
 // Sync commands (lint, sim) resolve inline; async ones (synth, pnr) are
 // DISPATCH-ONLY: POST → run appears queued/running → done. The UI is a viewer
@@ -215,11 +217,15 @@ export function manifestFacts(
  * menu) — dev#51 (2): right-click → Simulate on a testbench must run THAT
  * testbench, not silently fall back to the manifest default.
  *
- * Only mappings the REST contracts can honestly express are made: sim gets
- * `simTop` when the clicked file is a known testbench (manifest.testbenches
- * carries file → module). Lint/synth bodies have no per-file field — the
- * backend re-resolves their sets from the manifest — so they pass nothing
- * rather than a pretend argument the backend would ignore.
+ * Only mappings the contracts can honestly express are made (A15):
+ * - sim gets `simTop` when the clicked file is a known testbench
+ *   (manifest.testbenches carries file → module). It does NOT single-file-
+ *   override the compile set — a testbench needs its dependencies, which the
+ *   manifest resolves.
+ * - lint gets `files: [clicked]` through the W3 override — "lint this file"
+ *   now honestly lints exactly that file.
+ * - synth passes nothing: a one-file synth override from a right-click would
+ *   silently drop the rest of the design.
  */
 export function commandValuesForFile(
   id: CommandId,
@@ -230,6 +236,7 @@ export function commandValuesForFile(
     const tb = (manifest?.testbenches ?? []).find((t) => t.file === path);
     if (tb?.module) return { simTop: tb.module };
   }
+  if (id === "lint") return { files: [path] };
   return {};
 }
 
@@ -371,11 +378,20 @@ export async function runCommand(
     void s.loadRuns();
   };
 
+  // W3/L1: optional file overrides ride the same value bag as every other
+  // param. Empty/absent = the manifest-resolved set, exactly as today.
+  const fileOverride = (key: string): string[] => {
+    const v = vals[key];
+    return Array.isArray(v) ? (v as string[]).filter((f) => typeof f === "string" && f) : [];
+  };
+
   try {
     switch (id) {
       case "lint": {
+        const files = fileOverride("files");
         const result = await workbenchApi.lint(sessionId, {
           engine: String(vals.engine ?? "auto"),
+          ...(files.length > 0 ? { files } : {}),
         });
         const nErr = result.errors.length;
         const nWarn = result.warnings.length;
@@ -397,10 +413,12 @@ export async function runCommand(
 
       case "sim": {
         const simTop = String(vals.simTop ?? "").trim();
+        const files = fileOverride("files");
         const { run, manifestWarnings } = await workbenchApi.simulate(sessionId, {
           mode: String(vals.mode ?? "rtl"),
           // Empty = let the backend fall back to the manifest's default TB.
           ...(simTop ? { simTop } : {}),
+          ...(files.length > 0 ? { files } : {}),
         });
         done({
           status: run.status === "passed" ? "ok" : "error",
@@ -432,6 +450,7 @@ export async function runCommand(
           store.pushToast({ kind: "error", title: "P&R retry needs a source synth run" });
           break;
         }
+        const verilogFiles = fileOverride("verilogFiles");
         const dispatch =
           id === "synth"
             ? await workbenchApi.synthesize(sessionId, {
@@ -442,6 +461,7 @@ export async function runCommand(
                 aspectRatio: vals.aspectRatio,
                 coreMargin: vals.coreMargin,
                 runEquiv: vals.runEquiv,
+                ...(verilogFiles.length > 0 ? { verilogFiles } : {}),
               })
             : await workbenchApi.retryRun(sessionId, String(vals.runId), {
                 fromStage: String(vals.fromStage ?? "floorplan"),

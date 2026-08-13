@@ -474,6 +474,98 @@ function ParamRow({
   );
 }
 
+// ---- file-override box (W3/L1) ---------------------------------------------------
+
+/**
+ * The editable successor of the "Supplied by manifest — not asked of the
+ * user" box: collapsed, it shows the manifest set as chips; "Override…"
+ * swaps in the multi-combo (chips + suggesting input). An empty override =
+ * the backend's manifest resolution, exactly as before — so "Use manifest
+ * set" simply clears the list.
+ */
+function OverrideBox({
+  param,
+  options,
+  subtitles,
+  value,
+  error,
+  onChange,
+}: {
+  param: SurfaceParam;
+  /** The manifest set — doubles as chips (collapsed) and suggestions (editing). */
+  options: string[];
+  subtitles?: Record<string, string>;
+  value: unknown;
+  error?: string | null;
+  onChange: (v: string[]) => void;
+}) {
+  const arr = Array.isArray(value) ? (value as string[]) : [];
+  const [editing, setEditing] = React.useState(false);
+  const active = editing || arr.length > 0;
+  const suggestions: ComboSuggestion[] = options.map((o) =>
+    subtitles?.[o] ? { value: o, subtitle: subtitles[o] } : o
+  );
+  return (
+    <div
+      data-testid={`command-surface-override-${param.key}`}
+      className="mt-4 rounded-lg border border-info/25 bg-info/5 p-3"
+    >
+      <div className="mb-2 flex items-center gap-1.5">
+        <Info className="h-3.5 w-3.5 text-info" aria-hidden />
+        <span className="text-[11px] font-semibold text-info">
+          {active ? "Overriding the manifest set" : "Supplied by manifest"}
+          {" · "}
+          <code className="font-mono">{param.key}</code>
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            if (active) {
+              onChange([]); // empty = manifest-driven again
+              setEditing(false);
+            } else {
+              setEditing(true);
+            }
+          }}
+          className="ml-auto shrink-0 text-[11px] text-info underline-offset-2 hover:underline"
+        >
+          {active ? "Use manifest set" : "Override…"}
+        </button>
+      </div>
+      {active ? (
+        <div className="flex flex-col gap-1">
+          <MultiComboInput
+            values={arr}
+            onChange={onChange}
+            suggestions={suggestions}
+            ariaLabel={`Override ${param.key}`}
+            className="max-w-none items-start"
+          />
+          {param.hint && (
+            <span className="text-[10px] italic text-muted-foreground">{param.hint}</span>
+          )}
+          {error && <span className="text-[10px] text-status-fail">{error}</span>}
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {options.length > 0 ? (
+            options.map((o) => (
+              <span
+                key={o}
+                className="rounded border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-foreground"
+              >
+                {o}
+              </span>
+            ))
+          ) : (
+            <span className="font-mono text-[11px] text-muted-foreground">—</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- right-pane endpoint label ---------------------------------------------------
 
 const CORE_PATHS: Record<string, string> = {
@@ -690,8 +782,10 @@ export function CommandSurface() {
   };
 
   const visible = cmd.params.filter((p) => !p.when || p.when(merged));
-  const basic = visible.filter((p) => !p.adv);
-  const advanced = visible.filter((p) => p.adv);
+  // W3: override params render as the manifest box, never as plain rows.
+  const overrides = visible.filter((p) => p.override);
+  const basic = visible.filter((p) => !p.adv && !p.override);
+  const advanced = visible.filter((p) => p.adv && !p.override);
 
   const missingRun = visible.some(
     (p) =>
@@ -951,7 +1045,22 @@ export function CommandSurface() {
                 </div>
               )}
 
-              {basic.length === 0 && advanced.length === 0 && !cmd.autoArgs?.length && (
+              {overrides.map((p) => (
+                <OverrideBox
+                  key={p.key}
+                  param={p}
+                  options={resolveOptions(p, ctx)}
+                  subtitles={p.subtitles?.(ctx)}
+                  value={merged[p.key]}
+                  error={fieldErrs[cmd.id]?.[p.key]}
+                  onChange={(v) => setValue(p.key, v)}
+                />
+              ))}
+
+              {basic.length === 0 &&
+                advanced.length === 0 &&
+                overrides.length === 0 &&
+                !cmd.autoArgs?.length && (
                 <p className="mt-4 text-xs italic text-muted-foreground">
                   No parameters — one-click command.
                 </p>

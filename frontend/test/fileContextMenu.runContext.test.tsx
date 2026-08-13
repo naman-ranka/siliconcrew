@@ -96,6 +96,32 @@ describe("FileContextMenu run commands carry the clicked file", () => {
     );
   });
 
+  it("Lint on a file row lints THAT file via the W3 override (A15)", async () => {
+    vi.mocked(workbenchApi.lint).mockResolvedValue({
+      ok: true,
+      status: "passed",
+      warnings: [],
+      errors: [],
+      byFile: {},
+      command: "iverilog sync_fifo.v",
+      files: ["sync_fifo.v"],
+      engine: "iverilog",
+    } as never);
+    useWorkbenchUiStore.setState({
+      contextMenu: { x: 10, y: 10, path: "sync_fifo.v", kind: "file" },
+    });
+    render(<FileContextMenu />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: /Lint/ }));
+
+    await waitFor(() =>
+      expect(workbenchApi.lint).toHaveBeenCalledWith("s1", {
+        engine: "auto",
+        files: ["sync_fifo.v"], // the clicked file, honestly scoped
+      })
+    );
+  });
+
   it("Simulate on an rtl row keeps the manifest default (no false file scoping)", async () => {
     useWorkbenchUiStore.setState({
       contextMenu: { x: 10, y: 10, path: "sync_fifo.v", kind: "file" },

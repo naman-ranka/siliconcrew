@@ -137,6 +137,62 @@ describe("CommandSurface — rail filter + keyboard (W6)", () => {
   });
 });
 
+describe("CommandSurface — file-override box (W3/A16)", () => {
+  it("collapsed by default: manifest chips + an Override… affordance, nothing in the payload", () => {
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Lint")!);
+    const box = screen.getByTestId("command-surface-override-files");
+    expect(box).toHaveTextContent("Supplied by manifest");
+    expect(box).toHaveTextContent("alu.v"); // the manifest rtl chip
+    // Empty override → the payload stays manifest-driven (no `files` key).
+    expect(screen.getByLabelText("tool call payload").textContent).not.toContain('"files"');
+  });
+
+  it("Override… swaps in the multi-combo; picked files land in the live payload; reset clears", async () => {
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Lint")!);
+    fireEvent.click(screen.getByRole("button", { name: "Override…" }));
+    const input = screen.getByRole("combobox", { name: "Override files" });
+    fireEvent.focus(input);
+    fireEvent.click(screen.getByRole("option", { name: "alu.v" }));
+    expect(screen.getByLabelText("tool call payload").textContent).toContain('"files"');
+    expect(screen.getByLabelText("tool call payload").textContent).toContain('"alu.v"');
+    // Free entry stays allowed — type a path the suggestions missed.
+    fireEvent.change(input, { target: { value: "rtl/custom.v" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByLabelText("tool call payload").textContent).toContain("rtl/custom.v");
+    // "Use manifest set" clears the override → payload back to manifest-driven.
+    fireEvent.click(screen.getByRole("button", { name: "Use manifest set" }));
+    expect(screen.getByLabelText("tool call payload").textContent).not.toContain('"files"');
+    expect(screen.getByTestId("command-surface-override-files")).toHaveTextContent(
+      "Supplied by manifest"
+    );
+  });
+
+  it("the override rides the dispatch: lint POSTs files when set", async () => {
+    vi.mocked(workbenchApi.lint).mockResolvedValue({
+      ok: true,
+      status: "passed",
+      warnings: [],
+      errors: [],
+      byFile: {},
+      command: "iverilog tb.v",
+      files: ["tb.v"],
+      engine: "iverilog",
+    } as never);
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Lint")!);
+    fireEvent.click(screen.getByRole("button", { name: "Override…" }));
+    const input = screen.getByRole("combobox", { name: "Override files" });
+    fireEvent.change(input, { target: { value: "tb.v" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    await waitFor(() =>
+      expect(workbenchApi.lint).toHaveBeenCalledWith("s1", { engine: "auto", files: ["tb.v"] })
+    );
+  });
+});
+
 describe("CommandSurface — honest async/sync affordances (W5)", () => {
   afterEach(() => vi.useRealTimers());
 

@@ -433,6 +433,46 @@ describe("runSurfaceCommand", () => {
   });
 });
 
+// ---- W3/L1 file-override params on the core commands ------------------------------------
+
+describe("core file overrides (W3/A16)", () => {
+  it("lint/sim expose `files`, synth exposes `verilogFiles` — optional, manifest-suggested", () => {
+    const byId = Object.fromEntries(CORE_SURFACE_COMMANDS.map((c) => [c.id, c]));
+    const lintFiles = byId.lint.params.find((p) => p.key === "files")!;
+    expect(lintFiles).toMatchObject({ editor: "multi", optional: true, override: true, source: "manifest" });
+    expect((lintFiles.options as (c: SurfaceCtx) => string[])(CTX)).toEqual(["alu.v"]); // rtl+include
+    const simFiles = byId.sim.params.find((p) => p.key === "files")!;
+    expect((simFiles.options as (c: SurfaceCtx) => string[])(CTX)).toEqual(["alu.v", "tb.v"]); // rtl+tb+include
+    const synthFiles = byId.synth.params.find((p) => p.key === "verilogFiles")!;
+    expect((synthFiles.options as (c: SurfaceCtx) => string[])(CTX)).toEqual(["alu.v"]); // rtl only
+  });
+
+  it("empty override is OMITTED from the payload (manifest-driven, unchanged behavior)", () => {
+    const lint = CORE_SURFACE_COMMANDS.find((c) => c.id === "lint")!;
+    expect(buildSurfacePayload(lint, {}, CTX).arguments).toEqual({ engine: "auto" });
+    expect(buildSurfacePayload(lint, { files: ["tb.v"] }, CTX).arguments).toEqual({
+      engine: "auto",
+      files: ["tb.v"],
+    });
+  });
+
+  it("the override reaches the REST body through the core engine", async () => {
+    vi.mocked(workbenchApi.lint).mockResolvedValue({
+      ok: true,
+      status: "passed",
+      warnings: [],
+      errors: [],
+      byFile: {},
+      command: "verilator --lint-only tb.v",
+      files: ["tb.v"],
+      engine: "verilator",
+    } as never);
+    const lint = CORE_SURFACE_COMMANDS.find((c) => c.id === "lint")!;
+    await runSurfaceCommand(lint, { files: ["tb.v"] });
+    expect(workbenchApi.lint).toHaveBeenCalledWith("s1", { engine: "auto", files: ["tb.v"] });
+  });
+});
+
 // ---- json editor params (W7/A24) --------------------------------------------------------
 
 const SIM_BUILD_ENTRY = entry({

@@ -55,6 +55,11 @@ export interface SurfaceParam {
   optional?: boolean;
   hint?: string;
   when?: (vals: Record<string, unknown>) => boolean;
+  /** W3/L1: a file-set OVERRIDE param — rendered as the "Supplied by
+   *  manifest" box (manifest chips, collapsed) with an "Override…"
+   *  affordance that swaps in the multi-combo, not as a plain row. Empty
+   *  value = the backend's manifest resolution, exactly as before. */
+  override?: true;
   /** Module-valued vs file-valued — rendered as a tiny tag next to the source
    *  badge so the ".v here but not there" question answers itself. */
   valueKind?: "module" | "file";
@@ -98,27 +103,48 @@ const filesByRoles = (m: DesignManifest | null, roles: string[]) =>
   (m?.files ?? []).filter((f) => roles.includes(f.role)).map((f) => f.path);
 
 const synthRunIds = (ctx: SurfaceCtx) => ctx.runs.filter((r) => r.kind === "synth").map((r) => r.id);
-const rtlFiles = (ctx: SurfaceCtx) => filesByRoles(ctx.manifest, ["rtl"]);
+
+/** path → role subtitles for file-override combos. */
+const roleSubtitles = (c: SurfaceCtx): Record<string, string> =>
+  Object.fromEntries((c.manifest?.files ?? []).map((f) => [f.path, f.role]));
+
+/** A W3/L1 file-override param: empty = the manifest set (backend resolves
+ *  files_for_stage exactly as before); a non-empty list replaces it. The
+ *  option pool doubles as the displayed "supplied by manifest" chips. */
+const fileOverrideParam = (key: string, roles: string[], hint: string): SurfaceParam => ({
+  key,
+  label: key,
+  editor: "multi",
+  source: "manifest",
+  options: (c: SurfaceCtx) => filesByRoles(c.manifest, roles),
+  def: [],
+  optional: true, // empty → omitted from the payload → manifest-driven
+  override: true,
+  valueKind: "file",
+  subtitles: roleSubtitles,
+  hint,
+});
 
 // ---- the core four (hand-defined; REST semantics + job polling) ----------------
 
 export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
   {
     id: "lint", label: "Lint", group: "Flow", tool: "linter_tool", core: "lint",
-    desc: "Lint/syntax check (iverilog or verilator). Manifest supplies rtl + include files.",
-    autoArgs: [{ key: "verilog_files", describe: (c: SurfaceCtx) => filesByRoles(c.manifest, ["rtl", "include"]).join(", ") || "—" }],
+    desc: "Lint/syntax check (iverilog or verilator). Manifest supplies rtl + include files; override to lint a different set.",
     params: [
       { key: "engine", label: "engine", editor: "enum", options: LINT_ENGINES, def: "auto", source: "choice" },
+      // W3/L1 (REST key `files`): optional override of the rtl+include set.
+      fileOverrideParam("files", ["rtl", "include"], "empty = the manifest's rtl + include set"),
     ],
   },
   {
     id: "sim", label: "Simulate", group: "Flow", tool: "run_isolated_simulation", core: "sim", mutates: true,
     desc: "Manifest-driven sim in its own sim_runs/sim_NNNN/ dir — own VCD + provenance.",
-    autoArgs: [
-      { key: "reads (files)", describe: (c: SurfaceCtx) => filesByRoles(c.manifest, ["rtl", "tb", "include"]).join(", ") || "—" },
-    ],
     params: [
       { key: "mode", label: "mode", editor: "enum", options: ["rtl", "post_synth"], def: "rtl", source: "choice" },
+      // W3/L1 (REST key `files`): optional override of the compile set —
+      // replaces the old "reads (files)" pseudo-key display (A16).
+      fileOverrideParam("files", ["rtl", "tb", "include"], "empty = the manifest's rtl + tb + include set"),
       {
         // W7: named for what it IS — a testbench MODULE (subtitles show each
         // module's defining file, so the ".v or not" question never comes up).
@@ -141,10 +167,13 @@ export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
     id: "synth", label: "Synthesize", group: "Flow", tool: "start_synthesis", core: "synth", async: true, requiresSignIn: true, mutates: true,
     desc: "Async ORFS job → { run_id } immediately; completion arrives via activity events / Refresh (no client polling).",
     autoArgs: [
-      { key: "verilog_files", describe: (c: SurfaceCtx) => rtlFiles(c).join(", ") || "—" },
       { key: "top_module", label: "Top module", describe: (c: SurfaceCtx) => c.manifest?.synthTop ?? "—" },
     ],
     params: [
+      // W3/L1 (REST key `verilogFiles`): optional override of the rtl set —
+      // the backend keeps its .v/.sv filter (actions.py) and rejects
+      // non-Verilog overrides honestly.
+      fileOverrideParam("verilogFiles", ["rtl"], "empty = the manifest's rtl set"),
       { key: "platform", label: "platform", editor: "enum", options: PLATFORMS, def: (c: SurfaceCtx) => c.manifest?.platform ?? "sky130hd", source: "manifest" },
       { key: "maxStage", label: "max_stage", editor: "enum", options: SYNTH_STAGES, def: "finish", source: "choice", hint: "“synth” = fast synthesis-only estimate" },
       { key: "clockPeriodNs", label: "clock_period_ns", editor: "number", def: (c: SurfaceCtx) => c.manifest?.clockPeriodNs ?? 10, min: 0.1, step: 0.1, unit: "ns", source: "manifest" },

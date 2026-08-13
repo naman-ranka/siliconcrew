@@ -166,8 +166,18 @@ describe("commandValuesForFile", () => {
     expect(commandValuesForFile("sim", "alu_tb.v", null)).toEqual({});
   });
 
-  it("lint/synth pass nothing — their REST bodies have no per-file field", () => {
-    expect(commandValuesForFile("lint", "alu_tb.v", MANIFEST)).toEqual({});
+  it("lint passes the clicked file through the W3 override (A15)", () => {
+    expect(commandValuesForFile("lint", "alu_tb.v", MANIFEST)).toEqual({ files: ["alu_tb.v"] });
+    expect(commandValuesForFile("lint", "rtl/alu.v", null)).toEqual({ files: ["rtl/alu.v"] });
+  });
+
+  it("sim does NOT single-file-override the compile set (a TB needs its deps, A15)", () => {
+    const vals = commandValuesForFile("sim", "tb/cpu_tb.v", MANIFEST);
+    expect(vals).toEqual({ simTop: "cpu_tb" });
+    expect(vals).not.toHaveProperty("files");
+  });
+
+  it("synth passes nothing — a right-click must not silently drop the design", () => {
     expect(commandValuesForFile("synth", "alu.v", MANIFEST)).toEqual({});
   });
 });
@@ -228,6 +238,46 @@ describe("runCommand request bodies", () => {
       "s1",
       expect.objectContaining({ maxStage: "synth", platform: "sky130hd" })
     );
+  });
+
+  // W3/L1 (A16): optional file overrides ride the REST bodies — lint/sim use
+  // `files`, synth uses `verilogFiles`; empty/absent keeps the manifest set.
+
+  it("lint carries a files override; an empty list is OMITTED (manifest-driven)", async () => {
+    vi.mocked(workbenchApi.lint).mockResolvedValue({ ok: true, ...PASSING_LINT });
+    await runCommand("lint", { files: ["alu_tb.v", "alu.v"] });
+    expect(workbenchApi.lint).toHaveBeenLastCalledWith("s1", {
+      engine: "auto",
+      files: ["alu_tb.v", "alu.v"],
+    });
+    await runCommand("lint", { files: [] });
+    expect(workbenchApi.lint).toHaveBeenLastCalledWith("s1", { engine: "auto" });
+  });
+
+  it("sim carries a files override alongside simTop", async () => {
+    vi.mocked(workbenchApi.simulate).mockResolvedValue({ run: SIM_RUN, manifestWarnings: [] });
+    await runCommand("sim", { simTop: "alu_tb", files: ["alu.v", "alu_tb.v"] });
+    expect(workbenchApi.simulate).toHaveBeenLastCalledWith("s1", {
+      mode: "rtl",
+      simTop: "alu_tb",
+      files: ["alu.v", "alu_tb.v"],
+    });
+  });
+
+  it("synth carries a verilogFiles override; absent otherwise", async () => {
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue({
+      ok: true,
+      runId: "synth_0001",
+      pollAfterSec: 5,
+    });
+    await runCommand("synth", { verilogFiles: ["rtl/alu.v"] });
+    expect(workbenchApi.synthesize).toHaveBeenLastCalledWith(
+      "s1",
+      expect.objectContaining({ verilogFiles: ["rtl/alu.v"] })
+    );
+    await runCommand("synth", {});
+    const lastBody = vi.mocked(workbenchApi.synthesize).mock.calls.at(-1)![1];
+    expect(lastBody).not.toHaveProperty("verilogFiles");
   });
 });
 
