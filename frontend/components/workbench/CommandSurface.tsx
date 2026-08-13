@@ -54,7 +54,11 @@ import {
 } from "@/lib/commandSurface";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
-import { ComboInput } from "@/components/workbench/ComboInput";
+import {
+  ComboInput,
+  MultiComboInput,
+  type ComboSuggestion,
+} from "@/components/workbench/ComboInput";
 import { cn } from "@/lib/utils";
 
 // The v2 Command Surface — a three-pane command → tool-call explorer. Left: the
@@ -268,14 +272,20 @@ function JsonView({ value, ariaLabel }: { value: unknown; ariaLabel?: string }) 
 function ParamEditor({
   param,
   options,
+  subtitles,
   value,
   onChange,
 }: {
   param: SurfaceParam;
   options: string[];
+  /** value → subtitle map for combo rows (module → file, file → role). */
+  subtitles?: Record<string, string>;
   value: unknown;
   onChange: (v: unknown) => void;
 }) {
+  const suggestions: ComboSuggestion[] = options.map((o) =>
+    subtitles?.[o] ? { value: o, subtitle: subtitles[o] } : o
+  );
   switch (param.editor) {
     case "enum": {
       // Short small sets → segmented buttons; long values or >4 options →
@@ -363,112 +373,39 @@ function ParamEditor({
         <ComboInput
           value={String(value ?? "")}
           onChange={(v) => onChange(v)}
-          suggestions={options}
+          suggestions={suggestions}
           ariaLabel={param.label}
           className="w-52"
         />
       );
     case "multi": {
       const arr = Array.isArray(value) ? (value as string[]) : [];
-      // No convention/enum options → freeform entry: type + Enter adds a chip.
-      if (options.length === 0) {
-        return <FreeformChips values={arr} label={param.label} onChange={onChange} />;
-      }
+      // ONE selector everywhere (W2): chips + a suggesting combo to add
+      // entries — free entry always allowed, suggestions when the workspace
+      // supplies them (empty pool = plain type-and-Enter).
       return (
-        <div className="flex max-w-[300px] flex-wrap justify-end gap-1">
-          {options.map((opt) => {
-            const on = arr.includes(opt);
-            return (
-              <button
-                key={opt}
-                type="button"
-                aria-pressed={on}
-                onClick={() =>
-                  onChange(on ? arr.filter((o) => o !== opt) : [...arr, opt])
-                }
-                className={cn(
-                  "rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors",
-                  on
-                    ? "border-primary/40 bg-primary/15 text-primary"
-                    : "border-border bg-transparent text-muted-foreground hover:bg-surface-2 hover:text-foreground"
-                )}
-              >
-                {opt}
-              </button>
-            );
-          })}
-        </div>
+        <MultiComboInput
+          values={arr}
+          onChange={onChange}
+          suggestions={suggestions}
+          ariaLabel={`Add ${param.label}`}
+        />
       );
     }
   }
 }
 
-// Freeform string-array editor: a text input (Enter adds) + removable chips.
-function FreeformChips({
-  values,
-  label,
-  onChange,
-}: {
-  values: string[];
-  label: string;
-  onChange: (v: unknown) => void;
-}) {
-  const [draft, setDraft] = React.useState("");
-  const add = () => {
-    const v = draft.trim();
-    if (!v) return;
-    if (!values.includes(v)) onChange([...values, v]);
-    setDraft("");
-  };
-  return (
-    <div className="flex max-w-[300px] flex-col items-end gap-1">
-      <Input
-        type="text"
-        value={draft}
-        aria-label={`Add ${label}`}
-        placeholder="type + Enter"
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            add();
-          }
-        }}
-        className="h-7 w-52 font-mono text-[11px]"
-      />
-      {values.length > 0 && (
-        <div className="flex flex-wrap justify-end gap-1">
-          {values.map((v) => (
-            <span
-              key={v}
-              className="inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] text-primary"
-            >
-              {v}
-              <button
-                type="button"
-                aria-label={`Remove ${v}`}
-                onClick={() => onChange(values.filter((o) => o !== v))}
-                className="text-primary/70 transition-colors hover:text-primary"
-              >
-                <X className="h-2.5 w-2.5" aria-hidden />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ParamRow({
   param,
   options,
+  subtitles,
   value,
   error,
   onChange,
 }: {
   param: SurfaceParam;
   options: string[];
+  subtitles?: Record<string, string>;
   value: unknown;
   /** Server-side field error (400 invalid_arguments) — shown until edited. */
   error?: string | null;
@@ -488,12 +425,23 @@ function ParamRow({
           {param.label}
         </span>
         <SrcTag source={param.source} />
+        {param.valueKind && (
+          <span className="inline-flex items-center rounded border border-border bg-surface-2 px-1 py-px font-mono text-[9px] leading-3 text-muted-foreground">
+            {param.valueKind}
+          </span>
+        )}
       </div>
       <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
         {noRuns ? (
           <span className="text-[11px] italic text-muted-foreground">No synth runs yet</span>
         ) : (
-          <ParamEditor param={param} options={options} value={value} onChange={onChange} />
+          <ParamEditor
+            param={param}
+            options={options}
+            subtitles={subtitles}
+            value={value}
+            onChange={onChange}
+          />
         )}
         {error && (
           <span className="text-[10px] text-status-fail">{error}</span>
@@ -529,7 +477,8 @@ export function CommandSurface() {
   const currentSession = useStore((s) => s.currentSession);
   const manifest = useStore((s) => s.manifest);
   const runs = useStore((s) => s.runs);
-  const rootDir = useStore((s) => s.dirCache[""]);
+  const pathIndex = useStore((s) => s.pathIndex);
+  const loadPathIndex = useStore((s) => s.loadPathIndex);
   const toolCatalog = useStore((s) => s.toolCatalog);
   const loadToolCatalog = useStore((s) => s.loadToolCatalog);
 
@@ -559,18 +508,23 @@ export function CommandSurface() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, setOpen]);
 
-  // The introspected catalog loads once per app lifetime (store-guarded).
+  // The introspected catalog loads once per app lifetime (store-guarded);
+  // the recursive path index loads per session on open (SWR-cached — cheap
+  // no-op when already populated; invalidateDirs revalidates it).
   React.useEffect(() => {
-    if (open) void loadToolCatalog();
-  }, [open, loadToolCatalog]);
+    if (!open) return;
+    void loadToolCatalog();
+    void loadPathIndex();
+  }, [open, currentSession?.id, loadToolCatalog, loadPathIndex]);
 
   const ctx: SurfaceCtx = React.useMemo(
     () => ({
       manifest,
       runs,
-      rootFiles: (rootDir?.entries ?? []).filter((e) => e.kind === "file").map((e) => e.name),
+      wsPaths: pathIndex.paths,
+      wsPathsTruncated: pathIndex.truncated,
     }),
-    [manifest, runs, rootDir]
+    [manifest, runs, pathIndex]
   );
 
   // Flow (core four) + the schema-driven groups from the backend catalog.
@@ -877,6 +831,7 @@ export function CommandSurface() {
                       key={p.key}
                       param={p}
                       options={resolveOptions(p, ctx)}
+                      subtitles={p.subtitles?.(ctx)}
                       value={merged[p.key]}
                       error={fieldErrs[cmd.id]?.[p.key]}
                       onChange={(v) => setValue(p.key, v)}
@@ -897,6 +852,7 @@ export function CommandSurface() {
                         key={p.key}
                         param={p}
                         options={resolveOptions(p, ctx)}
+                        subtitles={p.subtitles?.(ctx)}
                         value={merged[p.key]}
                         error={fieldErrs[cmd.id]?.[p.key]}
                         onChange={(v) => setValue(p.key, v)}
@@ -949,6 +905,12 @@ export function CommandSurface() {
                   <SrcTag key={s} source={s} />
                 ))}
               </div>
+              {ctx.wsPathsTruncated && (
+                <p className="text-[10px] text-muted-foreground">
+                  Workspace file index truncated — suggestions may be incomplete;
+                  any path can still be typed.
+                </p>
+              )}
               <Button
                 type="button"
                 data-testid="command-surface-invoke"

@@ -28,8 +28,12 @@ export type SurfaceParamSource = "manifest" | "choice" | "run" | "default" | "te
 export interface SurfaceCtx {
   manifest: DesignManifest | null;
   runs: RunSummary[];
-  /** Workspace-root file names (from the dir cache) — file-picking conventions. */
-  rootFiles: string[];
+  /** Recursive workspace file PATHS (the store's path-index slice) — every
+   *  file-picking convention suggests ws-relative paths, consistently. */
+  wsPaths: string[];
+  /** The backend truncated the path walk — suggestions may be incomplete;
+   *  surfaced in the UI, never hidden (invariant 4). */
+  wsPathsTruncated: boolean;
 }
 
 export interface SurfaceParam {
@@ -49,6 +53,12 @@ export interface SurfaceParam {
   optional?: boolean;
   hint?: string;
   when?: (vals: Record<string, unknown>) => boolean;
+  /** Module-valued vs file-valued — rendered as a tiny tag next to the source
+   *  badge so the ".v here but not there" question answers itself. */
+  valueKind?: "module" | "file";
+  /** Per-value subtitles for combo suggestions (module → its file;
+   *  file → its manifest role). Display-only decoration. */
+  subtitles?: (ctx: SurfaceCtx) => Record<string, string>;
 }
 
 export interface SurfaceAutoArg {
@@ -74,8 +84,10 @@ export interface SurfaceCommand {
   params: SurfaceParam[];
 }
 
+// Ws-relative PATHS (`name` is documented display-only, manifest.py:102-105 —
+// a nested rtl/alu.v would silently break on `name`).
 const filesByRoles = (m: DesignManifest | null, roles: string[]) =>
-  (m?.files ?? []).filter((f) => roles.includes(f.role)).map((f) => f.name);
+  (m?.files ?? []).filter((f) => roles.includes(f.role)).map((f) => f.path);
 
 const synthRunIds = (ctx: SurfaceCtx) => ctx.runs.filter((r) => r.kind === "synth").map((r) => r.id);
 const rtlFiles = (ctx: SurfaceCtx) => filesByRoles(ctx.manifest, ["rtl"]);
@@ -105,6 +117,13 @@ export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
         def: (c: SurfaceCtx) => c.manifest?.simTop ?? "",
         optional: true, // empty → backend falls back to the manifest default
         hint: "which testbench to run",
+        valueKind: "module",
+        subtitles: (c: SurfaceCtx) =>
+          Object.fromEntries(
+            (c.manifest?.testbenches ?? [])
+              .filter((t) => !!t.module)
+              .map((t) => [t.module, t.file])
+          ),
       },
     ],
   },
@@ -308,15 +327,14 @@ function fieldErrorsFrom(e: unknown): SurfaceFieldError[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-/** Live ctx for resolution — manifest, runs, and workspace-root file names. */
+/** Live ctx for resolution — manifest, runs, and the recursive path index. */
 function storeCtx(): SurfaceCtx {
   const store = useStore.getState();
   return {
     manifest: store.manifest,
     runs: store.runs,
-    rootFiles: (store.dirCache[""]?.entries ?? [])
-      .filter((e) => e.kind === "file")
-      .map((e) => e.name),
+    wsPaths: store.pathIndex.paths,
+    wsPathsTruncated: store.pathIndex.truncated,
   };
 }
 

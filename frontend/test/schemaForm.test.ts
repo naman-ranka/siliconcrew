@@ -9,7 +9,9 @@ import {
   manifestValueFor,
   paramSourceFor,
   shortDescription,
+  suggestionSubtitles,
   unwrapOptional,
+  valueKindFor,
 } from "@/lib/schemaForm";
 import type { SurfaceCtx } from "@/lib/commandSurface";
 import type { RunSummary, SchemaProperty, ToolCatalogEntry } from "@/types";
@@ -42,6 +44,10 @@ const CTX: SurfaceCtx = {
     files: [
       { name: "alu.v", role: "rtl", path: "alu.v" },
       { name: "top.v", role: "rtl", path: "top.v" },
+      // Nested rtl — `path` differs from display-only `name` (A11: options
+      // must be ws-relative paths, or nested files silently break).
+      { name: "nested.v", role: "rtl", path: "rtl/nested.v" },
+      { name: "defs.vh", role: "include", path: "inc/defs.vh" },
       { name: "tb.v", role: "tb", path: "tb.v" },
       { name: "tb2.v", role: "tb", path: "sub/tb2.v" },
     ],
@@ -61,10 +67,31 @@ const CTX: SurfaceCtx = {
     simRun("sim_0001", "sim_runs/sim_0001/dump.vcd"),
     simRun("sim_0000"), // no vcd — must not appear in vcd options
   ],
-  rootFiles: ["alu.v", "tb.v", "check.sby", "adder.x", "spec.md"],
+  // The recursive path index (W2/A8) — nested paths included.
+  wsPaths: [
+    "alu.v",
+    "tb.v",
+    "rtl/nested.v",
+    "check.sby",
+    "adder.x",
+    "hls/mul.x",
+    "spec.md",
+    "scripts/gen_vectors.py",
+    "specs/counter_spec.yaml",
+    "legacy_spec.yml",
+    "ir/adder.ir",
+    "ir/adder.opt.ir",
+    "cpp/design.cc",
+  ],
+  wsPathsTruncated: false,
 };
 
-const EMPTY_CTX: SurfaceCtx = { manifest: null, runs: [], rootFiles: [] };
+const EMPTY_CTX: SurfaceCtx = {
+  manifest: null,
+  runs: [],
+  wsPaths: [],
+  wsPathsTruncated: false,
+};
 
 const optionalString = (def: unknown = null): SchemaProperty => ({
   anyOf: [{ type: "string" }, { type: "null" }],
@@ -141,21 +168,51 @@ describe("conventionOptions", () => {
       "sim_runs/sim_0001/dump.vcd",
     ]);
   });
-  it("verilog_file → manifest rtl file names only", () => {
-    expect(conventionOptions("verilog_file", CTX)).toEqual(["alu.v", "top.v"]);
+  it("verilog_file → manifest rtl PATHS (nested files keep their path, A11)", () => {
+    expect(conventionOptions("verilog_file", CTX)).toEqual(["alu.v", "top.v", "rtl/nested.v"]);
   });
-  it("sby_file / dslx_file → root files by extension", () => {
+  it("verilog_files → manifest rtl + include paths (the compile set)", () => {
+    expect(conventionOptions("verilog_files", CTX)).toEqual([
+      "alu.v",
+      "top.v",
+      "rtl/nested.v",
+      "inc/defs.vh",
+    ]);
+  });
+  it("sby_file / dslx_file → recursive workspace paths by extension", () => {
     expect(conventionOptions("sby_file", CTX)).toEqual(["check.sby"]);
-    expect(conventionOptions("dslx_file", CTX)).toEqual(["adder.x"]);
+    expect(conventionOptions("dslx_file", CTX)).toEqual(["adder.x", "hls/mul.x"]);
   });
-  it("filename / file_path / spec_file / script_file → all root files (PA10)", () => {
-    for (const key of ["filename", "file_path", "spec_file", "script_file"]) {
-      expect(conventionOptions(key, CTX)).toEqual(CTX.rootFiles);
+  it("script_file → *.py paths only", () => {
+    expect(conventionOptions("script_file", CTX)).toEqual(["scripts/gen_vectors.py"]);
+  });
+  it("spec_filename / yaml_path → *.yaml/*.yml paths", () => {
+    for (const key of ["spec_filename", "yaml_path"]) {
+      expect(conventionOptions(key, CTX)).toEqual(["specs/counter_spec.yaml", "legacy_spec.yml"]);
     }
   });
-  it("sim_top / toplevel → the manifest's derived testbench modules", () => {
+  it("ir_filename → *.ir excluding *.opt.ir; opt_ir_filename → *.opt.ir", () => {
+    expect(conventionOptions("ir_filename", CTX)).toEqual(["ir/adder.ir"]);
+    expect(conventionOptions("opt_ir_filename", CTX)).toEqual(["ir/adder.opt.ir"]);
+  });
+  it("filename → the whole recursive index by default", () => {
+    expect(conventionOptions("filename", CTX)).toEqual(CTX.wsPaths);
+  });
+  it("filename is tool-aware: DSLX tools see *.x, xlscc sees *.cc (A9)", () => {
+    for (const tool of ["run_dslx_interpreter", "compile_dslx_to_ir"]) {
+      expect(conventionOptions("filename", CTX, tool)).toEqual(["adder.x", "hls/mul.x"]);
+    }
+    expect(conventionOptions("filename", CTX, "experimental_compile_cpp_to_ir")).toEqual([
+      "cpp/design.cc",
+    ]);
+  });
+  it("dead keys (spec_file / file_path / toplevel) have NO convention anymore", () => {
+    for (const key of ["spec_file", "file_path", "toplevel"]) {
+      expect(conventionOptions(key, CTX)).toBeNull();
+    }
+  });
+  it("sim_top → the manifest's derived testbench modules", () => {
     expect(conventionOptions("sim_top", CTX)).toEqual(["tb", "tb2"]);
-    expect(conventionOptions("toplevel", CTX)).toEqual(["tb", "tb2"]);
     expect(conventionOptions("sim_top", EMPTY_CTX)).toEqual([]);
   });
   it("top_module → synthTop first, then testbench modules, deduped", () => {
@@ -168,12 +225,51 @@ describe("conventionOptions", () => {
     expect(conventionOptions("top_module", ctx)).toEqual(["tb", "tb2"]);
     expect(conventionOptions("top_module", EMPTY_CTX)).toEqual([]);
   });
+  it("HLS top_module gets NO Verilog-top suggestions (free text, A9)", () => {
+    for (const tool of ["run_xls_flow", "compile_dslx_to_ir"]) {
+      expect(conventionOptions("top_module", CTX, tool)).toBeNull();
+    }
+    // Non-HLS tools keep the manifest tops.
+    expect(conventionOptions("top_module", CTX, "schematic_tool")).toEqual(["alu", "tb", "tb2"]);
+  });
   it("returns null when no convention applies (falls back to enum/free input)", () => {
     expect(conventionOptions("query", CTX)).toBeNull();
     expect(conventionOptions("signals", CTX)).toBeNull();
   });
   it("run conventions still apply (empty list) with no runs", () => {
     expect(conventionOptions("run_id", EMPTY_CTX)).toEqual([]);
+  });
+});
+
+// ---- valueKindFor / suggestionSubtitles ------------------------------------------
+
+describe("valueKindFor", () => {
+  it("labels file-valued and module-valued keys; undefined otherwise", () => {
+    for (const key of ["filename", "verilog_file", "verilog_files", "vcd_file", "spec_filename", "script_file"]) {
+      expect(valueKindFor(key)).toBe("file");
+    }
+    for (const key of ["sim_top", "top_module", "module_name"]) {
+      expect(valueKindFor(key)).toBe("module");
+    }
+    expect(valueKindFor("query")).toBeUndefined();
+    expect(valueKindFor("run_id")).toBeUndefined();
+  });
+});
+
+describe("suggestionSubtitles", () => {
+  it("module keys → module → defining file (from manifest.testbenches)", () => {
+    expect(suggestionSubtitles("sim_top", CTX)).toEqual({ tb: "tb.v", tb2: "sub/tb2.v" });
+    expect(suggestionSubtitles("top_module", CTX)).toEqual({ tb: "tb.v", tb2: "sub/tb2.v" });
+  });
+  it("file keys → path → manifest role", () => {
+    const subs = suggestionSubtitles("verilog_files", CTX);
+    expect(subs["alu.v"]).toBe("rtl");
+    expect(subs["inc/defs.vh"]).toBe("include");
+    expect(subs["sub/tb2.v"]).toBe("tb");
+  });
+  it("empty without a manifest; unknown keys empty", () => {
+    expect(suggestionSubtitles("sim_top", EMPTY_CTX)).toEqual({});
+    expect(suggestionSubtitles("query", CTX)).toEqual({});
   });
 });
 
@@ -235,6 +331,16 @@ describe("defaultFor", () => {
   it("a null schema default is treated as empty, not null", () => {
     expect(defaultFor("content", optionalString(null), EMPTY_CTX, false)).toBe("");
   });
+  it("required ARRAY fields never take a single suggestion — verilog_files pre-fills the manifest set", () => {
+    const arrProp: SchemaProperty = { type: "array", items: { type: "string" } };
+    expect(defaultFor("verilog_files", arrProp, CTX, true)).toEqual([
+      "alu.v",
+      "top.v",
+      "rtl/nested.v",
+      "inc/defs.vh",
+    ]);
+    expect(defaultFor("verilog_files", arrProp, EMPTY_CTX, true)).toEqual([]);
+  });
 });
 
 // ---- manifestValueFor / basicOrAdvanced ----------------------------------------------------
@@ -245,6 +351,15 @@ describe("manifestValueFor", () => {
     expect(manifestValueFor("top_module", CTX)).toBe("alu");
     expect(manifestValueFor("query", CTX)).toBeUndefined();
     expect(manifestValueFor("platform", EMPTY_CTX)).toBeUndefined();
+  });
+  it("verilog_files resolves to the manifest rtl+include paths (manifest badge + default)", () => {
+    expect(manifestValueFor("verilog_files", CTX)).toEqual([
+      "alu.v",
+      "top.v",
+      "rtl/nested.v",
+      "inc/defs.vh",
+    ]);
+    expect(manifestValueFor("verilog_files", EMPTY_CTX)).toBeUndefined();
   });
 });
 
@@ -470,5 +585,56 @@ describe("buildFormModel", () => {
   it("tolerates an empty/missing argsSchema", () => {
     const entry = { ...METRICS_ENTRY, name: "t3", argsSchema: {} } as ToolCatalogEntry;
     expect(buildFormModel(entry, EMPTY_CTX)).toEqual([]);
+  });
+
+  it("cocotb-style verilog_files: multi-combo with manifest paths, manifest badge + set default", () => {
+    const entry: ToolCatalogEntry = {
+      ...METRICS_ENTRY,
+      name: "cocotb_tool",
+      argsSchema: {
+        type: "object",
+        properties: {
+          verilog_files: { type: "array", items: { type: "string" } },
+          top_module: { type: "string" },
+          python_module: { type: "string" },
+        },
+        required: ["verilog_files", "top_module", "python_module"],
+      },
+    };
+    const byKey = Object.fromEntries(buildFormModel(entry, CTX).map((p) => [p.key, p]));
+    expect(byKey.verilog_files.editor).toBe("multi");
+    expect(byKey.verilog_files.options).toEqual(["alu.v", "top.v", "rtl/nested.v", "inc/defs.vh"]);
+    // The manifest supplies the compile set: badge and default are honest.
+    expect(byKey.verilog_files.source).toBe("manifest");
+    expect(byKey.verilog_files.def).toEqual(["alu.v", "top.v", "rtl/nested.v", "inc/defs.vh"]);
+    expect(byKey.verilog_files.valueKind).toBe("file");
+    // File-role subtitles ride along for the combo rows.
+    expect(byKey.verilog_files.subtitles?.(CTX)).toMatchObject({ "alu.v": "rtl" });
+    expect(byKey.top_module.valueKind).toBe("module");
+  });
+
+  it("HLS tools: filename filters to *.x and top_module is free text with an honest hint (A9)", () => {
+    const entry: ToolCatalogEntry = {
+      ...METRICS_ENTRY,
+      name: "compile_dslx_to_ir",
+      argsSchema: {
+        type: "object",
+        properties: {
+          filename: { type: "string" },
+          top_module: { type: "string" },
+        },
+        required: ["filename", "top_module"],
+      },
+    };
+    const byKey = Object.fromEntries(buildFormModel(entry, CTX).map((p) => [p.key, p]));
+    expect(byKey.filename.editor).toBe("combo");
+    expect(byKey.filename.options).toEqual(["adder.x", "hls/mul.x"]);
+    // No Verilog tops suggested — a DSLX function is not in the manifest —
+    // and the manifest's synthTop must NOT leak in as its default or badge.
+    expect(byKey.top_module.editor).toBe("text");
+    expect(byKey.top_module.options).toBeUndefined();
+    expect(byKey.top_module.def).toBe("");
+    expect(byKey.top_module.source).toBe("text");
+    expect(byKey.top_module.hint).toMatch(/not tracked by the manifest/);
   });
 });
