@@ -364,6 +364,35 @@ describe("runSurfaceCommand", () => {
     const res = await runSurfaceCommand(synth, {});
     expect(res).toEqual({ ok: false, result: "Quota exceeded." });
   });
+
+  // dev#51 (follow-up): runCommand's nothing-ran cases used to come back as
+  // the SAME null as a successful async dispatch, so the Surface rendered
+  // "Dispatched — follow it in Activity/Runs" when nothing was dispatched.
+
+  it("duplicate in-flight core command reports honestly, never a false 'Dispatched'", async () => {
+    let resolveSim!: (v: unknown) => void;
+    vi.mocked(workbenchApi.simulate).mockReturnValue(
+      new Promise((r) => { resolveSim = r; }) as never
+    );
+    const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
+    const first = runSurfaceCommand(sim, {}); // holds the in-flight guard
+    const second = await runSurfaceCommand(sim, {});
+    expect(second).not.toBeNull(); // null would render "Dispatched"
+    expect(second).toMatchObject({ ok: false });
+    expect(String(second!.result)).toMatch(/already running/i);
+    // Only ONE simulate call ever reached the backend.
+    expect(workbenchApi.simulate).toHaveBeenCalledTimes(1);
+    resolveSim({ run: { id: "sim_0001", status: "passed" }, manifestWarnings: [] });
+    await first;
+  });
+
+  it("no active session reports honestly instead of null", async () => {
+    useStore.setState({ currentSession: null as never });
+    const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
+    const res = await runSurfaceCommand(sim, {});
+    expect(res).toEqual({ ok: false, result: "No active session" });
+    expect(workbenchApi.simulate).not.toHaveBeenCalled();
+  });
 });
 
 // ---- store: toolCatalog slice ----------------------------------------------------------------

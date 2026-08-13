@@ -642,7 +642,8 @@ export function CommandSurface() {
       // Pass only the user-touched values — runSurfaceCommand merges defaults.
       const res = await runSurfaceCommand(cmd, userVals);
       if (res === null) {
-        // Core command delegated to runCommand — observable in Activity/Runs.
+        // null now means exactly one thing: an async core dispatch succeeded
+        // (dev#51) — the note below is truthful by construction.
         setDispatched((prev) => ({ ...prev, [cmd.id]: true }));
       } else {
         setResults((prev) => ({ ...prev, [cmd.id]: res }));

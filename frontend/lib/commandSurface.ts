@@ -332,7 +332,10 @@ export async function runSurfaceCommand(
 ): Promise<SurfaceRunResult | null> {
   const store = useStore.getState();
   const session = store.currentSession;
-  if (!session) return null;
+  // Honest nothing-ran outcome — `null` from this function means exactly one
+  // thing (async core dispatch succeeded), so the Surface's "Dispatched" note
+  // can never appear when nothing was dispatched (dev#51 follow-up).
+  if (!session) return { ok: false, result: "No active session" };
   const ctx = storeCtx();
 
   if (cmd.core) {
@@ -340,9 +343,10 @@ export async function runSurfaceCommand(
     // a failed invoke is visible right here — a detached `void runCommand`
     // left the Surface claiming "Dispatched" before the POST even ran.
     // runCommand still owns toasts/activity/unread; this only mirrors its
-    // outcome into the Surface's own result pane.
+    // outcome into the Surface's own result pane. Nothing-ran outcomes
+    // (duplicate in-flight, no session) arrive as ok:false/ran:false and
+    // render as an inline error, never as "Dispatched".
     const outcome = await runCommand(cmd.core, { ...surfaceDefaults(cmd, ctx), ...vals });
-    if (!outcome) return null; // nothing ran (no session / duplicate in-flight)
     if (!outcome.ok) return { ok: false, result: outcome.summary };
     // Async dispatches keep the "Dispatched — follow it in Activity/Runs"
     // note (now rendered only after the dispatch actually succeeded); sync

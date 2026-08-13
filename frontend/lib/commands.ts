@@ -293,13 +293,18 @@ function warningsSuffix(warnings: string[] | undefined): string {
 }
 
 /** What a runCommand call amounted to — mirrored back to callers (the Command
- *  Surface) so their own chrome (spinner, result pane) can be truthful. `null`
- *  from runCommand = nothing ran (no session, or a duplicate while in flight). */
+ *  Surface) so their own chrome (spinner, result pane) can be truthful. The
+ *  nothing-ran cases (no session, duplicate while in flight) return `ok:false`
+ *  with `ran:false` — never `null`, which callers used to conflate with a
+ *  successful async dispatch (dev#51). */
 export interface CommandOutcome {
   ok: boolean;
   /** The same one-liner recorded on the local activity event. */
   summary: string;
   runId: string | null;
+  /** False when nothing was executed at all (no session / duplicate in-flight)
+   *  — no activity event, no toast, nothing to follow in Activity/Runs. */
+  ran: boolean;
 }
 
 /**
@@ -316,15 +321,27 @@ const inFlight = new Set<CommandId>();
 export async function runCommand(
   id: CommandId,
   values?: CommandValues
-): Promise<CommandOutcome | null> {
+): Promise<CommandOutcome> {
   const store = useStore.getState();
   const session = store.currentSession;
-  if (!session) return null;
-  if (inFlight.has(id)) return null;
+  const cmd = COMMANDS[id];
+  // Nothing-ran guards return a distinguishable outcome instead of null
+  // (dev#51): callers that render "Dispatched" on a successful async dispatch
+  // must be able to tell these apart from one.
+  if (!session) {
+    return { ok: false, summary: "No active session", runId: null, ran: false };
+  }
+  if (inFlight.has(id)) {
+    return {
+      ok: false,
+      summary: `${cmd.label} is already running — wait for it to finish`,
+      runId: null,
+      ran: false,
+    };
+  }
   inFlight.add(id);
   const sessionId = session.id;
   const ui = useWorkbenchUiStore.getState();
-  const cmd = COMMANDS[id];
   const vals = { ...defaultValues(id, { manifest: store.manifest, runs: store.runs }), ...(values ?? {}) };
 
   const ev = localEvent(cmd.tool, vals);
@@ -337,6 +354,7 @@ export async function runCommand(
       ok: patch.status !== "error",
       summary: patch.resultSummary ?? "",
       runId: patch.runId ?? null,
+      ran: true,
     };
     useStore.getState().appendLocalActivity({
       ...ev,
@@ -454,5 +472,7 @@ export async function runCommand(
     inFlight.delete(id);
     refresh();
   }
-  return outcome;
+  // Every switch arm narrates through done() (the catch does too), so outcome
+  // is always set by here; the fallback only satisfies the type system.
+  return outcome ?? { ok: false, summary: "", runId: null, ran: false };
 }
