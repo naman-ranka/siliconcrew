@@ -2698,6 +2698,42 @@ def _elapsed_seconds(meta: Dict[str, Any], status: str) -> Optional[float]:
     return persisted
 
 
+def _parse_iso_utc(value: Optional[str]) -> Optional[datetime]:
+    """ISO string -> aware datetime; naive timestamps are UTC (sharp edge:
+    never call .timestamp() on a naive datetime — it reads as LOCAL time)."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _liveness_elapsed_sec(meta: Dict[str, Any], status: str) -> Optional[float]:
+    """Elapsed wall clock for the metrics response's liveness fields (dev#75).
+
+    Terminal runs: the persisted ``elapsed_sec`` is authoritative (the worker's
+    own dispatch-to-terminal measurement); an adopted/legacy meta without one
+    falls back to dispatched_at -> finished_at. Live runs: dispatched_at -> now
+    (dispatch covers the queued window, when created_at doesn't exist yet).
+    ``None`` when the timestamps are absent — never guess.
+    """
+    if status in _TERMINAL_SYNTH_STATES:
+        persisted = meta.get("elapsed_sec")
+        if persisted is not None:
+            return persisted
+        start = _parse_iso_utc(meta.get("dispatched_at") or meta.get("created_at"))
+        end = _parse_iso_utc(meta.get("finished_at"))
+        if start is not None and end is not None:
+            return round((end - start).total_seconds(), 2)
+        return None
+    start = _parse_iso_utc(meta.get("dispatched_at") or meta.get("created_at"))
+    if start is not None:
+        return round((datetime.now(timezone.utc) - start).total_seconds(), 2)
+    return None
+
+
 def _build_status_response(
     run_id: str,
     run_dir: str,
@@ -4414,12 +4450,21 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
             "complete": False,
         }
 
+    # Liveness (dev#75): reconcile this run's status on THIS read — the run
+    # directory is the database (invariant #5) — before parsing reports, so a
+    # dead worker's finished artifacts are adopted (and an expired silent run
+    # tombstoned) by the same self-healing call the status path makes. A run
+    # with a live worker in this process is never touched.
+    run_meta = _read_run_meta(run_dir)
+    run_meta = _reconcile_stale_status(run_dir, run_meta, workspace=workspace)
+    run_status = run_meta.get("status") or "unknown"
+    elapsed_sec = _liveness_elapsed_sec(run_meta, run_status)
+
     finish = _find_report_file(run_dir, "6_finish.rpt")
     stat = _find_report_file(run_dir, "synth_stat.txt")
     finish_data = _parse_finish_report(finish) if finish else {}
     stat_data = _parse_synth_stat(stat) if stat else {}
 
-    run_meta = _read_run_meta(run_dir)
     clock_period_ns = (
         run_meta.get("effective_clock_period_ns")
         or run_meta.get("clock_period_ns")
@@ -4479,11 +4524,39 @@ def get_synthesis_metrics(workspace: str, run_id: Optional[str] = None) -> Dict[
             "finish stage and are expected to be missing"
         )
 
+    # Progress fact from the same file trail the status path renders: this
+    # run's completed stages out of its planned flow (out-of-plan stages are
+    # "skipped" and don't count toward the denominator).
+    progress = stage_progress_from_files(run_dir, run_meta)
+    planned = [h for h in progress["stage_history"] if h.get("status") != "skipped"]
+    stages_completed = (
+        f"{sum(1 for h in planned if h.get('status') == 'completed')}/{len(planned)}"
+    )
+
+    if run_status in ("queued", "running") and missing:
+        elapsed_txt = (
+            f"{elapsed_sec}s since dispatch" if elapsed_sec is not None else "elapsed unknown"
+        )
+        notes.append(
+            f"run is still {run_status} ({elapsed_txt}, stages {stages_completed}): "
+            "missing reports are expected mid-flight — treat this as in progress, "
+            "not failed. elapsed_sec is the authoritative clock; your own sense "
+            "of elapsed time is not."
+        )
+
     return {
         "status": "ok",
         "run_id": run_meta.get("run_id") or os.path.basename(run_dir),
         "top_module": run_meta.get("top_module"),
         "platform": run_meta.get("platform"),
+        # Liveness (dev#75): a caller holding nulls must be able to tell from
+        # this ONE response whether to wait or give up. run_status is the
+        # reconciled run state; elapsed_sec is the platform's clock (agents
+        # have none): dispatch->now while live, the persisted dispatch-to-
+        # terminal measurement once finished.
+        "run_status": run_status,
+        "elapsed_sec": elapsed_sec,
+        "stages_completed": stages_completed,
         "metrics": metrics,
         "violations": finish_data.get("violations", {}),
         "sources": sources,
