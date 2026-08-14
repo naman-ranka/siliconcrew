@@ -8,6 +8,9 @@ vi.mock("@/lib/api", () => ({
   threadsApi: {},
   modelsApi: {},
   workspaceApi: {},
+  // Mirrors the real detection: by CODE, never by message (W4/A17).
+  isSignInRequired: (e: unknown) =>
+    (e as { code?: string } | null)?.code === "signin_required",
   workbenchApi: {
     invokeTool: vi.fn(),
     updateManifest: vi.fn(),
@@ -28,6 +31,7 @@ import {
   CORE_TWIN_TOOLS,
   buildSurfaceCommands,
   buildSurfacePayload,
+  jsonParamErrors,
   prettifyToolName,
   runSurfaceCommand,
   surfaceDefaults,
@@ -70,7 +74,8 @@ const synthRun = (id: string): RunSummary => ({
 const CTX: SurfaceCtx = {
   manifest: MANIFEST,
   runs: [synthRun("synth_0002"), synthRun("synth_0001")],
-  rootFiles: ["alu.v", "tb.v"],
+  wsPaths: ["alu.v", "tb.v"],
+  wsPathsTruncated: false,
 };
 
 const entry = (over: Partial<ToolCatalogEntry>): ToolCatalogEntry => ({
@@ -134,16 +139,8 @@ beforeEach(() => {
     currentSession: SESSION as never,
     manifest: MANIFEST,
     runs: CTX.runs,
-    dirCache: {
-      "": {
-        status: "ready",
-        entries: [
-          { name: "alu.v", path: "alu.v", kind: "file" },
-          { name: "sim_runs", path: "sim_runs", kind: "dir" },
-        ],
-        error: null,
-      },
-    },
+    // storeCtx() reads the recursive path-index slice (W2/A8), not dirCache.
+    pathIndex: { status: "ready", paths: ["alu.v", "tb.v"], truncated: false, error: null },
     activity: { serverEvents: [], localEvents: [], status: "empty", nextBefore: null, error: null },
     toolCatalog: { tools: [], status: "empty", error: null },
   });
@@ -346,7 +343,7 @@ describe("runSurfaceCommand", () => {
     expect(res).toEqual({ ok: false, result: "HTTP 500 — lint backend down" });
   });
 
-  it("async core dispatch success returns null — the 'Dispatched' note is now truthful", async () => {
+  it("async core dispatch success returns {ok, dispatched, runId} — W5/A20 replaces the null contract", async () => {
     vi.mocked(workbenchApi.synthesize).mockResolvedValue({
       ok: true,
       runId: "synth_0009",
@@ -355,7 +352,9 @@ describe("runSurfaceCommand", () => {
     const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
     const res = await runSurfaceCommand(synth, {});
     expect(workbenchApi.synthesize).toHaveBeenCalled(); // resolved BEFORE returning
-    expect(res).toBeNull();
+    // The run id rides the result so the dispatch note can name it and
+    // "View in Runs" has something to point at.
+    expect(res).toMatchObject({ ok: true, dispatched: true, runId: "synth_0009" });
   });
 
   it("async core dispatch failure surfaces inline instead of a false 'Dispatched'", async () => {
@@ -377,8 +376,9 @@ describe("runSurfaceCommand", () => {
     const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
     const first = runSurfaceCommand(sim, {}); // holds the in-flight guard
     const second = await runSurfaceCommand(sim, {});
-    expect(second).not.toBeNull(); // null would render "Dispatched"
+    // dispatched:true would render the "Dispatched" note — must be absent.
     expect(second).toMatchObject({ ok: false });
+    expect(second.dispatched).toBeUndefined();
     expect(String(second!.result)).toMatch(/already running/i);
     // Only ONE simulate call ever reached the backend.
     expect(workbenchApi.simulate).toHaveBeenCalledTimes(1);
@@ -392,6 +392,246 @@ describe("runSurfaceCommand", () => {
     const res = await runSurfaceCommand(sim, {});
     expect(res).toEqual({ ok: false, result: "No active session" });
     expect(workbenchApi.simulate).not.toHaveBeenCalled();
+  });
+
+  // W4/A17: signin_required is detected by CODE across BOTH error shapes and
+  // surfaces as a flag the UI turns into a sign-in CTA — never a raw string
+  // heuristic.
+
+  it("/invoke 401 signin_required (envelope code) → signinRequired on the result", async () => {
+    vi.mocked(workbenchApi.invokeTool).mockRejectedValue(
+      Object.assign(new Error("'write_file' requires signing in."), {
+        code: "signin_required",
+        status: 401,
+      })
+    );
+    const writeFile = toolToSurfaceCommand(CATALOG.find((e) => e.name === "write_file")!, CTX);
+    const res = await runSurfaceCommand(writeFile, { filename: "a.v" });
+    expect(res).toMatchObject({ ok: false, signinRequired: true });
+  });
+
+  it("core twin 403 signin_required (detail code) → signinRequired through runCommand", async () => {
+    vi.mocked(workbenchApi.synthesize).mockRejectedValue(
+      Object.assign(new Error("Sign in to run synthesis."), {
+        code: "signin_required",
+        status: 403,
+      })
+    );
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    const res = await runSurfaceCommand(synth, {});
+    expect(res).toMatchObject({ ok: false, signinRequired: true });
+  });
+
+  it("ordinary failures never carry signinRequired (message text is not a trigger)", async () => {
+    vi.mocked(workbenchApi.synthesize).mockRejectedValue(
+      new Error("'start_synthesis' requires signing in.") // codeless — NOT the CTA
+    );
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    const res = await runSurfaceCommand(synth, {});
+    expect(res).toMatchObject({ ok: false });
+    expect(res && "signinRequired" in res && res.signinRequired).toBeFalsy();
+  });
+});
+
+// ---- W3/L1 file-override params on the core commands ------------------------------------
+
+describe("core file overrides (W3/A16)", () => {
+  it("lint/sim expose `files`, synth exposes `verilogFiles` — optional, manifest-suggested", () => {
+    const byId = Object.fromEntries(CORE_SURFACE_COMMANDS.map((c) => [c.id, c]));
+    const lintFiles = byId.lint.params.find((p) => p.key === "files")!;
+    expect(lintFiles).toMatchObject({ editor: "multi", optional: true, override: true, source: "manifest" });
+    expect((lintFiles.options as (c: SurfaceCtx) => string[])(CTX)).toEqual(["alu.v"]); // rtl+include
+    const simFiles = byId.sim.params.find((p) => p.key === "files")!;
+    expect((simFiles.options as (c: SurfaceCtx) => string[])(CTX)).toEqual(["alu.v", "tb.v"]); // rtl+tb+include
+    const synthFiles = byId.synth.params.find((p) => p.key === "verilogFiles")!;
+    expect((synthFiles.options as (c: SurfaceCtx) => string[])(CTX)).toEqual(["alu.v"]); // rtl only
+  });
+
+  it("empty override is OMITTED from the payload (manifest-driven, unchanged behavior)", () => {
+    const lint = CORE_SURFACE_COMMANDS.find((c) => c.id === "lint")!;
+    expect(buildSurfacePayload(lint, {}, CTX).arguments).toEqual({ engine: "auto" });
+    expect(buildSurfacePayload(lint, { files: ["tb.v"] }, CTX).arguments).toEqual({
+      engine: "auto",
+      files: ["tb.v"],
+    });
+  });
+
+  it("the override reaches the REST body through the core engine", async () => {
+    vi.mocked(workbenchApi.lint).mockResolvedValue({
+      ok: true,
+      status: "passed",
+      warnings: [],
+      errors: [],
+      byFile: {},
+      command: "verilator --lint-only tb.v",
+      files: ["tb.v"],
+      engine: "verilator",
+    } as never);
+    const lint = CORE_SURFACE_COMMANDS.find((c) => c.id === "lint")!;
+    await runSurfaceCommand(lint, { files: ["tb.v"] });
+    expect(workbenchApi.lint).toHaveBeenCalledWith("s1", { engine: "auto", files: ["tb.v"] });
+  });
+});
+
+// ---- json editor params (W7/A24) --------------------------------------------------------
+
+const SIM_BUILD_ENTRY = entry({
+  name: "build_interactive_sim",
+  category: "verification",
+  mutates: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      verilog_files: { type: "array", items: { type: "string" } },
+      top_module: { type: "string" },
+      parameters: { anyOf: [{ type: "object" }, { type: "null" }], default: null },
+    },
+    required: ["verilog_files", "top_module"],
+  },
+});
+
+// ---- plural file fields: empty form, manifest set at payload time -----------------------
+// Owner refinement (2026-08-14): the form must NOT pre-fill every manifest
+// file as chips. The field starts empty; for tools that REQUIRE the list the
+// manifest set is injected into the payload — and the payload pane renders
+// exactly what buildSurfacePayload returns, so what is sent stays visible.
+
+describe("required plural file fields (owner refinement 2026-08-14)", () => {
+  const COCOTB_ENTRY = entry({
+    name: "cocotb_tool",
+    category: "verification",
+    mutates: true,
+    argsSchema: {
+      type: "object",
+      properties: {
+        verilog_files: { type: "array", items: { type: "string" } },
+        top_module: { type: "string" },
+        python_module: { type: "string" },
+      },
+      required: ["verilog_files", "top_module", "python_module"],
+    },
+  });
+
+  it("the field's DEFAULT is empty — no pre-filled chip wall", () => {
+    const cmd = toolToSurfaceCommand(COCOTB_ENTRY, CTX);
+    expect(surfaceDefaults(cmd, CTX).verilog_files).toEqual([]);
+    const files = cmd.params.find((p) => p.key === "verilog_files")!;
+    // The manifest set is still the SUGGESTED tier and the honest placeholder.
+    expect(files.options).toEqual(["alu.v"]);
+    expect(files.placeholder).toBe("manifest set (1 file) — type to override");
+  });
+
+  it("an empty required list is filled from the manifest IN THE PAYLOAD (visible, not implied)", () => {
+    const cmd = toolToSurfaceCommand(COCOTB_ENTRY, CTX);
+    const { arguments: args } = buildSurfacePayload(
+      cmd,
+      { top_module: "alu", python_module: "test_alu" },
+      CTX
+    );
+    expect(args.verilog_files).toEqual(["alu.v"]); // the manifest compile set
+  });
+
+  it("user chips REPLACE the manifest set — only what the user picked is sent", () => {
+    const cmd = toolToSurfaceCommand(COCOTB_ENTRY, CTX);
+    const { arguments: args } = buildSurfacePayload(
+      cmd,
+      { verilog_files: ["rtl/custom.v"], top_module: "alu", python_module: "t" },
+      CTX
+    );
+    expect(args.verilog_files).toEqual(["rtl/custom.v"]);
+  });
+
+  it("no manifest set: the empty list is sent as-is — nothing is invented", () => {
+    const bare: SurfaceCtx = { manifest: null, runs: [], wsPaths: [], wsPathsTruncated: false };
+    const cmd = toolToSurfaceCommand(COCOTB_ENTRY, bare);
+    const { arguments: args } = buildSurfacePayload(cmd, { top_module: "alu" }, bare);
+    expect(args.verilog_files).toEqual([]);
+  });
+
+  it("the injected set reaches /invoke (build_interactive_sim requires the list too)", async () => {
+    vi.mocked(workbenchApi.invokeTool).mockResolvedValue({ ok: true, result: "built" } as never);
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    await runSurfaceCommand(cmd, { top_module: "alu" });
+    expect(workbenchApi.invokeTool).toHaveBeenCalledWith("s1", "build_interactive_sim", {
+      verilog_files: ["alu.v"],
+      top_module: "alu",
+    });
+  });
+
+  it("REGRESSION: optional override params still OMIT the key when empty", () => {
+    // lint/sim/synth overrides are optional — empty must keep meaning "the
+    // backend resolves the manifest", never an injected list (W3 semantics).
+    const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
+    expect(buildSurfacePayload(sim, {}, CTX).arguments).not.toHaveProperty("files");
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    expect(buildSurfacePayload(synth, {}, CTX).arguments).not.toHaveProperty("verilogFiles");
+    const lint = CORE_SURFACE_COMMANDS.find((c) => c.id === "lint")!;
+    expect(surfaceDefaults(lint, CTX).files).toEqual([]);
+  });
+});
+
+describe("json editor params (W7/A24)", () => {
+  it("buildSurfacePayload parses json text into a real dict; empty text is omitted", () => {
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    const p = cmd.params.find((x) => x.key === "parameters")!;
+    expect(p.editor).toBe("json");
+    expect(p.jsonKind).toBe("object");
+    const withParams = buildSurfacePayload(
+      cmd,
+      { top_module: "alu", parameters: '{ "WIDTH": 8 }' },
+      CTX
+    );
+    expect(withParams.arguments.parameters).toEqual({ WIDTH: 8 }); // dict, not text
+    const without = buildSurfacePayload(cmd, { top_module: "alu", parameters: "  " }, CTX);
+    expect(without.arguments).not.toHaveProperty("parameters");
+  });
+
+  it("jsonParamErrors: unparseable text and wrong shapes get field-level messages", () => {
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    expect(jsonParamErrors(cmd, { parameters: "{oops" })).toEqual([
+      { field: "parameters", message: "not valid JSON" },
+    ]);
+    expect(jsonParamErrors(cmd, { parameters: "[1, 2]" })).toEqual([
+      { field: "parameters", message: "must be a JSON object" },
+    ]);
+    expect(jsonParamErrors(cmd, { parameters: '{ "WIDTH": 8 }' })).toEqual([]);
+    expect(jsonParamErrors(cmd, { parameters: "" })).toEqual([]); // empty = omitted
+  });
+
+  it("an array-kind json param (write_spec.ports) requires a JSON array", () => {
+    const portsEntry = entry({
+      name: "write_spec",
+      category: "essential",
+      argsSchema: {
+        type: "object",
+        properties: {
+          module_name: { type: "string" },
+          ports: { type: "array", items: { type: "object" } },
+        },
+        required: ["module_name", "ports"],
+      },
+    });
+    const cmd = toolToSurfaceCommand(portsEntry, CTX);
+    const ports = cmd.params.find((x) => x.key === "ports")!;
+    expect(ports.editor).toBe("json");
+    expect(ports.jsonKind).toBe("array");
+    expect(jsonParamErrors(cmd, { ports: '{ "name": "clk" }' })).toEqual([
+      { field: "ports", message: "must be a JSON array" },
+    ]);
+    expect(
+      jsonParamErrors(cmd, { ports: '[{ "name": "clk", "dir": "input" }]' })
+    ).toEqual([]);
+  });
+
+  it("runSurfaceCommand blocks invalid JSON client-side — the backend is never called", async () => {
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    const res = await runSurfaceCommand(cmd, {
+      top_module: "alu",
+      parameters: "{not json",
+    });
+    expect(res).toMatchObject({ ok: false });
+    expect(res.fieldErrors).toEqual([{ field: "parameters", message: "not valid JSON" }]);
+    expect(workbenchApi.invokeTool).not.toHaveBeenCalled();
   });
 });
 

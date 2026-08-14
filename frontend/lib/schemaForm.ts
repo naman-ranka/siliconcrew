@@ -22,12 +22,45 @@ const MANIFEST_KEYS = new Set([
   "verilog_files",
 ]);
 
+/** Plural file keys whose "empty" means the manifest's compile set (see
+ *  `manifestFileSet`). They render EMPTY — never as pre-filled chips. */
+const MANIFEST_SET_KEYS = new Set(["verilog_files"]);
+
 /** Keys that stay basic (visible) even when optional with no convention options. */
 const BASIC_KEYS = new Set(["query", "stage", "mode", "generator"]);
 
-/** Keys naming a workspace file → a file combo (suggestions from the tree,
- *  free entry still allowed). Includes `script_file` (run_python_analysis). */
-const FILE_KEYS = new Set(["filename", "file_path", "spec_file", "script_file"]);
+/** Tools whose `filename` is a DSLX source (*.x), not a Verilog/any file. */
+const DSLX_FILENAME_TOOLS = new Set(["run_dslx_interpreter", "compile_dslx_to_ir"]);
+
+/** Tools whose `top_module` is an HLS function/proc — NOT in the manifest, so
+ *  suggesting Verilog tops there would be dishonest. Free text instead. */
+const HLS_TOP_TOOLS = new Set(["run_xls_flow", "compile_dslx_to_ir"]);
+
+/** File-valued keys (get the "file" tag + role subtitles when in the manifest). */
+const FILE_VALUE_KEYS = new Set([
+  "filename",
+  "script_file",
+  "spec_filename",
+  "yaml_path",
+  "ir_filename",
+  "opt_ir_filename",
+  "sby_file",
+  "dslx_file",
+  "vcd_file",
+  "verilog_file",
+  "verilog_files",
+]);
+
+/** Module-valued keys (get the "module" tag + defining-file subtitles). */
+const MODULE_VALUE_KEYS = new Set(["sim_top", "top_module", "module_name", "top_name", "python_module"]);
+
+/** Workspace paths filtered by extension (case-insensitive). */
+function pathsByExt(ctx: SurfaceCtx, exts: string[]): string[] {
+  return ctx.wsPaths.filter((p) => {
+    const lower = p.toLowerCase();
+    return exts.some((e) => lower.endsWith(e));
+  });
+}
 
 // --- schema unwrapping ------------------------------------------------------------
 
@@ -62,7 +95,20 @@ export function editorFor(key: string, prop: SchemaProperty): SurfaceParam["edit
   if (p.type === "boolean") return "bool";
   if (p.type === "integer" || p.type === "number") return "number";
   if (p.type === "array" && p.items?.type === "string") return "multi";
+  // W7/A24: dict (build_interactive_sim.parameters) and list[dict]
+  // (write_spec.ports) get a validated JSON textarea — they were untypeable
+  // through the plain text input.
+  if (p.type === "object") return "json";
+  if (p.type === "array" && p.items?.type === "object") return "json";
   return "text";
+}
+
+/** The shape a json editor validates against (see SurfaceParam.jsonKind). */
+export function jsonKindFor(prop: SchemaProperty): "object" | "array" | undefined {
+  const p = unwrapOptional(prop).prop;
+  if (p.type === "object") return "object";
+  if (p.type === "array" && p.items?.type === "object") return "array";
+  return undefined;
 }
 
 /** Where the value comes from — drives the source badge next to the label. */
@@ -70,11 +116,14 @@ export function paramSourceFor(
   key: string,
   prop: SchemaProperty,
   hasConventionOptions: boolean,
-  manifestHasValue = false
+  manifestHasValue = false,
+  toolName?: string
 ): SurfaceParamSource {
   const p = unwrapOptional(prop).prop;
   if (RUN_ID_KEYS.has(key) && hasConventionOptions) return "run";
-  if (MANIFEST_KEYS.has(key)) return manifestHasValue ? "manifest" : "choice";
+  // HLS tops are NOT manifest-backed (see HLS_TOP_TOOLS) — honest free text.
+  if (MANIFEST_KEYS.has(key) && !(key === "top_module" && toolName && HLS_TOP_TOOLS.has(toolName)))
+    return manifestHasValue ? "manifest" : "choice";
   if (Array.isArray(p.enum) && p.enum.length > 0) return "choice";
   if (hasConventionOptions) return "choice";
   if (p.default !== undefined) return "default";
@@ -88,9 +137,16 @@ function testbenchModules(ctx: SurfaceCtx): string[] {
 
 /**
  * Live workspace choices for conventional keys; null when no convention
- * applies (the field falls back to its schema enum or free input).
+ * applies (the field falls back to its schema enum or free input). File
+ * suggestions are ws-relative PATHS from the recursive index, consistently.
+ * `toolName` (optional) disambiguates keys whose meaning is per-tool
+ * (`filename` on DSLX/C++ tools, HLS `top_module`).
  */
-export function conventionOptions(key: string, ctx: SurfaceCtx): string[] | null {
+export function conventionOptions(
+  key: string,
+  ctx: SurfaceCtx,
+  toolName?: string
+): string[] | null {
   if (RUN_ID_KEYS.has(key)) {
     // Runs arrive newest-first from the backend.
     return ctx.runs.filter((r) => r.kind === "synth").map((r) => r.id);
@@ -99,15 +155,33 @@ export function conventionOptions(key: string, ctx: SurfaceCtx): string[] | null
     return ctx.runs.filter((r) => r.kind === "sim" && r.vcdPath).map((r) => r.vcdPath as string);
   }
   if (key === "verilog_file") {
-    return (ctx.manifest?.files ?? []).filter((f) => f.role === "rtl").map((f) => f.name);
+    return (ctx.manifest?.files ?? []).filter((f) => f.role === "rtl").map((f) => f.path);
   }
-  if (key === "sby_file") return ctx.rootFiles.filter((f) => f.endsWith(".sby"));
-  if (key === "dslx_file") return ctx.rootFiles.filter((f) => f.endsWith(".x"));
-  if (FILE_KEYS.has(key)) {
-    return [...ctx.rootFiles];
+  if (key === "verilog_files") {
+    // Plural compile sets: the manifest's rtl + include paths.
+    return (ctx.manifest?.files ?? [])
+      .filter((f) => f.role === "rtl" || f.role === "include")
+      .map((f) => f.path);
   }
-  if (key === "sim_top" || key === "toplevel") return testbenchModules(ctx);
+  if (key === "sby_file") return pathsByExt(ctx, [".sby"]);
+  if (key === "dslx_file") return pathsByExt(ctx, [".x"]);
+  if (key === "script_file") return pathsByExt(ctx, [".py"]);
+  if (key === "spec_filename" || key === "yaml_path") return pathsByExt(ctx, [".yaml", ".yml"]);
+  if (key === "opt_ir_filename") return pathsByExt(ctx, [".opt.ir"]);
+  if (key === "ir_filename") {
+    // Unoptimized IR — the *.opt.ir outputs belong to opt_ir_filename.
+    return pathsByExt(ctx, [".ir"]).filter((p) => !p.toLowerCase().endsWith(".opt.ir"));
+  }
+  if (key === "filename") {
+    if (toolName && DSLX_FILENAME_TOOLS.has(toolName)) return pathsByExt(ctx, [".x"]);
+    if (toolName === "experimental_compile_cpp_to_ir") return pathsByExt(ctx, [".cc"]);
+    return [...ctx.wsPaths];
+  }
+  if (key === "sim_top") return testbenchModules(ctx);
   if (key === "top_module") {
+    // HLS tops are DSLX functions / C++ classes — the manifest doesn't know
+    // them, so no suggestions (free text; the hint says why).
+    if (toolName && HLS_TOP_TOOLS.has(toolName)) return null;
     // Synth top first (the common answer), then every known testbench top.
     return Array.from(
       new Set(
@@ -118,10 +192,43 @@ export function conventionOptions(key: string, ctx: SurfaceCtx): string[] | null
   return null;
 }
 
-/** Manifest value backing a conventional key, if the manifest supplies one. */
-export function manifestValueFor(key: string, ctx: SurfaceCtx): unknown {
+/** "module" | "file" tag rendered next to the source badge, so the
+ *  ".v-or-not" question answers itself; undefined for everything else. */
+export function valueKindFor(key: string): "module" | "file" | undefined {
+  if (MODULE_VALUE_KEYS.has(key)) return "module";
+  if (FILE_VALUE_KEYS.has(key)) return "file";
+  return undefined;
+}
+
+/**
+ * Per-value subtitles for a key's combo suggestions: a module shows its
+ * defining file; a file path shows its manifest role. Display-only.
+ */
+export function suggestionSubtitles(key: string, ctx: SurfaceCtx): Record<string, string> {
+  const out: Record<string, string> = {};
+  const m = ctx.manifest;
+  if (MODULE_VALUE_KEYS.has(key)) {
+    for (const t of m?.testbenches ?? []) {
+      if (t.module && !(t.module in out)) out[t.module] = t.file;
+    }
+    return out;
+  }
+  if (FILE_VALUE_KEYS.has(key)) {
+    for (const f of m?.files ?? []) {
+      if (f.path && !(f.path in out)) out[f.path] = f.role;
+    }
+  }
+  return out;
+}
+
+/** Manifest value backing a conventional SCALAR key, if the manifest supplies
+ *  one. Tool-aware: an HLS `top_module` is a DSLX function — the manifest's
+ *  Verilog synthTop must NOT leak in as its default. Plural file sets live in
+ *  `manifestFileSet` — they are never a pre-filled field value. */
+export function manifestValueFor(key: string, ctx: SurfaceCtx, toolName?: string): unknown {
   const m = ctx.manifest;
   if (!m) return undefined;
+  if (key === "top_module" && toolName && HLS_TOP_TOOLS.has(toolName)) return undefined;
   switch (key) {
     case "platform":
       return m.platform || undefined;
@@ -135,6 +242,27 @@ export function manifestValueFor(key: string, ctx: SurfaceCtx): unknown {
     default:
       return undefined;
   }
+}
+
+/**
+ * The manifest set behind a PLURAL file key — the compile set (rtl + include
+ * paths) for `verilog_files`. Owner refinement (2026-08-14): this is NOT a
+ * pre-filled field value. Pre-filling turned every form into a wall of chips
+ * the user had to read and prune; the field starts empty and this set is what
+ * "empty" MEANS — said in the placeholder, and injected into the payload for
+ * the tools that require the list (so the payload pane still shows the truth).
+ */
+export function manifestFileSet(key: string, ctx: SurfaceCtx): string[] | undefined {
+  if (key !== "verilog_files") return undefined;
+  const files = (ctx.manifest?.files ?? [])
+    .filter((f) => f.role === "rtl" || f.role === "include")
+    .map((f) => f.path);
+  return files.length > 0 ? files : undefined;
+}
+
+/** The honest "leave it empty and this is what runs" placeholder. */
+export function manifestSetPlaceholder(set: string[]): string {
+  return `manifest set (${set.length} file${set.length === 1 ? "" : "s"}) — type to override`;
 }
 
 /** Type-appropriate empty value (the "nothing chosen yet" state). */
@@ -162,14 +290,18 @@ export function defaultFor(
   key: string,
   prop: SchemaProperty,
   ctx: SurfaceCtx,
-  required: boolean
+  required: boolean,
+  toolName?: string
 ): unknown {
   const p = unwrapOptional(prop).prop;
-  if (required) {
-    const conv = conventionOptions(key, ctx);
+  // Array-valued fields never take a single suggestion as their default, and
+  // (owner refinement 2026-08-14) never pre-fill the manifest set either:
+  // plural file fields START EMPTY and mean the manifest set while empty.
+  if (required && p.type !== "array") {
+    const conv = conventionOptions(key, ctx, toolName);
     if (conv && conv.length > 0) return conv[0];
   }
-  const fromManifest = manifestValueFor(key, ctx);
+  const fromManifest = manifestValueFor(key, ctx, toolName);
   if (fromManifest !== undefined) return fromManifest;
   if (p.default !== undefined && p.default !== null) return p.default;
   return typeEmpty(p);
@@ -210,7 +342,7 @@ export function buildFormModel(entry: ToolCatalogEntry, ctx: SurfaceCtx): Surfac
   return Object.entries(properties).map(([key, raw]) => {
     const { prop } = unwrapOptional(raw ?? {});
     const required = requiredKeys.has(key);
-    const conv = conventionOptions(key, ctx);
+    const conv = conventionOptions(key, ctx, entry.name);
     const hasConv = conv != null;
 
     let editor = editorFor(key, prop);
@@ -234,21 +366,63 @@ export function buildFormModel(entry: ToolCatalogEntry, ctx: SurfaceCtx): Surfac
       ? prop.multipleOf ?? (prop.type === "integer" ? 1 : 0.1)
       : undefined;
 
-    const manifestVal = manifestValueFor(key, ctx);
+    const manifestVal = manifestValueFor(key, ctx, entry.name);
+    // Plural file sets: the manifest backs the field (badge + placeholder +
+    // payload injection) WITHOUT pre-filling it with chips.
+    const mSet = editor === "multi" ? manifestFileSet(key, ctx) : undefined;
+    const valueKind = valueKindFor(key);
+    const jsonKind = editor === "json" ? jsonKindFor(prop) : undefined;
+    // json editors hold TEXT: a structured schema default renders as pretty
+    // JSON; empty/absent stays "" (omitted from the payload).
+    let def = defaultFor(key, raw ?? {}, ctx, required, entry.name);
+    if (editor === "json" && typeof def !== "string") {
+      def =
+        def == null || (Array.isArray(def) && def.length === 0)
+          ? ""
+          : JSON.stringify(def, null, 2);
+    }
+    // HLS top_module has NO suggestions by design — say why, honestly.
+    const hlsTopHint =
+      key === "top_module" && HLS_TOP_TOOLS.has(entry.name)
+        ? "DSLX function / proc name — not tracked by the manifest"
+        : undefined;
     return {
       key,
       label: key,
       editor,
-      source: paramSourceFor(key, raw ?? {}, hasConv, manifestVal !== undefined),
+      source: paramSourceFor(
+        key,
+        raw ?? {},
+        hasConv,
+        manifestVal !== undefined || mSet !== undefined,
+        entry.name
+      ),
       ...(options ? { options } : {}),
-      def: defaultFor(key, raw ?? {}, ctx, required),
+      def,
+      // Empty plural file field = the manifest set. Say so in the input, and
+      // — when the tool REQUIRES the list — put the set in the payload so the
+      // pane shows what is actually sent (invariant 4).
+      ...(mSet
+        ? {
+            manifestDefault: (c: SurfaceCtx) => manifestFileSet(key, c) ?? [],
+            placeholder: manifestSetPlaceholder(mSet),
+          }
+        : {}),
+      ...(required && editor === "multi" && MANIFEST_SET_KEYS.has(key)
+        ? { fillFromManifest: true as const }
+        : {}),
       ...(min !== undefined ? { min } : {}),
       ...(step !== undefined ? { step } : {}),
       adv: basicOrAdvanced(key, required, hasConv) === "advanced",
       optional: !required,
+      ...(jsonKind ? { jsonKind } : {}),
+      ...(valueKind ? { valueKind } : {}),
+      ...(valueKind ? { subtitles: (c: SurfaceCtx) => suggestionSubtitles(key, c) } : {}),
       ...(typeof prop.description === "string" && prop.description
         ? { hint: prop.description }
-        : {}),
+        : hlsTopHint
+          ? { hint: hlsTopHint }
+          : {}),
     } satisfies SurfaceParam;
   });
 }

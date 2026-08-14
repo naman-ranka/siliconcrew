@@ -157,7 +157,7 @@ def test_lint_action_logs_ui_event(client, monkeypatch):
     with open(os.path.join(ws, "counter.v"), "w") as f:
         f.write(DUT)
     monkeypatch.setattr(actions_mod, "run_linter",
-                        lambda files, cwd, engine="auto": {
+                        lambda files, cwd, engine="auto", **kw: {
                             "success": True, "stderr": "", "command": "iverilog -t null counter.v",
                             "engine": "iverilog", "diagnostics": [],
                         })

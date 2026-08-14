@@ -107,3 +107,95 @@ def test_run_linter_iverilog_success_keeps_legacy_keys(monkeypatch, tmp_path):
     assert result["engine"] == "iverilog"
     for key in ("stdout", "stderr", "command"):  # legacy contract preserved
         assert key in result
+
+
+# --- file-scoped lint (adversarial-review F2) ---------------------------------
+#
+# "Lint this file" on a hierarchical design compiles ONE file: every module it
+# instantiates is missing, which both engines report as an error. That is a
+# true statement about the compile and a FALSE verdict about the file. With
+# file_scoped=True those specific errors become one honest note; everything
+# else still fails. No binaries here — this is the command-construction /
+# diagnostic-filter layer.
+
+IVERILOG_MISSING_MODULE = """tb.v:5: error: Unknown module type: alu
+2 error(s) during elaboration.
+*** These modules were missing:
+        alu referenced 1 times.
+***
+"""
+
+IVERILOG_MISSING_PLUS_SYNTAX = """tb.v:3: syntax error
+tb.v:3: error: malformed statement
+tb.v:5: error: Unknown module type: alu
+"""
+
+VERILATOR_MISSING_MODULE = "%Error: top.v:3:10: Cannot find file containing module: 'missing_mod'\n"
+
+
+def _iverilog(monkeypatch, stderr, returncode=1):
+    monkeypatch.setattr(rl.shutil, "which", lambda name: None if name == "verilator" else "/usr/bin/iverilog")
+    monkeypatch.setattr(
+        rl, "_run",
+        lambda cmd, cwd, timeout: {"returncode": returncode, "stdout": "", "stderr": stderr, "command": " ".join(cmd)},
+    )
+
+
+def test_split_unresolved_module_diagnostics_names_each_engine_signature():
+    diags = (
+        rl.parse_iverilog_diagnostics(IVERILOG_MISSING_MODULE)
+        + rl.parse_verilator_diagnostics(VERILATOR_MISSING_MODULE)
+    )
+    kept, missing = rl.split_unresolved_module_diagnostics(diags)
+    assert missing == ["alu", "missing_mod"]
+    assert all("Unknown module type" not in (d["message"] or "") for d in kept)
+
+
+def test_file_scoped_lint_of_a_file_missing_its_submodules_passes_with_a_note(monkeypatch, tmp_path):
+    _iverilog(monkeypatch, IVERILOG_MISSING_MODULE)
+    result = rl.run_linter(["tb.v"], cwd=str(tmp_path), engine="iverilog", file_scoped=True)
+    assert result["success"] is True  # the FILE is fine; its deps were not compiled
+    assert not [d for d in result["diagnostics"] if d["severity"] == "error"]
+    assert len(result["notes"]) == 1
+    assert "alu" in result["notes"][0] and "not in the linted file set" in result["notes"][0]
+
+
+def test_file_scoped_lint_still_fails_on_a_real_syntax_error(monkeypatch, tmp_path):
+    _iverilog(monkeypatch, IVERILOG_MISSING_PLUS_SYNTAX)
+    result = rl.run_linter(["tb.v"], cwd=str(tmp_path), engine="iverilog", file_scoped=True)
+    assert result["success"] is False
+    messages = [d["message"] for d in result["diagnostics"]]
+    assert any("malformed statement" in m for m in messages)
+    assert all("Unknown module type" not in m for m in messages)
+    assert result["notes"]  # the scope is still narrated honestly
+
+
+def test_file_scoped_lint_of_a_clean_verilator_run_adds_no_note(monkeypatch, tmp_path):
+    monkeypatch.setattr(rl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        rl, "_run",
+        lambda cmd, cwd, timeout: {"returncode": 0, "stdout": "", "stderr": "", "command": " ".join(cmd)},
+    )
+    result = rl.run_linter(["a.v"], cwd=str(tmp_path), engine="verilator", file_scoped=True)
+    assert result["success"] is True and result["notes"] == []
+
+
+def test_file_scoped_verilator_missing_module_is_a_note_too(monkeypatch, tmp_path):
+    monkeypatch.setattr(rl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        rl, "_run",
+        lambda cmd, cwd, timeout: {"returncode": 1, "stdout": "", "stderr": VERILATOR_MISSING_MODULE, "command": " ".join(cmd)},
+    )
+    result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="verilator", file_scoped=True)
+    assert result["success"] is True
+    assert "missing_mod" in result["notes"][0]
+
+
+def test_whole_design_lint_keeps_unresolved_module_errors(monkeypatch, tmp_path):
+    """The default (manifest-resolved set) is unchanged: a module missing from
+    the WHOLE design is a real error, not a scoping artifact."""
+    _iverilog(monkeypatch, IVERILOG_MISSING_MODULE)
+    result = rl.run_linter(["tb.v"], cwd=str(tmp_path), engine="iverilog")
+    assert result["success"] is False
+    assert any("Unknown module type" in d["message"] for d in result["diagnostics"])
+    assert result["notes"] == []

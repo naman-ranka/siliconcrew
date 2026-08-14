@@ -1,14 +1,16 @@
-import { workbenchApi } from "@/lib/api";
+import { isSignInRequired, workbenchApi } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import type { ActivityEvent, DesignManifest, RunSummary } from "@/types";
 
 // The v2 invocation model: every tool run — palette (⌘K), file context menu,
 // activity "Re-run", param modal — goes through this registry. The guiding
-// principle: THE MANIFEST SUPPLIES FILES AND TARGETS; THE USER ONLY SUPPLIES
-// CHOICES. Files are never hand-picked in the UI — the backend re-resolves
-// each command's file set from the manifest (files_for_stage), so the param
-// surface here is choices only (platform, clock, mode, stages…).
+// principle: THE MANIFEST SUPPLIES FILES AND TARGETS BY DEFAULT; the user
+// supplies choices (platform, clock, mode, stages…) and — since L1
+// (command-surface-simplification) REVERSED the old no-hand-picking fence —
+// may OPTIONALLY override the file set (`files` on lint/sim, `verilogFiles`
+// on synth). An empty/absent override keeps the backend's manifest
+// resolution (files_for_stage) exactly as before.
 //
 // Sync commands (lint, sim) resolve inline; async ones (synth, pnr) are
 // DISPATCH-ONLY: POST → run appears queued/running → done. The UI is a viewer
@@ -215,11 +217,20 @@ export function manifestFacts(
  * menu) — dev#51 (2): right-click → Simulate on a testbench must run THAT
  * testbench, not silently fall back to the manifest default.
  *
- * Only mappings the REST contracts can honestly express are made: sim gets
- * `simTop` when the clicked file is a known testbench (manifest.testbenches
- * carries file → module). Lint/synth bodies have no per-file field — the
- * backend re-resolves their sets from the manifest — so they pass nothing
- * rather than a pretend argument the backend would ignore.
+ * Only mappings the contracts can honestly express are made (A15):
+ * - sim gets `simTop` when the clicked file is a known testbench
+ *   (manifest.testbenches carries file → module). It does NOT single-file-
+ *   override the compile set — a testbench needs its dependencies, which the
+ *   manifest resolves.
+ * - lint gets `files: [clicked]` through the W3 override — "lint this file"
+ *   now honestly lints exactly that file. The backend runs that override
+ *   FILE-SCOPED (src/api/actions.py → run_linter's `file_scoped`): modules the
+ *   clicked file instantiates but that the override left out are reported as
+ *   a note, not as the false FAILED verdict a single-file elaboration of a
+ *   hierarchical design would otherwise produce. The menu labels the gesture
+ *   accordingly ("Lint this file").
+ * - synth passes nothing: a one-file synth override from a right-click would
+ *   silently drop the rest of the design.
  */
 export function commandValuesForFile(
   id: CommandId,
@@ -230,6 +241,7 @@ export function commandValuesForFile(
     const tb = (manifest?.testbenches ?? []).find((t) => t.file === path);
     if (tb?.module) return { simTop: tb.module };
   }
+  if (id === "lint") return { files: [path] };
   return {};
 }
 
@@ -305,6 +317,9 @@ export interface CommandOutcome {
   /** False when nothing was executed at all (no session / duplicate in-flight)
    *  — no activity event, no toast, nothing to follow in Activity/Runs. */
   ran: boolean;
+  /** The failure was the hosted-anonymous signin_required rejection (by CODE,
+   *  W4/A17) — callers render a sign-in CTA instead of a raw error string. */
+  signinRequired?: boolean;
 }
 
 /**
@@ -368,25 +383,41 @@ export async function runCommand(
     void s.loadRuns();
   };
 
+  // W3/L1: optional file overrides ride the same value bag as every other
+  // param. Empty/absent = the manifest-resolved set, exactly as today.
+  const fileOverride = (key: string): string[] => {
+    const v = vals[key];
+    return Array.isArray(v) ? (v as string[]).filter((f) => typeof f === "string" && f) : [];
+  };
+
   try {
     switch (id) {
       case "lint": {
+        const files = fileOverride("files");
         const result = await workbenchApi.lint(sessionId, {
           engine: String(vals.engine ?? "auto"),
+          ...(files.length > 0 ? { files } : {}),
         });
         const nErr = result.errors.length;
         const nWarn = result.warnings.length;
         // Auto resolves server-side — name the engine that actually ran.
         const engineTag = result.engine ? ` (${result.engine})` : "";
+        // Lint carries manifestWarnings too (dropped manifest files, and the
+        // file-scoped-lint note) — surfaced exactly like sim's, never folded
+        // into the pass/fail narration.
+        const manifestWarnings = result.manifestWarnings;
         done({
           status: result.status === "passed" ? "ok" : "error",
-          resultSummary: `${result.status}${engineTag} · ${nErr} error(s), ${nWarn} warning(s)`,
+          resultSummary:
+            `${result.status}${engineTag} · ${nErr} error(s), ${nWarn} warning(s)` +
+            warningsSuffix(manifestWarnings),
         });
         store.pushToast(
           result.status === "passed"
             ? { kind: nWarn ? "info" : "success", title: `Lint passed${engineTag}${nWarn ? ` · ${nWarn} warning(s)` : ""}` }
             : { kind: "error", title: `Lint failed${engineTag} · ${nErr} error(s)` }
         );
+        notifyManifestWarnings(store, manifestWarnings);
         // Keep the structured diagnostics available to the feed/editor.
         useStore.setState({ lintResult: result });
         break;
@@ -394,10 +425,12 @@ export async function runCommand(
 
       case "sim": {
         const simTop = String(vals.simTop ?? "").trim();
+        const files = fileOverride("files");
         const { run, manifestWarnings } = await workbenchApi.simulate(sessionId, {
           mode: String(vals.mode ?? "rtl"),
           // Empty = let the backend fall back to the manifest's default TB.
           ...(simTop ? { simTop } : {}),
+          ...(files.length > 0 ? { files } : {}),
         });
         done({
           status: run.status === "passed" ? "ok" : "error",
@@ -429,6 +462,7 @@ export async function runCommand(
           store.pushToast({ kind: "error", title: "P&R retry needs a source synth run" });
           break;
         }
+        const verilogFiles = fileOverride("verilogFiles");
         const dispatch =
           id === "synth"
             ? await workbenchApi.synthesize(sessionId, {
@@ -439,6 +473,7 @@ export async function runCommand(
                 aspectRatio: vals.aspectRatio,
                 coreMargin: vals.coreMargin,
                 runEquiv: vals.runEquiv,
+                ...(verilogFiles.length > 0 ? { verilogFiles } : {}),
               })
             : await workbenchApi.retryRun(sessionId, String(vals.runId), {
                 fromStage: String(vals.fromStage ?? "floorplan"),
@@ -467,6 +502,9 @@ export async function runCommand(
     }
   } catch (e) {
     done({ status: "error", resultSummary: errText(e) });
+    if (outcome && isSignInRequired(e)) {
+      (outcome as CommandOutcome).signinRequired = true;
+    }
     store.pushToast({ kind: "error", title: `${cmd.label} failed`, detail: errText(e) });
   } finally {
     inFlight.delete(id);

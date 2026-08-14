@@ -1,4 +1,4 @@
-import { workbenchApi } from "@/lib/api";
+import { isSignInRequired, workbenchApi } from "@/lib/api";
 import {
   runCommand,
   testbenchChoices,
@@ -28,16 +28,22 @@ export type SurfaceParamSource = "manifest" | "choice" | "run" | "default" | "te
 export interface SurfaceCtx {
   manifest: DesignManifest | null;
   runs: RunSummary[];
-  /** Workspace-root file names (from the dir cache) — file-picking conventions. */
-  rootFiles: string[];
+  /** Recursive workspace file PATHS (the store's path-index slice) — every
+   *  file-picking convention suggests ws-relative paths, consistently. */
+  wsPaths: string[];
+  /** The backend truncated the path walk — suggestions may be incomplete;
+   *  surfaced in the UI, never hidden (invariant 4). */
+  wsPathsTruncated: boolean;
 }
 
 export interface SurfaceParam {
   key: string;
   label: string;
   /** "combo" = text input with filtered suggestions (resolveOptions); free
-   *  entry always allowed — the "search ≻ suggest ≻ type anything" editor. */
-  editor: "enum" | "number" | "bool" | "text" | "multi" | "combo";
+   *  entry always allowed — the "search ≻ suggest ≻ type anything" editor.
+   *  "json" = a validated JSON textarea (W7/A24) for dict / list[dict]
+   *  params the plain editors can't type — parsed client-side before send. */
+  editor: "enum" | "number" | "bool" | "text" | "multi" | "combo" | "json";
   source: SurfaceParamSource;
   options?: readonly string[] | ((ctx: SurfaceCtx) => string[]);
   def: unknown | ((ctx: SurfaceCtx) => unknown);
@@ -49,10 +55,40 @@ export interface SurfaceParam {
   optional?: boolean;
   hint?: string;
   when?: (vals: Record<string, unknown>) => boolean;
+  /** W3/L1: a file-set OVERRIDE param — rendered as the "Supplied by
+   *  manifest" box (manifest chips, collapsed) with an "Override…"
+   *  affordance that swaps in the multi-combo, not as a plain row. Empty
+   *  value = the backend's manifest resolution, exactly as before. */
+  override?: true;
+  /** Module-valued vs file-valued — rendered as a tiny tag next to the source
+   *  badge so the ".v here but not there" question answers itself. */
+  valueKind?: "module" | "file";
+  /** json editors only: the shape the backend expects — "object" (a dict,
+   *  e.g. build_interactive_sim.parameters) or "array" (list[dict], e.g.
+   *  write_spec.ports). Drives client-side validation. */
+  jsonKind?: "object" | "array";
+  /** Per-value subtitles for combo suggestions (module → its file;
+   *  file → its manifest role). Display-only decoration. */
+  subtitles?: (ctx: SurfaceCtx) => Record<string, string>;
+  /** Owner refinement (2026-08-14): the manifest set that backs a plural
+   *  file field. The field itself starts EMPTY (no chip wall) — this is what
+   *  the value MEANS when empty, so the placeholder can say it honestly and
+   *  `fillFromManifest` can put it in the payload. */
+  manifestDefault?: (ctx: SurfaceCtx) => string[];
+  /** The tool REQUIRES the list (cocotb_tool / build_interactive_sim), so an
+   *  empty field cannot mean "omit the key": buildSurfacePayload injects
+   *  `manifestDefault` — and the payload pane shows exactly that (invariant
+   *  4: what is sent is visible). Optional override params (lint/sim/synth)
+   *  do NOT set this — empty stays "omit the key, backend resolves". */
+  fillFromManifest?: true;
+  /** Input placeholder — the honest "what happens if you leave this empty". */
+  placeholder?: string;
 }
 
 export interface SurfaceAutoArg {
   key: string;
+  /** Display label (W7 clarity: "Top module" over the raw key); key if absent. */
+  label?: string;
   /** Human-readable resolution shown in the "Supplied by manifest" box. */
   describe: (ctx: SurfaceCtx) => string;
   /** Included in the displayed/sent payload when the tool expects it client-side. */
@@ -74,37 +110,69 @@ export interface SurfaceCommand {
   params: SurfaceParam[];
 }
 
+// Ws-relative PATHS (`name` is documented display-only, manifest.py:102-105 —
+// a nested rtl/alu.v would silently break on `name`).
 const filesByRoles = (m: DesignManifest | null, roles: string[]) =>
-  (m?.files ?? []).filter((f) => roles.includes(f.role)).map((f) => f.name);
+  (m?.files ?? []).filter((f) => roles.includes(f.role)).map((f) => f.path);
 
 const synthRunIds = (ctx: SurfaceCtx) => ctx.runs.filter((r) => r.kind === "synth").map((r) => r.id);
-const rtlFiles = (ctx: SurfaceCtx) => filesByRoles(ctx.manifest, ["rtl"]);
+
+/** path → role subtitles for file-override combos. */
+const roleSubtitles = (c: SurfaceCtx): Record<string, string> =>
+  Object.fromEntries((c.manifest?.files ?? []).map((f) => [f.path, f.role]));
+
+/** A W3/L1 file-override param: empty = the manifest set (backend resolves
+ *  files_for_stage exactly as before); a non-empty list replaces it. The
+ *  option pool doubles as the displayed "supplied by manifest" chips. */
+const fileOverrideParam = (key: string, roles: string[], hint: string): SurfaceParam => ({
+  key,
+  label: key,
+  editor: "multi",
+  source: "manifest",
+  options: (c: SurfaceCtx) => filesByRoles(c.manifest, roles),
+  def: [],
+  optional: true, // empty → omitted from the payload → manifest-driven
+  override: true,
+  valueKind: "file",
+  subtitles: roleSubtitles,
+  hint,
+});
 
 // ---- the core four (hand-defined; REST semantics + job polling) ----------------
 
 export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
   {
     id: "lint", label: "Lint", group: "Flow", tool: "linter_tool", core: "lint",
-    desc: "Lint/syntax check (iverilog or verilator). Manifest supplies rtl + include files.",
-    autoArgs: [{ key: "verilog_files", describe: (c: SurfaceCtx) => filesByRoles(c.manifest, ["rtl", "include"]).join(", ") || "—" }],
+    desc: "Lint/syntax check (iverilog or verilator). Manifest supplies rtl + include files; override to lint a different set.",
     params: [
       { key: "engine", label: "engine", editor: "enum", options: LINT_ENGINES, def: "auto", source: "choice" },
+      // W3/L1 (REST key `files`): optional override of the rtl+include set.
+      fileOverrideParam("files", ["rtl", "include"], "empty = the manifest's rtl + include set"),
     ],
   },
   {
     id: "sim", label: "Simulate", group: "Flow", tool: "run_isolated_simulation", core: "sim", mutates: true,
     desc: "Manifest-driven sim in its own sim_runs/sim_NNNN/ dir — own VCD + provenance.",
-    autoArgs: [
-      { key: "reads (files)", describe: (c: SurfaceCtx) => filesByRoles(c.manifest, ["rtl", "tb", "include"]).join(", ") || "—" },
-    ],
     params: [
       { key: "mode", label: "mode", editor: "enum", options: ["rtl", "post_synth"], def: "rtl", source: "choice" },
+      // W3/L1 (REST key `files`): optional override of the compile set —
+      // replaces the old "reads (files)" pseudo-key display (A16).
+      fileOverrideParam("files", ["rtl", "tb", "include"], "empty = the manifest's rtl + tb + include set"),
       {
-        key: "simTop", label: "sim_top", editor: "combo", source: "manifest",
+        // W7: named for what it IS — a testbench MODULE (subtitles show each
+        // module's defining file, so the ".v or not" question never comes up).
+        key: "simTop", label: "Testbench (module)", editor: "combo", source: "manifest",
         options: (c: SurfaceCtx) => testbenchChoices(c.manifest),
         def: (c: SurfaceCtx) => c.manifest?.simTop ?? "",
         optional: true, // empty → backend falls back to the manifest default
         hint: "which testbench to run",
+        valueKind: "module",
+        subtitles: (c: SurfaceCtx) =>
+          Object.fromEntries(
+            (c.manifest?.testbenches ?? [])
+              .filter((t) => !!t.module)
+              .map((t) => [t.module, t.file])
+          ),
       },
     ],
   },
@@ -112,10 +180,13 @@ export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
     id: "synth", label: "Synthesize", group: "Flow", tool: "start_synthesis", core: "synth", async: true, requiresSignIn: true, mutates: true,
     desc: "Async ORFS job → { run_id } immediately; completion arrives via activity events / Refresh (no client polling).",
     autoArgs: [
-      { key: "verilog_files", describe: (c: SurfaceCtx) => rtlFiles(c).join(", ") || "—" },
-      { key: "top_module", describe: (c: SurfaceCtx) => c.manifest?.synthTop ?? "—" },
+      { key: "top_module", label: "Top module", describe: (c: SurfaceCtx) => c.manifest?.synthTop ?? "—" },
     ],
     params: [
+      // W3/L1 (REST key `verilogFiles`): optional override of the rtl set —
+      // the backend keeps its .v/.sv filter (actions.py) and rejects
+      // non-Verilog overrides honestly.
+      fileOverrideParam("verilogFiles", ["rtl"], "empty = the manifest's rtl set"),
       { key: "platform", label: "platform", editor: "enum", options: PLATFORMS, def: (c: SurfaceCtx) => c.manifest?.platform ?? "sky130hd", source: "manifest" },
       { key: "maxStage", label: "max_stage", editor: "enum", options: SYNTH_STAGES, def: "finish", source: "choice", hint: "“synth” = fast synthesis-only estimate" },
       { key: "clockPeriodNs", label: "clock_period_ns", editor: "number", def: (c: SurfaceCtx) => c.manifest?.clockPeriodNs ?? 10, min: 0.1, step: 0.1, unit: "ns", source: "manifest" },
@@ -252,6 +323,31 @@ export function buildSurfacePayload(
   cmd.params.forEach((p) => {
     if (p.when && !p.when(merged)) return;
     let v = merged[p.key];
+    if (p.editor === "json" && typeof v === "string") {
+      // W7/A24: the textarea holds TEXT; the backend needs the parsed value
+      // (`parameters` as dict, `ports` as list[dict]). Empty = omitted;
+      // unparseable text stays visible as-is (jsonParamErrors blocks the
+      // actual send with a field error, so this never reaches the wire).
+      const trimmed = v.trim();
+      if (!trimmed) return;
+      try {
+        v = JSON.parse(trimmed);
+      } catch {
+        /* keep the raw string for the live preview */
+      }
+    }
+    // Owner refinement (2026-08-14): a REQUIRED plural file field left empty
+    // means "the manifest set" — inject it here so the payload pane shows the
+    // exact list that goes on the wire. Optional override params never take
+    // this branch: empty keeps meaning "omit the key" and the backend
+    // resolves the manifest itself (unchanged W3 semantics).
+    if (p.fillFromManifest && Array.isArray(v) && v.length === 0) {
+      const set = p.manifestDefault?.(ctx) ?? [];
+      if (set.length > 0) {
+        args[p.key] = set;
+        return;
+      }
+    }
     if (p.optional && (v === "" || v == null || (Array.isArray(v) && v.length === 0))) return;
     if (v === undefined) return;
     if (p.editor === "number" && v !== "") v = Number(v);
@@ -261,6 +357,33 @@ export function buildSurfacePayload(
     if (a.value) args[a.key] = a.value(ctx);
   });
   return { tool: cmd.tool, arguments: args };
+}
+
+/** Client-side validation for json-editor fields (W7/A24): empty = omitted;
+ *  anything present must parse AND match the param's jsonKind. */
+export function jsonParamErrors(
+  cmd: SurfaceCommand,
+  vals: Record<string, unknown>
+): SurfaceFieldError[] {
+  const out: SurfaceFieldError[] = [];
+  for (const p of cmd.params) {
+    if (p.editor !== "json") continue;
+    const v = vals[p.key];
+    if (typeof v !== "string" || !v.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v.trim());
+    } catch {
+      out.push({ field: p.key, message: "not valid JSON" });
+      continue;
+    }
+    if (p.jsonKind === "object" && (parsed == null || typeof parsed !== "object" || Array.isArray(parsed))) {
+      out.push({ field: p.key, message: "must be a JSON object" });
+    } else if (p.jsonKind === "array" && !Array.isArray(parsed)) {
+      out.push({ field: p.key, message: "must be a JSON array" });
+    }
+  }
+  return out;
 }
 
 // --- execution ----------------------------------------------------------------
@@ -292,6 +415,16 @@ export interface SurfaceRunResult {
   result: unknown;
   /** Per-field messages from a 400 invalid_arguments response, when available. */
   fieldErrors?: SurfaceFieldError[];
+  /** Hosted-anonymous signin_required rejection (detected by CODE across the
+   *  /invoke 401 envelope and the core twins' 403 detail, W4/A17) — the
+   *  Surface renders a "Sign in to run this" CTA, never a raw error. */
+  signinRequired?: boolean;
+  /** An ASYNC core dispatch succeeded (W5/A20) — nothing "completed"; the
+   *  run id is what to follow. Replaces the old `null` return, which carried
+   *  no run id for the dispatch note. */
+  dispatched?: boolean;
+  /** The dispatched run's durable key (dispatched=true only). */
+  runId?: string | null;
 }
 
 // The api layer's actionFetch throws a plain Error carrying only the message
@@ -308,15 +441,14 @@ function fieldErrorsFrom(e: unknown): SurfaceFieldError[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-/** Live ctx for resolution — manifest, runs, and workspace-root file names. */
+/** Live ctx for resolution — manifest, runs, and the recursive path index. */
 function storeCtx(): SurfaceCtx {
   const store = useStore.getState();
   return {
     manifest: store.manifest,
     runs: store.runs,
-    rootFiles: (store.dirCache[""]?.entries ?? [])
-      .filter((e) => e.kind === "file")
-      .map((e) => e.name),
+    wsPaths: store.pathIndex.paths,
+    wsPathsTruncated: store.pathIndex.truncated,
   };
 }
 
@@ -324,19 +456,28 @@ function storeCtx(): SurfaceCtx {
  * Execute a surface command. Core flow commands delegate to runCommand (which
  * owns unread/toasts) and are AWAITED so the caller's spinner and result pane
  * reflect what actually happened; the rest go through POST /invoke and return
- * their result for the inline result pane.
+ * their result for the inline result pane. Always resolves to a
+ * SurfaceRunResult (W5/A20 — the old `null`-means-dispatched contract is
+ * gone): a successful async dispatch is `{ok:true, dispatched:true, runId}`.
  */
 export async function runSurfaceCommand(
   cmd: SurfaceCommand,
   vals: Record<string, unknown>
-): Promise<SurfaceRunResult | null> {
+): Promise<SurfaceRunResult> {
   const store = useStore.getState();
   const session = store.currentSession;
-  // Honest nothing-ran outcome — `null` from this function means exactly one
-  // thing (async core dispatch succeeded), so the Surface's "Dispatched" note
-  // can never appear when nothing was dispatched (dev#51 follow-up).
+  // Honest nothing-ran outcome (dev#51 follow-up): the "Dispatched" note can
+  // only ever render off an explicit dispatched:true result.
   if (!session) return { ok: false, result: "No active session" };
   const ctx = storeCtx();
+
+  // W7/A24: json-editor fields are validated CLIENT-SIDE before anything is
+  // sent — `parameters` must arrive as a dict, `ports` as a list[dict]; an
+  // unparseable field blocks the call with a field-level message.
+  const jsonErrs = jsonParamErrors(cmd, { ...surfaceDefaults(cmd, ctx), ...vals });
+  if (jsonErrs.length > 0) {
+    return { ok: false, result: "Invalid JSON in the highlighted field(s).", fieldErrors: jsonErrs };
+  }
 
   if (cmd.core) {
     // dev#51 (1): await the core engine so the Invoke spinner is truthful and
@@ -347,11 +488,19 @@ export async function runSurfaceCommand(
     // (duplicate in-flight, no session) arrive as ok:false/ran:false and
     // render as an inline error, never as "Dispatched".
     const outcome = await runCommand(cmd.core, { ...surfaceDefaults(cmd, ctx), ...vals });
-    if (!outcome.ok) return { ok: false, result: outcome.summary };
-    // Async dispatches keep the "Dispatched — follow it in Activity/Runs"
-    // note (now rendered only after the dispatch actually succeeded); sync
-    // cores render their real completion summary inline.
-    return cmd.async ? null : { ok: true, result: outcome.summary };
+    if (!outcome.ok) {
+      return {
+        ok: false,
+        result: outcome.summary,
+        ...(outcome.signinRequired ? { signinRequired: true } : {}),
+      };
+    }
+    // Async dispatches return the run id for the dispatch note + "View in
+    // Runs" (W5 — rendered only after the dispatch actually succeeded);
+    // sync cores render their real completion summary inline.
+    return cmd.async
+      ? { ok: true, dispatched: true, runId: outcome.runId, result: outcome.summary }
+      : { ok: true, result: outcome.summary };
   }
 
   const { tool, arguments: args } = buildSurfacePayload(cmd, vals, ctx);
@@ -386,7 +535,12 @@ export async function runSurfaceCommand(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       store.appendLocalActivity({ ...ev, status: "error", resultSummary: msg, durationMs: Date.now() - new Date(ev.ts).getTime() });
-      return { ok: false, result: msg, fieldErrors: fieldErrorsFrom(e) };
+      return {
+        ok: false,
+        result: msg,
+        fieldErrors: fieldErrorsFrom(e),
+        ...(isSignInRequired(e) ? { signinRequired: true } : {}),
+      };
     }
   }
 
@@ -408,6 +562,11 @@ export async function runSurfaceCommand(
       durationMs: Date.now() - new Date(ev.ts).getTime(),
     });
     void useStore.getState().loadActivity();
-    return { ok: false, result: msg, fieldErrors: fieldErrorsFrom(e) };
+    return {
+      ok: false,
+      result: msg,
+      fieldErrors: fieldErrorsFrom(e),
+      ...(isSignInRequired(e) ? { signinRequired: true } : {}),
+    };
   }
 }
