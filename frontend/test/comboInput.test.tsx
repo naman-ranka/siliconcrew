@@ -91,6 +91,27 @@ describe("ComboInput", () => {
     expect(input()).toHaveValue("cpu");
   });
 
+  it("blur closes the dropdown and, without commitOnBlur, commits nothing", () => {
+    // The single combo's typed text IS the value (live via onChange), so there
+    // is no draft to rescue — blur must stay a pure close.
+    const commit = vi.fn();
+    render(
+      <ComboInput
+        value="cpu"
+        onChange={() => {}}
+        onCommit={commit}
+        suggestions={["cpu_tb"]}
+        ariaLabel="sim_top"
+      />
+    );
+    fireEvent.focus(input());
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    fireEvent.blur(input());
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(commit).not.toHaveBeenCalled();
+    expect(input()).toHaveValue("cpu");
+  });
+
   it("renders no dropdown when nothing matches", () => {
     render(<Harness suggestions={["cpu_tb"]} />);
     fireEvent.change(input(), { target: { value: "zzz" } });
@@ -286,6 +307,55 @@ describe("MultiComboInput", () => {
     const labels = screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"));
     expect(labels).toContain("docs/notes.md");
     expect(labels).not.toContain("old/legacy.v"); // already chosen
+  });
+
+  // ---- PR #90 review: a typed-but-unentered draft must not vanish -----------
+  // The draft lives in MultiComboInput's local state, so a user who types an
+  // override and clicks straight through to "Dispatch job" (never pressing
+  // Enter) used to lose it — the paid run silently used the manifest default.
+
+  it("blurring with typed text commits it as a chip (no Enter required)", () => {
+    const spy = vi.fn();
+    render(
+      <>
+        <MultiHarness suggestions={["alu.v"]} onChangeSpy={spy} />
+        <button type="button">Dispatch job</button>
+      </>
+    );
+    fireEvent.change(multiInput(), { target: { value: "rtl/alu_v2.v" } });
+    // Focus genuinely leaves for another control — nothing has been committed yet.
+    expect(spy).not.toHaveBeenCalled();
+    fireEvent.blur(multiInput());
+    expect(spy).toHaveBeenLastCalledWith(["rtl/alu_v2.v"]);
+    expect(screen.getByLabelText("Remove rtl/alu_v2.v")).toBeInTheDocument();
+    expect(multiInput()).toHaveValue(""); // draft consumed, not left behind
+  });
+
+  it("a blank/whitespace draft blurs away without inventing a chip", () => {
+    const spy = vi.fn();
+    render(<MultiHarness suggestions={["alu.v"]} onChangeSpy={spy} />);
+    fireEvent.change(multiInput(), { target: { value: "   " } });
+    fireEvent.blur(multiInput());
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("picking a suggestion adds ONLY it — the row's mousedown is cancelled so the input never blurs", () => {
+    const spy = vi.fn();
+    render(<MultiHarness suggestions={["alu.v", "tb.v"]} onChangeSpy={spy} />);
+    fireEvent.change(multiInput(), { target: { value: "al" } }); // half-typed query
+    const option = screen.getByRole("option", { name: "alu.v" });
+    // fireEvent returns false when the event was defaultPrevented. The dropdown
+    // cancels mousedown, which cancels the browser's focus shift — so no blur
+    // fires before the click and the draft "al" never becomes a chip.
+    expect(fireEvent.mouseDown(option)).toBe(false);
+    fireEvent.click(option);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenLastCalledWith(["alu.v"]);
+    expect(screen.queryByLabelText("Remove al")).toBeNull(); // no draft chip
+    expect(multiInput()).toHaveValue(""); // draft cleared
+    // A later real blur (now empty) adds nothing.
+    fireEvent.blur(multiInput());
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it("duplicates and empty drafts are ignored", () => {

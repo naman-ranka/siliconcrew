@@ -169,6 +169,24 @@ describe("CommandSurface — file-override box (W3/A16)", () => {
     );
   });
 
+  it("typed-but-unentered override text reaches the payload on blur (PR #90 review)", () => {
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Lint")!);
+    fireEvent.click(screen.getByRole("button", { name: "Override…" }));
+    const input = screen.getByRole("combobox", { name: "Override files" });
+    // The user types a path and goes straight for Dispatch — no Enter. Until
+    // the field loses focus the draft is invisible to the payload pane…
+    fireEvent.change(input, { target: { value: "rtl/alu_v2.v" } });
+    expect(screen.getByLabelText("tool call payload").textContent).not.toContain(
+      "rtl/alu_v2.v"
+    );
+    // …and on blur it must become a real value, not vanish.
+    fireEvent.blur(input);
+    expect(screen.getByLabelText("tool call payload").textContent).toContain(
+      "rtl/alu_v2.v"
+    );
+  });
+
   it("the override rides the dispatch: lint POSTs files when set", async () => {
     vi.mocked(workbenchApi.lint).mockResolvedValue({
       ok: true,

@@ -42,10 +42,18 @@ export interface ComboInputProps {
   ariaLabel?: string;
   /** Wrapper classes (width etc.); the input itself keeps the shared style. */
   className?: string;
-  /** Fired when the user COMMITS a value: picks a suggestion, or presses
-   *  Enter on typed text. Multi-value wrappers (MultiComboInput) use this to
-   *  turn the committed value into a chip; single-value callers ignore it. */
+  /** Fired when the user COMMITS a value: picks a suggestion, presses Enter on
+   *  typed text, or (with `commitOnBlur`) leaves the field with text in it.
+   *  Multi-value wrappers (MultiComboInput) use this to turn the committed
+   *  value into a chip; single-value callers ignore it. */
   onCommit?: (v: string) => void;
+  /** Also commit on blur. For multi-value wrappers, where the typed text lives
+   *  in a local draft: leaving the field for a Dispatch button must not
+   *  silently drop it. Safe because suggestion rows preventDefault on mousedown
+   *  (below), so picking one never blurs the input — blur means REAL focus
+   *  loss. Single-value callers leave this off: their typed text is already the
+   *  value via onChange, so there is nothing to rescue. */
+  commitOnBlur?: boolean;
 }
 
 export function ComboInput({
@@ -58,6 +66,7 @@ export function ComboInput({
   ariaLabel,
   className,
   onCommit,
+  commitOnBlur,
 }: ComboInputProps) {
   const [open, setOpen] = React.useState(false);
   const [highlight, setHighlight] = React.useState(-1);
@@ -147,9 +156,14 @@ export function ComboInput({
         onClick={() => setOpen(true)}
         onBlur={() => {
           // Suggestion rows preventDefault on mousedown, so a row click never
-          // blurs the input first — closing here is safe.
+          // blurs the input first — closing here is safe, and a blur that DOES
+          // arrive is real focus loss (Tab, a click on Dispatch…). For a
+          // multi-value wrapper that is the last chance to keep the typed
+          // draft: committing it here is what stops a paid dispatch from
+          // silently running against the manifest default set.
           setOpen(false);
           setHighlight(-1);
+          if (commitOnBlur && value.trim()) onCommit?.(value);
         }}
         onKeyDown={onKeyDown}
         className={cn(
@@ -163,7 +177,10 @@ export function ComboInput({
           id={listId}
           role="listbox"
           aria-label={ariaLabel ? `${ariaLabel} suggestions` : "Suggestions"}
-          // Keep focus in the input so blur doesn't fire before the click.
+          // Load-bearing: mousedown bubbles here from a row, and cancelling it
+          // cancels the browser's focus shift — so the input never blurs before
+          // the row's onClick. That is what keeps `commitOnBlur` from turning a
+          // half-typed query into a bogus chip alongside the picked suggestion.
           onMouseDown={(e) => e.preventDefault()}
           className="absolute left-0 right-0 top-full z-50 mt-1 max-h-44 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-e2"
         >
@@ -235,8 +252,9 @@ export interface MultiComboInputProps {
 }
 
 /**
- * The multi-combo: chips + a ComboInput to add entries. Picking a suggestion
- * or pressing Enter on typed text adds a chip; free entry is always allowed
+ * The multi-combo: chips + a ComboInput to add entries. Picking a suggestion,
+ * pressing Enter on typed text, or simply leaving the field with text in it
+ * adds a chip; free entry is always allowed
  * (same honesty rule as the single combo — the suggestion pool can miss
  * files). Replaces both the zero-suggestion freeform chips and the closed
  * toggle-chip list with ONE selector (command-surface-simplification W2).
@@ -266,6 +284,10 @@ export function MultiComboInput({
         value={draft}
         onChange={setDraft}
         onCommit={add}
+        // A draft only this component can see must not die with the focus:
+        // typing an override and clicking straight through to Dispatch used to
+        // drop it silently (PR #90 review).
+        commitOnBlur
         suggestions={suggestions.filter((s) => !values.includes(suggestionValue(s)))}
         moreSuggestions={moreSuggestions?.filter((s) => !values.includes(suggestionValue(s)))}
         moreLabel={moreLabel}
