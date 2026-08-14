@@ -490,6 +490,86 @@ const SIM_BUILD_ENTRY = entry({
   },
 });
 
+// ---- plural file fields: empty form, manifest set at payload time -----------------------
+// Owner refinement (2026-08-14): the form must NOT pre-fill every manifest
+// file as chips. The field starts empty; for tools that REQUIRE the list the
+// manifest set is injected into the payload — and the payload pane renders
+// exactly what buildSurfacePayload returns, so what is sent stays visible.
+
+describe("required plural file fields (owner refinement 2026-08-14)", () => {
+  const COCOTB_ENTRY = entry({
+    name: "cocotb_tool",
+    category: "verification",
+    mutates: true,
+    argsSchema: {
+      type: "object",
+      properties: {
+        verilog_files: { type: "array", items: { type: "string" } },
+        top_module: { type: "string" },
+        python_module: { type: "string" },
+      },
+      required: ["verilog_files", "top_module", "python_module"],
+    },
+  });
+
+  it("the field's DEFAULT is empty — no pre-filled chip wall", () => {
+    const cmd = toolToSurfaceCommand(COCOTB_ENTRY, CTX);
+    expect(surfaceDefaults(cmd, CTX).verilog_files).toEqual([]);
+    const files = cmd.params.find((p) => p.key === "verilog_files")!;
+    // The manifest set is still the SUGGESTED tier and the honest placeholder.
+    expect(files.options).toEqual(["alu.v"]);
+    expect(files.placeholder).toBe("manifest set (1 file) — type to override");
+  });
+
+  it("an empty required list is filled from the manifest IN THE PAYLOAD (visible, not implied)", () => {
+    const cmd = toolToSurfaceCommand(COCOTB_ENTRY, CTX);
+    const { arguments: args } = buildSurfacePayload(
+      cmd,
+      { top_module: "alu", python_module: "test_alu" },
+      CTX
+    );
+    expect(args.verilog_files).toEqual(["alu.v"]); // the manifest compile set
+  });
+
+  it("user chips REPLACE the manifest set — only what the user picked is sent", () => {
+    const cmd = toolToSurfaceCommand(COCOTB_ENTRY, CTX);
+    const { arguments: args } = buildSurfacePayload(
+      cmd,
+      { verilog_files: ["rtl/custom.v"], top_module: "alu", python_module: "t" },
+      CTX
+    );
+    expect(args.verilog_files).toEqual(["rtl/custom.v"]);
+  });
+
+  it("no manifest set: the empty list is sent as-is — nothing is invented", () => {
+    const bare: SurfaceCtx = { manifest: null, runs: [], wsPaths: [], wsPathsTruncated: false };
+    const cmd = toolToSurfaceCommand(COCOTB_ENTRY, bare);
+    const { arguments: args } = buildSurfacePayload(cmd, { top_module: "alu" }, bare);
+    expect(args.verilog_files).toEqual([]);
+  });
+
+  it("the injected set reaches /invoke (build_interactive_sim requires the list too)", async () => {
+    vi.mocked(workbenchApi.invokeTool).mockResolvedValue({ ok: true, result: "built" } as never);
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    await runSurfaceCommand(cmd, { top_module: "alu" });
+    expect(workbenchApi.invokeTool).toHaveBeenCalledWith("s1", "build_interactive_sim", {
+      verilog_files: ["alu.v"],
+      top_module: "alu",
+    });
+  });
+
+  it("REGRESSION: optional override params still OMIT the key when empty", () => {
+    // lint/sim/synth overrides are optional — empty must keep meaning "the
+    // backend resolves the manifest", never an injected list (W3 semantics).
+    const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
+    expect(buildSurfacePayload(sim, {}, CTX).arguments).not.toHaveProperty("files");
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    expect(buildSurfacePayload(synth, {}, CTX).arguments).not.toHaveProperty("verilogFiles");
+    const lint = CORE_SURFACE_COMMANDS.find((c) => c.id === "lint")!;
+    expect(surfaceDefaults(lint, CTX).files).toEqual([]);
+  });
+});
+
 describe("json editor params (W7/A24)", () => {
   it("buildSurfacePayload parses json text into a real dict; empty text is omitted", () => {
     const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);

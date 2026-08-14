@@ -6,6 +6,8 @@ import {
   conventionOptions,
   defaultFor,
   editorFor,
+  manifestFileSet,
+  manifestSetPlaceholder,
   manifestValueFor,
   paramSourceFor,
   shortDescription,
@@ -339,19 +341,17 @@ describe("defaultFor", () => {
   it("a null schema default is treated as empty, not null", () => {
     expect(defaultFor("content", optionalString(null), EMPTY_CTX, false)).toBe("");
   });
-  it("required ARRAY fields never take a single suggestion — verilog_files pre-fills the manifest set", () => {
+  it("required ARRAY fields never take a single suggestion, and plural file fields start EMPTY", () => {
+    // Owner refinement (2026-08-14): pre-filling the manifest set produced a
+    // wall of chips the user had to prune. The field starts empty; the set is
+    // what "empty" MEANS (placeholder + payload injection), not a value.
     const arrProp: SchemaProperty = { type: "array", items: { type: "string" } };
-    expect(defaultFor("verilog_files", arrProp, CTX, true)).toEqual([
-      "alu.v",
-      "top.v",
-      "rtl/nested.v",
-      "inc/defs.vh",
-    ]);
+    expect(defaultFor("verilog_files", arrProp, CTX, true)).toEqual([]);
     expect(defaultFor("verilog_files", arrProp, EMPTY_CTX, true)).toEqual([]);
   });
 });
 
-// ---- manifestValueFor / basicOrAdvanced ----------------------------------------------------
+// ---- manifestValueFor / manifestFileSet / basicOrAdvanced -----------------------------------
 
 describe("manifestValueFor", () => {
   it("resolves platform/clock/top/sim_top; undefined otherwise or without a manifest", () => {
@@ -360,14 +360,27 @@ describe("manifestValueFor", () => {
     expect(manifestValueFor("query", CTX)).toBeUndefined();
     expect(manifestValueFor("platform", EMPTY_CTX)).toBeUndefined();
   });
-  it("verilog_files resolves to the manifest rtl+include paths (manifest badge + default)", () => {
-    expect(manifestValueFor("verilog_files", CTX)).toEqual([
+  it("plural file keys are NOT scalar manifest values (they never pre-fill a field)", () => {
+    expect(manifestValueFor("verilog_files", CTX)).toBeUndefined();
+  });
+});
+
+describe("manifestFileSet", () => {
+  it("verilog_files → the manifest's rtl + include paths; undefined when empty", () => {
+    expect(manifestFileSet("verilog_files", CTX)).toEqual([
       "alu.v",
       "top.v",
       "rtl/nested.v",
       "inc/defs.vh",
     ]);
-    expect(manifestValueFor("verilog_files", EMPTY_CTX)).toBeUndefined();
+    expect(manifestFileSet("verilog_files", EMPTY_CTX)).toBeUndefined();
+    expect(manifestFileSet("verilog_file", CTX)).toBeUndefined(); // singular: a plain combo
+  });
+  it("the placeholder states what an empty field runs, with honest pluralization", () => {
+    expect(manifestSetPlaceholder(["a.v", "b.v"])).toBe(
+      "manifest set (2 files) — type to override"
+    );
+    expect(manifestSetPlaceholder(["a.v"])).toBe("manifest set (1 file) — type to override");
   });
 });
 
@@ -595,30 +608,70 @@ describe("buildFormModel", () => {
     expect(buildFormModel(entry, EMPTY_CTX)).toEqual([]);
   });
 
-  it("cocotb-style verilog_files: multi-combo with manifest paths, manifest badge + set default", () => {
-    const entry: ToolCatalogEntry = {
-      ...METRICS_ENTRY,
-      name: "cocotb_tool",
-      argsSchema: {
-        type: "object",
-        properties: {
-          verilog_files: { type: "array", items: { type: "string" } },
-          top_module: { type: "string" },
-          python_module: { type: "string" },
-        },
-        required: ["verilog_files", "top_module", "python_module"],
+  const COCOTB_ENTRY: ToolCatalogEntry = {
+    ...METRICS_ENTRY,
+    name: "cocotb_tool",
+    argsSchema: {
+      type: "object",
+      properties: {
+        verilog_files: { type: "array", items: { type: "string" } },
+        top_module: { type: "string" },
+        python_module: { type: "string" },
       },
-    };
-    const byKey = Object.fromEntries(buildFormModel(entry, CTX).map((p) => [p.key, p]));
+      required: ["verilog_files", "top_module", "python_module"],
+    },
+  };
+
+  it("cocotb-style verilog_files: EMPTY multi-combo, manifest badge, set behind the placeholder", () => {
+    const byKey = Object.fromEntries(buildFormModel(COCOTB_ENTRY, CTX).map((p) => [p.key, p]));
     expect(byKey.verilog_files.editor).toBe("multi");
+    // The SUGGESTED tier is still the manifest compile set…
     expect(byKey.verilog_files.options).toEqual(["alu.v", "top.v", "rtl/nested.v", "inc/defs.vh"]);
-    // The manifest supplies the compile set: badge and default are honest.
     expect(byKey.verilog_files.source).toBe("manifest");
-    expect(byKey.verilog_files.def).toEqual(["alu.v", "top.v", "rtl/nested.v", "inc/defs.vh"]);
+    // …but the FIELD starts empty — no 13-chip wall (owner, 2026-08-14).
+    expect(byKey.verilog_files.def).toEqual([]);
+    expect(byKey.verilog_files.placeholder).toBe(
+      "manifest set (4 files) — type to override"
+    );
+    // The tool REQUIRES the list, so empty is filled at payload time.
+    expect(byKey.verilog_files.fillFromManifest).toBe(true);
+    expect(byKey.verilog_files.manifestDefault?.(CTX)).toEqual([
+      "alu.v",
+      "top.v",
+      "rtl/nested.v",
+      "inc/defs.vh",
+    ]);
     expect(byKey.verilog_files.valueKind).toBe("file");
     // File-role subtitles ride along for the combo rows.
     expect(byKey.verilog_files.subtitles?.(CTX)).toMatchObject({ "alu.v": "rtl" });
     expect(byKey.top_module.valueKind).toBe("module");
+  });
+
+  it("no manifest set → no placeholder, no injection promise (honest empty field)", () => {
+    const byKey = Object.fromEntries(
+      buildFormModel(COCOTB_ENTRY, EMPTY_CTX).map((p) => [p.key, p])
+    );
+    expect(byKey.verilog_files.def).toEqual([]);
+    expect(byKey.verilog_files.placeholder).toBeUndefined();
+    expect(byKey.verilog_files.manifestDefault).toBeUndefined();
+    expect(byKey.verilog_files.source).toBe("choice"); // nothing manifest-backed to claim
+  });
+
+  it("an OPTIONAL plural file field keeps 'empty = omit the key' (no injection)", () => {
+    const optionalPlural: ToolCatalogEntry = {
+      ...COCOTB_ENTRY,
+      name: "some_optional_tool",
+      argsSchema: {
+        type: "object",
+        properties: { verilog_files: { type: "array", items: { type: "string" } } },
+        required: [],
+      },
+    };
+    const [files] = buildFormModel(optionalPlural, CTX);
+    expect(files.def).toEqual([]);
+    expect(files.fillFromManifest).toBeUndefined();
+    // The placeholder still tells the truth about what empty runs.
+    expect(files.placeholder).toBe("manifest set (4 files) — type to override");
   });
 
   it("json params carry jsonKind and a STRING default (structured defaults pretty-print)", () => {

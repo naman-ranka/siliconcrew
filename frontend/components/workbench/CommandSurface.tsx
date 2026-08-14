@@ -52,6 +52,7 @@ import {
   type SurfaceParamSource,
   type SurfaceRunResult,
 } from "@/lib/commandSurface";
+import { manifestSetPlaceholder } from "@/lib/schemaForm";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { useAuth } from "@/lib/auth";
@@ -276,6 +277,7 @@ function ParamEditor({
   param,
   options,
   subtitles,
+  morePaths,
   value,
   onChange,
 }: {
@@ -283,10 +285,16 @@ function ParamEditor({
   options: string[];
   /** value → subtitle map for combo rows (module → file, file → role). */
   subtitles?: Record<string, string>;
+  /** The wider workspace path index — the combo's SECOND tier, surfaced only
+   *  once the user types (owner refinement 2026-08-14). File fields only. */
+  morePaths?: string[];
   value: unknown;
   onChange: (v: unknown) => void;
 }) {
   const suggestions: ComboSuggestion[] = options.map((o) =>
+    subtitles?.[o] ? { value: o, subtitle: subtitles[o] } : o
+  );
+  const more: ComboSuggestion[] | undefined = morePaths?.map((o) =>
     subtitles?.[o] ? { value: o, subtitle: subtitles[o] } : o
   );
   switch (param.editor) {
@@ -377,7 +385,9 @@ function ParamEditor({
           value={String(value ?? "")}
           onChange={(v) => onChange(v)}
           suggestions={suggestions}
+          moreSuggestions={more}
           ariaLabel={param.label}
+          placeholder={param.placeholder}
           className="w-52"
         />
       );
@@ -408,7 +418,9 @@ function ParamEditor({
           values={arr}
           onChange={onChange}
           suggestions={suggestions}
+          moreSuggestions={more}
           ariaLabel={`Add ${param.label}`}
+          placeholder={param.placeholder}
         />
       );
     }
@@ -419,6 +431,7 @@ function ParamRow({
   param,
   options,
   subtitles,
+  morePaths,
   value,
   error,
   onChange,
@@ -426,6 +439,7 @@ function ParamRow({
   param: SurfaceParam;
   options: string[];
   subtitles?: Record<string, string>;
+  morePaths?: string[];
   value: unknown;
   /** Server-side field error (400 invalid_arguments) — shown until edited. */
   error?: string | null;
@@ -459,6 +473,7 @@ function ParamRow({
             param={param}
             options={options}
             subtitles={subtitles}
+            morePaths={morePaths}
             value={value}
             onChange={onChange}
           />
@@ -487,6 +502,7 @@ function OverrideBox({
   param,
   options,
   subtitles,
+  morePaths,
   value,
   error,
   onChange,
@@ -495,6 +511,8 @@ function OverrideBox({
   /** The manifest set — doubles as chips (collapsed) and suggestions (editing). */
   options: string[];
   subtitles?: Record<string, string>;
+  /** Second suggestion tier for the editor (typed queries only). */
+  morePaths?: string[];
   value: unknown;
   error?: string | null;
   onChange: (v: string[]) => void;
@@ -503,6 +521,9 @@ function OverrideBox({
   const [editing, setEditing] = React.useState(false);
   const active = editing || arr.length > 0;
   const suggestions: ComboSuggestion[] = options.map((o) =>
+    subtitles?.[o] ? { value: o, subtitle: subtitles[o] } : o
+  );
+  const more: ComboSuggestion[] | undefined = morePaths?.map((o) =>
     subtitles?.[o] ? { value: o, subtitle: subtitles[o] } : o
   );
   return (
@@ -538,7 +559,12 @@ function OverrideBox({
             values={arr}
             onChange={onChange}
             suggestions={suggestions}
+            moreSuggestions={more}
             ariaLabel={`Override ${param.key}`}
+            // Empty override = the manifest set, said out loud in the input.
+            placeholder={
+              options.length > 0 ? manifestSetPlaceholder(options) : undefined
+            }
             className="max-w-none items-start"
           />
           {param.hint && (
@@ -822,6 +848,14 @@ export function CommandSurface() {
       return { ...prev, [cmd.id]: rest };
     });
   };
+
+  // Owner refinement (2026-08-14): every FILE field's combo gets a second
+  // tier — the whole workspace path index — revealed only once the user
+  // types. The suggested tier still leads; nothing the workspace holds is
+  // unreachable. Module/run/enum fields are untouched (a run id is a closed
+  // set; a module is not a path).
+  const morePathsFor = (p: SurfaceParam): string[] | undefined =>
+    p.valueKind === "file" && ctx.wsPaths.length > 0 ? ctx.wsPaths : undefined;
 
   const visible = cmd.params.filter((p) => !p.when || p.when(merged));
   // W3: override params render as the manifest box, never as plain rows.
@@ -1117,6 +1151,7 @@ export function CommandSurface() {
                   param={p}
                   options={resolveOptions(p, ctx)}
                   subtitles={p.subtitles?.(ctx)}
+                  morePaths={morePathsFor(p)}
                   value={merged[p.key]}
                   error={fieldErrs[cmd.id]?.[p.key]}
                   onChange={(v) => setValue(p.key, v)}
@@ -1140,6 +1175,7 @@ export function CommandSurface() {
                       param={p}
                       options={resolveOptions(p, ctx)}
                       subtitles={p.subtitles?.(ctx)}
+                      morePaths={morePathsFor(p)}
                       value={merged[p.key]}
                       error={fieldErrs[cmd.id]?.[p.key]}
                       onChange={(v) => setValue(p.key, v)}
@@ -1161,6 +1197,7 @@ export function CommandSurface() {
                         param={p}
                         options={resolveOptions(p, ctx)}
                         subtitles={p.subtitles?.(ctx)}
+                        morePaths={morePathsFor(p)}
                         value={merged[p.key]}
                         error={fieldErrs[cmd.id]?.[p.key]}
                         onChange={(v) => setValue(p.key, v)}

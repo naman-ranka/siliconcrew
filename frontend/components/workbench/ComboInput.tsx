@@ -27,8 +27,17 @@ const suggestionSubtitle = (s: ComboSuggestion): string | undefined =>
 export interface ComboInputProps {
   value: string;
   onChange: (v: string) => void;
-  /** Suggestion pool; filtered by the current value (case-insensitive substring). */
+  /** The SUGGESTED tier: what this field conventionally means (manifest roles,
+   *  *.py, *.x …). Shown alone on focus/empty query. */
   suggestions: ComboSuggestion[];
+  /** The SECOND tier (owner refinement 2026-08-14): the rest of the workspace
+   *  path index. Hidden while the query is empty — a dropdown that dumps every
+   *  file teaches nothing — and merged in under a divider once the user types,
+   *  so a file the conventions did not guess is still one keystroke away.
+   *  Values already present in `suggestions` are never repeated here. */
+  moreSuggestions?: ComboSuggestion[];
+  /** Divider label for the second tier. */
+  moreLabel?: string;
   placeholder?: string;
   ariaLabel?: string;
   /** Wrapper classes (width etc.); the input itself keeps the shared style. */
@@ -43,6 +52,8 @@ export function ComboInput({
   value,
   onChange,
   suggestions,
+  moreSuggestions,
+  moreLabel = "other files",
   placeholder,
   ariaLabel,
   className,
@@ -53,9 +64,22 @@ export function ComboInput({
   const listId = React.useId();
 
   const q = value.trim().toLowerCase();
-  const filtered = q
+  // Tier 1 = the field's own suggestions; tier 2 = the wider index, typed
+  // queries only. `dividerAt` is where tier 2 starts in the flat row list
+  // (keyboard nav walks the flat list, so the divider costs no index math).
+  const suggested = q
     ? suggestions.filter((s) => suggestionValue(s).toLowerCase().includes(q))
     : suggestions;
+  const dividerAt = suggested.length;
+  const others = React.useMemo(() => {
+    if (!q || !moreSuggestions || moreSuggestions.length === 0) return [];
+    const known = new Set(suggestions.map(suggestionValue));
+    return moreSuggestions.filter(
+      (s) =>
+        !known.has(suggestionValue(s)) && suggestionValue(s).toLowerCase().includes(q)
+    );
+  }, [q, moreSuggestions, suggestions]);
+  const filtered = others.length > 0 ? [...suggested, ...others] : suggested;
 
   const select = (v: string) => {
     onChange(v);
@@ -146,7 +170,7 @@ export function ComboInput({
           {filtered.map((s, i) => {
             const v = suggestionValue(s);
             const sub = suggestionSubtitle(s);
-            return (
+            const row = (
               <button
                 key={v}
                 type="button"
@@ -170,6 +194,23 @@ export function ComboInput({
                 )}
               </button>
             );
+            // The tier divider: everything below it came from the wider
+            // workspace index, not from what this field conventionally means.
+            if (i === dividerAt && others.length > 0) {
+              return (
+                <React.Fragment key={`tier:${v}`}>
+                  <div
+                    role="presentation"
+                    data-testid="combo-tier-divider"
+                    className="mt-1 border-t border-border px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wider text-muted-foreground"
+                  >
+                    {moreLabel}
+                  </div>
+                  {row}
+                </React.Fragment>
+              );
+            }
+            return row;
           })}
         </div>
       )}
@@ -182,8 +223,12 @@ export function ComboInput({
 export interface MultiComboInputProps {
   values: string[];
   onChange: (v: string[]) => void;
-  /** Suggestion pool; already-chosen values are hidden from the dropdown. */
+  /** Suggested tier; already-chosen values are hidden from the dropdown. */
   suggestions: ComboSuggestion[];
+  /** Second tier (the workspace path index) — typed queries only, same rule
+   *  as the single combo. */
+  moreSuggestions?: ComboSuggestion[];
+  moreLabel?: string;
   placeholder?: string;
   ariaLabel?: string;
   className?: string;
@@ -200,6 +245,8 @@ export function MultiComboInput({
   values,
   onChange,
   suggestions,
+  moreSuggestions,
+  moreLabel,
   placeholder,
   ariaLabel,
   className,
@@ -220,6 +267,8 @@ export function MultiComboInput({
         onChange={setDraft}
         onCommit={add}
         suggestions={suggestions.filter((s) => !values.includes(suggestionValue(s)))}
+        moreSuggestions={moreSuggestions?.filter((s) => !values.includes(suggestionValue(s)))}
+        moreLabel={moreLabel}
         placeholder={placeholder ?? "type or pick + Enter"}
         ariaLabel={ariaLabel}
         className="w-52"

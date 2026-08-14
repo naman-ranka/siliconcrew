@@ -70,6 +70,19 @@ export interface SurfaceParam {
   /** Per-value subtitles for combo suggestions (module → its file;
    *  file → its manifest role). Display-only decoration. */
   subtitles?: (ctx: SurfaceCtx) => Record<string, string>;
+  /** Owner refinement (2026-08-14): the manifest set that backs a plural
+   *  file field. The field itself starts EMPTY (no chip wall) — this is what
+   *  the value MEANS when empty, so the placeholder can say it honestly and
+   *  `fillFromManifest` can put it in the payload. */
+  manifestDefault?: (ctx: SurfaceCtx) => string[];
+  /** The tool REQUIRES the list (cocotb_tool / build_interactive_sim), so an
+   *  empty field cannot mean "omit the key": buildSurfacePayload injects
+   *  `manifestDefault` — and the payload pane shows exactly that (invariant
+   *  4: what is sent is visible). Optional override params (lint/sim/synth)
+   *  do NOT set this — empty stays "omit the key, backend resolves". */
+  fillFromManifest?: true;
+  /** Input placeholder — the honest "what happens if you leave this empty". */
+  placeholder?: string;
 }
 
 export interface SurfaceAutoArg {
@@ -321,6 +334,18 @@ export function buildSurfacePayload(
         v = JSON.parse(trimmed);
       } catch {
         /* keep the raw string for the live preview */
+      }
+    }
+    // Owner refinement (2026-08-14): a REQUIRED plural file field left empty
+    // means "the manifest set" — inject it here so the payload pane shows the
+    // exact list that goes on the wire. Optional override params never take
+    // this branch: empty keeps meaning "omit the key" and the backend
+    // resolves the manifest itself (unchanged W3 semantics).
+    if (p.fillFromManifest && Array.isArray(v) && v.length === 0) {
+      const set = p.manifestDefault?.(ctx) ?? [];
+      if (set.length > 0) {
+        args[p.key] = set;
+        return;
       }
     }
     if (p.optional && (v === "" || v == null || (Array.isArray(v) && v.length === 0))) return;

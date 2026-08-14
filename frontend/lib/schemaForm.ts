@@ -22,6 +22,10 @@ const MANIFEST_KEYS = new Set([
   "verilog_files",
 ]);
 
+/** Plural file keys whose "empty" means the manifest's compile set (see
+ *  `manifestFileSet`). They render EMPTY — never as pre-filled chips. */
+const MANIFEST_SET_KEYS = new Set(["verilog_files"]);
+
 /** Keys that stay basic (visible) even when optional with no convention options. */
 const BASIC_KEYS = new Set(["query", "stage", "mode", "generator"]);
 
@@ -217,9 +221,10 @@ export function suggestionSubtitles(key: string, ctx: SurfaceCtx): Record<string
   return out;
 }
 
-/** Manifest value backing a conventional key, if the manifest supplies one.
- *  Tool-aware: an HLS `top_module` is a DSLX function — the manifest's
- *  Verilog synthTop must NOT leak in as its default. */
+/** Manifest value backing a conventional SCALAR key, if the manifest supplies
+ *  one. Tool-aware: an HLS `top_module` is a DSLX function — the manifest's
+ *  Verilog synthTop must NOT leak in as its default. Plural file sets live in
+ *  `manifestFileSet` — they are never a pre-filled field value. */
 export function manifestValueFor(key: string, ctx: SurfaceCtx, toolName?: string): unknown {
   const m = ctx.manifest;
   if (!m) return undefined;
@@ -234,17 +239,30 @@ export function manifestValueFor(key: string, ctx: SurfaceCtx, toolName?: string
       return m.synthTop || undefined;
     case "sim_top":
       return m.simTop || undefined;
-    case "verilog_files": {
-      // The manifest's compile set (rtl + include paths) — pre-filled so the
-      // "manifest supplies files" default holds; the user edits, not rebuilds.
-      const files = m.files
-        .filter((f) => f.role === "rtl" || f.role === "include")
-        .map((f) => f.path);
-      return files.length > 0 ? files : undefined;
-    }
     default:
       return undefined;
   }
+}
+
+/**
+ * The manifest set behind a PLURAL file key — the compile set (rtl + include
+ * paths) for `verilog_files`. Owner refinement (2026-08-14): this is NOT a
+ * pre-filled field value. Pre-filling turned every form into a wall of chips
+ * the user had to read and prune; the field starts empty and this set is what
+ * "empty" MEANS — said in the placeholder, and injected into the payload for
+ * the tools that require the list (so the payload pane still shows the truth).
+ */
+export function manifestFileSet(key: string, ctx: SurfaceCtx): string[] | undefined {
+  if (key !== "verilog_files") return undefined;
+  const files = (ctx.manifest?.files ?? [])
+    .filter((f) => f.role === "rtl" || f.role === "include")
+    .map((f) => f.path);
+  return files.length > 0 ? files : undefined;
+}
+
+/** The honest "leave it empty and this is what runs" placeholder. */
+export function manifestSetPlaceholder(set: string[]): string {
+  return `manifest set (${set.length} file${set.length === 1 ? "" : "s"}) — type to override`;
 }
 
 /** Type-appropriate empty value (the "nothing chosen yet" state). */
@@ -276,8 +294,9 @@ export function defaultFor(
   toolName?: string
 ): unknown {
   const p = unwrapOptional(prop).prop;
-  // Array-valued fields never take a single suggestion as their default —
-  // they fall through to the manifest set (verilog_files) or [].
+  // Array-valued fields never take a single suggestion as their default, and
+  // (owner refinement 2026-08-14) never pre-fill the manifest set either:
+  // plural file fields START EMPTY and mean the manifest set while empty.
   if (required && p.type !== "array") {
     const conv = conventionOptions(key, ctx, toolName);
     if (conv && conv.length > 0) return conv[0];
@@ -348,6 +367,9 @@ export function buildFormModel(entry: ToolCatalogEntry, ctx: SurfaceCtx): Surfac
       : undefined;
 
     const manifestVal = manifestValueFor(key, ctx, entry.name);
+    // Plural file sets: the manifest backs the field (badge + placeholder +
+    // payload injection) WITHOUT pre-filling it with chips.
+    const mSet = editor === "multi" ? manifestFileSet(key, ctx) : undefined;
     const valueKind = valueKindFor(key);
     const jsonKind = editor === "json" ? jsonKindFor(prop) : undefined;
     // json editors hold TEXT: a structured schema default renders as pretty
@@ -368,9 +390,27 @@ export function buildFormModel(entry: ToolCatalogEntry, ctx: SurfaceCtx): Surfac
       key,
       label: key,
       editor,
-      source: paramSourceFor(key, raw ?? {}, hasConv, manifestVal !== undefined, entry.name),
+      source: paramSourceFor(
+        key,
+        raw ?? {},
+        hasConv,
+        manifestVal !== undefined || mSet !== undefined,
+        entry.name
+      ),
       ...(options ? { options } : {}),
       def,
+      // Empty plural file field = the manifest set. Say so in the input, and
+      // — when the tool REQUIRES the list — put the set in the payload so the
+      // pane shows what is actually sent (invariant 4).
+      ...(mSet
+        ? {
+            manifestDefault: (c: SurfaceCtx) => manifestFileSet(key, c) ?? [],
+            placeholder: manifestSetPlaceholder(mSet),
+          }
+        : {}),
+      ...(required && editor === "multi" && MANIFEST_SET_KEYS.has(key)
+        ? { fillFromManifest: true as const }
+        : {}),
       ...(min !== undefined ? { min } : {}),
       ...(step !== undefined ? { step } : {}),
       adv: basicOrAdvanced(key, required, hasConv) === "advanced",

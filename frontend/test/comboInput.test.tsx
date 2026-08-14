@@ -118,6 +118,80 @@ describe("ComboInput", () => {
     expect(screen.getByRole("option", { name: "alu_tb" }).textContent).toBe("alu_tb");
   });
 
+  // ---- owner refinement (2026-08-14): two-tier suggestions -------------------
+  // The dropdown shows what this field MEANS (the suggested tier) on focus;
+  // typing also reaches the rest of the workspace index, under a divider.
+
+  const TwoTier = ({ initial = "" }: { initial?: string }) => {
+    const [v, setV] = React.useState(initial);
+    return (
+      <ComboInput
+        value={v}
+        onChange={setV}
+        ariaLabel="sim_top"
+        suggestions={["alu.v", "top.v"]}
+        moreSuggestions={["alu.v", "old/legacy.v", "docs/notes.md"]}
+      />
+    );
+  };
+
+  it("focus with an empty query shows the SUGGESTED tier only — no index dump", () => {
+    render(<TwoTier />);
+    fireEvent.focus(input());
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([
+      "alu.v",
+      "top.v",
+    ]);
+    expect(screen.queryByTestId("combo-tier-divider")).toBeNull();
+  });
+
+  it("typing surfaces non-suggested workspace files under the 'other files' divider", () => {
+    render(<TwoTier />);
+    fireEvent.change(input(), { target: { value: "old" } });
+    // Suggested tier first (nothing matches "old" here), then the wider index.
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([
+      "old/legacy.v",
+    ]);
+    expect(screen.getByTestId("combo-tier-divider")).toHaveTextContent("other files");
+    fireEvent.click(screen.getByRole("option", { name: "old/legacy.v" }));
+    expect(input()).toHaveValue("old/legacy.v"); // free-index values are selectable
+  });
+
+  it("the suggested tier leads and never repeats in the second tier", () => {
+    render(<TwoTier />);
+    fireEvent.change(input(), { target: { value: ".v" } });
+    // alu.v is suggested — it appears ONCE, above the divider, and top.v with it.
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([
+      "alu.v",
+      "top.v",
+      "old/legacy.v",
+    ]);
+    expect(screen.getByTestId("combo-tier-divider")).toBeInTheDocument();
+  });
+
+  it("no second-tier match → no divider (the tier is never an empty header)", () => {
+    render(<TwoTier />);
+    fireEvent.change(input(), { target: { value: "top" } });
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([
+      "top.v",
+    ]);
+    expect(screen.queryByTestId("combo-tier-divider")).toBeNull();
+  });
+
+  it("↑/↓ walk both tiers as one list", () => {
+    render(<TwoTier />);
+    fireEvent.change(input(), { target: { value: ".v" } });
+    fireEvent.keyDown(input(), { key: "ArrowDown" }); // alu.v (suggested)
+    fireEvent.keyDown(input(), { key: "ArrowDown" }); // top.v (suggested)
+    fireEvent.keyDown(input(), { key: "ArrowDown" }); // old/legacy.v (other files)
+    expect(screen.getByRole("option", { name: "old/legacy.v" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+    fireEvent.keyDown(input(), { key: "Enter" });
+    expect(input()).toHaveValue("old/legacy.v");
+  });
+
   it("selecting a rich suggestion yields the VALUE, never the subtitle", () => {
     const spy = vi.fn();
     render(
@@ -138,10 +212,12 @@ describe("ComboInput", () => {
 
 function MultiHarness({
   suggestions,
+  moreSuggestions,
   initial = [],
   onChangeSpy,
 }: {
   suggestions: (string | { value: string; subtitle?: string })[];
+  moreSuggestions?: (string | { value: string; subtitle?: string })[];
   initial?: string[];
   onChangeSpy?: (v: string[]) => void;
 }) {
@@ -154,6 +230,7 @@ function MultiHarness({
         onChangeSpy?.(v);
       }}
       suggestions={suggestions}
+      moreSuggestions={moreSuggestions}
       ariaLabel="Add files"
     />
   );
@@ -188,6 +265,27 @@ describe("MultiComboInput", () => {
     expect(screen.getByRole("option", { name: "tb.v" })).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Remove alu.v"));
     expect(screen.queryByLabelText("Remove alu.v")).toBeNull();
+  });
+
+  it("two tiers ride through the multi-combo, and chips are hidden from BOTH", () => {
+    render(
+      <MultiHarness
+        suggestions={["alu.v", "top.v"]}
+        moreSuggestions={["old/legacy.v", "docs/notes.md"]}
+        initial={["old/legacy.v"]}
+      />
+    );
+    // Focus: suggested tier only — the manifest set, not the whole workspace.
+    fireEvent.focus(multiInput());
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([
+      "alu.v",
+      "top.v",
+    ]);
+    // Typing reaches the index — minus what is already a chip.
+    fireEvent.change(multiInput(), { target: { value: "o" } });
+    const labels = screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"));
+    expect(labels).toContain("docs/notes.md");
+    expect(labels).not.toContain("old/legacy.v"); // already chosen
   });
 
   it("duplicates and empty drafts are ignored", () => {
