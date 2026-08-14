@@ -269,7 +269,11 @@ export function MultiComboInput({
         suggestions={suggestions.filter((s) => !values.includes(suggestionValue(s)))}
         moreSuggestions={moreSuggestions?.filter((s) => !values.includes(suggestionValue(s)))}
         moreLabel={moreLabel}
-        placeholder={placeholder ?? "type or pick + Enter"}
+        placeholder={
+          // A "manifest set applies" placeholder is only true while the field
+          // is empty — once chips exist, the chips are what's sent.
+          values.length > 0 ? "type or pick + Enter" : placeholder ?? "type or pick + Enter"
+        }
         ariaLabel={ariaLabel}
         className="w-52"
       />

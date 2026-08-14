@@ -299,3 +299,29 @@ describe("MultiComboInput", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("MultiComboInput manifest placeholder honesty", () => {
+  it("drops the manifest-set placeholder once chips exist (chips are what's sent)", () => {
+    function Harness() {
+      const [values, setValues] = React.useState<string[]>([]);
+      return (
+        <MultiComboInput
+          values={values}
+          onChange={setValues}
+          suggestions={["alu.v", "tb.v"]}
+          placeholder="manifest set (2 files) — type to override"
+          ariaLabel="Add files"
+        />
+      );
+    }
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "Add files" });
+    expect(input).toHaveAttribute(
+      "placeholder",
+      "manifest set (2 files) — type to override"
+    );
+    fireEvent.focus(input);
+    fireEvent.click(screen.getByRole("option", { name: "alu.v" }));
+    expect(input).toHaveAttribute("placeholder", "type or pick + Enter");
+  });
+});
