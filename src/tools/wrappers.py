@@ -1889,6 +1889,34 @@ def session_host(host):
         _SESSION_HOST.reset(token)
 
 
+def visible_session(host) -> Optional[str]:
+    """The active session id THIS caller is entitled to see, or ``None``.
+
+    ``host.current_session`` is a PROCESS-GLOBAL pointer, and on hosted the
+    streamable-HTTP transport multiplexes many tenants through one process. A
+    sessionless tool that reads it directly therefore reports whatever the most
+    recent tenant selected — their session id, their workspace path, their
+    metadata — to whoever asks next. The regular tool path re-verifies ownership
+    before acting, but sessionless tools dispatch *before* that check, which is
+    the whole point of them, so they have to do it themselves.
+
+    ``owns_session`` covers both modes by design: a ``None`` user id is
+    self-host, where any existing session belongs to the single local user.
+
+    Fails CLOSED. If ownership cannot be established for any reason, the caller
+    sees no active session rather than someone else's.
+    """
+    sid = getattr(host, "current_session", None)
+    if not sid:
+        return None
+    try:
+        if host.session_manager.owns_session(sid, host.scoped_user_id()):
+            return sid
+    except Exception:
+        return None
+    return None
+
+
 def _host():
     host = _SESSION_HOST.get()
     if host is None:
@@ -1903,8 +1931,8 @@ def _host():
 @tool(parse_docstring=True)
 @policy(category="session", protected=False, mutates=False, async_job=False,
         surfaces=("mcp",), requires_session=False, disabled_when_bound=True)
-def create_session_tool(session_name: str, model_name: str = "claude-via-mcp",
-                        project_id: str = "") -> str:
+def create_session_tool(session_name: str, model_name: Optional[str] = "claude-via-mcp",
+                        project_id: Optional[str] = "") -> str:
     """Create a new isolated session workspace for a design project.
 
     Args:
@@ -1918,7 +1946,11 @@ def create_session_tool(session_name: str, model_name: str = "claude-via-mcp",
     host = _host()
     try:
         session_id = host.session_manager.create_session(
-            tag=session_name, model_name=model_name, project_id=project_id or None,
+            # A client sending JSON null for an optional field means "no value",
+            # not "the literal None" — coerce rather than reject. This is the
+            # FIRST call the server's own instructions tell a stranger to make.
+            tag=session_name, model_name=model_name or "claude-via-mcp",
+            project_id=project_id or None,
             user_id=host.scoped_user_id(),
         )
         host.current_session = session_id
@@ -1992,13 +2024,14 @@ def set_active_session(session_id: str) -> str:
 def get_current_session() -> str:
     """Get the currently active session ID and workspace path."""
     host = _host()
-    if not host.current_session:
+    sid = visible_session(host)
+    if not sid:
         return "No active session. Load a prompt or call create_session_tool."
 
     info = {
-        "session_id": host.current_session,
-        "workspace": host.workspace_path(host.current_session),
-        "metadata": host.session_manager.get_session_metadata(host.current_session),
+        "session_id": sid,
+        "workspace": host.workspace_path(sid),
+        "metadata": host.session_manager.get_session_metadata(sid),
     }
     return json.dumps(info, indent=2, default=str)
 
@@ -2033,7 +2066,7 @@ def delete_session_tool(session_id: str) -> str:
 @tool(parse_docstring=True)
 @policy(category="session", protected=False, mutates=False, async_job=False,
         surfaces=("codex",), requires_session=False)
-def inject_architect_prompt(session_id: str = "") -> str:
+def inject_architect_prompt(session_id: Optional[str] = "") -> str:
     """Return the configured Architect prompt for Codex clients. Optional session_id also sets active session/workspace.
 
     Args:
@@ -2048,15 +2081,20 @@ def inject_architect_prompt(session_id: str = "") -> str:
             return f"❌ Session '{session_id}' not found."
         workspace = host.workspace_path(session_id)
         host.current_session = session_id
-    elif host.current_session:
-        workspace = host.workspace_path(host.current_session)
+    else:
+        # No session named: fall back to the active one ONLY if this caller owns
+        # it. Reading the process-global pointer here is how tenant B learned
+        # tenant A's session id and workspace path.
+        session_id = visible_session(host)
+        if session_id:
+            workspace = host.workspace_path(session_id)
 
     prompt_text, prompt_source, resolved_version = host.architect_prompt()
     payload = f"{prompt_text}"
-    if host.current_session and workspace:
+    if session_id and workspace:
         payload += (
             "\n\n---\n"
-            f"CURRENT_SESSION: {host.current_session}\n"
+            f"CURRENT_SESSION: {session_id}\n"
             f"WORKSPACE: {workspace}\n"
             f"PROMPT_VERSION: {resolved_version}\n"
             f"PROMPT_SOURCE: {prompt_source}\n"
