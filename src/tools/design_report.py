@@ -66,20 +66,25 @@ def _files_by_role(workspace_path: str) -> Dict[str, list]:
 
 
 def _latest_lint_event(workspace_path: str) -> Optional[Dict[str, Any]]:
-    """The most recent ``linter_tool`` result from the session event log.
+    """The most recent lint result from the session event log.
 
     Every actor's lint lands in ``attempt_events.jsonl`` (invariant 3), so that
     log — not a guess — is the evidence for the report's lint cell. Appended in
     order, so the last match is the latest.
     """
     try:
-        from src.utils.attempt_logger import EVENTS_FILE, _read_events
+        from src.api.tool_catalog import tools_with_attempt_parser
+        from src.utils.attempt_logger import EVENTS_FILE, _read_events, attempt_lint
 
+        # Which tool produces a lint verdict is the registry's answer, not a
+        # name spelled here: a tool declares ``attempt_parser=attempt_lint`` in
+        # its @policy, which is the same declaration the attempt log reads.
+        lint_tools = tools_with_attempt_parser(attempt_lint)
         records = _read_events(os.path.join(workspace_path, EVENTS_FILE))
     except Exception:
         return None
     for rec in reversed(records):
-        if rec.get("event_type") == "tool_result" and rec.get("tool") == "linter_tool":
+        if rec.get("event_type") == "tool_result" and rec.get("tool") in lint_tools:
             return rec
     return None
 

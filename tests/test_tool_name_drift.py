@@ -115,9 +115,13 @@ _BARE_WORD = re.compile(r"(?<![`\w/.\-])(" + _SNAKE + r")(?![\w/.\-])")
 # =============================================================================
 
 def _mcp_server_declared_tools() -> Set[str]:
-    """Session/Codex tools declared directly in ``mcp_server.py`` as
-    ``Tool(name="...")`` — part of the live MCP surface but not LangChain
-    wrappers. Read from the source AST so a rename there retargets this too."""
+    """Tools declared directly in ``mcp_server.py`` as ``Tool(name="...")``.
+
+    There are none any more — the six session tools that used to live there are
+    registry tools now (``test_the_server_hand_declares_no_tools`` pins that).
+    Kept because the server declaring a tool by hand is exactly what would make
+    it invisible to the registry, and this is the only reader that would see it
+    at all."""
     path = os.path.join(REPO_ROOT, "mcp_server.py")
     tree = _parse(_read(path))
     names: Set[str] = set()
@@ -135,10 +139,14 @@ def _mcp_server_declared_tools() -> Set[str]:
 
 
 def live_tool_names() -> Set[str]:
-    """Every name a caller may legitimately reference today."""
-    from src.tools.wrappers import architect_tools, mcp_tools
+    """Every name a caller may legitimately reference today.
 
-    names = {t.name for t in mcp_tools} | {t.name for t in architect_tools}
+    The whole registry, not a union of surfaces: a tool served on ONE surface
+    (the Codex-only prompt tool) is just as live as one served on all of them,
+    and the surfaces are themselves derived from the same list."""
+    from src.tools.wrappers import ALL_TOOLS
+
+    names = {t.name for t in ALL_TOOLS}
     names |= _mcp_server_declared_tools()
     return names
 
@@ -469,6 +477,15 @@ def test_every_tool_name_reference_resolves_to_a_live_tool():
     grouped = _group(dead)
     extra = _also_mentioned({h[0] for h in dead}, {(h[0], h[1], h[2]) for h in dead}) if dead else {}
     assert not grouped, _report(grouped, live, extra)
+
+
+def test_the_server_hand_declares_no_tools():
+    """One registry, no exceptions. ``mcp_server.py`` used to declare six tools
+    with hand-written JSON schemas — advertised to every client, invisible to
+    the catalog, to @policy and to the schema tests. Every tool it serves now
+    comes from the registry; a new ``Tool(name="...")`` there would be a second
+    source of truth, so it fails here."""
+    assert _mcp_server_declared_tools() == set()
 
 
 def test_suppression_lists_are_not_stale():

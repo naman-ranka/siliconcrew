@@ -697,7 +697,14 @@ class CodexEngine:
         token = turn.mcp_token or os.environ.get("CODEX_MCP_BEARER_TOKEN") or os.environ.get("SILICONCREW_MCP_TOKEN")
         if token:
             env["SILICONCREW_MCP_TOKEN"] = token
-        disabled = ["create_session_tool", "list_sessions_tool", "set_active_session", "delete_session_tool"]
+        # The tools a session-bound server refuses, read off the tools' own
+        # policy (``disabled_when_bound``) rather than typed here a second
+        # time: this list and mcp_server's refusal must name the same tools,
+        # and a hand-kept copy is how they stop doing that. Client-side
+        # disabling keeps Codex from even offering them; the server refuses
+        # them anyway.
+        from src.api.tool_catalog import DISABLED_WHEN_BOUND
+        disabled = sorted(DISABLED_WHEN_BOUND)
 
         # json.dumps yields TOML-valid literals for strings / arrays-of-strings.
         ov = [

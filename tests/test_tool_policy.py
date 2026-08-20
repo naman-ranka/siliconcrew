@@ -57,6 +57,7 @@ def test_every_registered_tool_declares_a_full_policy():
         assert isinstance(p.mutates, bool), t.name
         assert isinstance(p.async_job, bool), t.name
         assert isinstance(p.requires_session, bool), t.name
+        assert isinstance(p.disabled_when_bound, bool), t.name
         assert p.surfaces and not (p.surfaces - SURFACE_NAMES), t.name
     assert not missing, (
         "tools in the registry that declare no @policy — their sign-in, sync and "
@@ -92,19 +93,41 @@ def test_every_category_has_a_presentation_order():
     assert not stale, f"CATEGORY_ORDER names categories no tool declares: {sorted(stale)}"
 
 
-def test_every_mcp_tool_requires_a_session():
-    """The MCP server gates EVERY tool call on an active session before
-    dispatch. That blanket gate is only correct while this holds — and
-    ``requires_session`` is the field that lets the server's own session tools
-    join this registry later without breaking a stranger's first call."""
-    from src.api.tool_catalog import requires_session
-    from src.tools.wrappers import tools_on_surface
+def test_only_the_session_tools_opt_out_of_the_session_gate():
+    """The MCP server gates EVERY call on ``requires_session`` before dispatch.
+    The tools that opt out are exactly the session tools — the ones a stranger
+    must be able to call BEFORE any session exists. Anything else opting out
+    would be a tool running with no workspace to act on.
 
-    sessionless = [t.name for t in tools_on_surface("mcp") if not requires_session(t.name)]
-    assert not sessionless, (
-        "MCP-surfaced tools that claim to need no session, while the server "
-        f"refuses them without one: {sorted(sessionless)}"
+    Two independent declarations (the category and the gate field) asserted to
+    agree: a session tool that demands a session cannot bootstrap anyone, and a
+    design tool that waives one would dispatch into nothing."""
+    from src.api.tool_catalog import requires_session
+    from src.tools.wrappers import ALL_TOOLS, tool_policy, tools_on_surface
+
+    served_over_mcp = tools_on_surface("mcp") + tools_on_surface("codex")
+    sessionless = {t.name for t in served_over_mcp if not requires_session(t.name)}
+    session_tools = {t.name for t in ALL_TOOLS if tool_policy(t).category == "session"}
+    assert sessionless == session_tools, (
+        "the tools that bypass the session gate are no longer the session "
+        f"tools: bypassing={sorted(sessionless)} session={sorted(session_tools)}"
     )
+
+
+def test_the_bound_refusal_set_is_session_management_only():
+    """A server bound to ONE session (Codex) refuses the tools that create,
+    list, switch or delete sessions — and nothing else. Both readers (the MCP
+    server's refusal and the Codex engine's disabled_tools) take this set from
+    the tools; this pins what it contains."""
+    from src.api.tool_catalog import DISABLED_WHEN_BOUND, category_of, requires_session
+
+    assert set(DISABLED_WHEN_BOUND) == {
+        "create_session_tool", "list_sessions_tool",
+        "set_active_session", "delete_session_tool",
+    }
+    for name in DISABLED_WHEN_BOUND:
+        assert category_of(name) == "session"
+        assert not requires_session(name)
 
 
 # =============================================================================
@@ -141,6 +164,10 @@ def test_a_partial_policy_is_a_hard_error():
         ToolPolicy(category="essential", protected=False, mutates=False,
                    async_job=False, surfaces=("agent",), requires_session=True,
                    attempt_role="sometimes")
+    # The two defaulted fields are the only ones a tool may leave out.
+    p = ToolPolicy(category="essential", protected=False, mutates=False,
+                   async_job=False, surfaces=("agent",), requires_session=True)
+    assert p.disabled_when_bound is False and p.attempt_role is None
 
 
 def test_unknown_tool_is_not_executable():
@@ -256,6 +283,9 @@ def test_catalog_sets_are_exactly_what_the_tools_declare():
     assert set(tc.EXCLUDED_FROM_UI) == {
         n for n, p in declared.items() if "ui" not in p.surfaces
     }
+    assert set(tc.DISABLED_WHEN_BOUND) == {
+        n for n, p in declared.items() if p.disabled_when_bound
+    }
     flat = {}
     for cat, names in tc.TOOL_CATEGORIES.items():
         for n in names:
@@ -283,8 +313,11 @@ def test_the_registries_are_derived_from_surfaces():
 
     assert mcp_tools == [t for t in ALL_TOOLS if "mcp" in tool_policy(t).surfaces]
     assert architect_tools == [t for t in ALL_TOOLS if "agent" in tool_policy(t).surfaces]
-    # The agent surface is the superset the MCP surface is carved out of.
-    assert set(t.name for t in mcp_tools) <= set(t.name for t in architect_tools)
+    # The two surfaces overlap on the design tools; what MCP has and the agent
+    # does not is exactly the session bootstrap, which an in-process agent
+    # (already inside a session) has no use for.
+    mcp_only = {t.name for t in mcp_tools} - {t.name for t in architect_tools}
+    assert mcp_only == {t.name for t in mcp_tools if not tool_policy(t).requires_session}
 
 
 def test_the_catalog_is_the_ui_surface():
@@ -318,12 +351,15 @@ def test_every_attempt_reader_is_claimed_by_a_tool():
 
 
 def test_attempt_summary_tolerates_names_that_are_not_registry_tools():
-    """Event rows carry system pseudo-tools (``synthesis_run``) and the MCP
-    session tools. Those have no attempt semantics — and must not raise."""
+    """Event rows carry system pseudo-tools (``synthesis_run``) and names the
+    registry has since forgotten. Those have no attempt semantics — and must
+    not raise. The session tools ARE registry tools now, and take no part in
+    attempt tracking either; that is a null policy field, not a null policy."""
     from src.utils.attempt_logger import _tool_policy
 
     assert _tool_policy("synthesis_run") is None
-    assert _tool_policy("create_session_tool") is None
+    assert _tool_policy(_RENAMED_AWAY) is None  # a literal here would be a name the drift guard hunts
+    assert _tool_policy("create_session_tool").attempt_role is None
     assert _tool_policy("linter_tool") is not None
 
 

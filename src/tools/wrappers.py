@@ -54,19 +54,28 @@ from src.utils.session_context import current_session_id
 #                       dispatch-then-poll instead of blocking
 #   surfaces         -> which registries a tool is in: "agent" (architect_tools),
 #                       "mcp" (mcp_tools), "ui" (Command Surface; absence is
-#                       tool_catalog.EXCLUDED_FROM_UI)
-#   requires_session -> tool_catalog.requires_session(); today every registry
-#                       tool needs one, which is what makes the MCP server's
-#                       blanket session gate correct. The field exists so the
-#                       6 hand-written server tools can be folded into this
-#                       registry later (plan finding A-H9) without that gate
-#                       rejecting a stranger's first call.
+#                       tool_catalog.EXCLUDED_FROM_UI), "codex" (the extra tool
+#                       only a Codex-launched MCP server advertises, on top of
+#                       the mcp set)
+#   requires_session -> tool_catalog.requires_session() -> the MCP server's
+#                       session gate. False ONLY for the session tools below:
+#                       the gate fires before every call, so a tool a stranger
+#                       needs BEFORE a session exists must say so here. This is
+#                       what the gate reads instead of naming those tools.
+#   disabled_when_bound
+#                    -> mcp_server's bound-session refusal AND the codex
+#                       engine's disabled_tools. A server bound to ONE session
+#                       (Codex) cannot offer tools that create, list, switch or
+#                       delete sessions; the tools say so, the two consumers
+#                       read it.
 #   attempt_role     -> attempt_logger: which tool calls open a new attempt
 #                       (a change) and which close one (a checkpoint)
 #   attempt_parser   -> attempt_logger: how THIS tool's result fills the
 #                       attempt summary. Declared here so there is no
 #                       name-keyed dispatch chain in the logger.
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Callable
 
@@ -77,8 +86,10 @@ from src.utils.attempt_logger import (
     attempt_synthesis_metrics,
 )
 
-# Where a tool is offered. "ui" means the Command Surface / REST /invoke.
-SURFACE_NAMES = frozenset({"agent", "mcp", "ui"})
+# Where a tool is offered. "ui" means the Command Surface / REST /invoke;
+# "codex" means the Codex-bound MCP server only, which serves it in addition to
+# everything on the "mcp" surface.
+SURFACE_NAMES = frozenset({"agent", "mcp", "ui", "codex"})
 ALL_SURFACES = ("agent", "mcp", "ui")
 
 # How a tool call moves the attempt log forward (see attempt_logger).
@@ -89,8 +100,9 @@ ATTEMPT_ROLES = frozenset({"rtl_change", "synth_change", "checkpoint"})
 class ToolPolicy:
     """Everything about a tool that is not derivable from its own schema.
 
-    Every field is required except the two attempt fields, whose honest default
-    is "this tool does not take part in attempt tracking". Omitting a required
+    Every field is required except ``disabled_when_bound`` and the two attempt
+    fields, whose honest defaults are "a session-bound server may run this" and
+    "this tool does not take part in attempt tracking". Omitting a required
     field is a TypeError at import; omitting the whole policy is caught by
     tests/test_tool_policy.py.
     """
@@ -101,6 +113,7 @@ class ToolPolicy:
     async_job: bool
     surfaces: frozenset
     requires_session: bool
+    disabled_when_bound: bool = False
     attempt_role: "str | None" = None
     attempt_parser: "Callable | None" = None
 
@@ -1834,12 +1847,245 @@ def run_xls_flow(
     return json.dumps(result, indent=2)
 
 # =============================================================================
+# Session tools — the bootstrap of the MCP surface
+# =============================================================================
+# These six were hand-written ``Tool(name=..., inputSchema={...})`` objects in
+# mcp_server.py: advertised to every MCP client, but invisible to
+# build_catalog(), to @policy, to the drift guard and to the schema tests that
+# cover every other tool. Their schemas were maintained by hand, which is the
+# one thing this repo does not do. They are ordinary registry tools now.
+#
+# The only thing that makes them special is WHEN they run: a session tool is
+# what a stranger calls BEFORE any session exists. So they declare
+# ``requires_session=False``, and the MCP server's session gate reads that
+# field rather than a list of names it keeps itself.
+#
+# They also need something no other tool needs — the host that owns the
+# active-session pointer: its SessionManager, the caller's scoped identity, its
+# workspace resolver (logical on self-host, hydrated on hosted) and the
+# architect prompt. That host binds itself for the duration of a call through
+# ``session_host()`` below. A ContextVar, not a module global, because the
+# hosted server multiplexes tenants: two concurrent calls must never see each
+# other's host.
+#
+# The host contract, in full (mcp_server.RTLDesignMCPServer is the only
+# implementation):
+#   session_manager               -> SessionManager
+#   current_session               -> the active session id, readable AND writable
+#   scoped_user_id()              -> the caller's tenant id (None on self-host)
+#   workspace_path(session_id)    -> that session's workspace path
+#   architect_prompt()            -> (prompt_text, source_label, version)
+
+_SESSION_HOST: ContextVar = ContextVar("siliconcrew_session_host", default=None)
+
+
+@contextmanager
+def session_host(host):
+    """Bind ``host`` as the owner of the active session for the calls inside."""
+    token = _SESSION_HOST.set(host)
+    try:
+        yield host
+    finally:
+        _SESSION_HOST.reset(token)
+
+
+def _host():
+    host = _SESSION_HOST.get()
+    if host is None:
+        raise RuntimeError(
+            "no session host is bound: the session tools run only where something "
+            "owns the active-session pointer (mcp_server binds itself with "
+            "session_host())"
+        )
+    return host
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("mcp",), requires_session=False, disabled_when_bound=True)
+def create_session_tool(session_name: str, model_name: str = "claude-via-mcp",
+                        project_id: str = "") -> str:
+    """Create a new isolated session workspace for a design project.
+
+    Args:
+        session_name: Name for the design, such as 'counter_design'. One session
+            holds one design block.
+        model_name: Label for the model driving the session, recorded with it
+            for usage tracking.
+        project_id: Optional id of an existing project to group this session
+            under. The project must already exist; leave empty for none.
+    """
+    host = _host()
+    try:
+        session_id = host.session_manager.create_session(
+            tag=session_name, model_name=model_name, project_id=project_id or None,
+            user_id=host.scoped_user_id(),
+        )
+        host.current_session = session_id
+        workspace = host.workspace_path(session_id)
+        project_line = f"\nProject: {project_id}" if project_id else ""
+        return (
+            f"✅ Created session '{session_id}'\nWorkspace: {workspace}{project_line}\n"
+            "This session is now active."
+        )
+    except FileExistsError:
+        return f"❌ Session '{session_name}' already exists. Use set_active_session to switch to it."
+    except Exception as e:
+        return f"❌ Error creating session: {str(e)}"
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("mcp",), requires_session=False, disabled_when_bound=True)
+def list_sessions_tool() -> str:
+    """List all available sessions with metadata."""
+    host = _host()
+    # Tenant scope (F1): pass the caller's scoped uid so hosted users see
+    # ONLY their own sessions. Self-host uid is None → full list (parity
+    # with the resource path and set_active_session's ownership check).
+    uid = host.scoped_user_id()
+    sessions = host.session_manager.get_all_sessions(user_id=uid)
+    if not sessions:
+        return "No sessions found. Create one with create_session_tool."
+
+    session_list = []
+    for session_id in sessions:
+        meta = host.session_manager.get_session_metadata(session_id, user_id=uid)
+        is_current = "← ACTIVE" if session_id == host.current_session else ""
+        session_list.append({
+            "id": session_id,
+            "model": meta.get("model_name") if meta else "unknown",
+            "created": str(meta.get("created_at")) if meta else "unknown",
+            "tokens": meta.get("total_tokens", 0) if meta else 0,
+            "active": is_current,
+        })
+    return json.dumps(session_list, indent=2)
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("mcp",), requires_session=False, disabled_when_bound=True)
+def set_active_session(session_id: str) -> str:
+    """Switch to a different session. All tools will use that session's workspace.
+
+    Args:
+        session_id: Id of the session to activate, as reported by
+            list_sessions_tool.
+    """
+    host = _host()
+    # Tenant check: only switch to a session the caller owns (self-host
+    # uid is None → any existing session).
+    if not host.session_manager.owns_session(session_id, host.scoped_user_id()):
+        return f"❌ Session '{session_id}' not found."
+    workspace = host.workspace_path(session_id)
+
+    host.current_session = session_id
+    return (
+        f"✅ Switched to session '{session_id}'\nWorkspace: {workspace}\n"
+        "All tools will now use this workspace."
+    )
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("mcp",), requires_session=False)
+def get_current_session() -> str:
+    """Get the currently active session ID and workspace path."""
+    host = _host()
+    if not host.current_session:
+        return "No active session. Load a prompt or call create_session_tool."
+
+    info = {
+        "session_id": host.current_session,
+        "workspace": host.workspace_path(host.current_session),
+        "metadata": host.session_manager.get_session_metadata(host.current_session),
+    }
+    return json.dumps(info, indent=2, default=str)
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("mcp",), requires_session=False, disabled_when_bound=True)
+def delete_session_tool(session_id: str) -> str:
+    """Delete a session and all its workspace files.
+
+    Args:
+        session_id: Id of the session to delete. It must not be the active one;
+            switch away first with set_active_session.
+    """
+    host = _host()
+    if session_id == host.current_session:
+        return "❌ Cannot delete active session. Switch to another session first."
+
+    try:
+        # Tenant scope (F1): pass the caller's scoped uid so the ownership guard
+        # in delete_session fires. Without it a hosted user could rmtree ANY
+        # tenant's workspace/chats/checkpoints by id.
+        host.session_manager.delete_session(session_id, user_id=host.scoped_user_id())
+        return f"✅ Deleted session '{session_id}' and all its files."
+    except PermissionError:
+        # Do not leak the existence of another tenant's session.
+        return f"❌ Session '{session_id}' not found."
+    except Exception as e:
+        return f"❌ Error deleting session: {str(e)}"
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("codex",), requires_session=False)
+def inject_architect_prompt(session_id: str = "") -> str:
+    """Return the configured Architect prompt for Codex clients. Optional session_id also sets active session/workspace.
+
+    Args:
+        session_id: Existing session to activate before returning the prompt.
+            Leave empty to keep whichever session is already active.
+    """
+    host = _host()
+    workspace = None
+
+    if session_id:
+        if not host.session_manager.owns_session(session_id, host.scoped_user_id()):
+            return f"❌ Session '{session_id}' not found."
+        workspace = host.workspace_path(session_id)
+        host.current_session = session_id
+    elif host.current_session:
+        workspace = host.workspace_path(host.current_session)
+
+    prompt_text, prompt_source, resolved_version = host.architect_prompt()
+    payload = f"{prompt_text}"
+    if host.current_session and workspace:
+        payload += (
+            "\n\n---\n"
+            f"CURRENT_SESSION: {host.current_session}\n"
+            f"WORKSPACE: {workspace}\n"
+            f"PROMPT_VERSION: {resolved_version}\n"
+            f"PROMPT_SOURCE: {prompt_source}\n"
+            "All tool calls should operate inside this workspace."
+        )
+    else:
+        payload += (
+            "\n\n---\n"
+            f"PROMPT_VERSION: {resolved_version}\n"
+            f"PROMPT_SOURCE: {prompt_source}\n"
+        )
+
+    return payload
+
+
+# =============================================================================
 # The registry
 # =============================================================================
 # ONE list of the tools that exist, in the order clients see them. Which
 # surfaces each one reaches is NOT restated here — it is read off the tool's
 # own policy, so a tool can never be in a list its policy contradicts.
 ALL_TOOLS = [
+    # Session tools — a stranger's first call, so they lead the advertised list
+    create_session_tool,
+    list_sessions_tool,
+    set_active_session,
+    get_current_session,
+    delete_session_tool,
+    inject_architect_prompt,
     # Specification tools (use FIRST)
     write_spec,
     read_spec,
@@ -1912,6 +2158,7 @@ def tools_on_surface(surface: str) -> list:
 
 
 # Tools exposed over MCP (no blocking wait tool for the UI; see each policy).
+# Includes the session tools, which no other surface offers.
 mcp_tools = tools_on_surface("mcp")
 
 # Tools bound to the in-process architect agent.

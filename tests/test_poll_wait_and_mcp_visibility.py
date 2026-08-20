@@ -46,7 +46,14 @@ def test_tool_registry_matches_run_id_contract():
     assert "sleep_tool" not in mcp_names
 
     architect_names = {t.name for t in wrappers.architect_tools}
-    assert architect_names == mcp_names | {"sleep_tool"}
+    # The two surfaces differ by exactly two things, both derived from policy:
+    # MCP also carries the session tools (a foreign client has to bootstrap its
+    # own session; the in-process architect is already in one), and the
+    # architect also carries sleep_tool.
+    session_tools = {t.name for t in wrappers.mcp_tools
+                     if not wrappers.tool_policy(t).requires_session}
+    assert session_tools, "the MCP surface must carry the session bootstrap"
+    assert architect_names == (mcp_names - session_tools) | {"sleep_tool"}
 
 
 def test_mcp_does_not_expose_sleep_tool():

@@ -16,8 +16,8 @@ MCP clients all speak one contract with zero drift:
 Policy (what is NOT derivable from schemas) is declared ON each tool, once, at
 its definition site (``@policy(...)`` in ``src/tools/wrappers.py``). This module
 DERIVES the views everything else reads — ``TOOL_CATEGORIES``,
-``PROTECTED_TOOLS``, ``ASYNC_TOOLS``, ``MUTATING_TOOLS``, ``EXCLUDED_FROM_UI``
-— from those declarations. ``mcp_server`` imports the category/protected policy
+``PROTECTED_TOOLS``, ``ASYNC_TOOLS``, ``MUTATING_TOOLS``, ``EXCLUDED_FROM_UI``,
+``DISABLED_WHEN_BOUND`` — from those declarations. ``mcp_server`` imports the category/protected policy
 FROM here, so there is one policy, not two, and adding a tool means editing one
 file.
 
@@ -54,11 +54,14 @@ from src.utils.paths import is_within
 CATEGORY_ORDER = (
     "essential", "manifest", "verification", "synthesis",
     "editing", "reporting", "analysis", "hls",
+    # MCP-only: the session tools never reach the Command Surface (the web UI
+    # has its own session management), so this group is always empty there.
+    "session",
 )
 
 _DERIVED_NAMES = frozenset({
     "TOOL_CATEGORIES", "PROTECTED_TOOLS", "ASYNC_TOOLS", "MUTATING_TOOLS",
-    "EXCLUDED_FROM_UI",
+    "EXCLUDED_FROM_UI", "DISABLED_WHEN_BOUND",
 })
 
 
@@ -116,6 +119,9 @@ def _derive() -> Dict[str, Any]:
             "ASYNC_TOOLS": frozenset(n for n, p in policies.items() if p.async_job),
             "MUTATING_TOOLS": frozenset(n for n, p in policies.items() if p.mutates),
             "EXCLUDED_FROM_UI": frozenset(n for n, p in policies.items() if "ui" not in p.surfaces),
+            "DISABLED_WHEN_BOUND": frozenset(
+                n for n, p in policies.items() if p.disabled_when_bound
+            ),
         }
     return _derived
 
@@ -140,13 +146,23 @@ def category_of(tool_name: str) -> str:
 def requires_session(tool_name: str) -> bool:
     """Whether the tool needs an active session/workspace to run.
 
-    Every MCP-surfaced tool does today (the agent-only sleep_tool does not),
-    which is what makes the MCP server's blanket session gate correct. The field
-    exists on the policy so the server's own hand-written session tools — which
-    a stranger must call BEFORE any session exists — can be folded in later
-    (finding A-H9) without that gate rejecting a stranger's first call.
+    This is what the MCP server's session gate reads before every call. It is
+    False for the session tools themselves — a stranger has to be able to call
+    create_session_tool with no session yet — and True for everything else,
+    which is why that gate can be blanket without naming a single tool.
     """
     return policy_for(tool_name).requires_session
+
+
+def tools_with_attempt_parser(parser) -> frozenset:
+    """Every tool whose results ``parser`` reads (declared in its ``@policy``).
+
+    Lets a consumer ask "which tool produces a lint verdict?" instead of
+    hardcoding ``"linter_tool"`` — the same question the attempt log asks.
+    """
+    return frozenset(
+        n for n, p in _load_policies().items() if p.attempt_parser is parser
+    )
 
 
 # --- Catalog (introspected once per process) ----------------------------------
