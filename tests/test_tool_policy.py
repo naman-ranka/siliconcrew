@@ -93,24 +93,29 @@ def test_every_category_has_a_presentation_order():
     assert not stale, f"CATEGORY_ORDER names categories no tool declares: {sorted(stale)}"
 
 
-def test_only_the_session_tools_opt_out_of_the_session_gate():
+def test_only_workspace_free_tools_opt_out_of_the_session_gate():
     """The MCP server gates EVERY call on ``requires_session`` before dispatch.
-    The tools that opt out are exactly the session tools — the ones a stranger
-    must be able to call BEFORE any session exists. Anything else opting out
-    would be a tool running with no workspace to act on.
+    The tools that opt out are exactly the ones with no workspace to act on:
+    the session tools a stranger must call BEFORE any session exists, and the
+    skill tools, whose store ships with SiliconCrew and is the same text for
+    every session. Anything else opting out would dispatch into nothing.
 
     Two independent declarations (the category and the gate field) asserted to
-    agree: a session tool that demands a session cannot bootstrap anyone, and a
-    design tool that waives one would dispatch into nothing."""
+    agree: a session tool that demands a session cannot bootstrap anyone, a
+    design tool that waives one would dispatch into nothing, and a skill tool
+    that demanded one would make a stranger create a design before it could ask
+    what knowledge exists (finding A3-H1)."""
     from src.api.tool_catalog import requires_session
     from src.tools.wrappers import ALL_TOOLS, tool_policy, tools_on_surface
 
     served_over_mcp = tools_on_surface("mcp") + tools_on_surface("codex")
     sessionless = {t.name for t in served_over_mcp if not requires_session(t.name)}
-    session_tools = {t.name for t in ALL_TOOLS if tool_policy(t).category == "session"}
-    assert sessionless == session_tools, (
-        "the tools that bypass the session gate are no longer the session "
-        f"tools: bypassing={sorted(sessionless)} session={sorted(session_tools)}"
+    workspace_free = {
+        t.name for t in ALL_TOOLS if tool_policy(t).category in ("session", "skills")
+    }
+    assert sessionless == workspace_free, (
+        "the tools that bypass the session gate are no longer the workspace-free "
+        f"ones: bypassing={sorted(sessionless)} workspace-free={sorted(workspace_free)}"
     )
 
 
@@ -303,7 +308,10 @@ def test_the_registries_are_derived_from_surfaces():
     # does not is exactly the session bootstrap, which an in-process agent
     # (already inside a session) has no use for.
     mcp_only = {t.name for t in mcp_tools} - {t.name for t in architect_tools}
-    assert mcp_only == {t.name for t in mcp_tools if not tool_policy(t).requires_session}
+    assert mcp_only == {
+        t.name for t in mcp_tools
+        if not tool_policy(t).requires_session and tool_policy(t).category == "session"
+    }
 
 
 def test_the_catalog_is_the_ui_surface():

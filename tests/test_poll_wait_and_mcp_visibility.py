@@ -31,9 +31,11 @@ def test_tool_registry_matches_run_id_contract():
     architect_names = {t.name for t in wrappers.architect_tools}
     # The two surfaces differ by exactly one thing, derived from policy: MCP
     # also carries the session tools (a foreign client has to bootstrap its own
-    # session; the in-process architect is already in one).
+    # session; the in-process architect is already in one). The skill tools are
+    # sessionless too, but both surfaces carry them, so they are not a
+    # difference.
     session_tools = {t.name for t in wrappers.mcp_tools
-                     if not wrappers.tool_policy(t).requires_session}
+                     if wrappers.tool_policy(t).category == "session"}
     assert session_tools, "the MCP surface must carry the session bootstrap"
     assert architect_names == mcp_names - session_tools
 

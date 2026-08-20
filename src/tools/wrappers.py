@@ -1908,6 +1908,55 @@ def inject_architect_prompt(session_id: Optional[str] = "") -> str:
 
 
 # =============================================================================
+# Skills
+# =============================================================================
+# The skill store is NOT in the session workspace — it ships with SiliconCrew
+# and is the same text for every session — so `read_file`, which is confined to
+# the workspace on every surface, cannot serve it. These two are the read route,
+# and being registry tools they reach the agent and every MCP client by
+# construction. Neither needs a session: a stranger's client asks what knowledge
+# exists before it has a design to apply it to.
+from src.utils import skills as skills_mod  # noqa: E402
+
+
+@tool(parse_docstring=True)
+@policy(category="skills", protected=False, mutates=False, async_job=False,
+        surfaces=("agent", "mcp"), requires_session=False)
+def list_skills() -> str:
+    """
+    Lists the available skills — name and one-line description each. A skill is
+    procedural knowledge for a situation the tools cannot decide for you: how to
+    diagnose a physical-design failure, how to earn a passing testbench, how to
+    sweep a design's PPA frontier. Read one with read_skill when its description
+    matches what you are doing. The index is already in the system prompt; call
+    this to re-read it.
+    """
+    skills = skills_mod.discover_skills()
+    if not skills:
+        return "No skills are installed."
+    return skills_mod.skill_index(skills)
+
+
+@tool(parse_docstring=True)
+@policy(category="skills", protected=False, mutates=False, async_job=False,
+        surfaces=("agent", "mcp"), requires_session=False)
+def read_skill(name: str, file: str = "") -> str:
+    """
+    Returns a skill's full text. Skills are markdown; a skill may point at
+    reference files beside it, which this same tool reads.
+
+    Args:
+        name: Skill name as list_skills reports it.
+        file: A reference file inside that skill, e.g.
+            'references/pd_knob_catalog.md'. Omit for the skill itself.
+    """
+    try:
+        return skills_mod.read_skill_file(name, file)
+    except skills_mod.SkillError as exc:
+        return f"❌ {exc}"
+
+
+# =============================================================================
 # The registry
 # =============================================================================
 # ONE list of the tools that exist, in the order clients see them. Which
@@ -1954,6 +2003,9 @@ ALL_TOOLS = [
     run_python_analysis,
     # Google XLS HLS
     run_xls_flow,
+    # Skills — knowledge, not action; no session needed to ask what exists
+    list_skills,
+    read_skill,
 ]
 
 

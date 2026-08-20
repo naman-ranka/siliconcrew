@@ -150,6 +150,27 @@ def test_instructions_bootstrap_a_stranger(make_server):
     assert "No active session" not in after[0].text  # gate cleared by the documented step
 
 
+def test_knowledge_tools_answer_a_stranger_with_no_session(make_server):
+    """Finding A3-H1. The skill store is not in any workspace, so asking what
+    knowledge exists must not require creating a design first — and the waiver
+    must come from the tool's own policy, not a seventh hand-written branch in
+    the server."""
+    from src.api.tool_catalog import TOOL_CATEGORIES, requires_session
+
+    server = make_server()
+    advertised = _advertised(server)
+    knowledge = [n for n in TOOL_CATEGORIES.get("skills", ()) if n in advertised]
+    assert knowledge, "the skill tools are not advertised over MCP"
+
+    for name in knowledge:
+        assert not requires_session(name)
+        assert server.current_session is None
+        out = asyncio.run(server.call_tool(name, _probe_args(advertised[name])))
+        assert "No active session" not in out[0].text
+    # ...and asking is not the same as acting: no session was created either.
+    assert server.current_session is None
+
+
 def test_gate_error_points_at_the_recovery_tool(make_server):
     """The refusal must be recoverable from its own text: a stranger who never
     read the instructions still learns which tool to call."""

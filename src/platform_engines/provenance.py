@@ -16,7 +16,7 @@ this" — which prompt, which knowledge, which tools were visible — so no
 benchmark number could ever be attributed to a prompt version (finding B9). The
 ``AgentProvenance`` half below closes that gap:
 
-  * ``prompt_version`` — the active architect prompt version (``v2``, ...)
+  * ``prompt_version`` — the active architect prompt version (``v3``, ...)
   * ``prompt_sha``     — content hash of the prompt file actually used (a
                          version string alone is not enough: the file changes
                          without the version changing)
@@ -25,8 +25,10 @@ benchmark number could ever be attributed to a prompt version (finding B9). The
   * ``tool_set``       — identifier of the tool set the agent could see
   * ``context_edit``   — the context-compaction settings the turn ran under
 
-Skills and tool sets do not exist yet, so those three are present and ABSENT
-today; the later phase fills them with data, not with new fields.
+The skill pair is filled in: a run made with a different set of skills, or with
+one of them edited, is not the same experiment, and nothing else in the stamp
+would show it. ``tool_set`` is still present and ABSENT — nothing resolves one
+yet, and the later phase fills it with data rather than a new field.
 
 ``context_edit`` is filled in: once compaction is on, a long run reaches the
 model with older tool results replaced by a placeholder, so it is not the same
@@ -72,8 +74,8 @@ class AgentProvenance:
       nothing enabled — a choice was made. Only a resolver that really looked
       may write it.
 
-    Today every field but the prompt pair is ``None`` on every run, and that is
-    the honest reading: skills and tool sets are not implemented yet.
+    ``tool_set`` is ``None`` on every run today, and that is the honest
+    reading: tool sets are not implemented yet.
     """
 
     prompt_version: Optional[str] = None
@@ -156,8 +158,8 @@ def active_prompt_version() -> str:
     Read at call time rather than import time so a process that changes the env
     stamps what it will actually use.
     """
-    version = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v2") or "v2").strip().lower()
-    return version or "v2"
+    version = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v3") or "v3").strip().lower()
+    return version or "v3"
 
 
 def active_prompt_path(version: Optional[str] = None) -> Path:
@@ -282,17 +284,51 @@ def agent_provenance_scope(agent: AgentProvenance) -> Iterator[AgentProvenance]:
 def resolve_agent_provenance(user_id: Optional[str] = None) -> AgentProvenance:
     """Resolve, once per turn, what is driving this turn.
 
-    ``user_id`` is the owner whose skill set / tool set would be composed. It is
-    unused today because neither exists — that is the seam the later phase fills
-    in, and the reason this resolution lives in request scope (where the owner
-    IS known) instead of inside ``collect_provenance``. Until then
-    ``skills_loaded`` / ``skills_sha`` / ``tool_set`` stay ``None`` = absent,
-    which is the truthful reading: nothing looked, so nothing was chosen.
+    ``user_id`` is the owner whose skill set / tool set would be composed. The
+    built-in skill pack is the same for everyone, so today it changes nothing —
+    but the resolution stays HERE, in request scope where the owner is known,
+    because the moment a user layer exists, composing it deeper down (inside
+    ``collect_provenance``, or in any module-level cache) is the cross-tenant
+    leak finding A3-C1 describes.
+
+    ``skills_loaded`` names the skills IN FORCE for the turn — the pack the
+    agent could read, with the always-loaded one already in its prompt. It is
+    deliberately not "the bodies the model chose to open": this stamp is
+    resolved before the turn runs, and the synthesis worker that writes
+    ``run_meta.json`` could not observe that choice anyway. Claiming otherwise
+    would be a more precise-sounding number that is not true. ``skills_sha``
+    hashes their CONTENT, so an edited skill moves the digest even under an
+    unchanged name — the same reason ``prompt_sha`` rides beside
+    ``prompt_version``.
+
+    ``tool_set`` stays ``None`` = absent: nothing resolves one yet.
     """
     version, sha = prompt_identity()
+    names, digest = _skills_identity()
     return AgentProvenance(
-        prompt_version=version, prompt_sha=sha, context_edit=context_edit_identity()
+        prompt_version=version,
+        prompt_sha=sha,
+        skills_loaded=names,
+        skills_sha=digest,
+        context_edit=context_edit_identity(),
     )
+
+
+def _skills_identity() -> Tuple[Optional[List[str]], Optional[str]]:
+    """``(names, digest)`` for the active skill store, or ``(None, None)``.
+
+    ``None`` when discovery could not run at all — a build shipped without the
+    pack, or a malformed file — because "nothing looked" and "looked, found
+    none" must stay distinguishable (see :class:`AgentProvenance`). An empty
+    store that parses cleanly is ``([], <digest of nothing>)``: a real answer.
+    Never raises; stamping a run must not be the thing that fails a run.
+    """
+    try:
+        from src.utils.skills import skills_provenance
+
+        return skills_provenance()
+    except Exception:
+        return None, None
 
 
 def collect_provenance(

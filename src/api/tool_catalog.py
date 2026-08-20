@@ -59,6 +59,9 @@ CATEGORY_ORDER = (
     # MCP-only: the session tools never reach the Command Surface (the web UI
     # has its own session management), so this group is always empty there.
     "session",
+    # Agent + MCP: reading the skill store is the agent's own business, and the
+    # web UI has no skills surface yet, so this group is empty there too.
+    "skills",
 )
 
 _DERIVED_NAMES = frozenset({

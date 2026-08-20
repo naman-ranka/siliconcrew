@@ -94,7 +94,7 @@ def test_provenance_records_the_active_prompt(monkeypatch):
     monkeypatch.delenv("ARCHITECT_PROMPT_VERSION", raising=False)
 
     d = collect_provenance(pdk="sky130hd").as_dict()
-    assert d["prompt_version"] == "v2"
+    assert d["prompt_version"] == prov.active_prompt_version()
     assert d["prompt_sha"].startswith("sha256:") and len(d["prompt_sha"]) == 7 + 64
     # ...and it is the hash of the file load_system_prompt would actually read.
     import hashlib
@@ -125,18 +125,20 @@ def test_prompt_edit_moves_sha_but_not_version(tmp_path, monkeypatch):
     prompts = tmp_path / "prompts"
     prompts.mkdir()
     monkeypatch.setattr(prov, "PROMPTS_DIR", prompts)
-    target = prompts / "architect_prompt_v2.md"
+    # Named for whatever version is active, so this cannot rot on a bump.
+    active = prov.active_prompt_version()
+    target = prompts / f"architect_prompt_{active}.md"
 
-    target.write_text("You are the Architect.\n\nPROMPT_VERSION: v2\n", encoding="utf-8")
+    target.write_text(f"You are the Architect.\n\nPROMPT_VERSION: {active}\n", encoding="utf-8")
     v1, sha1 = prov.prompt_identity()
 
     target.write_text(
-        "You are the Architect.\nAlways run lint first.\n\nPROMPT_VERSION: v2\n",
+        f"You are the Architect.\nAlways run lint first.\n\nPROMPT_VERSION: {active}\n",
         encoding="utf-8",
     )
     v2, sha2 = prov.prompt_identity()
 
-    assert v1 == v2 == "v2"          # version stays put...
+    assert v1 == v2 == active        # version stays put...
     assert sha1 != sha2              # ...but the content hash moves.
     assert sha1 and sha2
 
@@ -185,7 +187,7 @@ def test_collect_provenance_reads_the_bound_scope_not_its_own_lookup(monkeypatch
     bound = prov.AgentProvenance(
         prompt_version="v9",
         prompt_sha="sha256:beef",
-        skills_loaded=["self-verification-standard"],
+        skills_loaded=["a-skill"],
         skills_sha="sha256:cafe",
         tool_set="default@3",
     )
@@ -194,7 +196,7 @@ def test_collect_provenance_reads_the_bound_scope_not_its_own_lookup(monkeypatch
 
     assert d["prompt_version"] == "v9"
     assert d["prompt_sha"] == "sha256:beef"
-    assert d["skills_loaded"] == ["self-verification-standard"]
+    assert d["skills_loaded"] == ["a-skill"]
     assert d["skills_sha"] == "sha256:cafe"
     assert d["tool_set"] == "default@3"
     # The scope does not leak past its block.
@@ -258,7 +260,8 @@ def test_request_scope_resolves_agent_provenance_once_per_turn(monkeypatch, tmp_
         with session_request_scope("sess_a", user_id="owner_a", provider=_Provider()):
             pass
     assert calls == ["owner_a"], f"resolved {len(calls)} times, expected once"
-    assert stamped["prompt_version"] == "v2" and stamped["prompt_sha"]
+    assert stamped["prompt_version"] == prov.active_prompt_version()
+    assert stamped["prompt_sha"]
     assert prov.current_agent_provenance() is None
 
 

@@ -12,6 +12,13 @@ There is deliberately NO fallback to an embedded prompt. Serving a stale prompt
 when the file is missing turns a bad deploy or a typo'd ARCHITECT_PROMPT_VERSION
 into an agent that looks healthy while running the wrong instructions, and
 provenance records a version that was never loaded.
+
+The skill index is appended HERE, in the one place every runtime already asks
+for a prompt — the native agent, the Codex runtime, the MCP prompt envelope and
+the Codex-client prompt tool all go through this function, so all four receive
+the same bytes and none of them can forget. A second composition would be a
+second list, and the skill that would go missing from it is the always-loaded
+one, whose absence produces no error anywhere (finding A3-H2).
 """
 from __future__ import annotations
 
@@ -24,8 +31,8 @@ PROMPTS_DIR = _REPO_ROOT / "prompts" / "architect"
 
 def resolved_version() -> str:
     """The prompt version this process is configured to run."""
-    version = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v2") or "v2").strip().lower()
-    return version or "v2"
+    version = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v3") or "v3").strip().lower()
+    return version or "v3"
 
 
 def prompt_path(version: str | None = None) -> Path:
@@ -36,11 +43,16 @@ class PromptUnavailable(RuntimeError):
     """The runtime prompt file is missing, unreadable, or empty."""
 
 
-def load_system_prompt(path: Path | None = None) -> str:
-    """Return the prompt text, or raise :class:`PromptUnavailable`.
+def load_system_prompt(path: Path | None = None, with_skills: bool = True) -> str:
+    """Return the prompt text plus the skill block, or raise
+    :class:`PromptUnavailable`.
 
     An agent running the wrong prompt is worse than one that refuses to start,
     because the failure is invisible.
+
+    ``with_skills=False`` returns the prompt FILE alone. It exists for the
+    identity/provenance readers, which hash the file; everything that actually
+    drives a model leaves it on.
     """
     path = path or prompt_path()
     try:
@@ -55,7 +67,14 @@ def load_system_prompt(path: Path | None = None) -> str:
         raise PromptUnavailable(f"Architect prompt at {path} could not be read: {exc}") from exc
     if not text:
         raise PromptUnavailable(f"Architect prompt at {path} is empty.")
-    return text
+    if not with_skills:
+        return text
+    from src.utils.skills import compose_skills_block
+
+    # No try/except: a malformed shipped skill is a bad build, and an agent
+    # quietly missing the knowledge it was supposed to have is the failure this
+    # whole layer exists to prevent. An absent store composes to "" already.
+    return text + compose_skills_block()
 
 
 def load_with_provenance() -> tuple[str, str, str]:

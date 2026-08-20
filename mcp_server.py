@@ -571,9 +571,15 @@ class RTLDesignMCPServer:
                         role="user",
                         content=TextContent(
                             type="text",
-                            text=f"""You are now equipped with RTL design tools. Please follow this expert workflow:
-
-{prompt_text}
+                            # The envelope carries what this prompt request
+                            # resolved and NOTHING else. It used to append its
+                            # own four-step workflow and a session-management
+                            # summary: the workflow contradicted the architect
+                            # prompt (which deliberately prescribes no flow),
+                            # and the session facts are already delivered once,
+                            # at connect time, in SERVER_INSTRUCTIONS. Two
+                            # prompts and two copies of one fact, both drifting.
+                            text=f"""{prompt_text}
 
 ---
 
@@ -582,21 +588,7 @@ class RTLDesignMCPServer:
 **PROMPT_VERSION**: {resolved_version}
 **PROMPT_SOURCE**: {prompt_source}
 
-All tools will operate in this workspace. Files you create will be stored here.
-
-**SESSION MANAGEMENT**:
-- Use `set_active_session` to switch between sessions
-- Use `list_sessions_tool` to see all available sessions
-- Use `create_session_tool` to start a new isolated workspace
-- Current session persists across tool calls
-
-**IMPORTANT REMINDERS**:
-1. ALWAYS start with `write_spec` before writing any RTL
-2. ALWAYS use `linter_tool` after writing Verilog files
-3. ALWAYS use `waveform_tool` to debug simulation failures (never guess!)
-4. Follow the standard workflow: Spec → RTL → Testbench → Lint → Simulate → Debug → Synthesize
-
-Ready to design! What would you like to create?"""
+Tools act on this session's workspace; files you create are stored there."""
                         )
                     )
                 ]

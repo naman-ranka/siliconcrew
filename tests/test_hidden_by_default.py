@@ -72,27 +72,39 @@ def test_a_hidden_tool_keeps_its_full_policy(name):
     assert isinstance(policy.mutates, bool)
 
 
-def test_the_agent_surface_is_nineteen_tools():
+# The nineteen tools that DO the design work. The skill tools sit beside them
+# and are listed separately below, because they act on knowledge rather than on
+# the workspace — and because a reader counting the agent's levers should get
+# nineteen, not twenty-one.
+FLOW_TOOLS = {
+    "write_spec", "read_spec",
+    "write_file", "read_file", "edit_file", "list_files_tool",
+    "get_manifest", "update_manifest",
+    "linter_tool", "run_simulation", "waveform_tool",
+    "start_synthesis", "retry_pd", "get_synthesis_status",
+    "get_synthesis_metrics", "read_stage_report", "compare_pd_runs",
+    "search_logs_tool", "generate_report_tool",
+}
+SKILL_TOOLS = {"list_skills", "read_skill"}
+
+
+def test_the_agent_surface_is_the_flow_tools_plus_the_skill_pair():
     """The number this wave exists to reach, and the list it is made of. A tool
     added to the agent's list from now on is a decision someone has to make
-    here, out loud."""
-    assert _names(architect_tools) == {
-        "write_spec", "read_spec",
-        "write_file", "read_file", "edit_file", "list_files_tool",
-        "get_manifest", "update_manifest",
-        "linter_tool", "run_simulation", "waveform_tool",
-        "start_synthesis", "retry_pd", "get_synthesis_status",
-        "get_synthesis_metrics", "read_stage_report", "compare_pd_runs",
-        "search_logs_tool", "generate_report_tool",
-    }
-    assert len(architect_tools) == 19
+    here, out loud. The skill pair was that decision: the store lives outside
+    every workspace, so `read_file` cannot reach it."""
+    assert _names(architect_tools) == FLOW_TOOLS | SKILL_TOOLS
+    assert len(FLOW_TOOLS) == 19
+    assert len(architect_tools) == 21
 
 
-def test_a_default_mcp_connection_gets_those_nineteen_plus_the_bootstrap():
-    """A stranger's client sees the same 19, plus the session tools it needs
-    before any session exists — and nothing else."""
-    session_tools = {t.name for t in mcp_tools if not tool_policy(t).requires_session}
-    assert _names(mcp_tools) - session_tools == _names(architect_tools)
+def test_a_default_mcp_connection_gets_the_same_set_plus_the_bootstrap():
+    """A stranger's client sees exactly what the agent sees, plus the session
+    tools it needs before any session exists — and nothing else."""
+    sessionless = {t.name for t in mcp_tools if not tool_policy(t).requires_session}
+    assert _names(mcp_tools) - sessionless == FLOW_TOOLS
+    assert SKILL_TOOLS <= _names(mcp_tools)   # knowledge needs no session...
+    assert SKILL_TOOLS <= sessionless          # ...and must survive the gate
     assert not (_names(mcp_tools) & HIDDEN)
 
 

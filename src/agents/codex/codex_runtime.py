@@ -122,6 +122,14 @@ class CodexRuntimeHandler:
         # ONE composition used by run_turn AND prewarm — the worker fingerprint
         # includes the prompt, so the two must build it identically or the
         # first real turn would discard its own pre-warmed worker.
+        #
+        # Skills ride the loader (src.utils.architect_prompt.load_system_prompt),
+        # which appends the index AND the body of the always-loaded skill. That
+        # is deliberate and load-bearing: Codex has no middleware of ours, so a
+        # skill block composed only on the native side would leave this runtime
+        # — the one the stranger test measures — without the one skill whose
+        # absence produces no error anywhere (finding A3-H2). Do not "optimise"
+        # this to read the prompt file directly.
         policy_on = os.environ.get("CODEX_TOOL_POLICY", "1").lower() not in ("0", "false", "no")
         return self._load_system_prompt() + (_CODEX_TOOL_POLICY if policy_on else "")
 
