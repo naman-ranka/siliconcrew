@@ -7,21 +7,28 @@ from typing import Any
 EVENTS_FILE = "attempt_events.jsonl"
 SUMMARY_FILE = "attempt_log.json"
 
-CHANGE_TOOLS = {
-    "write_spec",
-    "load_yaml_spec_file",
-    "write_file",
-    "edit_file_tool",
-    "apply_patch_tool",
-    "start_synthesis",
-}
 
-CHECKPOINT_TOOLS = {
-    "linter_tool",
-    "simulation_tool",
-    "get_synthesis_metrics",
-    "generate_report_tool",
-}
+def _tool_policy(tool: str):
+    """The :class:`ToolPolicy` for a tool NAME read out of an event row.
+
+    Lazy import on purpose: this module is dependency-light and is imported BY
+    the tool registry (the wrappers declare the readers below on their tools),
+    so it cannot import the registry at module load.
+
+    ``None`` for a name the registry does not know. Event rows are a data
+    stream from every actor, and they legitimately carry names that are not
+    registry tools: the ``synthesis_run`` system pseudo-tool
+    (synthesis_manager.py), the MCP server's session tools, and rows recorded
+    before a rename. Those have no attempt semantics by construction — this is
+    not a policy default for a REGISTERED tool, which cannot be missing
+    (tests/test_tool_policy.py).
+    """
+    from src.api.tool_catalog import UnknownToolError, policy_for
+
+    try:
+        return policy_for(tool)
+    except UnknownToolError:
+        return None
 
 
 def _utc_now() -> str:
@@ -163,6 +170,54 @@ def _extract_synth_metrics(result_text: str | None) -> tuple[float | None, float
     return wns, tns
 
 
+# --- Per-tool result readers -------------------------------------------------
+# Each reader fills the attempt summary from ONE tool's result. A tool names its
+# reader on its own policy (``attempt_parser=`` in src/tools/wrappers.py); this
+# module never selects one by tool name. That is the whole point: the dispatch
+# used to be a chain of ``if tool == "..."`` here, five tool names away from the
+# tools themselves, with no way to notice a tool that nobody handled.
+#
+# Contract: mutate ``attempt`` in place. ``_had_failure`` marks a failed
+# checkpoint (the next change opens a new attempt). ``_has_checkpoint`` is NOT
+# set here — it comes from the policy's ``attempt_role``.
+
+def attempt_lint(attempt: dict[str, Any], arguments: dict[str, Any],
+                 result_text: str | None, status: str) -> None:
+    text = (result_text or "").lower()
+    l_status = "pass" if ("syntax ok" in text or "lint passed" in text) else "fail"
+    attempt["rtl_lint"] = l_status
+    attempt["_had_failure"] = attempt["_had_failure"] or l_status == "fail"
+
+
+def attempt_simulation(attempt: dict[str, Any], arguments: dict[str, Any],
+                       result_text: str | None, status: str) -> None:
+    mode = str(arguments.get("mode", "rtl")).lower()
+    parsed_mode, sim_status = _extract_sim_status(result_text)
+    if mode not in {"rtl", "post_synth"}:
+        mode = parsed_mode
+    if mode == "post_synth":
+        attempt["post_synth_sim"] = sim_status
+    else:
+        attempt["rtl_sim"] = sim_status
+    attempt["_had_failure"] = attempt["_had_failure"] or sim_status == "fail"
+
+
+def attempt_synthesis_dispatch(attempt: dict[str, Any], arguments: dict[str, Any],
+                               result_text: str | None, status: str) -> None:
+    attempt["synth_status"] = "running" if status == "success" else "failed"
+    attempt["_had_failure"] = attempt["_had_failure"] or status == "error"
+
+
+def attempt_synthesis_metrics(attempt: dict[str, Any], arguments: dict[str, Any],
+                              result_text: str | None, status: str) -> None:
+    wns, tns = _extract_synth_metrics(result_text)
+    attempt["wns_ns"] = wns
+    attempt["tns_ns"] = tns
+    attempt["synth_status"] = "completed"
+    if wns is not None and tns is not None and (wns < 0 or tns != 0):
+        attempt["_had_failure"] = True
+
+
 def _write_summary(workspace: str, session_id: str | None) -> None:
     events_path = os.path.join(workspace, EVENTS_FILE)
     events = _read_events(events_path)
@@ -190,16 +245,19 @@ def _write_summary(workspace: str, session_id: str | None) -> None:
 
     def touch_attempt_for_call(tool: str, args: dict[str, Any], ts: str) -> None:
         nonlocal current
+        policy = _tool_policy(tool)
+        role = policy.attempt_role if policy is not None else None
+        is_change = role in ("rtl_change", "synth_change")
         if current is None:
             current = new_attempt(ts)
             attempts.append(current)
-        elif tool in CHANGE_TOOLS and (current["_has_checkpoint"] or current["_had_failure"]):
+        elif is_change and (current["_has_checkpoint"] or current["_had_failure"]):
             current["ended_at"] = ts
             current = new_attempt(ts)
             attempts.append(current)
 
-        if tool in CHANGE_TOOLS:
-            if tool == "start_synthesis":
+        if is_change:
+            if role == "synth_change":
                 current["change_type"] = "synth" if current["change_type"] == "unknown" else "both"
             else:
                 if current["change_type"] == "unknown":
@@ -237,36 +295,12 @@ def _write_summary(workspace: str, session_id: str | None) -> None:
         result_text = ev.get("result")
         status = str(ev.get("status", "unknown")).lower()
 
-        if tool == "linter_tool":
-            _lt = (result_text or "").lower()
-            l_status = "pass" if ("syntax ok" in _lt or "lint passed" in _lt) else "fail"
-            current["rtl_lint"] = l_status
-            current["_has_checkpoint"] = True
-            current["_had_failure"] = current["_had_failure"] or l_status == "fail"
-        elif tool == "simulation_tool":
-            mode = str(args.get("mode", "rtl")).lower()
-            parsed_mode, sim_status = _extract_sim_status(result_text)
-            if mode not in {"rtl", "post_synth"}:
-                mode = parsed_mode
-            if mode == "post_synth":
-                current["post_synth_sim"] = sim_status
-            else:
-                current["rtl_sim"] = sim_status
-            current["_has_checkpoint"] = True
-            current["_had_failure"] = current["_had_failure"] or sim_status == "fail"
-        elif tool == "start_synthesis":
-            current["synth_status"] = "running" if status == "success" else "failed"
-            current["_had_failure"] = current["_had_failure"] or status == "error"
-        elif tool == "get_synthesis_metrics":
-            wns, tns = _extract_synth_metrics(result_text)
-            current["wns_ns"] = wns
-            current["tns_ns"] = tns
-            current["synth_status"] = "completed"
-            current["_has_checkpoint"] = True
-            if wns is not None and tns is not None and (wns < 0 or tns != 0):
-                current["_had_failure"] = True
-        elif tool == "generate_report_tool":
-            current["_has_checkpoint"] = True
+        policy = _tool_policy(tool)
+        if policy is not None:
+            if policy.attempt_role == "checkpoint":
+                current["_has_checkpoint"] = True
+            if policy.attempt_parser is not None:
+                policy.attempt_parser(current, args, result_text, status)
 
     if current is not None and current["ended_at"] is None:
         current["ended_at"] = _event_ts(events[-1]) if events else _utc_now()

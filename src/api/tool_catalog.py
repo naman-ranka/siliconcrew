@@ -13,10 +13,13 @@ MCP clients all speak one contract with zero drift:
                               function the agent runs, inside the caller's
                               session scope.
 
-Policy (what is NOT derivable from schemas) lives here as small explicit sets:
-categories, sign-in gating, async-ness, workspace mutation. ``mcp_server``
-imports the category/protected policy FROM here, so there is one policy, not
-two.
+Policy (what is NOT derivable from schemas) is declared ON each tool, once, at
+its definition site (``@policy(...)`` in ``src/tools/wrappers.py``). This module
+DERIVES the views everything else reads — ``TOOL_CATEGORIES``,
+``PROTECTED_TOOLS``, ``ASYNC_TOOLS``, ``MUTATING_TOOLS``, ``EXCLUDED_FROM_UI``
+— from those declarations. ``mcp_server`` imports the category/protected policy
+FROM here, so there is one policy, not two, and adding a tool means editing one
+file.
 
 No heavy imports at module load — ``wrappers`` (LangChain) is imported lazily
 inside functions so the action router stays importable/testable without the
@@ -25,85 +28,124 @@ agent stack.
 from __future__ import annotations
 
 import os
+from types import MappingProxyType
 from typing import Any, Dict, List, Optional
 
 from src.utils.paths import is_within
 
-# --- Policy (explicit, reviewed — everything else is introspected) -----------
+# --- Policy (DERIVED from the tools — never hand-maintained here) -------------
+#
+# Policy is declared at each tool's definition site (``@policy(...)`` in
+# src/tools/wrappers.py). Everything below is a VIEW of those declarations,
+# computed once per process. The historical names (TOOL_CATEGORIES,
+# PROTECTED_TOOLS, ASYNC_TOOLS, MUTATING_TOOLS, EXCLUDED_FROM_UI) still exist
+# and still mean the same thing, so every existing consumer keeps working — but
+# they are now derived values, and every one of them is immutable: editing this
+# file to change a tool's policy is no longer possible, which is the point.
+#
+# They are exposed through a module-level ``__getattr__`` (PEP 562) so importing
+# this module stays free of the LangChain tool stack; the registry is imported
+# on FIRST ACCESS to a derived name, exactly like ``build_catalog()``.
 
-TOOL_CATEGORIES: Dict[str, List[str]] = {
-    "essential": [
-        "write_spec", "read_spec", "write_file", "read_file",
-        "linter_tool", "simulation_tool", "run_isolated_simulation",
-        "list_files_tool",
-    ],
-    "manifest": [
-        "get_manifest", "update_manifest",
-    ],
-    "verification": [
-        "waveform_tool", "cocotb_tool", "sby_tool", "build_interactive_sim",
-    ],
-    "synthesis": [
-        "start_synthesis", "retry_pd", "get_synthesis_status", "wait_for_synthesis",
-        "get_synthesis_metrics", "read_stage_report", "get_route_drc_summary",
-        "get_cts_summary", "get_congestion_summary", "compare_pd_runs",
-        "search_logs_tool", "schematic_tool",
-    ],
-    "editing": [
-        "apply_patch_tool", "edit_file_tool", "load_yaml_spec_file",
-    ],
-    "reporting": [
-        "save_metrics_tool", "generate_report_tool",
-    ],
-    "analysis": [
-        "run_python_analysis",
-    ],
-    "hls": [
-        "run_xls_flow", "run_dslx_interpreter", "compile_dslx_to_ir",
-        "optimize_xls_ir", "codegen_xls", "benchmark_xls",
-        "experimental_compile_cpp_to_ir",
-    ],
-}
+# Presentation order for the Command Surface's groups (the frontend renders
+# catalog categories in first-seen order). Pure presentation — not policy, and
+# not a tool list. A category missing here is caught by tests/test_tool_policy.py
+# rather than silently sorting last.
+CATEGORY_ORDER = (
+    "essential", "manifest", "verification", "synthesis",
+    "editing", "reporting", "analysis", "hls",
+)
 
-_CATEGORY_BY_TOOL: Dict[str, str] = {
-    name: cat for cat, names in TOOL_CATEGORIES.items() for name in names
-}
-
-# Mutate/persist or compute-heavy → signed-in user required (same policy the
-# MCP server enforces for external clients; imported by mcp_server).
-PROTECTED_TOOLS = frozenset(TOOL_CATEGORIES["synthesis"]) | {
-    "write_spec", "write_file", "apply_patch_tool", "edit_file_tool",
-    "load_yaml_spec_file", "update_manifest",
-    "save_metrics_tool", "generate_report_tool",
-    "cocotb_tool", "sby_tool", "build_interactive_sim",
-    "run_python_analysis",
-    *TOOL_CATEGORIES["hls"],
-}
-
-# Dispatch-then-poll jobs (the UI renders them as async, never blocks on them).
-ASYNC_TOOLS = frozenset({"start_synthesis", "retry_pd"})
-
-# Tools whose execution writes into the workspace → hosted mode must sync the
-# workspace back to object storage after the call.
-MUTATING_TOOLS = frozenset({
-    "write_spec", "write_file", "apply_patch_tool", "edit_file_tool",
-    "load_yaml_spec_file", "update_manifest",
-    "simulation_tool", "run_isolated_simulation", "cocotb_tool", "sby_tool",
-    "start_synthesis", "retry_pd",
-    "save_metrics_tool", "generate_report_tool", "schematic_tool",
-    "build_interactive_sim",
-    "run_python_analysis",
-    *TOOL_CATEGORIES["hls"],
+_DERIVED_NAMES = frozenset({
+    "TOOL_CATEGORIES", "PROTECTED_TOOLS", "ASYNC_TOOLS", "MUTATING_TOOLS",
+    "EXCLUDED_FROM_UI",
 })
 
-# In the registry but not surfaced/invocable from the UI:
-#   wait_for_synthesis — a blocking poll loop built for agent turn economy;
-#   the UI has live job polling instead.
-EXCLUDED_FROM_UI = frozenset({"wait_for_synthesis"})
+
+class UnknownToolError(KeyError):
+    """Asked for the policy of a name no registered tool answers to.
+
+    Deliberately loud. The previous behaviour returned permissive defaults for
+    any unknown name (no sign-in required, does not mutate), which would have
+    made a mis-typed or unregistered tool an unauthenticated write whose
+    changes are never synced to object storage.
+    """
+
+
+_policies: Optional[Dict[str, Any]] = None
+_derived: Optional[Dict[str, Any]] = None
+
+
+def _load_policies() -> Dict[str, Any]:
+    """{tool name: ToolPolicy} for every registered tool, from the registry.
+
+    Lazy import (LangChain): callers surface an ImportError honestly rather
+    than this module dragging the agent stack into the action router.
+    """
+    global _policies
+    if _policies is None:
+        from src.tools.wrappers import ALL_TOOLS, tool_policy
+
+        _policies = {t.name: tool_policy(t) for t in ALL_TOOLS}
+    return _policies
+
+
+def policy_for(name: str):
+    """The declared :class:`ToolPolicy` for ``name``. Raises for anything else."""
+    try:
+        return _load_policies()[name]
+    except KeyError:
+        raise UnknownToolError(name) from None
+
+
+def _derive() -> Dict[str, Any]:
+    global _derived
+    if _derived is None:
+        policies = _load_policies()
+        by_category: Dict[str, List[str]] = {}
+        for name, p in policies.items():
+            by_category.setdefault(p.category, []).append(name)
+        order = {cat: i for i, cat in enumerate(CATEGORY_ORDER)}
+        categories = {
+            cat: tuple(by_category[cat])
+            for cat in sorted(by_category, key=lambda c: (order.get(c, len(order)), c))
+        }
+        _derived = {
+            "TOOL_CATEGORIES": MappingProxyType(categories),
+            "PROTECTED_TOOLS": frozenset(n for n, p in policies.items() if p.protected),
+            "ASYNC_TOOLS": frozenset(n for n, p in policies.items() if p.async_job),
+            "MUTATING_TOOLS": frozenset(n for n, p in policies.items() if p.mutates),
+            "EXCLUDED_FROM_UI": frozenset(n for n, p in policies.items() if "ui" not in p.surfaces),
+        }
+    return _derived
+
+
+def __getattr__(name: str) -> Any:
+    """PEP 562: the derived policy views, computed on first access."""
+    if name in _DERIVED_NAMES:
+        return _derive()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def reset_caches() -> None:
+    """Drop every cached view of the registry (tests that alter it)."""
+    global _policies, _derived, _catalog_cache, _tools_by_name
+    _policies = _derived = _catalog_cache = _tools_by_name = None
 
 
 def category_of(tool_name: str) -> str:
-    return _CATEGORY_BY_TOOL.get(tool_name, "other")
+    return policy_for(tool_name).category
+
+
+def requires_session(tool_name: str) -> bool:
+    """Whether the tool needs an active session/workspace to run.
+
+    Every tool in the registry does today, which is what makes the MCP server's
+    blanket session gate correct. The field exists on the policy so the server's
+    own hand-written session tools can be folded into this registry later
+    (finding A-H9) without that gate rejecting a stranger's first call.
+    """
+    return policy_for(tool_name).requires_session
 
 
 # --- Catalog (introspected once per process) ----------------------------------
@@ -113,13 +155,15 @@ _tools_by_name: Optional[Dict[str, Any]] = None
 
 
 def _load_tools() -> Dict[str, Any]:
-    """Lazy-import the agent tool registry (LangChain). Raises ImportError when
-    the agent stack isn't installed — callers surface that honestly."""
+    """The UI-invocable tools, keyed by name. Lazy-imports the agent tool
+    registry (LangChain); raises ImportError when the agent stack isn't
+    installed — callers surface that honestly. Membership is the tools' own
+    ``surfaces`` declaration, not a list kept here."""
     global _tools_by_name
     if _tools_by_name is None:
-        from src.tools.wrappers import mcp_tools
+        from src.tools.wrappers import tools_on_surface
 
-        _tools_by_name = {t.name: t for t in mcp_tools if t.name not in EXCLUDED_FROM_UI}
+        _tools_by_name = {t.name: t for t in tools_on_surface("ui")}
     return _tools_by_name
 
 
@@ -148,27 +192,31 @@ def build_catalog() -> List[Dict[str, Any]]:
                 schema = _clean_schema(t.args_schema.model_json_schema())
             else:
                 schema = {"type": "object", "properties": {}}
+            p = policy_for(name)
             entries.append({
                 "name": name,
                 "description": (t.description or "").strip(),
-                "category": category_of(name),
+                "category": p.category,
                 "argsSchema": schema,
-                "requiresSignIn": name in PROTECTED_TOOLS,
-                "async": name in ASYNC_TOOLS,
-                "mutates": name in MUTATING_TOOLS,
+                "requiresSignIn": p.protected,
+                "async": p.async_job,
+                "mutates": p.mutates,
             })
         # Stable order: catalog category order, then registry order within.
-        cat_rank = {cat: i for i, cat in enumerate(TOOL_CATEGORIES)}
+        cat_rank = {cat: i for i, cat in enumerate(_derive()["TOOL_CATEGORIES"])}
         entries.sort(key=lambda e: cat_rank.get(e["category"], 99))
         _catalog_cache = entries
     return _catalog_cache
 
 
 def tool_flags(name: str) -> Dict[str, bool]:
+    """The gate flags for one REGISTERED tool. Raises UnknownToolError
+    otherwise — an unknown name must never resolve to permissive defaults."""
+    p = policy_for(name)
     return {
-        "requiresSignIn": name in PROTECTED_TOOLS,
-        "mutates": name in MUTATING_TOOLS,
-        "async": name in ASYNC_TOOLS,
+        "requiresSignIn": p.protected,
+        "mutates": p.mutates,
+        "async": p.async_job,
     }
 
 

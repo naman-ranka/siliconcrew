@@ -30,6 +30,114 @@ from src.utils.workspace import get_workspace_path, resolve_in_workspace
 from src.utils.session_context import current_session_id
 
 
+# =============================================================================
+# Tool policy — declared AT the tool, read everywhere
+# =============================================================================
+# One rule: a tool's policy is written once, on the tool itself. Nothing else
+# in this repo may hand-maintain a list of tool names to classify them.
+#
+# Carrier: ``__tool_policy__`` on the undecorated function, which LangChain's
+# ``@tool`` keeps reachable as ``StructuredTool.func`` (already relied on by
+# ``tool_catalog.validate_and_execute``). ``BaseTool.metadata`` was the
+# alternative and was rejected on evidence: ``langchain_core.tools.tool()``
+# (1.6.0) takes no ``metadata`` argument, so it could only be assigned AFTER
+# the definition — a second site, i.e. exactly the drift this removes.
+#
+# Readers (there are no others; add one and add it here):
+#   category         -> tool_catalog.TOOL_CATEGORIES / category_of / build_catalog;
+#                       mcp_server picks Action.SYNTHESIZE vs Action.SAVE from it
+#   protected        -> tool_catalog.PROTECTED_TOOLS -> /invoke sign-in gate
+#                       (actions.py) and the MCP capability gate
+#   mutates          -> tool_catalog.MUTATING_TOOLS -> hosted workspace sync
+#                       (mcp_server, actions.run_scoped) and the catalog flag
+#   async_job        -> tool_catalog.ASYNC_TOOLS -> catalog flag; the UI renders
+#                       dispatch-then-poll instead of blocking
+#   surfaces         -> which registries a tool is in: "agent" (architect_tools),
+#                       "mcp" (mcp_tools), "ui" (Command Surface; absence is
+#                       tool_catalog.EXCLUDED_FROM_UI)
+#   requires_session -> tool_catalog.requires_session(); today every registry
+#                       tool needs one, which is what makes the MCP server's
+#                       blanket session gate correct. The field exists so the
+#                       6 hand-written server tools can be folded into this
+#                       registry later (plan finding A-H9) without that gate
+#                       rejecting a stranger's first call.
+#   attempt_role     -> attempt_logger: which tool calls open a new attempt
+#                       (a change) and which close one (a checkpoint)
+#   attempt_parser   -> attempt_logger: how THIS tool's result fills the
+#                       attempt summary. Declared here so there is no
+#                       name-keyed dispatch chain in the logger.
+
+from dataclasses import dataclass
+from typing import Callable
+
+from src.utils.attempt_logger import (
+    attempt_lint,
+    attempt_simulation,
+    attempt_synthesis_dispatch,
+    attempt_synthesis_metrics,
+)
+
+# Where a tool is offered. "ui" means the Command Surface / REST /invoke.
+SURFACE_NAMES = frozenset({"agent", "mcp", "ui"})
+ALL_SURFACES = ("agent", "mcp", "ui")
+
+# How a tool call moves the attempt log forward (see attempt_logger).
+ATTEMPT_ROLES = frozenset({"rtl_change", "synth_change", "checkpoint"})
+
+
+@dataclass(frozen=True)
+class ToolPolicy:
+    """Everything about a tool that is not derivable from its own schema.
+
+    Every field is required except the two attempt fields, whose honest default
+    is "this tool does not take part in attempt tracking". Omitting a required
+    field is a TypeError at import; omitting the whole policy is caught by
+    tests/test_tool_policy.py.
+    """
+
+    category: str
+    protected: bool
+    mutates: bool
+    async_job: bool
+    surfaces: frozenset
+    requires_session: bool
+    attempt_role: "str | None" = None
+    attempt_parser: "Callable | None" = None
+
+    def __post_init__(self):
+        if not self.category or not self.category.strip():
+            raise ValueError("ToolPolicy.category must be a non-empty category name")
+        surfaces = frozenset(self.surfaces)
+        unknown = surfaces - SURFACE_NAMES
+        if unknown:
+            raise ValueError(f"unknown surface(s) {sorted(unknown)}; known: {sorted(SURFACE_NAMES)}")
+        if not surfaces:
+            raise ValueError("a tool with no surface is unreachable — delete it instead")
+        object.__setattr__(self, "surfaces", surfaces)
+        if self.attempt_role is not None and self.attempt_role not in ATTEMPT_ROLES:
+            raise ValueError(f"unknown attempt_role {self.attempt_role!r}; known: {sorted(ATTEMPT_ROLES)}")
+
+
+def policy(**fields):
+    """Attach a :class:`ToolPolicy` to the function ``@tool`` will wrap.
+
+    Applied UNDER ``@tool`` so the attribute lands on the plain function that
+    survives as ``StructuredTool.func``::
+
+        @tool
+        @policy(category="essential", ...)
+        def read_file(filename: str) -> str: ...
+    """
+    p = ToolPolicy(**fields)
+
+    def attach(fn):
+        fn.__tool_policy__ = p
+        return fn
+
+    return attach
+
+
+
 def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
     """
     Normalize verilog_files argument from tool-calling models.
@@ -78,6 +186,9 @@ class WriteFileArgs(BaseModel):
 
 
 @tool(args_schema=WriteFileArgs)
+@policy(category="essential", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="rtl_change")
 def write_file(filename: str, content: str | None = None) -> str:
     """
     Writes content to a file in the workspace.
@@ -120,6 +231,8 @@ _READ_FILE_SOURCE_MAX_BYTES = 1024 * 1024
 
 
 @tool
+@policy(category="essential", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def read_file(filename: str) -> str:
     """
     Reads content from a file in the workspace. Large files (over 64 KiB) are
@@ -160,6 +273,9 @@ def read_file(filename: str) -> str:
     )
 
 @tool
+@policy(category="essential", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="checkpoint", attempt_parser=attempt_lint)
 def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
     """
     Lints Verilog files. Supports single-file or multi-file linting.
@@ -201,6 +317,9 @@ def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
     return f"Lint FAILED — {len(errors)} error(s), {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
 
 @tool
+@policy(category="essential", protected=False, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="checkpoint", attempt_parser=attempt_simulation)
 def simulation_tool(
     verilog_files: list[str],
     top_module: str,
@@ -258,6 +377,8 @@ from src.tools.sim_manager import run_sim_isolated
 
 
 @tool
+@policy(category="manifest", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def get_manifest() -> str:
     """
     Returns the design manifest (files + roles + synthTop/simTop + clock + platform).
@@ -269,6 +390,8 @@ def get_manifest() -> str:
 
 
 @tool
+@policy(category="manifest", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def update_manifest(updates_json: str) -> str:
     """
     Upserts manifest fields. Pass a JSON object with any of:
@@ -319,6 +442,8 @@ def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -
 
 
 @tool
+@policy(category="essential", protected=False, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def run_isolated_simulation(
     sim_top: str = "",
     mode: str = "rtl",
@@ -361,6 +486,9 @@ def run_isolated_simulation(
 
 
 @tool
+@policy(category="synthesis", protected=True, mutates=True, async_job=True,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="synth_change", attempt_parser=attempt_synthesis_dispatch)
 def start_synthesis(
     verilog_files: list[str],
     top_module: str,
@@ -414,6 +542,8 @@ def start_synthesis(
 
 
 @tool
+@policy(category="synthesis", protected=True, mutates=True, async_job=True,
+        surfaces=ALL_SURFACES, requires_session=True)
 def retry_pd(
     run_id: str,
     start_stage: str,
@@ -440,6 +570,8 @@ def retry_pd(
     return json.dumps(result, indent=2)
 
 @tool
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def get_synthesis_status(run_id: str) -> str:
     """
     Full status for a synthesis run by its run_id: status, current stage,
@@ -500,6 +632,10 @@ def _wait_for_synthesis_job(
 
 
 @tool
+# No "ui" surface: a bounded blocking poll built for agent turn economy. The
+# UI is a viewer, not an actor (invariant 6) and has its own live polling.
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=("agent", "mcp"), requires_session=True)
 def wait_for_synthesis(run_id: str, max_wait_sec: int = 30, poll_interval_sec: int = 2) -> str:
     """
     MCP-safe bounded wait for synthesis completion — the ONE blocking
@@ -516,6 +652,8 @@ def wait_for_synthesis(run_id: str, max_wait_sec: int = 30, poll_interval_sec: i
 
 
 @tool
+@policy(category="verification", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
                   end_time: Optional[int] = None) -> str:
     """
@@ -532,6 +670,8 @@ def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
     return read_waveform(abs_file, signals, start_time, end_time)
 
 @tool
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def search_logs_tool(query: str, run_id: str = None) -> str:
     """
     Searches for a keyword in OpenROAD logs and reports.
@@ -545,6 +685,9 @@ def search_logs_tool(query: str, run_id: str = None) -> str:
 
 
 @tool
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="checkpoint", attempt_parser=attempt_synthesis_metrics)
 def get_synthesis_metrics(run_id: str = None) -> str:
     """
     Returns structured synthesis metrics for a run.
@@ -561,6 +704,8 @@ def get_synthesis_metrics(run_id: str = None) -> str:
 
 
 @tool
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def read_stage_report(stage: str, run_id: str = None) -> str:
     """
     Reads the main ORFS artifact for a physical-design stage.
@@ -572,6 +717,8 @@ def read_stage_report(stage: str, run_id: str = None) -> str:
 
 
 @tool
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def get_route_drc_summary(run_id: str = None) -> str:
     """
     Summarizes the final route DRC report from ORFS.
@@ -583,6 +730,8 @@ def get_route_drc_summary(run_id: str = None) -> str:
 
 
 @tool
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def get_cts_summary(run_id: str = None) -> str:
     """
     Summarizes the ORFS CTS final report.
@@ -594,6 +743,8 @@ def get_cts_summary(run_id: str = None) -> str:
 
 
 @tool
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def get_congestion_summary(run_id: str = None) -> str:
     """
     Summarizes ORFS global-routing congestion from congestion.rpt or 5_1_grt.log.
@@ -605,6 +756,8 @@ def get_congestion_summary(run_id: str = None) -> str:
 
 
 @tool
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def compare_pd_runs(child_run_id: str, parent_run_id: str = None) -> str:
     """
     Compares a PD retry child run against its parent.
@@ -622,6 +775,9 @@ def compare_pd_runs(child_run_id: str, parent_run_id: str = None) -> str:
 from src.tools.edit_file import replace_in_file
 
 @tool
+@policy(category="editing", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="rtl_change")
 def apply_patch_tool(unified_diff: str) -> str:
     """
     Applies a unified-diff patch inside the active workspace.
@@ -633,6 +789,9 @@ def apply_patch_tool(unified_diff: str) -> str:
 
 
 @tool
+@policy(category="editing", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="rtl_change")
 def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> str:
     """
     Surgically replaces a block of text in a file.
@@ -664,6 +823,9 @@ from src.tools.spec_manager import (
 )
 
 @tool
+@policy(category="essential", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="rtl_change")
 def write_spec(
     module_name: str,
     description: str,
@@ -762,6 +924,8 @@ Once confirmed, proceed to write the RTL following this specification exactly.""
 
 
 @tool
+@policy(category="essential", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def read_spec(spec_filename: str = None) -> str:
     """
     Reads a design specification from a YAML file.
@@ -805,6 +969,9 @@ Use this specification to write the RTL. The module signature MUST match exactly
 
 
 @tool
+@policy(category="editing", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="rtl_change")
 def load_yaml_spec_file(yaml_path: str) -> str:
     """
     Loads an external YAML specification file (e.g., from hackathon problems).
@@ -861,6 +1028,8 @@ Proceed to implement the RTL following this specification."""
 
 
 @tool
+@policy(category="synthesis", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def schematic_tool(verilog_file: str, top_module: str) -> str:
     """
     Generates a visual schematic (SVG) from a Verilog file.
@@ -894,6 +1063,8 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
         return f"Failed to generate schematic: {result['error']}"
 
 @tool
+@policy(category="verification", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def build_interactive_sim(
     verilog_files: list[str] | str,
     top_module: str,
@@ -968,6 +1139,8 @@ def build_interactive_sim(
 
 
 @tool
+@policy(category="reporting", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def save_metrics_tool(
     area_um2: float = None,
     cell_count: int = None,
@@ -1027,6 +1200,9 @@ These will be included in the design report when you call `generate_report_tool`
 
 
 @tool
+@policy(category="reporting", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="checkpoint")
 def generate_report_tool(run_id: str = None) -> str:
     """
     Generates a comprehensive design report comparing the specification vs actual results.
@@ -1068,6 +1244,8 @@ class RunPythonAnalysisArgs(BaseModel):
 
 
 @tool(args_schema=RunPythonAnalysisArgs)
+@policy(category="analysis", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def run_python_analysis(script_file: str, args: list[str] = None) -> str:
     """
     Run a workspace Python script for small engineering-support analysis —
@@ -1103,6 +1281,8 @@ def run_python_analysis(script_file: str, args: list[str] = None) -> str:
 
 
 @tool
+@policy(category="verification", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
     """
     Run a cocotb (Python) testbench against your RTL in a pinned simulator container.
@@ -1163,6 +1343,8 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
     return json.dumps(payload, indent=2)
 
 @tool
+@policy(category="verification", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def sby_tool(sby_file: str) -> str:
     """
     Run formal verification with SymbiYosys (SBY).
@@ -1233,6 +1415,8 @@ def sby_tool(sby_file: str) -> str:
     return f"SBY Run finished. Status: {status} ⚠️\nOutput:\n{tail}"
 
 @tool
+@policy(category="essential", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def list_files_tool() -> str:
     """
     Lists all files in the current workspace.
@@ -1254,6 +1438,11 @@ def list_files_tool() -> str:
     return "Files in workspace:\n" + "\n".join(sorted(files))
 
 @tool
+# Agent-only turn-economy helper: it paces the poll loop of the async synthesis
+# contract (hence the category), touches no workspace, and is on no other
+# surface.
+@policy(category="synthesis", protected=False, mutates=False, async_job=False,
+        surfaces=("agent",), requires_session=False)
 def sleep_tool(seconds: int) -> str:
     """
     Blocks briefly before the next action.
@@ -1267,6 +1456,8 @@ def sleep_tool(seconds: int) -> str:
 
 # New Google XLS / DSLX HLS tools
 @tool
+@policy(category="hls", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def run_dslx_interpreter(filename: str) -> str:
     """
     Runs the DSLX interpreter on a .x file in the active workspace to check syntax
@@ -1280,6 +1471,8 @@ def run_dslx_interpreter(filename: str) -> str:
     return json.dumps(result, indent=2)
 
 @tool
+@policy(category="hls", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def compile_dslx_to_ir(filename: str, top_module: str) -> str:
     """
     Translates a DSLX (.x) design into XLS Intermediate Representation (IR).
@@ -1293,6 +1486,8 @@ def compile_dslx_to_ir(filename: str, top_module: str) -> str:
     return json.dumps(result, indent=2)
 
 @tool
+@policy(category="hls", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def experimental_compile_cpp_to_ir(filename: str, top_name: str, block_from_class: bool = False) -> str:
     """
     Translates C++ hardware description code into XLS IR via xlscc (experimental).
@@ -1307,6 +1502,8 @@ def experimental_compile_cpp_to_ir(filename: str, top_name: str, block_from_clas
     return json.dumps(result, indent=2)
 
 @tool
+@policy(category="hls", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def optimize_xls_ir(ir_filename: str) -> str:
     """
     Optimizes XLS IR using logic and dataflow optimizations.
@@ -1319,6 +1516,8 @@ def optimize_xls_ir(ir_filename: str) -> str:
     return json.dumps(result, indent=2)
 
 @tool
+@policy(category="hls", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def codegen_xls(
     opt_ir_filename: str,
     generator: str = "combinational",
@@ -1354,6 +1553,8 @@ def codegen_xls(
     return json.dumps(result, indent=2)
 
 @tool
+@policy(category="hls", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def benchmark_xls(opt_ir_filename: str, delay_model: str = "sky130") -> str:
     """
     Evaluates XLS IR for performance, area complexity, and estimated critical path delay.
@@ -1367,6 +1568,8 @@ def benchmark_xls(opt_ir_filename: str, delay_model: str = "sky130") -> str:
     return json.dumps(result, indent=2)
 
 @tool
+@policy(category="hls", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def run_xls_flow(
     dslx_file: str,
     top_module: str,
@@ -1412,8 +1615,13 @@ def run_xls_flow(
     )
     return json.dumps(result, indent=2)
 
-# Tools exposed over MCP (no blocking wait tool).
-mcp_tools = [
+# =============================================================================
+# The registry
+# =============================================================================
+# ONE list of the tools that exist, in the order clients see them. Which
+# surfaces each one reaches is NOT restated here — it is read off the tool's
+# own policy, so a tool can never be in a list its policy contradicts.
+ALL_TOOLS = [
     # Specification tools (use FIRST)
     write_spec,
     read_spec,
@@ -1461,9 +1669,34 @@ mcp_tools = [
     codegen_xls,
     benchmark_xls,
     run_xls_flow,
+    # Agent-only helpers
+    sleep_tool,
 ]
+
+
+def tool_policy(t) -> ToolPolicy:
+    """The policy declared on a registry tool. Raises for a tool without one —
+    there is no permissive default, by design."""
+    p = getattr(getattr(t, "func", None), "__tool_policy__", None)
+    if p is None:
+        raise ValueError(
+            f"tool '{getattr(t, 'name', t)}' declares no @policy — every tool must "
+            "(see ToolPolicy above)"
+        )
+    return p
+
+
+def tools_on_surface(surface: str) -> list:
+    """Registry order, filtered by the tools' own declared surfaces."""
+    if surface not in SURFACE_NAMES:
+        raise ValueError(f"unknown surface {surface!r}; known: {sorted(SURFACE_NAMES)}")
+    return [t for t in ALL_TOOLS if surface in tool_policy(t).surfaces]
+
+
+# Tools exposed over MCP (no blocking wait tool for the UI; see each policy).
+mcp_tools = tools_on_surface("mcp")
 
 # Tools bound to the in-process architect agent.
 # One async contract everywhere: the architect polls with bounded
 # wait_for_synthesis loops — no start+wait combo tool (Wave 9).
-architect_tools = [*mcp_tools, sleep_tool]
+architect_tools = tools_on_surface("agent")
