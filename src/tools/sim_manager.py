@@ -269,6 +269,7 @@ def _persist_resolution_failure(
         "vcdPath": "",
         "xDetected": None,  # nothing ran: no VCD, honestly unknown
         "xScan": None,
+        "warnings": [],  # nothing ran, so nothing to warn about
         "stagedDataFiles": [],  # nothing ran, so nothing was staged
         "passMarkerFound": False,
         "passMarker": "",
@@ -434,6 +435,20 @@ def run_sim_isolated(
             "timeNs": _extract_time_ns(sim_result.get("first_failure_line")),
         }
 
+    # The x-blind pass (rule R1). `x !== x` is FALSE in Verilog, so a testbench
+    # that compares a checked output against an undefined expected value counts
+    # the mismatch as a match and prints its pass marker. The rule telling an
+    # agent to guard those comparisons with `$isunknown` lived only in an
+    # embedded prompt that was never loaded, so it has never once run. Here it
+    # is a field instead: a run that PASSED while its own waveform carried x/z
+    # after t=0 is flagged, with the evidence already beside it (`xDetected`,
+    # `xScan`). It is a warning, never a verdict — the status stays exactly what
+    # the testbench said (invariant 4), and a run with no VCD or a skipped scan
+    # is not flagged, because unknown is not the same as clean.
+    warnings: List[str] = []
+    if status == "passed" and x_detected is True:
+        warnings.append("x-blind-pass")
+
     sim_run: Dict[str, Any] = {
         "id": sim_run_id,
         "kind": "sim",
@@ -449,6 +464,8 @@ def run_sim_isolated(
         # None = no VCD (or scan skipped) — honestly unknown, never false.
         "xDetected": x_detected,
         "xScan": x_scan,
+        # Empty list = looked and found nothing to warn about, never absent.
+        "warnings": warnings,
         # Evidence: exactly which data files this run could see, and where.
         "stagedDataFiles": staged_data,
         # run_simulation reports the marker it actually grepped (post manifest/

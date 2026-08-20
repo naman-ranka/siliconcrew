@@ -469,7 +469,11 @@ def run_simulation(
     $readmem data never loaded is sim_failed even if it printed the pass marker.
     Also `vcdPath` — the VCD to hand to waveform_tool — `xDetected` (x/z seen
     after t=0; a warning surface, not a verdict), `stagedDataFiles`, and for
-    post_synth the run, netlist and stdcell set that were resolved.
+    post_synth the run, netlist and stdcell set that were resolved. `warnings`
+    carries "x-blind-pass" when a run PASSED while x/z was present: `x !== x` is
+    false, so such a pass may be a comparison against an undefined value rather
+    than a working design. Treat it as unproven until the waveform says
+    otherwise.
 
     Args:
         sim_top: Testbench top module. Empty uses the manifest's simTop.
