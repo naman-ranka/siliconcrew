@@ -585,19 +585,36 @@ PROMPT_FILE_DEFAULT = (
 )
 
 
-def load_system_prompt(prompt_path: Path | None = None) -> str:
+class PromptUnavailable(RuntimeError):
+    """The runtime prompt file is missing, unreadable, or empty.
+
+    Raised instead of falling back. The old behaviour silently served a stale
+    embedded prompt, so a bad deploy or a typo'd ARCHITECT_PROMPT_VERSION looked
+    like a working agent that was quietly running the wrong instructions — and
+    provenance recorded nothing about which prompt actually ran.
     """
-    Load runtime prompt from file with fallback to legacy embedded SYSTEM_PROMPT.
+
+
+def load_system_prompt(prompt_path: Path | None = None) -> str:
+    """Return the runtime prompt text, or raise :class:`PromptUnavailable`.
+
+    There is deliberately NO fallback. An agent with the wrong prompt is worse
+    than an agent that refuses to start, because the failure is invisible.
     """
     path = prompt_path or PROMPT_FILE_DEFAULT
     try:
-        if path.exists():
-            text = path.read_text(encoding="utf-8").strip()
-            if text:
-                return text
-    except Exception:
-        pass
-    return SYSTEM_PROMPT
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise PromptUnavailable(
+            f"Architect prompt not found at {path}. Check ARCHITECT_PROMPT_VERSION "
+            f"(currently {DEFAULT_ARCHITECT_PROMPT_VERSION!r}) and that prompts/architect/ "
+            f"shipped with this build."
+        ) from exc
+    except OSError as exc:
+        raise PromptUnavailable(f"Architect prompt at {path} could not be read: {exc}") from exc
+    if not text:
+        raise PromptUnavailable(f"Architect prompt at {path} is empty.")
+    return text
 
 
 def _strip_reasoning_blocks(state: dict) -> dict:
@@ -650,21 +667,17 @@ def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=
     llm = create_llm(model_name=model_name, temperature=0.0, api_key=api_key)
     runtime_prompt = load_system_prompt()
 
-    # Prefer passing prompt explicitly; keep backward compatibility for older LangGraph signatures.
-    try:
-        agent_graph = create_react_agent(
-            model=llm,
-            tools=architect_tools,
-            checkpointer=checkpointer,
-            prompt=runtime_prompt,
-            pre_model_hook=_strip_reasoning_blocks,
-        )
-    except TypeError:
-        agent_graph = create_react_agent(
-            model=llm,
-            tools=architect_tools,
-            checkpointer=checkpointer
-        )
+    # NO try/except TypeError fallback here, deliberately. It used to swallow any
+    # wrong kwarg and hand back an agent with NO prompt and NO pre-model hook —
+    # a silently lobotomised agent that still answers, so nothing looks broken.
+    # A signature mismatch is a wiring bug and must fail loudly at construction.
+    agent_graph = create_react_agent(
+        model=llm,
+        tools=architect_tools,
+        checkpointer=checkpointer,
+        prompt=runtime_prompt,
+        pre_model_hook=_strip_reasoning_blocks,
+    )
 
     return agent_graph
 
