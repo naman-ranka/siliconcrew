@@ -39,6 +39,12 @@ def _schema(tool):
 
 
 def _dummy_for(prop_schema):
+    # An argument with a closed value set is only "well-formed" if the value is
+    # IN that set — a schema-shape test must not send 'x' to an enum field and
+    # then read the (correct) rejection as a schema defect.
+    enum = prop_schema.get("enum")
+    if enum:
+        return enum[0]
     t = prop_schema.get("type")
     if t == "string":
         return "x"
@@ -92,6 +98,11 @@ def test_failing_pd_tools_schemas_match_a_working_tool():
         for v in s.get("properties", {}).values():
             if isinstance(v, dict):
                 v.pop("title", None)
+                # Per-argument prose is the "modulo description" this test's
+                # docstring already claims: the five readers take the same
+                # run_id but word it for their own subject. Shape is what is
+                # under test.
+                v.pop("description", None)
         return json.dumps(s, sort_keys=True)
 
     control = norm(byname["generate_report_tool"])  # worked on hosted

@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from src.tools.run_linter import run_linter
@@ -230,7 +230,7 @@ _READ_FILE_SOURCE_EXTS = {".v", ".sv", ".vh", ".svh", ".sdc", ".yaml", ".yml", "
 _READ_FILE_SOURCE_MAX_BYTES = 1024 * 1024
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="essential", protected=False, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def read_file(filename: str) -> str:
@@ -239,8 +239,9 @@ def read_file(filename: str) -> str:
     returned as head + tail with an explicit omission marker — for a systematic
     failure the first occurrences are the informative ones, and an unbounded
     read of a multi-MB sim log would swamp the model's context.
+
     Args:
-        filename: Name of the file to read.
+        filename: File to read, e.g. 'counter.v' or 'sim_runs/sim_0001/sim.log'.
     """
     workspace = get_workspace_path()
     try:
@@ -316,33 +317,55 @@ def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
     lines = "\n".join(_fmt(d) for d in (errors + warnings)) or result["stderr"]
     return f"Lint FAILED — {len(errors)} error(s), {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="essential", protected=False, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="checkpoint", attempt_parser=attempt_simulation)
 def simulation_tool(
     verilog_files: list[str],
     top_module: str,
-    mode: str = "rtl",
+    mode: Literal["rtl", "post_synth"] = "rtl",
     run_id: str = None,
     netlist_file: str = None,
     platform: str = None,
-    sim_profile: str = "auto",
+    sim_profile: Literal["auto", "pinned", "compat"] = "auto",
     pass_marker: str = "",
 ) -> str:
     """
-    Runs RTL or post-synthesis simulation with strict status contracts.
+    Compiles and runs an iverilog simulation of an EXPLICIT file list, in the
+    workspace root. Returns JSON whose `status` is exactly one of:
+      compile_failed - iverilog did not build the design
+      sim_failed     - the run crashed, or its $readmem data never loaded (a
+                       pass marker printed by such a run is NOT believed)
+      test_failed    - the run finished without printing the pass marker
+      test_passed    - the run printed the pass marker
+    plus stdout/stderr tails, the marker actually used, and — for post_synth —
+    the run, netlist and stdcell set that were resolved.
+    Prefer run_isolated_simulation: it takes the file set from the manifest,
+    runs in its own sim_runs/sim_NNNN/ directory, stages $readmem data files
+    beside the executable, and keeps a run record. Use this tool when you must
+    compile a file set the manifest does not describe. Both write a VCD; this
+    one writes it into the workspace root, where the next run overwrites it.
+
     Args:
-        verilog_files: List of filenames to compile (usually includes testbench).
-        top_module: Name of the top-level module in the testbench.
-        mode: 'rtl' or 'post_synth'.
-        run_id: Optional synthesis run ID for post-synth mode.
-        netlist_file: Optional explicit netlist path.
-        platform: Optional platform override for post-synth mode.
-        sim_profile: 'auto' (default), 'pinned', or 'compat'. Auto selects 'compat' for ASAP7 post-synth.
-        pass_marker: stdout substring required for test_passed status. Leave empty
-            to use the manifest's passMarker field (set it with update_manifest so
-            it matches what your testbench $displays), else "TEST PASSED".
+        verilog_files: Every file to compile, testbench included.
+        top_module: Top module of the testbench.
+        mode: 'rtl' compiles the listed sources. 'post_synth' drops the design
+            RTL, substitutes the gate netlist from a synthesis run, and links
+            stdcell models.
+        run_id: post_synth only - which synthesis run's netlist to simulate.
+            Omit for the most recent run.
+        netlist_file: post_synth only - an explicit gate netlist, overriding the
+            one the run recorded.
+        platform: post_synth only - the PDK whose stdcell models get linked.
+            Omit to use the platform the run itself recorded; that is almost
+            always right, and a wrong value here produces unresolved cells.
+        sim_profile: 'pinned' links the vendor's real stdcell models. 'compat'
+            substitutes SiliconCrew's behavioral models, which exist for asap7
+            ONLY and are a no-op on every other platform. 'auto' picks compat
+            for asap7 and pinned elsewhere.
+        pass_marker: stdout substring that means PASS. Empty uses the manifest's
+            passMarker, then "TEST PASSED".
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
@@ -376,29 +399,47 @@ from src.tools import manifest as manifest_mod
 from src.tools.sim_manager import run_sim_isolated
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="manifest", protected=False, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def get_manifest() -> str:
     """
-    Returns the design manifest (files + roles + synthTop/simTop + clock + platform).
-    The manifest is the single source of truth shared with the UI; auto-derived if absent.
+    Returns the design manifest: every design file with its role ({roles}),
+    synthTop, simTop, clockPeriodNs, platform, passMarker, the derived testbench
+    list, and warnings such as two files declaring the same module. Derived by
+    scanning the workspace when absent.
+    This is what decides which files each stage compiles, and where
+    run_isolated_simulation gets simTop and every simulation gets its default
+    pass marker.
     """
     workspace = get_workspace_path()
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
     return json.dumps(m.model_dump(), indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="manifest", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def update_manifest(updates_json: str) -> str:
     """
     Upserts manifest fields. Pass a JSON object with any of:
-    synthTop, simTop, clockPeriodNs, platform, passMarker (the stdout substring
-    your testbench prints on success — simulations use it as their default pass
-    marker), or files: [{name, role}] to override roles.
+      synthTop / simTop  - top module for synthesis / simulation
+      clockPeriodNs      - target clock period, nanoseconds
+      platform           - PDK used for synthesis and post-synth stdcell models
+      passMarker         - the stdout substring your testbench prints on
+                           success; every simulation uses it as its default
+                           pass criterion
+      ignore             - fnmatch globs (e.g. ["vendor/**"]) excluded from the
+                           file scan; newly ignored files drop out immediately
+      files              - [{"path": "rtl/counter.v", "role": "rtl"}] to
+                           override a file's role. Address files by path: a
+                           bare basename is honored only when it is unique, and
+                           is a silent no-op when it is not.
     Roles: {roles}. An unknown role is rejected and nothing is written.
+    testbenches and warnings are derived and cannot be set here.
+
+    Args:
+        updates_json: The object above, serialized as a JSON string.
     """
     workspace = get_workspace_path()
     try:
@@ -417,9 +458,9 @@ def update_manifest(updates_json: str) -> str:
 # The role list the agent and MCP clients see is GENERATED from the FileRole
 # Literal — a hand-copied list here is exactly how a tool description starts
 # advertising roles that no longer exist (or hiding ones that do).
-update_manifest.description = update_manifest.description.replace(
-    "{roles}", " | ".join(manifest_mod.ROLES)
-)
+for _t in (get_manifest, update_manifest):
+    _t.description = _t.description.replace("{roles}", " | ".join(manifest_mod.ROLES))
+del _t
 
 
 def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -> dict:
@@ -485,7 +526,7 @@ def run_isolated_simulation(
     return json.dumps(_with_manifest_warnings(result, workspace, files), indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=True, async_job=True,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="synth_change", attempt_parser=attempt_synthesis_dispatch)
@@ -494,26 +535,57 @@ def start_synthesis(
     top_module: str,
     platform: str = "sky130hd",
     clock_period_ns: float = 10.0,
-    utilization: int = 5,
+    utilization: int = 40,
     aspect_ratio: float = 1.0,
     core_margin: float = 2.0,
     run_equiv: bool = False,
-    constraints_mode: str = "auto",
-    max_stage: str = "finish",
+    constraints_mode: Literal["auto", "strict", "bypass"] = "auto",
+    max_stage: Literal[
+        "constraints", "synth", "floorplan", "place", "cts", "grt", "route", "finish"
+    ] = "finish",
 ) -> str:
     """
-    Starts synthesis asynchronously and returns quickly with the run_id —
-    the ONE durable handle for this run (poll it with get_synthesis_status).
-    By default (max_stage="finish") this runs the FULL RTL->GDS ORFS flow.
-    Set max_stage="synth" for a fast synthesis-only PPA estimate (area/cell
-    count without place-and-route timing/power), or stop after any stage:
-    constraints|synth|floorplan|place|cts|grt|route|finish. Stages after
-    max_stage are recorded as "skipped". Continue a partial run toward GDS
-    later with retry_pd starting from the next stage.
-    clock_period_ns is ALWAYS nanoseconds, on every platform — it is
-    converted internally to the platform's SDC time unit (e.g. ps on asap7),
-    and reported metrics (wns_ns/tns_ns/fmax_mhz/power_mw) are always in the
-    units their names say.
+    Starts an ORFS run and returns immediately with `run_id` — the one durable
+    handle for it. Poll get_synthesis_status until status is completed or failed
+    (a full flow is typically 8-40 minutes), then read get_synthesis_metrics.
+
+    Args:
+        verilog_files: RTL to synthesize. Do not include the testbench.
+        top_module: Top module to synthesize.
+        platform: ORFS PDK. Known good: sky130hd, sky130hs, asap7, nangate45,
+            ihp-sg13g2, gf180. Not a closed list — any platform your ORFS image
+            provides is passed through.
+        clock_period_ns: Target clock period, ALWAYS nanoseconds on every
+            platform (converted internally to the PDK's SDC time unit, e.g. ps
+            on asap7). Reported metrics are likewise in the units their names
+            carry: wns_ns, tns_ns, fmax_mhz, power_mw.
+        utilization: Percent of the core area filled with standard cells, 1-100
+            (clamped). 40 suits a standard design; raise it to shrink the die
+            once routing is comfortable. Lower it for a very small design, or
+            after a PDN-0185 failure (floorplan too small for the power grid).
+            Whether 40 trips PDN-0185 on a sub-30-cell design is UNMEASURED —
+            on a design that small, set core_margin >= 4 (below) and drop
+            utilization if the floorplan stage fails.
+        aspect_ratio: Core height divided by width. Raise it when
+            placement-driven congestion is what is costing timing.
+        core_margin: Empty core ring around the placeable area, in microns. Use
+            >= 4 for very small designs (under ~30 cells).
+        run_equiv: Run the post-synthesis logical-equivalence check. Skipped
+            automatically on a partial flow.
+        constraints_mode: How this run's SDC gets built. 'auto' uses the spec's
+            clock when the spec's module matches top_module, and otherwise falls
+            back to a default clock and says so in the run's constraints_note
+            and clock_source. 'strict' refuses to run rather than fall back: no
+            spec, a spec/module mismatch, or no clk/clock/clk_i input is an
+            error. 'bypass' ignores the spec entirely and constrains a port
+            literally named 'clk' at clock_period_ns; that port is NOT checked
+            against the netlist, so if this design's clock has another name the
+            run is UNCONSTRAINED and still reports "completed", with timing
+            numbers that mean nothing. Use bypass only to force a run through.
+        max_stage: Stop after this stage. 'finish' is the full RTL-to-GDS flow;
+            'synth' is a fast area/cell-count estimate with no place-and-route
+            timing or power. Later stages are recorded as "skipped"; continue a
+            partial run toward GDS with retry_pd.
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
@@ -541,22 +613,39 @@ def start_synthesis(
     return json.dumps(_with_manifest_warnings(result, workspace, abs_files), indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=True, async_job=True,
         surfaces=ALL_SURFACES, requires_session=True)
 def retry_pd(
     run_id: str,
-    start_stage: str,
-    max_stage: str = "finish",
+    start_stage: Literal["floorplan", "place", "cts", "grt", "route", "finish"],
+    max_stage: Literal["floorplan", "place", "cts", "grt", "route", "finish"] = "finish",
     orfs_overrides_json: str = "",
     timeout_sec: int = 0,
 ) -> str:
     """
-    Creates a child PD retry run from an existing synthesis run.
-    Validates the required checkpoint for start_stage, copies prerequisites into a new run,
-    and reruns only the requested downstream ORFS do-* stages.
-    timeout_sec=0 (default) uses the stage-aware ceiling for the run; pass a
-    positive value only to LOWER it (a larger request is capped at the ceiling).
+    Creates a CHILD run from an existing synthesis run and reruns only the
+    physical-design stages from start_stage onward, reusing the parent's
+    checkpoints. The parent is never modified. Async, like start_synthesis: it
+    returns a new run_id to poll.
+    Use it to try a physical knob without re-synthesizing. When the child is
+    terminal, call compare_pd_runs(child_run_id) for the parent-vs-child delta.
+
+    Args:
+        run_id: The parent run to branch from.
+        start_stage: First stage to rerun. The parent must have produced the
+            checkpoint that feeds it, so a partial parent limits how far back
+            you can start; the error names the stage you can resume from.
+        max_stage: Last stage to run. Must be at or after start_stage.
+        orfs_overrides_json: JSON object of ORFS make variables for this child,
+            e.g. {"PLACE_DENSITY": 0.15}. Keys must be UPPER_SNAKE_CASE, values
+            scalar. Validated in this repo: CORE_UTILIZATION with
+            start_stage='floorplan', PLACE_DENSITY with 'place',
+            CTS_BUF_DISTANCE with 'cts'. Anything else is passed to ORFS
+            unchecked.
+        timeout_sec: Seconds. 0 uses the stage-aware ceiling for this run. A
+            positive value only LOWERS it; a larger request is capped at the
+            ceiling.
     """
     workspace = get_workspace_path()
     result = retry_pd_job(
@@ -669,16 +758,26 @@ def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
     abs_file = os.path.join(workspace, vcd_file)
     return read_waveform(abs_file, signals, start_time, end_time)
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def search_logs_tool(query: str, run_id: str = None) -> str:
     """
-    Searches for a keyword in OpenROAD logs and reports.
-    Useful for finding specific errors, warnings, or metrics (e.g. "slack", "error", "area").
+    Case-insensitive SUBSTRING search (not regex) across a synthesis run's ORFS
+    logs, reports and results — *.log, *.rpt, *.txt, *.v, *.json, *.mk. Returns
+    at most 50 matching lines as "File: <path> | Line <n>: <text>", cut off
+    silently past that, so narrow the query rather than paging.
+    Reach for it only for evidence the structured readers do not surface: PDN
+    errors, path-level detail, ORFS-specific warnings. PPA and timing numbers
+    come from get_synthesis_metrics — do not grep for them.
+
     Args:
-        query: The string to search for.
-        run_id: Optional run ID for deterministic lookup.
+        query: Substring to look for, e.g. 'PDN-0185'.
+        run_id: Synthesis run to search. WITHOUT it this does NOT fall back to
+            the latest run the way the other run readers do: it searches the
+            workspace's legacy orfs_reports/orfs_logs/orfs_results directories
+            and the whole synth_runs/ tree, so hits can come from any run. Pass
+            one.
     """
     workspace = get_workspace_path()
     return search_logs(query, workspace, run_id=run_id)
@@ -774,32 +873,48 @@ def compare_pd_runs(child_run_id: str, parent_run_id: str = None) -> str:
 
 from src.tools.edit_file import replace_in_file
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="editing", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="rtl_change")
 def apply_patch_tool(unified_diff: str) -> str:
     """
-    Applies a unified-diff patch inside the active workspace.
-    Prefer this for robust code edits over exact-text replacement.
+    Applies a unified diff with `git apply` (--recount, so hunk line COUNTS may
+    be wrong, but CONTEXT LINES MUST MATCH THE FILE EXACTLY). Nothing is written
+    unless the whole patch applies: it is checked first, and a failure returns
+    git's own stderr with no partial write.
+    Use it to change several files, or several places in one file, in one call.
+    For a single edit in one file edit_file_tool is more reliable — a generated
+    diff whose context drifted by a line is the usual failure here.
+
+    Args:
+        unified_diff: A complete unified diff. Every file needs `---`/`+++`
+            headers; `a/` and `b/` prefixes are stripped; an absolute path, or
+            one that climbs out of the workspace, is rejected before git runs;
+            `--- /dev/null` creates a new file.
     """
     workspace = get_workspace_path()
     result = apply_unified_patch(workspace=workspace, unified_diff=unified_diff)
     return json.dumps(result, indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="editing", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="rtl_change")
 def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> str:
     """
-    Surgically replaces a block of text in a file.
-    Use this for small fixes (e.g. changing a parameter, fixing a typo) to avoid rewriting the whole file.
+    Replaces one exact block of text in one file. The match is literal,
+    including whitespace and indentation.
+    Two hard errors, both of which write nothing: the target text was not found,
+    or it was found more than once (extend the block with surrounding lines
+    until it is unique).
+
     Args:
-        filename: Name of the file (e.g., 'design.v').
-        target_text: The EXACT text block to find and replace (must match whitespace).
-        replacement_text: The new text to insert.
+        filename: File to edit, e.g. 'counter.v'.
+        target_text: The exact text to find, copied verbatim from read_file.
+        replacement_text: What to put in its place. An empty string deletes the
+            block.
     """
     workspace = get_workspace_path()
     try:
@@ -822,7 +937,7 @@ from src.tools.spec_manager import (
     spec_to_prompt, save_yaml_file, load_yaml_file, create_spec_from_dict
 )
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="essential", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="rtl_change")
@@ -837,24 +952,31 @@ def write_spec(
     behavioral_description: str = ""
 ) -> str:
     """
-    Creates a YAML design specification file. Call this FIRST before writing any RTL.
-    The spec defines the module interface and requirements that the RTL must follow.
-    
+    Creates the design spec `<module_name>_spec.yaml` AND writes (overwriting)
+    `constraints.sdc` from clock_period_ns. Call it before writing RTL:
+    synthesis reads this spec to build each run's real timing constraints.
+
     Args:
-        module_name: Name of the Verilog module (e.g., 'counter_8bit')
-        description: What the module does (e.g., '8-bit synchronous counter with enable')
-        ports: List of port definitions, each with keys: name, direction ('input'/'output'), 
-               optional: type ('logic'), width (int), description (str)
-               Example: [{"name": "clk", "direction": "input"}, 
-                        {"name": "count", "direction": "output", "width": 8}]
-        clock_period_ns: Target clock period in nanoseconds (default: 10.0)
-        tech_node: Target technology node (default: 'SkyWater 130HD')
-        parameters: Optional dict of Verilog parameters (e.g., {"WIDTH": 8, "DEPTH": 16})
-        module_signature: Optional exact Verilog module signature to enforce
-        behavioral_description: Optional detailed behavioral requirements
-        
-    Returns:
-        Confirmation message with the spec filename
+        module_name: Verilog module name, e.g. 'counter_8bit'. Names the spec
+            file.
+        description: One line on what the module does.
+        ports: Port list. Each entry {name, direction} plus optional type,
+            width, description. direction is 'input', 'output' or 'inout';
+            width is an int (8) or a parameterized string ('WIDTH-1:0'); omit it
+            for 1 bit. Example:
+                [{"name": "clk", "direction": "input"},
+                 {"name": "count", "direction": "output", "width": 8}]
+            Name the clock input clk, clock or clk_i — the generated SDC
+            constrains that port, and a differently-named clock leaves the
+            design unconstrained rather than failing loudly.
+        clock_period_ns: Target clock period in nanoseconds; becomes the SDC
+            create_clock period.
+        tech_node: Free-text label recorded in the spec and the design report.
+            It does NOT select a PDK — start_synthesis's `platform` does that.
+        parameters: Verilog parameters, e.g. {"WIDTH": 8, "DEPTH": 16}.
+        module_signature: Exact module signature to enforce. Generated from
+            ports when omitted.
+        behavioral_description: Detailed behavioral requirements, free text.
     """
     workspace = get_workspace_path()
     if not os.path.exists(workspace):
@@ -923,20 +1045,17 @@ The user can now review the spec in the **Spec tab**.
 Once confirmed, proceed to write the RTL following this specification exactly."""
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="essential", protected=False, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def read_spec(spec_filename: str = None) -> str:
     """
     Reads a design specification from a YAML file.
     Use this to understand requirements before writing RTL.
-    
+
     Args:
-        spec_filename: Name of the spec file (e.g., 'counter_spec.yaml'). 
-                      If not provided, reads the most recent *_spec.yaml file.
-    
-    Returns:
-        The spec contents formatted for RTL implementation
+        spec_filename: Spec file to read, e.g. 'counter_spec.yaml'. Omit to
+            read the most recently modified *_spec.yaml in the workspace.
     """
     workspace = get_workspace_path()
     
@@ -968,20 +1087,19 @@ Use this specification to write the RTL. The module signature MUST match exactly
         return f"Error parsing spec file: {str(e)}"
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="editing", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="rtl_change")
 def load_yaml_spec_file(yaml_path: str) -> str:
     """
-    Loads an external YAML specification file (e.g., from hackathon problems).
-    Copies it to workspace and returns the parsed spec.
-    
+    Adopts an existing YAML spec as this design's spec: it is re-saved as
+    `<module_name>_spec.yaml` and `constraints.sdc` is regenerated from it,
+    replacing whatever write_spec produced.
+    Use it when the user supplied a spec file; use write_spec to author one.
+
     Args:
-        yaml_path: Path to the YAML file (relative to workspace or absolute)
-    
-    Returns:
-        Parsed specification ready for implementation
+        yaml_path: The YAML spec file to adopt, e.g. 'problem_spec.yaml'.
     """
     workspace = get_workspace_path()
     
@@ -1414,13 +1532,14 @@ def sby_tool(sby_file: str) -> str:
                 f"and retry.\nOutput:\n{tail}")
     return f"SBY Run finished. Status: {status} ⚠️\nOutput:\n{tail}"
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="essential", protected=False, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def list_files_tool() -> str:
     """
-    Lists all files in the current workspace.
-    Use this to explore the project structure or verify generated files.
+    Lists every file in the workspace, recursively. Includes generated run
+    artifacts (synth_runs/, sim_runs/, orfs_*), so on a worked-on design this is
+    long. Use it to discover what exists; get_manifest is the design-file list.
     """
     workspace = get_workspace_path()
     if not os.path.exists(workspace):
@@ -1470,15 +1589,18 @@ def run_dslx_interpreter(filename: str) -> str:
     result = run_interpreter(filename, cwd=workspace)
     return json.dumps(result, indent=2)
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="hls", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def compile_dslx_to_ir(filename: str, top_module: str) -> str:
     """
-    Translates a DSLX (.x) design into XLS Intermediate Representation (IR).
+    Compiles DSLX to XLS IR. Writes `<top_module>.ir` in the workspace and
+    returns it as `ir_filename` — feed that to optimize_xls_ir.
+    Step 2 of 4. Use run_xls_flow unless you are debugging one step.
+
     Args:
-        filename: Name of the DSLX file.
-        top_module: Name of the top-level function or proc to compile.
+        filename: DSLX source file, e.g. 'saturating_add.x'.
+        top_module: Top-level DSLX function or proc. Also names the output file.
     """
     from src.tools.run_xls import compile_dslx_to_ir as compile_to_ir
     workspace = get_workspace_path()
@@ -1501,14 +1623,18 @@ def experimental_compile_cpp_to_ir(filename: str, top_name: str, block_from_clas
     result = compile_cpp(filename, top_name, block_from_class, cwd=workspace)
     return json.dumps(result, indent=2)
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="hls", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def optimize_xls_ir(ir_filename: str) -> str:
     """
-    Optimizes XLS IR using logic and dataflow optimizations.
+    Runs the XLS IR optimization passes. Writes `<name>.opt.ir` beside the input
+    and returns it as `opt_ir_filename` — feed that to codegen_xls or
+    benchmark_xls.
+    Step 3 of 4. Use run_xls_flow unless you are debugging one step.
+
     Args:
-        ir_filename: Name of the XLS IR file (e.g. 'saturating_add.ir').
+        ir_filename: IR file from compile_dslx_to_ir, e.g. 'saturating_add.ir'.
     """
     from src.tools.run_xls import optimize_xls_ir as optimize_ir
     workspace = get_workspace_path()

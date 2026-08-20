@@ -1235,6 +1235,11 @@ def _pd_parameters_from_run(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str,
                 continue
         return default
 
+    # READ-SIDE reconstruction — deliberately still 5, not the 40 that
+    # start_synthesis_job now defaults to. A parent run whose config.mk and
+    # run_meta carry no utilization is an OLD run, and old runs really did
+    # floorplan at 5; re-running one at 40 would silently change the
+    # experiment the retry is supposed to reproduce.
     utilization = _pick("utilization", 5, int)
     return {
         "utilization": max(1, min(100, utilization)),
@@ -2467,7 +2472,7 @@ def start_synthesis_job(
     top_module: str,
     platform: str = "sky130hd",
     clock_period_ns: float = 10.0,
-    utilization: int = 5,
+    utilization: int = 40,
     aspect_ratio: float = 1.0,
     core_margin: float = 2.0,
     timeout: Optional[int] = None,
