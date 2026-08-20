@@ -12,6 +12,7 @@ import {
   ClipboardList,
   Cpu,
   Crown,
+  FileCode2,
   FileText,
   FlaskConical,
   Gauge,
@@ -21,6 +22,7 @@ import {
   LayoutGrid,
   ListTree,
   Loader2,
+  MonitorPlay,
   Package,
   PenLine,
   RefreshCw,
@@ -65,14 +67,22 @@ import { cn } from "@/lib/utils";
 
 // ---- icons -------------------------------------------------------------------
 
+// The one genuinely PRESENTATIONAL map left: which glyph a tool wears. Nothing
+// in the catalog can supply it, so it is hand-kept — and bound to the registry
+// by test/toolRegistry.coverage.test.ts, which fails when a catalog tool has no
+// icon (it silently fell back to a generic Terminal, which is how
+// build_interactive_sim and run_python_analysis went unnoticed) and when a key
+// here no longer names a live tool.
+//
 // Keyed by command id — the core four keep their short ids; schema-driven
-// commands use their tool name as id. Unknown tools fall back to Terminal.
-const SURFACE_ICONS: Record<string, LucideIcon> = {
+// commands use their tool name as id.
+export const SURFACE_ICONS: Record<string, LucideIcon> = {
   lint: FileText,
   sim: Waves,
   synth: Cpu,
   pnr: CircuitBoard,
   waveform_tool: Activity,
+  build_interactive_sim: MonitorPlay,
   cocotb_tool: FlaskConical,
   sby_tool: CircuitBoard,
   get_synthesis_metrics: Gauge,
@@ -88,6 +98,7 @@ const SURFACE_ICONS: Record<string, LucideIcon> = {
   update_manifest: Settings2,
   generate_report_tool: BarChart3,
   save_metrics_tool: PenLine,
+  run_python_analysis: FileCode2,
   write_spec: FileText,
   read_spec: FileText,
   write_file: FileText,
@@ -592,6 +603,7 @@ export function CommandSurface() {
   const cmd = allCommands.find((c) => c.id === selectedId) ?? allCommands[0];
   const Icon = iconFor(cmd.id);
 
+  const facts = cmd.facts?.(ctx) ?? [];
   const userVals = values[cmd.id] ?? {};
   const merged = { ...surfaceDefaults(cmd, ctx), ...userVals };
   const payload = buildSurfacePayload(cmd, userVals, ctx);
@@ -843,7 +855,7 @@ export function CommandSurface() {
                 {cmd.desc}
               </p>
 
-              {cmd.autoArgs && cmd.autoArgs.length > 0 && (
+              {facts.length > 0 && (
                 <div className="mt-4 rounded-lg border border-info/25 bg-info/5 p-3">
                   <div className="mb-2 flex items-center gap-1.5">
                     <Info className="h-3.5 w-3.5 text-info" aria-hidden />
@@ -852,11 +864,11 @@ export function CommandSurface() {
                     </span>
                   </div>
                   <div className="space-y-1">
-                    {cmd.autoArgs.map((a) => (
-                      <div key={a.key} className="flex gap-2 font-mono text-[11px]">
-                        <span className="w-28 shrink-0 text-muted-foreground">{a.key}</span>
+                    {facts.map((f) => (
+                      <div key={f.label} className="flex gap-2 font-mono text-[11px]">
+                        <span className="w-28 shrink-0 text-muted-foreground">{f.label}</span>
                         <span className="min-w-0 flex-1 break-words text-foreground">
-                          {a.describe(ctx)}
+                          {f.value}
                         </span>
                       </div>
                     ))}
@@ -864,7 +876,7 @@ export function CommandSurface() {
                 </div>
               )}
 
-              {basic.length === 0 && advanced.length === 0 && !cmd.autoArgs?.length && (
+              {basic.length === 0 && advanced.length === 0 && facts.length === 0 && (
                 <p className="mt-4 text-xs italic text-muted-foreground">
                   No parameters — one-click command.
                 </p>

@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
 import { parseArtifactKey } from "@/lib/artifactKeys";
 import { openArtifact } from "@/lib/openArtifact";
+import { prettifyToolName } from "@/lib/commandSurface";
 import { artifactKeyForToolCall } from "@/lib/toolArtifacts";
 import type { ArtifactKind, ToolCall, ToolResult } from "@/types";
 
@@ -32,24 +33,6 @@ interface ToolCallCardProps {
   result?: ToolResult;
   isRunning?: boolean;
 }
-
-const toolLabelMap: Record<string, string> = {
-  write_spec: "Writing Specification",
-  read_spec: "Reading Specification",
-  write_file: "Writing File",
-  read_file: "Reading File",
-  apply_patch_tool: "Applying Patch",
-  edit_file_tool: "Editing File",
-  list_files_tool: "Listing Files",
-  linter_tool: "Running Linter",
-  simulation_tool: "Running Simulation",
-  waveform_tool: "Generating Waveform",
-  start_synthesis: "Starting Synthesis",
-  get_synthesis_status: "Checking Synthesis Status",
-  wait_for_synthesis: "Waiting for Synthesis",
-  get_synthesis_metrics: "Collecting Synthesis Metrics",
-  generate_report_tool: "Generating Report",
-};
 
 const KIND_ICON: Record<ArtifactKind, React.ComponentType<{ className?: string }>> = {
   code: Code2,
@@ -118,7 +101,11 @@ export function ToolCallCard({ toolCall, result, isRunning }: ToolCallCardProps)
     return () => clearInterval(id);
   }, [result]);
 
-  const toolLabel = toolLabelMap[toolCall.name] || toolCall.name;
+  // Derived from the tool's own name (the same prettifier the Command Surface
+  // uses), not a hand-kept prose map: sixteen gerunds ("Running Simulation")
+  // covered a third of the registry and quietly reverted every other tool —
+  // and every renamed one — to the raw name.
+  const toolLabel = prettifyToolName(toolCall.name);
   const normalizedStatus = result?.status?.toLowerCase() ?? "";
 
   const getToolSummary = () => {

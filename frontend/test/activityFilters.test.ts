@@ -32,15 +32,25 @@ describe("toolKind", () => {
     expect(toolKind("apply_patch_tool")).toBe("writes");
   });
 
-  it("maps get_synthesis_* (prefix) to synth", () => {
+  it("maps the synthesis read tools to synth", () => {
+    // Named, not prefix-matched: a `get_synthesis_` heuristic used to stand in
+    // for the backend's synthesis category and silently dropped every other
+    // synthesis tool out of the pill. toolRegistry.coverage.test.ts holds the
+    // map to that category now.
     expect(toolKind("get_synthesis_status")).toBe("synth");
-    expect(toolKind("get_synthesis_report")).toBe("synth");
+    expect(toolKind("get_synthesis_metrics")).toBe("synth");
+    expect(toolKind("read_stage_report")).toBe("synth");
+    expect(toolKind("compare_pd_runs")).toBe("synth");
   });
 
   it("unknown tools are 'other'", () => {
     expect(toolKind("generate_report_tool")).toBe("other");
     expect(toolKind("")).toBe("other");
-    expect(toolKind("get_synthesis")).toBe("other"); // no trailing underscore segment
+    // Deliberately fake names shaped like synthesis tools. The old prefix rule
+    // answered "synth" for ANY get_synthesis_* string, registered or not; the
+    // named map answers only for tools that exist.
+    expect(toolKind("get_synthesis")).toBe("other");
+    expect(toolKind("get_synthesis_report")).toBe("other");
   });
 });
 

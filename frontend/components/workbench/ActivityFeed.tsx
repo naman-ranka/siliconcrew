@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { selectActivity, useStore } from "@/lib/store";
 import { openArtifact } from "@/lib/openArtifact";
 import { commandForTool, runCommand } from "@/lib/commands";
+import { TOOL } from "@/lib/toolNames";
 import {
   filterActivity,
   toolKind,
@@ -113,7 +114,7 @@ export function ActivityFeed() {
   // Only the MOST RECENT lint event owns the structured lintResult (the store
   // keeps just the latest lint's diagnostics).
   const latestLintId = useMemo(
-    () => events.find((e) => e.tool === "linter_tool")?.id ?? null,
+    () => events.find((e) => e.tool === TOOL.linter)?.id ?? null,
     [events]
   );
 
@@ -217,7 +218,7 @@ export function ActivityFeed() {
             const run = e.runId ? runs.find((r) => r.id === e.runId) : undefined;
             const isAgent = e.source === "agent" || e.source === "mcp";
             const showLintDiags =
-              isOpen && e.tool === "linter_tool" && !!lintResult && e.id === latestLintId;
+              isOpen && e.tool === TOOL.linter && !!lintResult && e.id === latestLintId;
             return (
               <div key={e.id} className="border-b border-border/50">
                 <div

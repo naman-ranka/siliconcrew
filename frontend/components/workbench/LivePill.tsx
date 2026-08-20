@@ -19,9 +19,12 @@ import { relativeTime } from "./runStatus";
  *      the dock on the Runs tab (where the Refresh gesture lives).
  */
 
-// Friendly labels for the noisy tool names — everything else falls back to
-// the raw tool name so nothing is ever mislabeled.
-const TOOL_LABELS: Record<string, string> = {
+// Short labels for the pill's cramped line. Deliberately NOT the catalog's
+// description or a prettified name: "P&R" and "Sim" are abbreviations no
+// derivation can produce. Anything without an entry falls back to the raw tool
+// name, so an omission is honest rather than wrong — but every key here must
+// still name a live tool (test/toolRegistry.coverage.test.ts).
+export const TOOL_LABELS: Record<string, string> = {
   linter_tool: "Lint",
   run_isolated_simulation: "Sim",
   simulation_tool: "Sim",

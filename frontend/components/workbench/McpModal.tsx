@@ -10,6 +10,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { useStore } from "@/lib/store";
+import { TOOL } from "@/lib/toolNames";
 import { getApiBase } from "@/lib/runtime-config";
 import { cn } from "@/lib/utils";
 import { REPO_URL } from "./ProfileMenu";
@@ -35,7 +36,7 @@ export function continuePrompt(
 ): string {
   let p =
     `Using the "siliconcrew" MCP server: call set_active_session("${session?.id ?? ""}"), ` +
-    `then get_manifest and list the runs. We're working on ${session?.name ?? "this project"}.`;
+    `then ${TOOL.getManifest} and list the runs. We're working on ${session?.name ?? "this project"}.`;
   if (latestRun) {
     const wns =
       latestRun.kind === "synth" && latestRun.ppa?.wnsNs != null

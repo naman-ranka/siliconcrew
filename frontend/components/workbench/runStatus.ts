@@ -1,5 +1,6 @@
 import { workbenchApi } from "@/lib/api";
 import { useStore } from "@/lib/store";
+import { TOOL } from "@/lib/toolNames";
 import type { RunStatus, RunSummary } from "@/types";
 
 /** Tailwind text color for a run/stage status (status = meaning, never brand). */
@@ -59,7 +60,7 @@ export function parseToolJsonResult(result: unknown): Record<string, unknown> | 
  * status via the store's applyRunStatus.
  */
 export async function refreshRunStatus(sessionId: string, runId: string): Promise<void> {
-  const res = await workbenchApi.invokeTool(sessionId, "get_synthesis_status", { run_id: runId });
+  const res = await workbenchApi.invokeTool(sessionId, TOOL.getSynthesisStatus, { run_id: runId });
   const parsed = parseToolJsonResult(res.result);
   if (parsed) useStore.getState().applyRunStatus(parsed);
 }
