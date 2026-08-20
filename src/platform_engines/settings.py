@@ -112,7 +112,9 @@ class PlatformSettings:
     orfs_timeout_synth_sec: int
     orfs_timeout_full_sec: int
 
-    # Chat agent step budget per turn (LangGraph recursion_limit).
+    # Chat agent step budget per turn (LangGraph recursion_limit). This counts
+    # GRAPH STEPS, not model calls, so its real meaning depends on how many
+    # nodes the agent graph runs per round — see the default below.
     chat_recursion_limit: int
 
     # Hosted free-tier guardrails (per-user daily tokens; global $ ceiling).
@@ -264,7 +266,20 @@ def get_settings() -> PlatformSettings:
         num_cores=_int_env("ORFS_NUM_CORES", 4),
         orfs_timeout_synth_sec=_int_env("ORFS_TIMEOUT_SYNTH_SEC", 900),
         orfs_timeout_full_sec=_int_env("ORFS_TIMEOUT_FULL_SEC", 3600),
-        chat_recursion_limit=_int_env("CHAT_RECURSION_LIMIT", 80),
+        # 54, re-derived — NOT inherited from the old default of 80.
+        # The budget is spent on graph steps, and the number of steps per round
+        # changed when the agent moved to `create_agent`: the old graph ran
+        # three nodes per round (pre_model_hook, agent, tools), the new one runs
+        # two (model, tools) because the reasoning strip is now a wrap-style
+        # middleware, which costs no step. Measured on the shipped graphs:
+        # 80 gave 27 model calls before and would give 40 after — a silent 48%
+        # increase in how much work a turn does, i.e. longer turns, more spend
+        # and a later step-budget nudge, from a change that shipped no feature.
+        # 54 holds the real budget at the same 27 model calls. Raising it is a
+        # product decision; make it on purpose, and re-derive this again if a
+        # node-style middleware is ever added (each one costs a step per round).
+        # Pinned by test_the_step_budget_a_turn_actually_gets_is_unchanged.
+        chat_recursion_limit=_int_env("CHAT_RECURSION_LIMIT", 54),
         hosted_tier_tokens_per_day=_int_env("HOSTED_TIER_TOKENS_PER_DAY", 2_000_000),
         hosted_tier_cost_ceiling_usd=float(_env("HOSTED_TIER_COST_CEILING_USD", "50.0")),
         dev_insecure_auth=_flag("SILICONCREW_DEV_INSECURE_AUTH", default=False),
