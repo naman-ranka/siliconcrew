@@ -11,7 +11,9 @@ MCP clients all speak one contract with zero drift:
   * ``validate_and_execute``— schema-validate arguments with the tool's own
                               pydantic model, then run the SAME wrapper
                               function the agent runs, inside the caller's
-                              session scope.
+                              session scope. Two rules apply on THIS surface
+                              only: file arguments stay in the workspace, and a
+                              blocking wait is clamped to zero (invariant 6).
 
 Policy (what is NOT derivable from schemas) is declared ON each tool, once, at
 its definition site (``@policy(...)`` in ``src/tools/wrappers.py``). This module
@@ -277,6 +279,21 @@ def enforce_file_containment(workspace: str, arguments: Dict[str, Any]) -> None:
                 raise ToolArgumentError(f"Path escapes the workspace: {v}")
 
 
+# Invariant 6: the UI is a viewer, not an actor. A tool may offer to BLOCK for
+# an agent's turn economy (get_synthesis_status' wait_sec is the only one), but
+# this path serves a browser: a request that sits on a worker for two minutes is
+# the UI acting, and the answer it would get is the answer it already has. Same
+# shape as the containment rule above — an argument-name rule applied on this
+# surface only, not a list of tool names kept here.
+_BLOCKING_ARG_KEYS = ("wait_sec",)
+
+
+def clamp_blocking_waits(arguments: Dict[str, Any]) -> None:
+    for key in _BLOCKING_ARG_KEYS:
+        if key in (arguments or {}):
+            arguments[key] = 0
+
+
 def validate_and_execute(name: str, workspace: str, arguments: Optional[Dict[str, Any]]) -> Any:
     """Validate ``arguments`` against the tool's own schema, then run the SAME
     function the agent runs. Must be called inside a bound session scope
@@ -288,6 +305,7 @@ def validate_and_execute(name: str, workspace: str, arguments: Optional[Dict[str
     tool = _load_tools()[name]
     args = dict(arguments or {})
     enforce_file_containment(workspace, args)
+    clamp_blocking_waits(args)
 
     if tool.args_schema is not None:
         try:

@@ -2073,7 +2073,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 # generator itself: asyncio.wait_for cancels its awaitable on
                 # timeout, and cancelling astream.__anext__ threw CancelledError
                 # into the running graph — aborting the very long tool call
-                # (e.g. wait_for_synthesis) the ping was meant to protect
+                # (e.g. a bounded get_synthesis_status wait) the ping was meant to protect
                 # (plans/phase2/REVIEW_FINDINGS.md P0 #2).
                 total_input_tokens = 0
                 total_output_tokens = 0

@@ -197,7 +197,6 @@ EXPECTED_TOOL_ACTIONS = {
     "start_synthesis": "synthesize",
     "retry_pd": "synthesize",
     "get_synthesis_status": "synthesize",
-    "wait_for_synthesis": "synthesize",
     "get_synthesis_metrics": "synthesize",
     "read_stage_report": "synthesize",
     "get_route_drc_summary": "synthesize",

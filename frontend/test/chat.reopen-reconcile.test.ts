@@ -26,7 +26,7 @@ describe("reopen reconciliation of an interrupted trace (F4)", () => {
       {
         role: "assistant",
         content: "",
-        tool_calls: [{ id: "t1", name: "wait_for_synthesis", args: {} }],
+        tool_calls: [{ id: "t1", name: "get_synthesis_status", args: {} }],
         tool_results: [{ tool_call_id: "t1", status: "running", content: "running" }],
       },
     ]);

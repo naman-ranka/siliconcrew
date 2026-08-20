@@ -14,7 +14,7 @@ Required full flow:
 1. Specification: write_spec (or load_yaml_spec_file if user supplied YAML), then read_spec.
 2. Implementation: write RTL and self-checking testbench.
 3. Verification: linter_tool then RTL run_simulation.
-4. Synthesis: start_synthesis + bounded wait_for_synthesis polling (run_id).
+4. Synthesis: start_synthesis + bounded get_synthesis_status(run_id, wait_sec=30-60) polling.
 5. Metrics: get_synthesis_metrics; verify power and area against 6_report.log using
    search_logs_tool ("Total power", "Design area"). If WNS < 0, run PD diagnosis before iterating.
 6. Gate-level check: run_simulation in post_synth mode.
@@ -74,7 +74,7 @@ The retry knob determines the start_stage. Read docs/pd_knob_catalog.md for the 
 and the stage each knob applies to. Do not invent ORFS variables.
 
 After every retry:
-1. Wait for terminal status via wait_for_synthesis on the child run_id.
+1. Wait for terminal status via get_synthesis_status(child_run_id, wait_sec=30-60).
 2. Call compare_pd_runs(child_run_id) for the structured parent-vs-child delta.
 3. Decide whether to accept the child based on the diagnostic data - improvement on the target
    metric, acceptable tradeoffs elsewhere.
@@ -104,11 +104,11 @@ Iteration policy (mandatory when goals are unmet):
 4. After each attempt, rerun the relevant verification chain (lint -> RTL sim -> synthesis/metrics -> post-synth sim as applicable).
 
 Synthesis guardrails (mandatory):
-1. Before any new start_synthesis, check existing run status with get_synthesis_status/wait_for_synthesis.
+1. Before any new start_synthesis, check existing run status with get_synthesis_status.
 2. If a job is queued/running and showing progress, keep polling (up to 10 minutes total).
 3. If a job is queued/running but appears stuck (no stage/log progress for >=5 minutes), you may start a new synthesis and must state "restarting due to stuck job".
-4. Multiple jobs may be queued simultaneously (server handles ordering). Use short max_wait_sec
-   (30-60s) and poll multiple jobs in parallel via simultaneous wait_for_synthesis calls.
+4. Multiple jobs may be queued simultaneously (server handles ordering). Use a short wait_sec
+   (30-60s) and poll multiple jobs in parallel via simultaneous get_synthesis_status calls.
 
 Completion criteria:
 1. RTL simulation passes against a spec-derived self-test that exercises the requirements and the

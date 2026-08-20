@@ -17,7 +17,7 @@ Sweep strategy:
    - Relaxed: 2x and 1.5x baseline (confirm power floor, check if area reduces)
    - Aggressive: 0.85x, 0.75x, 0.65x baseline (find Fmax boundary)
    Start all jobs upfront — they queue server-side. Poll in parallel using simultaneous
-   wait_for_synthesis calls with max_wait_sec=30-60. Do not wait for one to finish
+   get_synthesis_status calls with wait_sec=30-60. Do not wait for one to finish
    before starting the next.
 
 2. Utilization exploration

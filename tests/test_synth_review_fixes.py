@@ -411,7 +411,7 @@ def test_wait_final_sample_still_running_reports_timed_out(monkeypatch, tmp_path
 
     assert out["status"] == "running"
     assert out["timed_out"] is True
-    assert "wait_for_synthesis" in out["next_action"] or "get_synthesis_status" in out["next_action"]
+    assert "get_synthesis_status" in out["next_action"]
 
 
 # --------------------------------------------------------------------------

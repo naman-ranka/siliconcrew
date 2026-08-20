@@ -647,26 +647,6 @@ def retry_pd(
     )
     return json.dumps(result, indent=2)
 
-@tool(parse_docstring=True)
-@policy(category="synthesis", protected=True, mutates=False, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def get_synthesis_status(run_id: str) -> str:
-    """
-    Full status for a synthesis run by its run_id: status, current stage,
-    per-stage table + history, last log lines, artifacts found, best-effort
-    metrics, and poll_after_sec guidance. Self-healing: a run whose worker
-    died is reconciled from on-disk evidence (completed from artifacts, or
-    failed once past its timeout ceiling) instead of reading "running" forever.
-
-    Args:
-        run_id: Run to report on, from start_synthesis or retry_pd. Required —
-            this reader has no "latest" fallback.
-    """
-    workspace = get_workspace_path()
-    result = collect_synthesis_status(run_id, workspace=workspace)
-    return json.dumps(result, indent=2)
-
-
 # Bounded means bounded even for a creative caller (plan round-2 #6).
 WAIT_MAX_WAIT_SEC = 120
 
@@ -709,31 +689,42 @@ def _wait_for_synthesis_job(
     # timeout path returns latest known status with explicit timeout flag
     status["waited_sec"] = round(time.time() - start, 2)
     status["timed_out"] = True
-    status["next_action"] = "Call wait_for_synthesis again or poll with get_synthesis_status."
+    status["next_action"] = "Call get_synthesis_status again — with wait_sec to keep waiting."
     return status
 
 
 @tool(parse_docstring=True)
-# No "ui" surface: a bounded blocking poll built for agent turn economy. The
-# UI is a viewer, not an actor (invariant 6) and has its own live polling.
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
-        surfaces=("agent", "mcp"), requires_session=True)
-def wait_for_synthesis(run_id: str, max_wait_sec: int = 30, poll_interval_sec: int = 2) -> str:
+        surfaces=ALL_SURFACES, requires_session=True)
+def get_synthesis_status(run_id: str, wait_sec: int = 0, poll_interval_sec: int = 2) -> str:
     """
-    MCP-safe bounded wait for synthesis completion — the ONE blocking
-    convenience, defined as a bounded poll loop over get_synthesis_status.
+    Full status for a synthesis run by its run_id: status, current stage,
+    per-stage table + history, last log lines, artifacts found, best-effort
+    metrics, and poll_after_sec guidance. Self-healing: a run whose worker died
+    is reconciled from on-disk evidence (completed from artifacts, or failed
+    once past its timeout ceiling) instead of reading "running" forever.
+    With wait_sec > 0 it becomes the one blocking call in the system: a bounded
+    poll that returns as soon as the run is completed or failed, or when the
+    wait runs out (`timed_out: true`, plus `waited_sec`). Waiting is turn
+    economy for an agent — one call instead of ten — not a different answer.
 
     Args:
-        run_id: Synthesis run id from start_synthesis / retry_pd.
-        max_wait_sec: Max seconds to block in this call (default 30, capped
-            120).
-        poll_interval_sec: Fallback poll interval, seconds, when the run gives
-            no guidance.
+        run_id: Run to report on, from start_synthesis or retry_pd. Required —
+            this reader has no "latest" fallback.
+        wait_sec: Seconds to block waiting for a terminal status. 0 (the
+            default) answers immediately with the current state. Capped at 120,
+            and forced to 0 on the web UI's own /invoke path, which never
+            blocks — call it again to keep waiting.
+        poll_interval_sec: Fallback poll interval while waiting, in seconds,
+            used only when the run itself offers no guidance. Ignored when
+            wait_sec is 0.
     """
     workspace = get_workspace_path()
-    result = _wait_for_synthesis_job(workspace, run_id, max_wait_sec, poll_interval_sec)
+    if wait_sec and int(wait_sec) > 0:
+        result = _wait_for_synthesis_job(workspace, run_id, wait_sec, poll_interval_sec)
+    else:
+        result = collect_synthesis_status(run_id, workspace=workspace)
     return json.dumps(result, indent=2)
-
 
 
 @tool(parse_docstring=True)
@@ -2043,7 +2034,6 @@ ALL_TOOLS = [
     start_synthesis,
     retry_pd,
     get_synthesis_status,
-    wait_for_synthesis,
     get_synthesis_metrics,
     read_stage_report,
     get_route_drc_summary,
@@ -2091,6 +2081,7 @@ def tools_on_surface(surface: str) -> list:
 mcp_tools = tools_on_surface("mcp")
 
 # Tools bound to the in-process architect agent.
-# One async contract everywhere: the architect polls with bounded
-# wait_for_synthesis loops — no start+wait combo tool (Wave 9).
+# One async contract everywhere: dispatch, then poll get_synthesis_status —
+# with wait_sec when the agent would rather block once than poll ten times.
+# There is no start+wait combo tool (Wave 9).
 architect_tools = tools_on_surface("agent")

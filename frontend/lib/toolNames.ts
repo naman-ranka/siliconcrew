@@ -25,7 +25,6 @@ export const TOOL = {
   startSynthesis: "start_synthesis",
   retryPd: "retry_pd",
   getSynthesisStatus: "get_synthesis_status",
-  waitForSynthesis: "wait_for_synthesis",
   updateManifest: "update_manifest",
   getManifest: "get_manifest",
 } as const;
@@ -97,7 +96,9 @@ export function refreshesRuns(tool: string): boolean {
 export const SYNTH_DISPATCH_TOOLS: ReadonlySet<string> = new Set<string>([
   TOOL.startSynthesis,
   TOOL.retryPd,
-  TOOL.waitForSynthesis,
+  // A turn that died on the status reader was watching a run that may well
+  // still be going — the Runs panel is where to look.
+  TOOL.getSynthesisStatus,
 ]);
 
 export const SIM_TOOLS: ReadonlySet<string> = new Set<string>([TOOL.simulation]);

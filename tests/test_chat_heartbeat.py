@@ -215,7 +215,7 @@ class _ToolHangAgent:
     def __init__(self):
         self.updates = []
         self._tool_msg = AIMessage(
-            content="", tool_calls=[{"name": "wait_for_synthesis", "args": {}, "id": "tc1"}]
+            content="", tool_calls=[{"name": "get_synthesis_status", "args": {"wait_sec": 30}, "id": "tc1"}]
         )
 
     async def aget_state(self, config):

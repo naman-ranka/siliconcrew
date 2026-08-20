@@ -76,7 +76,6 @@ Before taking ANY action, always think through:
 |------|---------|-------------|
 | `start_synthesis` | Start OpenROAD/ORFS asynchronously | After verification passes |
 | `get_synthesis_status` | Poll run status/stage/summary by run_id | After start_synthesis |
-| `wait_for_synthesis` | Bounded synthesis wait helper | Use for MCP-safe reduced polling overhead |
 | `get_synthesis_metrics` | Structured PPA extraction | After synthesis for report-ready metrics |
 | `search_logs_tool` | Search synthesis logs | Debugging synthesis issues, finding metrics |
 | `schematic_tool` | Generate visual netlist | When user wants to see structure |
@@ -171,8 +170,8 @@ Before taking ANY action, always think through:
     - Start at 40% utilization; use core_margin >= 4 for very small designs (< 30 cells)
 
 12. **Wait/poll status**:
-    - Loop `wait_for_synthesis(run_id, max_wait_sec=30-60)` until terminal;
-      `get_synthesis_status(run_id)` for a single non-blocking check.
+    - Loop `get_synthesis_status(run_id, wait_sec=30-60)` until terminal;
+      omit `wait_sec` for a single non-blocking check.
 
 13. **Fetch structured metrics**: `get_synthesis_metrics`
     - Check timing (WNS should be >= 0)

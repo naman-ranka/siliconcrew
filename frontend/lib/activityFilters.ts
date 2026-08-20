@@ -34,7 +34,6 @@ export const TOOL_KIND_MAP: Record<string, Exclude<ActivityToolKind, "other">> =
   compare_pd_runs: "synth",
   search_logs_tool: "synth",
   schematic_tool: "synth",
-  wait_for_synthesis: "synth",
   write_spec: "writes",
   write_file: "writes",
   edit_file: "writes",

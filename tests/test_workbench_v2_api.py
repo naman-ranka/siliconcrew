@@ -513,8 +513,9 @@ def test_tools_catalog_exposes_real_schemas(client):
     assert wave["requiresSignIn"] is False and wave["mutates"] is False
     synth = tools["start_synthesis"]
     assert synth["async"] is True and synth["requiresSignIn"] is True and synth["mutates"] is True
-    # Blocking poll-loop tool is not surfaced to the UI.
-    assert "wait_for_synthesis" not in tools
+    # The status reader IS surfaced — but its blocking wait is not usable from
+    # here: the UI is a viewer, not an actor (invariant 6).
+    assert "get_synthesis_status" in tools
 
 
 def test_invoke_unknown_tool_404(client):

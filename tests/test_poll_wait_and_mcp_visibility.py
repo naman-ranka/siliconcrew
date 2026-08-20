@@ -16,11 +16,11 @@ def test_tool_registry_matches_run_id_contract():
     """Wave 9 tool surface, checked at the source registry (wrappers.mcp_tools
     is exactly what mcp_server advertises): get_synthesis_status replaces
     get_synthesis_job + get_stage_status; the start+wait combo is gone; the
-    bounded wait stays."""
+    bounded wait is an argument on the status reader, not a tool of its own."""
     mcp_names = {t.name for t in wrappers.mcp_tools}
 
     assert "get_synthesis_status" in mcp_names
-    assert "wait_for_synthesis" in mcp_names
+    assert "wait_sec" in wrappers.get_synthesis_status.args_schema.model_fields
     assert "start_synthesis" in mcp_names
     assert "retry_pd" in mcp_names
 
@@ -57,7 +57,6 @@ def test_mcp_advertises_the_run_id_keyed_readers():
         tools = asyncio.run(server.list_tools())
         names = {t.name for t in tools}
 
-        assert "wait_for_synthesis" in names
         assert "read_stage_report" in names
         assert "get_route_drc_summary" in names
         assert "get_cts_summary" in names
