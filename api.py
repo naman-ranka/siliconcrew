@@ -26,7 +26,12 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, Tool
 # The checkpointer (sqlite self-host / pooled Postgres hosted) is engine-selected
 # in src/platform_engines/checkpointer.py; api.py imports open_checkpointer below.
 
-from src.agents.architect import create_architect_agent, load_system_prompt
+from src.agents.architect import (
+    MODEL_NODE,
+    TOOLS_NODE,
+    create_architect_agent,
+    load_system_prompt,
+)
 from src.agents import runtime_registry
 from src.model_catalog import (
     CODEX_DEFAULT_MODEL,
@@ -2036,10 +2041,13 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 agent_graph = create_architect_agent(
                     checkpointer=memory, model_name=model_name, api_key=llm_key.api_key
                 )
-                # Step budget per turn (E6): config, not hard-code. Raised to
-                # 80 by default — live FIFO showcase turns hit 50 in 3 of 4
-                # runs; graceful limit handling below is the real fix, the
-                # headroom just makes it rarer.
+                # Step budget per turn (E6): config, not hard-code. The
+                # default buys ~27 model calls — live FIFO showcase turns hit
+                # 50 graph steps in 3 of 4 runs; graceful limit handling below
+                # is the real fix, the headroom just makes it rarer. The number
+                # counts graph STEPS, so it depends on the agent's node count
+                # per round; the derivation lives with the default in
+                # src/platform_engines/settings.py.
                 config = {
                     "configurable": {"thread_id": thread_id},
                     "recursion_limit": get_settings().chat_recursion_limit,
@@ -2156,11 +2164,17 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 segment_text = ""
                 segment_id = None
 
+                # Node names come from src.agents.architect, which builds the
+                # graph — never spelled as literals here. The framework has
+                # already renamed the model node once, and getting it wrong is
+                # SILENT: the turn runs and checkpoints while the socket goes
+                # completely quiet. One definition, asserted against the real
+                # compiled graph in tests/test_ws_golden_frames.py.
                 def _handle_updates(update: dict) -> List[dict]:
                     nonlocal total_input_tokens, total_output_tokens, segment_text, segment_id
                     frames: List[dict] = []
-                    if "agent" in update:
-                        msg = update["agent"]["messages"][-1]
+                    if MODEL_NODE in update:
+                        msg = update[MODEL_NODE]["messages"][-1]
                         text = get_clean_content(msg)
                         if text:
                             frames.append({"type": "text", "content": text})
@@ -2189,8 +2203,8 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             # the background incremental flush so a mid-turn
                             # instance drain can't lose the turn's files.
                             get_workspace_flusher().mark_dirty(session_id)
-                    elif "tools" in update:
-                        msg = update["tools"]["messages"][-1]
+                    elif TOOLS_NODE in update:
+                        msg = update[TOOLS_NODE]["messages"][-1]
                         result = format_tool_result_for_api(msg.content)
                         call_meta = pending_tool_calls.pop(msg.tool_call_id, {})
                         log_tool_result(
@@ -2262,7 +2276,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             )
                         if mode == "messages":
                             chunk, meta = data
-                            if (meta or {}).get("langgraph_node") == "agent":
+                            if (meta or {}).get("langgraph_node") == MODEL_NODE:
                                 piece = get_clean_content(chunk)
                                 if piece:
                                     chunk_id = getattr(chunk, "id", None)

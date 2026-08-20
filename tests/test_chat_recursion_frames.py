@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api
+from src.agents.architect import MODEL_NODE
 from src.platform_engines.llm_keys import (
     ByokHostedLlmKeyProvider,
     EnvelopeKeyVault,
@@ -62,7 +63,7 @@ class _RecursionAgent:
 
     async def astream(self, inputs, config, stream_mode=None):
         from langgraph.errors import GraphRecursionError
-        yield ("updates", {"agent": {"messages": [_FakeMsg()]}})
+        yield ("updates", {MODEL_NODE: {"messages": [_FakeMsg()]}})
         raise GraphRecursionError(
             "Recursion limit of 80 reached without hitting a stop condition."
         )

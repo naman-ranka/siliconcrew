@@ -1,10 +1,10 @@
 """The architect must never run on a prompt it did not intend to load.
 
 Both behaviours asserted here replaced *silent* fallbacks. The old code served a
-stale embedded prompt when the file was missing, and swallowed a
-``create_react_agent`` signature mismatch into an agent with no prompt and no
-pre-model hook. Both failures produced an agent that still answered, so nothing
-looked broken while the wrong instructions ran.
+stale embedded prompt when the file was missing, and swallowed an agent-factory
+signature mismatch into an agent with no prompt and no reasoning strip. Both
+failures produced an agent that still answered, so nothing looked broken while
+the wrong instructions ran.
 """
 import pytest
 
@@ -39,31 +39,34 @@ def test_unreadable_prompt_file_raises(tmp_path):
         load_system_prompt(d)
 
 
-def test_agent_construction_passes_prompt_and_hook(monkeypatch):
+def test_agent_construction_passes_prompt_and_middleware(monkeypatch):
     """A signature mismatch must surface, not degrade.
 
     Guards the deleted ``except TypeError`` fallback: it used to build a
-    promptless, hookless agent whenever any kwarg was wrong.
+    promptless, strip-less agent whenever any kwarg was wrong.
     """
     captured = {}
 
-    def fake_create_react_agent(**kwargs):
+    def fake_create_agent(**kwargs):
         captured.update(kwargs)
         return "AGENT"
 
-    monkeypatch.setattr(architect, "create_react_agent", fake_create_react_agent)
+    monkeypatch.setattr(architect, "create_agent", fake_create_agent)
     monkeypatch.setattr(architect, "create_llm", lambda **kwargs: "LLM")
 
     assert architect.create_architect_agent() == "AGENT"
-    assert captured["prompt"].strip(), "prompt must reach the agent"
-    assert captured["pre_model_hook"] is architect._strip_reasoning_blocks
+    assert captured["system_prompt"].strip(), "prompt must reach the agent"
+    assert any(
+        isinstance(mw, architect.ReasoningStripMiddleware)
+        for mw in captured["middleware"]
+    ), "the reasoning strip must reach the agent"
 
 
 def test_signature_mismatch_is_not_swallowed(monkeypatch):
-    def rejecting_create_react_agent(**kwargs):
-        raise TypeError("unexpected keyword argument 'pre_model_hook'")
+    def rejecting_create_agent(**kwargs):
+        raise TypeError("unexpected keyword argument 'middleware'")
 
-    monkeypatch.setattr(architect, "create_react_agent", rejecting_create_react_agent)
+    monkeypatch.setattr(architect, "create_agent", rejecting_create_agent)
     monkeypatch.setattr(architect, "create_llm", lambda **kwargs: "LLM")
 
     with pytest.raises(TypeError):

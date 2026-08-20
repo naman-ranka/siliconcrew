@@ -18,6 +18,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import api
+from src.agents.architect import MODEL_NODE
 from src.platform_engines.llm_keys import LlmKey
 
 
@@ -45,9 +46,9 @@ class _TwoTokenAgent:
         return _State()
 
     async def astream(self, inputs, config, stream_mode=None):
-        yield ("messages", (_Chunk("hel"), {"langgraph_node": "agent"}))
-        yield ("messages", (_Chunk("lo"), {"langgraph_node": "agent"}))
-        yield ("updates", {"agent": {"messages": [_Msg()]}})
+        yield ("messages", (_Chunk("hel"), {"langgraph_node": MODEL_NODE}))
+        yield ("messages", (_Chunk("lo"), {"langgraph_node": MODEL_NODE}))
+        yield ("updates", {MODEL_NODE: {"messages": [_Msg()]}})
 
 
 def _patch_common(monkeypatch, make_agent):

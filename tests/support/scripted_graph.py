@@ -1,7 +1,7 @@
 """Build a REAL agent graph driven by a scripted model.
 
 Every websocket test in this repo used to hand-construct the agent's output —
-``yield ("updates", {"agent": {...}})``. That asserts nothing about the
+``yield ("updates", {"model": {...}})``. That asserts nothing about the
 framework: the day LangGraph renames a node, the fakes keep yielding the old key
 and the whole suite stays green while the product emits no text, no tool cards,
 no activity rows and no token counts.
@@ -20,7 +20,10 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.prebuilt import create_react_agent
+
+from langchain.agents import create_agent
+
+from src.agents.architect import architect_middleware
 
 
 class ScriptedChatModel(BaseChatModel):
@@ -89,11 +92,27 @@ def exploding_tool(text: str) -> str:
     raise RuntimeError(f"boom: {text}")
 
 
-def build_real_graph(script: List[AIMessage], tools=None, checkpointer=None):
-    """A real ``create_react_agent`` graph over a scripted model."""
+def build_real_graph_with_model(script: List[AIMessage], tools=None, checkpointer=None):
+    """A real ``create_agent`` graph over a scripted model, plus the model.
+
+    Built with the SAME middleware list production ships, so the harness
+    exercises the real hooks — a middleware that only implements the sync path
+    would blow up here under ``astream`` exactly as it would in the product.
+
+    The model comes back too because ``ScriptedChatModel.calls`` is how a test
+    counts model round-trips, which is the only honest way to measure the step
+    budget a turn actually gets at a given recursion limit.
+    """
     model = ScriptedChatModel(script=script, calls=[])
-    return create_react_agent(
+    graph = create_agent(
         model=model,
         tools=list(tools) if tools is not None else [echo_tool, exploding_tool],
         checkpointer=checkpointer if checkpointer is not None else InMemorySaver(),
+        middleware=architect_middleware(),
     )
+    return graph, model
+
+
+def build_real_graph(script: List[AIMessage], tools=None, checkpointer=None):
+    """A real ``create_agent`` graph over a scripted model."""
+    return build_real_graph_with_model(script, tools=tools, checkpointer=checkpointer)[0]

@@ -2,13 +2,13 @@
 
 Why this file exists
 --------------------
-The turn driver in ``api.py`` keys on LangGraph's node names -- ``"agent"`` and
-``"tools"`` (see ``_handle_updates``). Every other websocket test in this repo
-hand-builds ``{"agent": ...}`` events, so if the framework renames that node,
+The turn driver in ``api.py`` keys on LangGraph's node names -- ``MODEL_NODE``
+and ``TOOLS_NODE`` (see ``_handle_updates``). Every other websocket test in this
+repo hand-builds ``{MODEL_NODE: ...}`` events, so if the framework renames that node,
 the fakes keep producing the old shape and the suite stays green while the
 product emits no text, no tool cards, no activity rows and no token counts.
 
-These tests drive the SAME websocket handler with a real ``create_react_agent``
+These tests drive the SAME websocket handler with a real ``create_agent``
 graph over a scripted model. Whatever the framework really emits is what the
 handler really receives. If a framework upgrade moves the node names, these fail
 and the fakes cannot hide it.
@@ -26,7 +26,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api
-from tests.support.scripted_graph import ai, build_real_graph, echo_tool, exploding_tool
+from src.agents.architect import MODEL_NODE, TOOLS_NODE, architect_middleware
+from tests.support.scripted_graph import (
+    ai,
+    build_real_graph,
+    build_real_graph_with_model,
+    echo_tool,
+    exploding_tool,
+)
 
 GOLDEN_DIR = Path(__file__).parent / "golden" / "ws_frames"
 
@@ -140,9 +147,13 @@ def drive(monkeypatch, tmp_path):
 def test_graph_node_names_match_what_the_turn_driver_keys_on(drive):
     """THE migration tripwire.
 
-    ``_handle_updates`` dispatches on the literal strings ``"agent"`` and
-    ``"tools"``. This asserts the real graph still uses them. When a framework
-    upgrade renames a node this fails loudly, instead of the product silently
+    ``_handle_updates`` dispatches on ``MODEL_NODE`` / ``TOOLS_NODE``, declared
+    in ``src.agents.architect`` beside the factory that builds the graph. This
+    asserts the graph the framework actually compiles still emits exactly those
+    names -- in the ``updates`` stream AND in ``metadata["langgraph_node"]`` on
+    streamed tokens. The framework has renamed the model node once already
+    (``agent`` under ``create_react_agent``, ``model`` under ``create_agent``);
+    when it happens again this fails loudly instead of the product silently
     going quiet.
     """
     import asyncio
@@ -153,7 +164,7 @@ def test_graph_node_names_match_what_the_turn_driver_keys_on(drive):
     ])
 
     async def collect():
-        keys = []
+        keys, token_nodes = [], set()
         async for mode, payload in graph.astream(
             {"messages": [("user", "go")]},
             {"configurable": {"thread_id": "t-nodes"}, "recursion_limit": 10},
@@ -161,14 +172,102 @@ def test_graph_node_names_match_what_the_turn_driver_keys_on(drive):
         ):
             if mode == "updates":
                 keys.extend(payload.keys())
-        return keys
+            else:
+                _chunk, meta = payload
+                token_nodes.add((meta or {}).get("langgraph_node"))
+        return keys, token_nodes
 
-    keys = asyncio.run(collect())
-    assert set(keys) == {"agent", "tools"}, (
+    keys, token_nodes = asyncio.run(collect())
+    assert set(keys) == {MODEL_NODE, TOOLS_NODE}, (
         f"graph emitted update keys {sorted(set(keys))}. api.py's _handle_updates "
-        "dispatches on 'agent' and 'tools' -- if these no longer match, the turn "
-        "driver produces NO frames and the product is silently dead. Update both "
-        "together."
+        f"dispatches on {MODEL_NODE!r} and {TOOLS_NODE!r} -- if these no longer "
+        "match, the turn driver produces NO frames and the product is silently "
+        "dead. Update src.agents.architect's constants and this test together."
+    )
+    assert MODEL_NODE in token_nodes, (
+        f"streamed token metadata carried langgraph_node {sorted(token_nodes)}, "
+        f"not {MODEL_NODE!r}. api.py gates every text_delta frame on that value, "
+        "so a mismatch means the chat never streams."
+    )
+
+
+def test_no_middleware_adds_a_graph_node():
+    """Node-style middleware are not free: each one consumes a graph step per
+    model call, so each one silently shrinks how much work a turn can do at a
+    fixed recursion limit. The shipped list must stay wrap-style only -- if that
+    ever changes, CHAT_RECURSION_LIMIT has to be re-derived in the same commit.
+    """
+    graph = build_real_graph([ai("hi")])
+    nodes = set(graph.get_graph().nodes)
+    assert nodes == {"__start__", MODEL_NODE, TOOLS_NODE, "__end__"}, (
+        f"the compiled graph has nodes {sorted(nodes)}. A middleware added a "
+        "node, which costs a graph step per model call -- re-derive "
+        "CHAT_RECURSION_LIMIT (settings.py) and update this test deliberately."
+    )
+
+
+def test_no_shipped_middleware_owns_its_own_model():
+    """A middleware that constructs its own LLM (``SummarizationMiddleware(model=)``,
+    ``ModelFallbackMiddleware``) bypasses the request-scoped key resolution in
+    api.py, the hosted model pin, cost accounting and the hosted-tier spend
+    limiter. That is an uncapped BYOK/free-tier hole, so the shipped list must
+    hold no model objects at all."""
+    from langchain_core.language_models import BaseLanguageModel
+
+    for mw in architect_middleware():
+        for attr, value in vars(mw).items():
+            assert not isinstance(value, BaseLanguageModel), (
+                f"{type(mw).__name__}.{attr} holds its own model. Every model in "
+                "the agent must come from the same create_llm(model_name, "
+                "api_key=...) call so BYOK keys, the hosted model pin, cost "
+                "accounting and the spend limiter all apply."
+            )
+
+
+def test_the_step_budget_a_turn_actually_gets_is_unchanged():
+    """The recursion-limit arithmetic, pinned.
+
+    ``create_react_agent`` with a ``pre_model_hook`` ran THREE nodes per round
+    (hook, agent, tools); ``create_agent`` with wrap-style middleware runs TWO
+    (model, tools). At an unchanged limit the agent would silently get ~48%
+    more model calls per turn -- longer turns, more spend, a later step-budget
+    nudge. The default was re-derived from 80 to 54 to hold the real budget at
+    the 27 model calls it has been. This asserts the number the user feels.
+    """
+    import asyncio
+    import os
+
+    from langgraph.errors import GraphRecursionError
+
+    from src.platform_engines.settings import get_settings
+
+    if os.environ.get("CHAT_RECURSION_LIMIT"):
+        pytest.skip("CHAT_RECURSION_LIMIT is overridden in this environment; "
+                    "this test pins the SHIPPED default")
+    limit = get_settings().chat_recursion_limit
+    graph, model = build_real_graph_with_model(
+        [ai("", tool_calls=[{"id": "c1", "name": "echo_tool", "args": {"text": "x"}}])]
+    )
+
+    async def run():
+        try:
+            async for _ in graph.astream(
+                {"messages": [("user", "go")]},
+                {"configurable": {"thread_id": "t-budget"}, "recursion_limit": limit},
+                stream_mode=["updates"],
+            ):
+                pass
+        except GraphRecursionError:
+            pass
+
+    asyncio.run(run())
+    # `bind_tools` returns self, so the scripted model counts its own
+    # round-trips in `.calls` no matter how the graph binds it.
+    calls = len(model.calls)
+    assert calls == 27, (
+        f"a turn at CHAT_RECURSION_LIMIT={limit} gets {calls} model calls, not "
+        "27. The step budget users actually feel changed -- if that is intended, "
+        "it is a product decision, not a side effect."
     )
 
 

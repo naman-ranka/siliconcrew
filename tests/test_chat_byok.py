@@ -14,6 +14,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 import api
+from src.agents.architect import MODEL_NODE
 from src.platform_engines.llm_keys import (
     ByokHostedLlmKeyProvider,
     EnvelopeKeyVault,
@@ -68,7 +69,7 @@ class _FakeAgent:
     async def astream(self, inputs, config, stream_mode=None):
         # The WS streams with stream_mode=["updates", "messages"], so events
         # arrive as (mode, payload) tuples.
-        yield ("updates", {"agent": {"messages": [_FakeMsg()]}})
+        yield ("updates", {MODEL_NODE: {"messages": [_FakeMsg()]}})
 
 
 @pytest.fixture()
