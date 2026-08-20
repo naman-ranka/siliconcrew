@@ -316,6 +316,14 @@ def _submit_with_quota_release(reservation, fn, *fn_args):
         provider = get_workspace_provider()
     except Exception:
         provider = None
+    # The dispatching request already resolved what is driving this turn
+    # (prompt, skills, tool set — A3-H4). Capture it here, in scope.
+    try:
+        from src.platform_engines.provenance import current_agent_provenance
+
+        agent_prov = current_agent_provenance()
+    except Exception:
+        agent_prov = None
 
     def runner():
         # Rebind the dispatching request's session context inside the worker
@@ -326,6 +334,16 @@ def _submit_with_quota_release(reservation, fn, *fn_args):
                 from src.utils.session_context import set_current_session
 
                 set_current_session(ctx)
+            except Exception:
+                pass
+        # Same reason, same rule: the run record stamped inside this thread must
+        # name the prompt/skills the DISPATCHER was running, not re-derive them
+        # from a worker that has no owner.
+        if agent_prov is not None:
+            try:
+                from src.platform_engines.provenance import set_agent_provenance
+
+                set_agent_provenance(agent_prov)
             except Exception:
                 pass
         try:
@@ -2221,7 +2239,10 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         "constraints_note": constraints["note"],
         "stages": _init_stage_metadata(),
         # Reproducibility stamp: repo commit, pinned ORFS image digest, PDK,
-        # iverilog version, and the pinned NUM_CORES used for this run.
+        # iverilog version, the pinned NUM_CORES used for this run, plus what
+        # DROVE it — prompt version + content hash, skills, tool set (B9). The
+        # driving half is read from the request scope that dispatched this job,
+        # never recomposed here (A3-H4).
         "provenance": collect_provenance(
             pdk=platform, num_cores=_pinned_num_cores()
         ).as_dict(),

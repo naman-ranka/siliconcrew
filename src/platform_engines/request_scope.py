@@ -20,7 +20,39 @@ import asyncio
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
 
+from src.platform_engines.provenance import (
+    agent_provenance_scope,
+    current_agent_provenance,
+    resolve_agent_provenance,
+)
 from src.utils.session_context import SessionContext, session_scope
+
+
+@contextmanager
+def _agent_provenance_bound(user_id: Optional[str]) -> Iterator[None]:
+    """Resolve "what is driving this turn" ONCE, here, where the owner is known.
+
+    This is the writer finding A3-H4 says the provenance fields lack:
+    ``collect_provenance`` runs deep in the synthesis worker with no owner and
+    no skill context, so it must READ a stamp rather than compose one (composing
+    owner-scoped state down there is the A3-C1 cross-tenant hazard). Resolution
+    happens per request and is keyed by the owner by construction — nothing is
+    cached at module level.
+
+    An inner scope (e.g. ``run_in_session`` nested inside a request) does not
+    re-resolve: the outermost turn's stamp wins, which is what "once per turn"
+    means. Best-effort — a provenance failure must never fail a request.
+    """
+    if current_agent_provenance() is not None:
+        yield
+        return
+    try:
+        agent = resolve_agent_provenance(user_id=user_id)
+    except Exception:
+        yield
+        return
+    with agent_provenance_scope(agent):
+        yield
 
 
 @contextmanager
@@ -51,7 +83,7 @@ def session_request_scope(
     workspace = provider.workspace_for(session_id)
     with session_scope(SessionContext(
         session_id=session_id, workspace=workspace, user_id=user_id, tier=tier,
-    )):
+    )), _agent_provenance_bound(user_id):
         try:
             yield workspace
         finally:

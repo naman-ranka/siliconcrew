@@ -125,4 +125,3 @@ Output requirements:
 
 ---
 PROMPT_VERSION: v2
-PROMPT_SOURCE: C:\Users\naman\Desktop\Projects\RTL_AGENT\prompts\architect\architect_prompt_v2.md

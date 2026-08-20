@@ -87,4 +87,3 @@ against logs. Accuracy of the table matters more than speed of delivery.
 
 ---
 PROMPT_VERSION: v2
-PROMPT_SOURCE: C:\Users\naman\Desktop\Projects\RTL_AGENT\prompts\architect\pareto_sweep_prompt_v2.md
