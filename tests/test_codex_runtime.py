@@ -417,8 +417,13 @@ def test_disabled_tools_are_derived_from_policy(wiring):
     from src.api.tool_catalog import DISABLED_WHEN_BOUND
     from src.agents.codex.codex_engine import CodexEngine, CodexTurn
 
+    # local_sqlite_dir is not optional in a test: without it the engine falls
+    # back to /app/codex-sqlite, a production container path. That exists in
+    # some dev images and not on a CI runner, so omitting it passes locally and
+    # fails in CI with a permission error.
     engine = CodexEngine(enabled=True, state_dir=wiring.state_dir,
-                         mcp_data_dir=wiring.db, repo_root=os.getcwd())
+                         mcp_data_dir=wiring.db, repo_root=os.getcwd(),
+                         local_sqlite_dir=wiring.state_dir)
     turn = CodexTurn(session_id="s1", thread_id="th1", message="hi",
                      workspace=wiring.workspace, user_id="alice",
                      model_name="gpt-5.5", api_key="sk-test")
