@@ -32,7 +32,7 @@ async def _run_mcp_server_test():
         "write_spec", "read_spec", "load_yaml_spec_file",
         "write_file", "read_file", "apply_patch_tool", "edit_file_tool", "list_files_tool",
         "linter_tool", "simulation_tool", "waveform_tool",
-        "start_synthesis", "get_synthesis_job", "wait_for_synthesis", "get_synthesis_metrics", "search_logs_tool",
+        "start_synthesis", "get_synthesis_status", "wait_for_synthesis", "get_synthesis_metrics", "search_logs_tool",
         "generate_report_tool"
     ]
     

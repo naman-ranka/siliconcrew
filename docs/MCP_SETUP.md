@@ -245,8 +245,8 @@ Claude has access to all 23 tools:
 - `sby_tool` - Formal verification (optional)
 
 ### Synthesis Tools
-- `synthesis_tool` - OpenROAD flow
-- `ppa_tool` - Extract metrics
+- `start_synthesis` - start the OpenROAD flow (async; poll with `get_synthesis_status` / `wait_for_synthesis`)
+- `get_synthesis_metrics` - extract PPA metrics
 - `search_logs_tool` - Search synthesis logs
 - `schematic_tool` - Generate SVG
 

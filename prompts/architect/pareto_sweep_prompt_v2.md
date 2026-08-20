@@ -28,7 +28,7 @@ Sweep strategy:
 
 3. Architecture variants
    Before choosing a variant, read the critical path of the tightest passing run
-   (search_logs "data arrival time", "startpoint", "endpoint" in 6_finish.rpt or
+   (search_logs_tool "data arrival time", "startpoint", "endpoint" in 6_finish.rpt or
    2_floorplan_final.rpt). Let that tell you where the bottleneck actually is —
    the right variant breaks the bottleneck, not just changes the style.
 
@@ -45,7 +45,7 @@ Sweep strategy:
 
 At each data point:
 
-- Run get_synthesis_metrics + search_logs ("Total power", "Design area") to verify numbers.
+- Run get_synthesis_metrics + search_logs_tool ("Total power", "Design area") to verify numbers.
 - If WNS < 0: run PD diagnosis (search "startpoint", "endpoint", "data arrival time",
   "slack (VIOLATED)"). Classify the failure:
     - Violation in 2_floorplan_final.rpt → process floor, stop pushing this direction.
