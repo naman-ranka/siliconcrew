@@ -662,7 +662,9 @@ class CodexEngine:
         - MCP: register the SiliconCrew server (bound to this session) as the
           agent's tool source. Codex has no first-class SDK MCP-register call, so
           config is the standard path — expressed here as overrides.
-        - Tool policy: apply_patch_tool/shell_tool/web_search/view_image off,
+        - Tool policy: Codex's OWN built-in editing/exec tools off
+          (apply_patch_tool/shell_tool/web_search/view_image — these are Codex
+          config keys, not SiliconCrew tools),
           approval_policy=never (see the class docstring for why native exec is
           effectively blocked in this container).
         - Env: mcp_server.py is OUR OWN trusted server code, so it needs
@@ -710,7 +712,7 @@ class CodexEngine:
         ov = [
             'cli_auth_credentials_store="file"',
             'approval_policy="never"',
-            "apply_patch_tool=false",
+            "apply_patch_tool=false",  # Codex's built-in patcher, not ours
             "shell_tool=false",
             "tools.web_search=false",
             "tools.view_image=false",

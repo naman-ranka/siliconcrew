@@ -31,7 +31,7 @@ export const TOOL_LABELS: Record<string, string> = {
   start_synthesis: "Synth",
   retry_pd: "P&R",
   write_file: "Write",
-  edit_file_tool: "Write",
+  edit_file: "Write",
   write_spec: "Spec",
 };
 

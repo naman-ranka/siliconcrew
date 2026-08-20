@@ -30,8 +30,8 @@ function firstStringArg(args: Record<string, unknown>, keys: string[]): string |
   return null;
 }
 
-/** `+++ b/foo.v` (or `+++ foo.v`) target of a unified diff — apply_patch_tool
- *  carries no filename arg, only the diff itself. */
+/** `+++ b/foo.v` (or `+++ foo.v`) target of a unified diff — edit_file's diff
+ *  form carries no filename arg, only the diff itself. */
 function fileFromUnifiedDiff(diff: string | null): string | null {
   if (!diff) return null;
   const m = /^\+\+\+\s+(?:b\/)?(\S+)/m.exec(diff);
@@ -104,7 +104,7 @@ function pythonAnalysisArtifactKey(
  * test/toolRegistry.coverage.test.ts is that every key here is still a live
  * tool, so a renamed or merged tool takes the button down loudly.
  *
- *   write_file / edit_file_tool / apply_patch_tool → code:<file>
+ *   write_file / edit_file (either form)           → code:<file>
  *   write_spec / read_spec / load_yaml_spec_file   → spec
  *   simulation_tool / run_isolated_simulation      → wave:<runId from result>
  *   start_synthesis / retry_pd / get_synthesis_metrics /
@@ -136,9 +136,10 @@ const reportArtifact: ArtifactResolver = (args, resultText) => {
 
 export const TOOL_ARTIFACT_RESOLVERS: Readonly<Record<string, ArtifactResolver>> = {
   write_file: mutationArtifact,
-  edit_file_tool: mutationArtifact,
 
-  apply_patch_tool: (args) => {
+  // One tool, two forms: an exact replacement names its file, a patch only
+  // carries the diff, and both must land on the same tab key as write_file.
+  edit_file: (args) => {
     const file =
       firstStringArg(args, ["filename", "target_file"]) ??
       fileFromUnifiedDiff(str(args.unified_diff));

@@ -38,8 +38,7 @@ export const TOOL_KIND_MAP: Record<string, Exclude<ActivityToolKind, "other">> =
   wait_for_synthesis: "synth",
   write_spec: "writes",
   write_file: "writes",
-  edit_file_tool: "writes",
-  apply_patch_tool: "writes",
+  edit_file: "writes",
 };
 
 /** Bucket a backend tool name into a feed kind. */

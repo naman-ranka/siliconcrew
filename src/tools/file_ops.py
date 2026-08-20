@@ -24,6 +24,31 @@ def _safe_join(workspace: str, path: str) -> str:
     return abspath
 
 
+_DESIGN_SUFFIXES = (".v", ".sv", ".vh", ".svh", ".sdc")
+
+
+def reconcile_roles(workspace: str, rel_paths: Any) -> None:
+    """Re-read (and persist) the manifest when a design source changed.
+
+    A new/renamed/edited source file can change roles/tops, so the next stage
+    selection (lint/sim/synth) is only correct if the manifest saw the change.
+    Every writer calls this — whole-file writes below, and the editing tool for
+    both an exact replacement and a patch — so no write path is the one that
+    leaves the manifest stale. Best-effort: reconciliation never fails a write.
+    """
+    paths = [rel_paths] if isinstance(rel_paths, str) else list(rel_paths or [])
+    if not any(str(p).lower().endswith(_DESIGN_SUFFIXES) for p in paths):
+        return
+    try:
+        from src.tools import manifest as manifest_mod
+        from src.utils.session_context import current_session_id
+
+        # read = reconcile + persist
+        manifest_mod.read_manifest(workspace, session_id=current_session_id())
+    except Exception:
+        pass
+
+
 def write_file(workspace: str, path: str, content: str) -> Dict[str, Any]:
     """Write ``content`` to ``path`` (workspace-relative) and reconcile roles.
 
@@ -35,18 +60,6 @@ def write_file(workspace: str, path: str, content: str) -> Dict[str, Any]:
     with open(abspath, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
 
-    # A new/renamed/edited source file can change roles/tops — keep the manifest
-    # in sync so the next stage selection (lint/sim/synth) is correct.
     rel = os.path.relpath(abspath, workspace)
-    try:
-        from src.tools import manifest as manifest_mod
-        from src.utils.session_context import current_session_id
-
-        if rel.lower().endswith((".v", ".sv", ".vh", ".svh", ".sdc")):
-            # read = reconcile + persist
-            manifest_mod.read_manifest(workspace, session_id=current_session_id())
-    except Exception:
-        # manifest reconciliation is best-effort; never fail a write on it
-        pass
-
+    reconcile_roles(workspace, rel)
     return {"path": rel, "bytes": len(content)}

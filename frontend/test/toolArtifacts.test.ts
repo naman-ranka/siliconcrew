@@ -19,12 +19,12 @@ describe("runIdFromText", () => {
 });
 
 describe("artifactKeyForToolCall — file family → code:<file>", () => {
-  it("write_file / edit_file_tool key by the filename arg", () => {
+  it("write_file / edit_file key by the filename arg", () => {
     expect(artifactKeyForToolCall("write_file", { filename: "alu.v", content: "x" })).toBe(
       "code:alu.v"
     );
     expect(
-      artifactKeyForToolCall("edit_file_tool", {
+      artifactKeyForToolCall("edit_file", {
         filename: "fifo.v",
         target_text: "a",
         replacement_text: "b",
@@ -32,18 +32,18 @@ describe("artifactKeyForToolCall — file family → code:<file>", () => {
     ).toBe("code:fifo.v");
   });
 
-  it("apply_patch_tool extracts the +++ target from the unified diff", () => {
+  it("edit_file's diff form extracts the +++ target from the unified diff", () => {
     const diff = "--- a/alu.v\n+++ b/alu.v\n@@ -1 +1 @@\n-x\n+y\n";
-    expect(artifactKeyForToolCall("apply_patch_tool", { unified_diff: diff })).toBe("code:alu.v");
+    expect(artifactKeyForToolCall("edit_file", { unified_diff: diff })).toBe("code:alu.v");
     // Bare (no a/ b/ prefix) headers work too.
     const bare = "--- alu.v\n+++ alu.v\n@@ -1 +1 @@\n";
-    expect(artifactKeyForToolCall("apply_patch_tool", { unified_diff: bare })).toBe("code:alu.v");
+    expect(artifactKeyForToolCall("edit_file", { unified_diff: bare })).toBe("code:alu.v");
   });
 
   it("null when the file is unknowable (no arg / deletion diff)", () => {
     expect(artifactKeyForToolCall("write_file", {})).toBeNull();
     expect(
-      artifactKeyForToolCall("apply_patch_tool", {
+      artifactKeyForToolCall("edit_file", {
         unified_diff: "--- a/alu.v\n+++ /dev/null\n",
       })
     ).toBeNull();

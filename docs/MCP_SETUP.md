@@ -234,7 +234,7 @@ Claude has access to all 23 tools:
 ### File Management (4 tools)
 - `write_file` - Create files
 - `read_file` - Read files
-- `edit_file_tool` - Surgical edits
+- `edit_file` - Exact-text replacement or a unified diff
 - `list_files_tool` - List workspace
 
 ### Verification Tools

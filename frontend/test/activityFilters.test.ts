@@ -28,8 +28,7 @@ describe("toolKind", () => {
     expect(toolKind("retry_pd")).toBe("synth");
     expect(toolKind("write_spec")).toBe("writes");
     expect(toolKind("write_file")).toBe("writes");
-    expect(toolKind("edit_file_tool")).toBe("writes");
-    expect(toolKind("apply_patch_tool")).toBe("writes");
+    expect(toolKind("edit_file")).toBe("writes");
   });
 
   it("maps the synthesis read tools to synth", () => {

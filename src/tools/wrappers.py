@@ -956,63 +956,94 @@ def compare_pd_runs(child_run_id: str, parent_run_id: str = None) -> str:
     return json.dumps(result, indent=2)
 
 
+from src.tools import file_ops
 from src.tools.edit_file import replace_in_file
 
-@tool(parse_docstring=True)
-@policy(category="editing", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True,
-        attempt_role="rtl_change")
-def apply_patch_tool(unified_diff: str) -> str:
-    """
-    Applies a unified diff with `git apply` (--recount, so hunk line COUNTS may
-    be wrong, but CONTEXT LINES MUST MATCH THE FILE EXACTLY). Nothing is written
-    unless the whole patch applies: it is checked first, and a failure returns
-    git's own stderr with no partial write.
-    Use it to change several files, or several places in one file, in one call.
-    For a single edit in one file edit_file_tool is more reliable — a generated
-    diff whose context drifted by a line is the usual failure here.
-
-    Args:
-        unified_diff: A complete unified diff. Every file needs `---`/`+++`
-            headers; `a/` and `b/` prefixes are stripped; an absolute path, or
-            one that climbs out of the workspace, is rejected before git runs;
-            `--- /dev/null` creates a new file.
-    """
-    workspace = get_workspace_path()
-    result = apply_unified_patch(workspace=workspace, unified_diff=unified_diff)
-    return json.dumps(result, indent=2)
-
 
 @tool(parse_docstring=True)
 @policy(category="editing", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="rtl_change")
-def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> str:
+def edit_file(
+    filename: str = "",
+    target_text: str = "",
+    replacement_text: str = "",
+    unified_diff: str = "",
+) -> str:
     """
-    Replaces one exact block of text in one file. The match is literal,
-    including whitespace and indentation.
-    Two hard errors, both of which write nothing: the target text was not found,
-    or it was found more than once (extend the block with surrounding lines
-    until it is unique).
+    Changes files that already exist. Two forms, one of which must be used:
+
+    EXACT REPLACEMENT (filename + target_text): replaces one literal block of
+    text in one file, whitespace and indentation included. Two hard errors, both
+    of which write nothing: the target was not found, or it was found more than
+    once (extend the block with surrounding lines until it is unique). The most
+    reliable form for a single edit.
+
+    UNIFIED DIFF (unified_diff): applies a patch with `git apply` --recount, so
+    hunk line COUNTS may be wrong but CONTEXT LINES MUST MATCH THE FILE EXACTLY.
+    Nothing is written unless the whole patch applies — it is checked first, and
+    a failure returns git's own stderr with no partial write. Use it to change
+    several files, or several places in one file, in one call; a generated diff
+    whose context drifted by a line is the usual failure here.
+
+    Returns JSON: `success`, `message`, `files_changed`, and for the replacement
+    form a short `diff` of what moved. To create a new file use write_file.
 
     Args:
-        filename: File to edit, e.g. 'counter.v'.
+        filename: File to edit, e.g. 'counter.v'. Replacement form only.
         target_text: The exact text to find, copied verbatim from read_file.
+            Replacement form only.
         replacement_text: What to put in its place. An empty string deletes the
-            block.
+            block. Replacement form only.
+        unified_diff: A complete unified diff. Every file needs `---`/`+++`
+            headers, and a patch touching MORE THAN ONE file needs a
+            `diff --git a/x b/x` line before each one — without it --recount
+            reads the next file's `---` header as a deleted line and refuses the
+            whole patch. `a/` and `b/` prefixes are stripped; an absolute path,
+            or one that climbs out of the workspace, is rejected before git
+            runs; `--- /dev/null` creates a new file. Diff form only.
     """
     workspace = get_workspace_path()
+    wants_diff = bool(unified_diff and unified_diff.strip())
+    wants_replace = bool(filename or target_text or replacement_text)
+
+    if wants_diff and wants_replace:
+        return json.dumps({
+            "success": False,
+            "message": (
+                "Pass either unified_diff, or filename + target_text — not both. "
+                "One call edits one way."
+            ),
+        }, indent=2)
+    if wants_diff:
+        result = apply_unified_patch(workspace=workspace, unified_diff=unified_diff)
+        if result.get("success"):
+            file_ops.reconcile_roles(workspace, result.get("files_changed") or [])
+        return json.dumps(result, indent=2)
+
+    if not filename:
+        return json.dumps({
+            "success": False,
+            "message": (
+                "Nothing to edit: pass filename + target_text for a single "
+                "replacement, or unified_diff for a patch."
+            ),
+        }, indent=2)
+
     try:
         abs_file = resolve_in_workspace(filename, workspace=workspace)
     except ValueError as exc:
-        return f"Error: {exc}"
+        return json.dumps({"success": False, "message": str(exc)}, indent=2)
 
     result = replace_in_file(abs_file, target_text, replacement_text)
-    
-    if result["success"]:
-        return f"Success: {result['message']}\nDiff:\n{result.get('diff', '')}"
-    else:
-        return f"Error: {result['message']}"
+    if result.get("success"):
+        # The write path every other writer uses, so a role/top change reaches
+        # the manifest instead of waiting to surprise the next stage.
+        rel = os.path.relpath(abs_file, workspace)
+        file_ops.reconcile_roles(workspace, [rel])
+        result["files_changed"] = [rel]
+    return json.dumps(result, indent=2)
+
 
 from src.tools.build_interactive_sim import build_websim_netlist
 from src.tools.generate_schematic import generate_schematic
@@ -2041,8 +2072,7 @@ ALL_TOOLS = [
     # File management
     write_file,
     read_file,
-    apply_patch_tool,
-    edit_file_tool,
+    edit_file,
     list_files_tool,
     # Design manifest (shared source of truth with the UI)
     get_manifest,

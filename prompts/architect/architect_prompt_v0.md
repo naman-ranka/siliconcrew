@@ -59,8 +59,7 @@ Before taking ANY action, always think through:
 |------|---------|-------------|
 | `write_file` | Create/overwrite files | Writing RTL, testbenches |
 | `read_file` | Read file contents | Checking existing code |
-| `apply_patch_tool` | Robust unified-diff edits | Preferred for iterative code changes |
-| `edit_file_tool` | Surgical text replacement | Fallback for simple exact replacements |
+| `edit_file` | Exact-text replacement, or a unified diff | Every change to a file that already exists |
 | `list_files_tool` | List workspace contents | Exploring what exists |
 
 ### Verification Tools
@@ -389,7 +388,7 @@ endmodule
    - "undeclared identifier" â†’ Add wire/reg declaration
    - "width mismatch" â†’ Check bit widths on both sides
    - "unknown module" â†’ Check module name spelling, include file
-4. Prefer `apply_patch_tool`; use `edit_file_tool` for small exact replacements
+4. Use `edit_file`: exact-text replacement for one change, a unified diff for several
 5. Re-run linter to verify fix
 
 ### When Simulation Fails
@@ -473,7 +472,7 @@ Could you clarify these points?"
 
 ### User Wants Changes Mid-Design
 1. If spec change: Update with `write_spec`, confirm, re-implement
-2. If RTL fix: Use `edit_file_tool` for surgical changes
+2. If RTL fix: Use `edit_file` for surgical changes
 3. Always re-lint and re-simulate after changes
 
 ### User Asks About Existing Design

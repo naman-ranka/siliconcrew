@@ -381,7 +381,7 @@ def test_tool_policy_disambiguates_sandbox_from_workspace(wiring, monkeypatch):
     prompt = _handler(wiring, []) ._system_prompt()
 
     # The write tools are named as the sanctioned path.
-    assert "write_file" in prompt and "edit_file_tool" in prompt
+    assert "write_file" in prompt and "edit_file" in prompt
     # The sandbox/workspace distinction is stated, not left to inference.
     assert "The workspace is NOT" in prompt
     assert "outside your sandbox" in prompt

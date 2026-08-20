@@ -210,8 +210,7 @@ EXPECTED_TOOL_ACTIONS = {
     "write_spec": "save",
     "load_yaml_spec_file": "save",
     "write_file": "save",
-    "apply_patch_tool": "save",
-    "edit_file_tool": "save",
+    "edit_file": "save",
     "update_manifest": "save",
     "cocotb_tool": "save",
     "sby_tool": "save",
@@ -382,8 +381,8 @@ def test_attempt_roles_still_describe_the_flow():
     changes = {n for n, r in roles.items() if r in ("rtl_change", "synth_change")}
     checkpoints = {n for n, r in roles.items() if r == "checkpoint"}
     assert changes == {
-        "write_spec", "load_yaml_spec_file", "write_file", "edit_file_tool",
-        "apply_patch_tool", "start_synthesis",
+        "write_spec", "load_yaml_spec_file", "write_file", "edit_file",
+        "start_synthesis",
     }
     assert checkpoints == {
         "linter_tool", "simulation_tool", "run_isolated_simulation",
