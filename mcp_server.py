@@ -127,6 +127,47 @@ def _load_architect_prompt() -> tuple[str, str, str]:
 
     return SYSTEM_PROMPT, "src.agents.architect.SYSTEM_PROMPT", "legacy"
 
+
+# =============================================================================
+# SERVER INSTRUCTIONS
+# =============================================================================
+
+# Delivered ONCE, in the MCP `initialize` result (InitializeResult.instructions),
+# to every client on every transport — Server(instructions=...) is carried into
+# create_initialization_options() by the SDK. This is where a fact that is true
+# of the whole server belongs: the alternative is copying the same sentence into
+# 40+ tool descriptions, which is a second list to keep in step and drifts the
+# first time one copy is edited.
+#
+# It answers what a stranger client (Claude Code, Codex, Cursor) cannot learn
+# from tools/list: that a session gates every other tool, that "session" here
+# means a design workspace rather than the MCP connection, that tools run
+# server-side rather than in the caller's sandbox, and that paths are
+# workspace-relative. Per-tool behaviour stays in the per-tool description.
+SERVER_INSTRUCTIONS = """SiliconCrew is a chip-design platform: you take a
+Verilog/RTL design from spec through lint, simulation and synthesis by calling
+these tools.
+
+Start by selecting a session — nothing else works without one. A SiliconCrew
+session is not this MCP connection; it is a workspace on the server holding ONE
+design block (its RTL, testbenches, spec, reports, waveforms and synthesis
+runs). Call `create_session_tool` to start a new design, or `list_sessions_tool`
+then `set_active_session` to continue an existing one; `get_current_session`
+reports which session is active. Every other tool acts on that session's
+workspace, and refuses to run until one is active.
+
+These tools execute SERVER-SIDE, not in your sandbox. They read and write the
+session workspace on the SiliconCrew server — not your machine, your container,
+or your working directory. Your own sandbox permissions say nothing about it: a
+read-only sandbox of your own does NOT make the workspace read-only, so never
+refuse an edit on that basis. Equally, your shell and file tools cannot see or
+change these files; the SiliconCrew tools are the only way in.
+
+Paths are workspace-relative. Pass `counter.v` or `tb/tb_counter.v`, never an
+absolute path or a path from your own filesystem — a path that leaves the
+workspace is rejected. `list_files_tool` shows what the workspace holds."""
+
+
 # =============================================================================
 # TOOL AUTO-DISCOVERY HELPERS
 # =============================================================================
@@ -178,7 +219,7 @@ def langchain_to_mcp_schema(langchain_tool) -> Tool:
 
 class RTLDesignMCPServer:
     def __init__(self, codex_tools: bool = False, bound_session: str | None = None):
-        self.server = Server("rtl-design-agent")
+        self.server = Server("rtl-design-agent", instructions=SERVER_INSTRUCTIONS)
         # Bound-session mode (Codex): this server instance is locked to exactly
         # one session. Session-management + cross-session tool access are refused
         # so an embedded Codex agent can only ever touch its own workspace.
@@ -827,8 +868,19 @@ Ready to design! What would you like to create?"""
         
         # A session must be active for regular tools (workspace is resolved
         # per-call via session_request_scope — no process-global env mutation).
+        # This is the first thing a brand-new client hits, so the message has to
+        # be recoverable on its own: name the tools that fix it, not just the
+        # condition. (The same fact is stated once at connect time in
+        # SERVER_INSTRUCTIONS; a client that ignored or never read those still
+        # gets a way forward here.)
         if not self.current_session:
-            return [TextContent(type="text", text="❌ No active session. Create or select one first.")]
+            return [TextContent(type="text", text=(
+                f"❌ No active session, so '{name}' has no workspace to act on. "
+                "A session is a workspace holding one design. Call "
+                "create_session_tool to start a new design, or list_sessions_tool "
+                "then set_active_session to continue an existing one — then retry "
+                f"'{name}'."
+            ))]
 
         # Defense in depth (F1 root cause 3): current_session is a process-global
         # field on the single hosted server that multiplexes all users, so a
