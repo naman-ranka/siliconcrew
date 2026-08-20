@@ -152,7 +152,7 @@ Essential tools (core workflow):
   - write_file
   - read_file
   - linter_tool
-  - simulation_tool
+  - run_simulation
   - list_files_tool
   
 ✅ 13 total tools (7 essential + 6 session management)
@@ -199,7 +199,7 @@ Claude: Let me start with essential tools only for clarity.
 ✅ Tool filter updated to 'essential'
 📊 Visible tools: 13
 
-[Proceeds with: write_spec → write_file → linter_tool → simulation_tool]
+[Proceeds with: write_spec → write_file → linter_tool → run_simulation]
 ```
 
 **Scenario 2: Complex design with synthesis**

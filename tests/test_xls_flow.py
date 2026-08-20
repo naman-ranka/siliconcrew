@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 from src.tools.run_xls import XLS_IMAGE
-from src.tools.wrappers import run_xls_flow, simulation_tool
+from src.tools.wrappers import run_simulation, run_xls_flow
 
 # End-to-end XLS→Verilog→sim: needs the XLS docker image + iverilog. Deselected
 # from the fast PR job; runs in the nightly/local EDA lane.
@@ -129,15 +129,15 @@ endmodule
     )
 
     sim = json.loads(
-        simulation_tool.invoke(
+        run_simulation.invoke(
             {
                 "verilog_files": ["sat_add.v", "sat_add_tb.v"],
-                "top_module": "sat_add_tb",
+                "sim_top": "sat_add_tb",
                 "mode": "rtl",
                 "pass_marker": "TEST PASSED",
             }
         )
     )
-    assert sim["success"] is True, sim
-    assert sim["status"] == "test_passed", sim
-    assert sim["pass_marker_found"] is True, sim
+    assert sim["status"] == "passed", sim
+    assert sim["simStatus"] == "test_passed", sim
+    assert sim["passMarkerFound"] is True, sim

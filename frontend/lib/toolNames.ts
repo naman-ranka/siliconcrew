@@ -21,8 +21,7 @@
  *  checks). Named so the coverage test can prove each one still exists. */
 export const TOOL = {
   linter: "linter_tool",
-  simulation: "simulation_tool",
-  isolatedSimulation: "run_isolated_simulation",
+  simulation: "run_simulation",
   startSynthesis: "start_synthesis",
   retryPd: "retry_pd",
   getSynthesisStatus: "get_synthesis_status",
@@ -51,12 +50,11 @@ export const WORKSPACE_MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "optimize_xls_ir",
   "retry_pd",
   "run_dslx_interpreter",
-  "run_isolated_simulation",
+  "run_simulation",
   "run_python_analysis",
   "run_xls_flow",
   "sby_tool",
   "schematic_tool",
-  "simulation_tool",
   "start_synthesis",
   "update_manifest",
   "write_file",
@@ -68,7 +66,6 @@ export const WORKSPACE_MUTATING_TOOLS: ReadonlySet<string> = new Set([
  *  slice. Keys must be live tools (coverage test). */
 export const RUN_DIR_PREFIX: Readonly<Record<string, string>> = {
   [TOOL.simulation]: "sim_runs",
-  [TOOL.isolatedSimulation]: "sim_runs",
   [TOOL.startSynthesis]: "synth_runs",
   [TOOL.retryPd]: "synth_runs",
 };
@@ -103,7 +100,4 @@ export const SYNTH_DISPATCH_TOOLS: ReadonlySet<string> = new Set<string>([
   TOOL.waitForSynthesis,
 ]);
 
-export const SIM_TOOLS: ReadonlySet<string> = new Set<string>([
-  TOOL.simulation,
-  TOOL.isolatedSimulation,
-]);
+export const SIM_TOOLS: ReadonlySet<string> = new Set<string>([TOOL.simulation]);

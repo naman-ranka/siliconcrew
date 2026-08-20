@@ -172,13 +172,9 @@ def _authorities(tmp_path) -> Dict[Tuple[str, str], Set[str]]:
 
     return {
         ("linter_tool", "engine"): set(run_linter.ENGINES),
-        ("simulation_tool", "mode"):
+        ("run_simulation", "mode"):
             _validated_set_literal(run_simulation.run_simulation, "mode"),
-        ("simulation_tool", "sim_profile"):
-            _validated_set_literal(run_simulation.run_simulation, "sim_profile"),
-        ("run_isolated_simulation", "mode"):
-            _validated_set_literal(run_simulation.run_simulation, "mode"),
-        ("run_isolated_simulation", "sim_profile"):
+        ("run_simulation", "sim_profile"):
             _validated_set_literal(run_simulation.run_simulation, "sim_profile"),
         ("start_synthesis", "constraints_mode"):
             _validated_set_literal(sm._constraints_guardrail, "constraints_mode"),
@@ -315,17 +311,17 @@ def test_no_tool_ships_an_unsubstituted_template():
     assert not leaks, "unsubstituted templates reaching clients: " + "; ".join(leaks)
 
 
-def test_the_two_simulation_tools_record_the_same_attempt():
-    """Both sim paths must leave the same evidence.
+def test_the_simulation_tool_records_an_attempt():
+    """Simulation must leave evidence in the attempt log.
 
-    run_isolated_simulation is the preferred path and the IDE's Simulate button
-    routes to it. Declaring no attempt policy made a passing run record as
-    "not_run", which is the honest-state invariant inverted: the run happened
-    and the log said it did not.
+    There were two sim tools and only one of them declared this, so a passing
+    run through the OTHER one recorded as "not_run" — the honest-state invariant
+    inverted: the run happened and the log said it did not. One tool now, and it
+    is the one the IDE's Simulate button routes to.
     """
-    from src.tools.wrappers import run_isolated_simulation, simulation_tool
+    from src.utils.attempt_logger import attempt_simulation
+    from src.tools.wrappers import run_simulation
 
-    a = run_isolated_simulation.func.__tool_policy__
-    b = simulation_tool.func.__tool_policy__
-    assert a.attempt_role == b.attempt_role
-    assert a.attempt_parser is b.attempt_parser
+    policy = run_simulation.func.__tool_policy__
+    assert policy.attempt_role == "checkpoint"
+    assert policy.attempt_parser is attempt_simulation

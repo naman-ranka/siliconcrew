@@ -569,11 +569,11 @@ def test_isolated_post_synth_links_the_runs_stdcells_not_the_manifests(monkeypat
         assert sim_run["provenance"]["pdk"] == "asap7"
 
 
-def test_simulation_tool_path_defers_to_the_runs_platform(monkeypatch):
-    """simulation_tool does NOT share the defect: its ``platform`` argument
-    defaults to None and is forwarded to run_simulation as-is, so post-synth
-    resolution takes the platform from the run's contract. Locked here at the
-    run_simulation seam simulation_tool calls."""
+def test_explicit_file_sim_path_defers_to_the_runs_platform(monkeypatch):
+    """The explicit-file sim path does NOT share the defect: its ``platform``
+    argument defaults to None and is forwarded as-is, so post-synth resolution
+    takes the platform from the run's contract. Locked here at the
+    run_simulation engine seam."""
     with tempfile.TemporaryDirectory() as ws:
         tb, gate_abs, gate_rel = _make_synth_run_with_contract(ws, platform="asap7")
         stdcell = os.path.join(ws, "_stdcells", "asap7", "sim", "dummy.v")

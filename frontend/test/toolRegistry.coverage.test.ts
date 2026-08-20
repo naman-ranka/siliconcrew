@@ -63,9 +63,9 @@ describe("liveness — every hardcoded tool name still exists", () => {
     expectAllLive(Object.keys(TOOL_ARTIFACT_RESOLVERS), "TOOL_ARTIFACT_RESOLVERS"));
   it("components/workbench/LivePill TOOL_LABELS", () =>
     expectAllLive(Object.keys(TOOL_LABELS), "TOOL_LABELS"));
-  it("lib/commands COMMANDS tools (+ their older twins)", () => {
+  it("lib/commands COMMANDS tools", () => {
     expectAllLive(
-      RUN_ORDER.flatMap((id) => [COMMANDS[id].tool, ...(COMMANDS[id].alsoTools ?? [])]),
+      RUN_ORDER.map((id) => COMMANDS[id].tool),
       "COMMANDS"
     );
     expectAllLive(CORE_TWIN_TOOLS, "CORE_TWIN_TOOLS");

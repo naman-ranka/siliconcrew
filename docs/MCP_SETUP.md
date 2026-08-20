@@ -11,7 +11,7 @@ Claude Desktop
     ↓ (loads prompt)
     ↓ "RTL Design Workflow" → SYSTEM_PROMPT injected
     ↓ (uses tools)
-    ↓ write_spec → linter_tool → simulation_tool → synthesis_tool
+    ↓ write_spec → linter_tool → run_simulation → start_synthesis
     ↓
 MCP Server (mcp_server.py)
     ↓
@@ -239,7 +239,7 @@ Claude has access to all 23 tools:
 
 ### Verification Tools
 - `linter_tool` - Check syntax (iverilog)
-- `simulation_tool` - Run testbench
+- `run_simulation` - Run a testbench in its own sim_runs/ dir
 - `waveform_tool` - Debug with VCD
 - `cocotb_tool` - Python testbenches (optional)
 - `sby_tool` - Formal verification (optional)
@@ -275,7 +275,7 @@ I'll design a 2-bit counter following the expert workflow.
 [Calls write_file for testbench with VCD dumping]
 [Calls linter_tool on RTL]
 [Calls linter_tool on testbench]
-[Calls simulation_tool]
+[Calls run_simulation]
 [If pass: calls synthesis_tool]
 [Calls generate_report_tool]
 ```

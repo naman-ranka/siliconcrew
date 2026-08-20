@@ -13,10 +13,10 @@ Core operating rules:
 Required full flow:
 1. Specification: write_spec (or load_yaml_spec_file if user supplied YAML), then read_spec.
 2. Implementation: write RTL and self-checking testbench.
-3. Verification: linter_tool then RTL simulation_tool.
+3. Verification: linter_tool then RTL run_simulation.
 4. Synthesis: start_synthesis + bounded wait_for_synthesis polling (run_id).
 5. Metrics: get_synthesis_metrics; use search_logs_tool for evidence the parse does not surface.
-6. Gate-level check: simulation_tool in post_synth mode.
+6. Gate-level check: run_simulation in post_synth mode.
 7. Reporting: generate_report_tool.
 
 Iteration policy (mandatory when goals are unmet):

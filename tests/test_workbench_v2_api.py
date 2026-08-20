@@ -85,7 +85,7 @@ def test_pairing_without_call_id_uses_most_recent_same_tool():
 def test_unpaired_call_running_and_orphan_result_standalone():
     events = build_activity_events([
         {"event_type": "tool_call", "source": "api_ws", "tool": "start_synthesis", "tool_call_id": "s1", "ts": _iso(0)},
-        {"event_type": "tool_result", "source": "api_ws", "tool": "simulation_tool", "ts": _iso(1),
+        {"event_type": "tool_result", "source": "api_ws", "tool": "run_simulation", "ts": _iso(1),
          "status": "error", "result": json.dumps({"run_id": "sim_0003", "status": "failed"})},
     ])
     assert len(events) == 2
@@ -190,7 +190,7 @@ def test_simulate_action_logs_ui_event_with_run_id(client, monkeypatch):
 
     events = c.get(f"/api/workspace/{SID}/activity").json()["events"]
     ev = events[0]
-    assert ev["tool"] == "run_isolated_simulation"
+    assert ev["tool"] == "run_simulation"
     assert ev["source"] == "user"
     assert ev["status"] == "error"  # failed sim surfaces as an error row
     assert ev["runId"] == "sim_0001"
@@ -615,7 +615,7 @@ def test_shared_policy_single_source():
     assert "update_manifest" in PROTECTED_TOOLS
     assert "linter_tool" not in PROTECTED_TOOLS
     flat = {n for names in TOOL_CATEGORIES.values() for n in names}
-    assert "get_manifest" in flat and "run_isolated_simulation" in flat
+    assert "get_manifest" in flat and "run_simulation" in flat
     # Wave 9 rename made it into the catalog (a stale name here would silently
     # drop the status tool's PROTECTED gating).
     assert "get_synthesis_status" in flat

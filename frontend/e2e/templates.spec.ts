@@ -44,8 +44,8 @@ const FORK_SESSION = {
 // The bundle's copied trajectory (lint → failing sim → passing sim), surfaced
 // in the forked workspace's Activity dock exactly as the template recorded it.
 const FORK_ACTIVITY = [
-  { id: "e3", ts: "2026-07-06T05:16:46Z", source: "ui", tool: "run_isolated_simulation", args: {}, status: "ok", resultSummary: "sim_0002 passed", durationMs: 100, runId: "sim_0002", threadId: null },
-  { id: "e2", ts: "2026-07-06T05:16:46Z", source: "ui", tool: "run_isolated_simulation", args: {}, status: "error", resultSummary: "sim_0001 failed", durationMs: 560, runId: "sim_0001", threadId: null },
+  { id: "e3", ts: "2026-07-06T05:16:46Z", source: "ui", tool: "run_simulation", args: {}, status: "ok", resultSummary: "sim_0002 passed", durationMs: 100, runId: "sim_0002", threadId: null },
+  { id: "e2", ts: "2026-07-06T05:16:46Z", source: "ui", tool: "run_simulation", args: {}, status: "error", resultSummary: "sim_0001 failed", durationMs: 560, runId: "sim_0001", threadId: null },
   { id: "e1", ts: "2026-07-06T05:16:45Z", source: "ui", tool: "linter_tool", args: {}, status: "ok", resultSummary: "passed (iverilog)", durationMs: 880, runId: null, threadId: null },
 ];
 
@@ -149,7 +149,7 @@ test("examples → preview → fork → lands in the forked workbench with the t
   // …the Activity dock shows the copied tool trajectory…
   const dock = page.getByTestId("bottom-dock");
   await expect(dock.getByText("linter_tool").first()).toBeVisible();
-  await expect(dock.getByText("run_isolated_simulation").first()).toBeVisible();
+  await expect(dock.getByText("run_simulation").first()).toBeVisible();
   // …and the breadcrumb carries the "forked from" provenance chip.
   await expect(page.getByTestId("forked-from-chip")).toContainText("forked from Synchronous FIFO");
   await page.screenshot({ path: "e2e-artifacts/templates-fork.png", fullPage: true });

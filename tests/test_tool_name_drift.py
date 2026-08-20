@@ -63,11 +63,16 @@ SKIP_DIRS = {
     "test-results", "playwright-report", ".ruff_cache", ".turbo", "site-packages",
 }
 # Captured history / generated artifacts — mentions there are records, not references.
+# ``cvdp-pipeline/research`` is the same thing in prose: dated post-hoc audits
+# that quote per-tool CALL COUNTS from runs that already happened. Rewriting the
+# tool names in a measurement would falsify the measurement, and nothing
+# executes from those files.
 SKIP_PREFIXES = (
     os.path.join("tests", "fixtures"),
     "workspace",
     os.path.join("bench-orchestrator", "runs"),
     os.path.join("bench-orchestrator", "final_runs"),
+    os.path.join("cvdp-pipeline", "research"),
 )
 
 # A tool-name-shaped token: lowercase snake_case with at least one underscore.
@@ -376,12 +381,6 @@ def scan_repo(live: Set[str] | None = None) -> List[Hit]:
 BENIGN: Dict[str, str] = {
     "run_id": "tool ARGUMENT/field name, all over prompts and docs",
     "route_stage_status": "a FIELD of get_route_drc_summary's result, not a tool",
-    "load_entry": "function in cvdp-pipeline/research logs (benchmark harness prose)",
-    "build_env": "function in cvdp-pipeline/research logs",
-    "run_all": "cvdp-pipeline/run_all.py, referenced by filename in research logs",
-    "run_pytest": "shell/CI step named in cvdp-pipeline research logs",
-    "run_config": "config object in cvdp-pipeline research logs",
-    "build_agent_prompt": "function in the cvdp-pipeline harness, named in its log",
     "run_docker_command": "src/platform_engines helper function, cited in deploy/RUNBOOK.md",
     "get_synthesis": "deliberately fake name in frontend/test/activityFilters.test.ts (prefix fallback)",
     "get_synthesis_report": "deliberately fake name in a frontend test — asserts an UNREGISTERED tool falls to 'other'. The get_synthesis_* prefix heuristic it once guarded is gone; synthesis membership is now totality-tested against the backend category.",

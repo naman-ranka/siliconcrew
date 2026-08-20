@@ -379,7 +379,7 @@ I'll design this counter in session 'my_counter'. Let me start with the specific
 [Calls: linter_tool]
 ✅ Syntax OK
 
-[Calls: simulation_tool]
+[Calls: run_simulation]
 ✅ TEST PASSED
 
 [Calls: synthesis_tool]

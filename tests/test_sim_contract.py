@@ -216,10 +216,10 @@ def test_fallback_platform_fills_a_run_that_recorded_none(tmp_path):
 
 
 def test_explicit_platform_argument_still_overrides_the_record(tmp_path):
-    """simulation_tool's documented ``platform`` override is unchanged: an
+    """The simulation tool's documented ``platform`` override is unchanged: an
     explicit platform is a caller decision (invariant #1, free entry), while a
-    fallback is only a suggestion. Its default is None, so simulation_tool
-    normally defers to the run's recorded platform."""
+    fallback is only a suggestion. Its default is None, so the tool normally
+    defers to the run's recorded platform."""
     ws = str(tmp_path)
     _write_synth_run(ws, platform="asap7", contract={
         "schema_version": 1, "mode": "post_synth", "platform": "asap7",

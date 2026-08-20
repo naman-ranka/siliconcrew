@@ -313,7 +313,7 @@ def test_post_synth_platform_comes_from_the_run_not_the_manifest(tmp_path):
     The manifest's ``platform`` is *intent* (it defaults to ``sky130hd`` and
     synthesis never writes the platform back to it). The synthesis run's sim
     contract is the record of what was actually built. Both callers of
-    ``run_sim_isolated`` (the ``run_isolated_simulation`` wrapper and the IDE's
+    ``run_sim_isolated`` (the ``run_simulation`` wrapper and the IDE's
     Simulate button) hand it the manifest's platform; before the fix that value
     won, so a design synthesised for asap7 had its gate netlist linked against
     sky130 standard-cell models — a silently wrong post-synth simulation.

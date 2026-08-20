@@ -31,7 +31,7 @@ async def _run_mcp_server_test():
         "create_session_tool", "list_sessions_tool", "set_active_session", "get_current_session",
         "write_spec", "read_spec", "load_yaml_spec_file",
         "write_file", "read_file", "edit_file", "list_files_tool",
-        "linter_tool", "simulation_tool", "waveform_tool",
+        "linter_tool", "run_simulation", "waveform_tool",
         "start_synthesis", "get_synthesis_status", "wait_for_synthesis", "get_synthesis_metrics", "search_logs_tool",
         "generate_report_tool"
     ]

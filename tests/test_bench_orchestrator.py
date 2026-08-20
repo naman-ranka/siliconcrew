@@ -140,12 +140,12 @@ def test_trace_generation_from_fake_events(tmp_path):
     agent = tmp_path / "agent.jsonl"
     agent.write_text(json.dumps({"type": "item.completed", "item": {"type": "mcp_tool_call", "tool": "linter_tool", "status": "completed"}}) + "\n", encoding="utf-8")
     sc = tmp_path / "attempt_events.jsonl"
-    sc.write_text(json.dumps({"event_type": "tool_call", "tool": "simulation_tool"}) + "\n", encoding="utf-8")
+    sc.write_text(json.dumps({"event_type": "tool_call", "tool": "run_simulation"}) + "\n", encoding="utf-8")
     summary = {"problem": {"id": "p"}, "flow": "xls", "agent": "fake", "status": "completed", "siliconcrew": {}}
     out = write_agent_trace(tmp_path, agent, sc, summary)
     text = out.read_text(encoding="utf-8")
     assert "`linter_tool`" in text
-    assert "call `simulation_tool`" in text
+    assert "call `run_simulation`" in text
 
 
 def test_failed_agent_event_detection(tmp_path):

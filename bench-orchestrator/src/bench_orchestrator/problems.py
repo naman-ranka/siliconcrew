@@ -36,7 +36,7 @@ def _lean_cvdp_prompt(problem: ProblemConfig, prepared: dict[str, Any], session_
         "2. Use that session for all SiliconCrew tool calls. (Do NOT call inject_architect_prompt — this "
         "prompt is self-contained.)\n\n"
         "Available SiliconCrew MCP tools (already provided — use them directly, no need to search/discover "
-        "tools): create_session_tool, write_file, read_file, list_files_tool, linter_tool, simulation_tool, "
+        "tools): create_session_tool, write_file, read_file, list_files_tool, linter_tool, run_simulation, "
         "cocotb_tool, sby_tool, waveform_tool.\n\n"
         "You are an expert RTL design agent solving a Chip Verification & Design Problem (CVDP). Deliver a "
         "correct, spec-matching SystemVerilog/Verilog design verified by RTL simulation. RTL-SIMULATION "
@@ -78,7 +78,7 @@ def _lean_cvdp_prompt(problem: ProblemConfig, prepared: dict[str, Any], session_
         "legality, occupancy/value bounds, handshake stability, no deadlock/comb-loop) — these hold across "
         "all reachable states without needing expected outputs.\n\n"
         "Before declaring done, list which spec requirements you DID and did NOT verify and report residual "
-        "risk honestly. Tool argument contract: pass verilog_files to linter_tool/simulation_tool as a "
+        "risk honestly. Tool argument contract: pass verilog_files to linter_tool/run_simulation as a "
         'JSON-array string (e.g. "[\\"rtl/dut.sv\\",\\"verif/tb.sv\\"]"), including DUT, TB, and '
         "dependencies.\n"
     )
@@ -117,7 +117,7 @@ def build_agent_prompt(problem: ProblemConfig, prepared: dict[str, Any], session
             "Copy each context file into your active SC session workspace at the SAME relative path "
             "(write_file with the relative path) before coding. Do not modify provided context testbenches.\n"
             f"Write only the solution files (patch targets): {targets_line}\n"
-            "Tool argument contract: pass verilog_files to linter_tool/simulation_tool as a JSON-array "
+            "Tool argument contract: pass verilog_files to linter_tool/run_simulation as a JSON-array "
             "string (e.g. \"[\\\"rtl/dut.sv\\\",\\\"verif/tb.sv\\\"]\"), including DUT, TB, and dependencies; "
             "do not pass space-separated filenames.\n"
             "Verify with RTL simulation against the provided/context testbench and iterate until it passes.\n"

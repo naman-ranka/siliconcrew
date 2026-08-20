@@ -60,19 +60,19 @@ describe("artifactKeyForToolCall — sim family → wave:<runId from result>", (
   it("keys by the run id in the result text", () => {
     expect(
       artifactKeyForToolCall(
-        "run_isolated_simulation",
+        "run_simulation",
         { design_files: ["alu.v"] },
         "PASS. Run ID: sim_0003 (sim_runs/sim_0003)"
       )
     ).toBe("wave:sim_0003");
     expect(
-      artifactKeyForToolCall("simulation_tool", {}, "sim_0011 failed @ 320ns")
+      artifactKeyForToolCall("run_simulation", {}, "sim_0011 failed @ 320ns")
     ).toBe("wave:sim_0011");
   });
 
   it("null when the result names no run", () => {
-    expect(artifactKeyForToolCall("simulation_tool", {}, "compile error")).toBeNull();
-    expect(artifactKeyForToolCall("run_isolated_simulation", {})).toBeNull();
+    expect(artifactKeyForToolCall("run_simulation", {}, "compile error")).toBeNull();
+    expect(artifactKeyForToolCall("run_simulation", {})).toBeNull();
   });
 });
 
@@ -161,7 +161,7 @@ describe("artifactKeyForActivity", () => {
     ).toBe("report:synth_0009");
     expect(
       artifactKeyForActivity({
-        tool: "run_isolated_simulation",
+        tool: "run_simulation",
         args: {},
         resultSummary: "passed",
         runId: "sim_0002",

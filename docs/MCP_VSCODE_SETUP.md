@@ -142,7 +142,7 @@ Close and reopen VS Code to activate the MCP server.
    You should see 24 tools (or 13 if in essential mode):
    - Session management: create_session, list_sessions, etc.
    - RTL tools: write_spec, read_spec, write_file, etc.
-   - Verification: linter_tool, simulation_tool, waveform_tool
+   - Verification: linter_tool, run_simulation, waveform_tool
    - Synthesis: synthesis_tool, ppa_tool, etc.
 
 ---

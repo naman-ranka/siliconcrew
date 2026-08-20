@@ -106,7 +106,7 @@ function pythonAnalysisArtifactKey(
  *
  *   write_file / edit_file (either form)           → code:<file>
  *   write_spec / read_spec / load_yaml_spec_file   → spec
- *   simulation_tool / run_isolated_simulation      → wave:<runId from result>
+ *   run_simulation                                 → wave:<runId from result>
  *   start_synthesis / retry_pd / get_synthesis_metrics /
  *   read_stage_report / generate_report_tool       → report:<runId from args|result>
  *   schematic_tool                                 → schematic:<svg name> (if extractable)
@@ -150,8 +150,7 @@ export const TOOL_ARTIFACT_RESOLVERS: Readonly<Record<string, ArtifactResolver>>
   read_spec: specArtifact,
   load_yaml_spec_file: specArtifact,
 
-  simulation_tool: simArtifact,
-  run_isolated_simulation: simArtifact,
+  run_simulation: simArtifact,
 
   start_synthesis: reportArtifact,
   retry_pd: reportArtifact,

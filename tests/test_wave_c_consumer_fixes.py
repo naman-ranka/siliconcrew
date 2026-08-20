@@ -135,7 +135,25 @@ def test_attempt_logger_reads_nested_ppa():
 
 
 def test_attempt_logger_still_reads_a_flat_payload():
-    """Older logged results (and save_metrics output) are flat — keep reading them."""
+    """Older logged results (and the hand-saved metrics file) are flat — keep
+    reading them."""
     wns, tns = _extract_synth_metrics(json.dumps({"wns_ns": 0.5, "tns_ns": 0.0}))
     assert wns == pytest.approx(0.5)
     assert tns == pytest.approx(0.0)
+
+
+def test_attempt_logger_reads_the_isolated_run_verdict():
+    """An isolated sim's top-level ``status`` is the RUN verdict (passed/failed);
+    the simulation verdict is ``simStatus``. Reading only the top level scored a
+    passing run as "unknown" — the run happened and the attempt log said nothing
+    about it. Both shapes must resolve."""
+    from src.utils.attempt_logger import _extract_sim_status
+
+    assert _extract_sim_status(json.dumps({
+        "status": "passed", "simStatus": "test_passed", "mode": "rtl",
+    })) == ("rtl", "pass")
+    assert _extract_sim_status(json.dumps({
+        "status": "failed", "simStatus": "compile_failed", "mode": "post_synth",
+    })) == ("post_synth", "fail")
+    # The pre-isolation shape (status IS the sim verdict) still reads.
+    assert _extract_sim_status(json.dumps({"status": "test_passed", "mode": "rtl"})) == ("rtl", "pass")

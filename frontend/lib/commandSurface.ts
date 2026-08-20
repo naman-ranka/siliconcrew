@@ -119,12 +119,10 @@ export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = RUN_ORDER.map((id) =>
   toSurfaceCommand(COMMANDS[id])
 );
 
-// Catalog entries duplicating a core twin are skipped — the core versions
+// Catalog entries duplicating a core command are skipped — the core versions
 // carry the REST dispatch semantics the plain /invoke path lacks. Read off the
-// same registry, so a renamed tool cannot leave a stale twin behind.
-export const CORE_TWIN_TOOLS = new Set<string>(
-  RUN_ORDER.flatMap((id) => [COMMANDS[id].tool, ...(COMMANDS[id].alsoTools ?? [])])
-);
+// same registry, so a renamed tool cannot leave a stale entry behind.
+export const CORE_TWIN_TOOLS = new Set<string>(RUN_ORDER.map((id) => COMMANDS[id].tool));
 
 // ---- schema-driven catalog → surface commands -----------------------------------
 

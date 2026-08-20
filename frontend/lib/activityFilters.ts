@@ -22,8 +22,7 @@ export type ActivityActorFilter = "both" | "agent" | "you";
  */
 export const TOOL_KIND_MAP: Record<string, Exclude<ActivityToolKind, "other">> = {
   linter_tool: "lint",
-  simulation_tool: "sim",
-  run_isolated_simulation: "sim",
+  run_simulation: "sim",
   start_synthesis: "synth",
   retry_pd: "synth",
   get_synthesis_status: "synth",

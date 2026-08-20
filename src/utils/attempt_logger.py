@@ -139,7 +139,11 @@ def _extract_sim_status(result_text: str | None) -> tuple[str, str]:
     obj = _parse_json_maybe(result_text)
     if obj:
         mode = str(obj.get("mode", "rtl"))
-        status = str(obj.get("status", "unknown")).lower()
+        # An isolated run's top-level ``status`` is the run verdict
+        # (passed/failed); the SIMULATION verdict is ``simStatus``. Reading only
+        # the top level logged every passing run as "unknown" — the run happened
+        # and the attempt summary said nothing about it.
+        status = str(obj.get("simStatus") or obj.get("status", "unknown")).lower()
         if status == "test_passed":
             return mode, "pass"
         if "fail" in status:

@@ -254,13 +254,12 @@ def test_category_to_action_mapping_is_pinned():
 
 
 def test_unprotected_tools_stay_out_of_the_capability_gate():
-    """The anonymous trial covers lint/sim. These four are MUTATING but NOT
+    """The anonymous trial covers lint/sim. These are MUTATING but NOT
     protected on purpose; nothing here may quietly protect or unprotect them."""
     from src.api.tool_catalog import PROTECTED_TOOLS
 
     assert "linter_tool" not in PROTECTED_TOOLS
-    assert "simulation_tool" not in PROTECTED_TOOLS
-    assert "run_isolated_simulation" not in PROTECTED_TOOLS
+    assert "run_simulation" not in PROTECTED_TOOLS
     assert "read_file" not in PROTECTED_TOOLS
 
 
@@ -385,13 +384,13 @@ def test_attempt_roles_still_describe_the_flow():
         "start_synthesis",
     }
     assert checkpoints == {
-        "linter_tool", "simulation_tool", "run_isolated_simulation",
+        "linter_tool", "run_simulation",
         "get_synthesis_metrics", "generate_report_tool",
     }
-    # run_isolated_simulation joined deliberately. It is the PREFERRED sim path
-    # and the IDE's Simulate button routes to it, but it declared no attempt
-    # policy, so a passing run recorded rtl_sim: "not_run" — the honest-state
-    # invariant inverted, since the run happened and the log denied it.
+    # The sim tool carries an attempt policy deliberately: when the preferred
+    # sim path declared none, a passing run recorded rtl_sim: "not_run" — the
+    # honest-state invariant inverted, since the run happened and the log
+    # denied it.
     assert roles["start_synthesis"] == "synth_change"
 
 
@@ -450,9 +449,9 @@ _ATTEMPT_SCENARIO = [
     ("tool_result", "write_file", {}, "ok", "success"),
     ("tool_call", "linter_tool", {}, "", "success"),
     ("tool_result", "linter_tool", {}, "Syntax OK", "success"),
-    ("tool_call", "simulation_tool", {"mode": "rtl"}, "", "success"),
-    ("tool_result", "simulation_tool", {"mode": "rtl"},
-     '{"status": "test_passed", "mode": "rtl"}', "success"),
+    ("tool_call", "run_simulation", {"mode": "rtl"}, "", "success"),
+    ("tool_result", "run_simulation", {"mode": "rtl"},
+     '{"status": "passed", "simStatus": "test_passed", "mode": "rtl"}', "success"),
     ("tool_call", "read_file", {}, "", "success"),
     ("tool_result", "read_file", {}, "module a;", "success"),
     ("tool_call", "write_file", {}, "", "success"),
@@ -464,9 +463,9 @@ _ATTEMPT_SCENARIO = [
     ("tool_call", "get_synthesis_metrics", {}, "", "success"),
     ("tool_result", "get_synthesis_metrics", {},
      '{"status": "ok", "metrics": {"wns_ns": 0.1, "tns_ns": 0}}', "success"),
-    ("tool_call", "simulation_tool", {"mode": "post_synth"}, "", "success"),
-    ("tool_result", "simulation_tool", {"mode": "post_synth"},
-     '{"status": "test_passed", "mode": "post_synth"}', "success"),
+    ("tool_call", "run_simulation", {"mode": "post_synth"}, "", "success"),
+    ("tool_result", "run_simulation", {"mode": "post_synth"},
+     '{"status": "passed", "simStatus": "test_passed", "mode": "post_synth"}', "success"),
     ("tool_call", "generate_report_tool", {}, "", "success"),
     ("tool_result", "generate_report_tool", {}, "report", "success"),
 ]

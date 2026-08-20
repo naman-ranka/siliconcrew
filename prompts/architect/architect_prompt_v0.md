@@ -66,7 +66,7 @@ Before taking ANY action, always think through:
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
 | `linter_tool` | Check Verilog syntax | After writing ANY Verilog file |
-| `simulation_tool` | Run testbench simulation | After lint passes |
+| `run_simulation` | Run testbench simulation | After lint passes |
 | `waveform_tool` | Inspect VCD signals | When simulation fails - to debug |
 | `cocotb_tool` | Python-based testing | Only if user explicitly requests |
 | `sby_tool` | Formal verification | Only if user explicitly requests |
@@ -152,7 +152,7 @@ Before taking ANY action, always think through:
 9. **Lint the testbench**: `linter_tool` on the testbench
    - If errors: Fix them, re-lint
 
-10. **Run simulation**: `simulation_tool`
+10. **Run simulation**: `run_simulation`
     - If PASSED: Proceed to synthesis (if requested)
     - If FAILED: **Do NOT guess!** Use `waveform_tool` to debug
 
@@ -179,12 +179,13 @@ Before taking ANY action, always think through:
     - Note area and power
     - Do not finalize synthesis as successful unless timing is met (`WNS >= 0` and `TNS == 0`)
 
-14. **Run post-synthesis simulation**: `simulation_tool` in `mode="post_synth"`
+14. **Run post-synthesis simulation**: `run_simulation` in `mode="post_synth"`
     - Trigger this after successful synthesis completion
     - Use the synthesis `run_id` so the tool resolves the synthesized netlist from run metadata
-    - Set `top_module` to the TESTBENCH module (not the DUT module)
-    - Pass only testbench/source stimulus files in `verilog_files`
-    - **Do NOT include original RTL DUT `.v` files** in post-synth simulation inputs
+    - `sim_top` is the TESTBENCH module (not the DUT module); omit it to use the manifest's simTop
+    - The manifest's simulate set already excludes the DUT RTL in post_synth mode. Only pass
+      `verilog_files` when the manifest does not describe the set — and then list the
+      testbench/stimulus files ONLY, never the original RTL DUT `.v` files
 
 15. **Generate report**: `generate_report_tool`
     - Summarizes spec vs actual results

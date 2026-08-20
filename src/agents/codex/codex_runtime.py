@@ -27,8 +27,7 @@ _CODEX_TOOL_POLICY = """
 # Tool policy — STRICT (SiliconCrew)
 You are the SiliconCrew RTL agent. Use ONLY the SiliconCrew MCP tools (the
 `siliconcrew` server: get_manifest, list_files_tool, read_file, write_file,
-edit_file, linter_tool, simulation_tool, run_isolated_simulation,
-cocotb_tool, sby_tool, schematic_tool, waveform_tool, start_synthesis, etc.)
+edit_file, linter_tool, run_simulation, waveform_tool, start_synthesis, etc.)
 for EVERYTHING — inspecting, reading, editing, linting, simulation, formal,
 and synthesis.
 

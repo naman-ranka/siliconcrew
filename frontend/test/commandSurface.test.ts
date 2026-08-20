@@ -97,7 +97,7 @@ const CATALOG: ToolCatalogEntry[] = [
     } }),
   // Core twins — must be skipped in favor of the hand-defined Flow commands.
   entry({ name: "linter_tool", category: "essential" }),
-  entry({ name: "run_isolated_simulation", category: "essential", mutates: true }),
+  entry({ name: "run_simulation", category: "essential", mutates: true }),
   entry({ name: "update_manifest", category: "manifest", requiresSignIn: true, mutates: true,
     description: "Upserts manifest fields.",
     argsSchema: {
@@ -178,14 +178,13 @@ describe("buildSurfaceCommands", () => {
     );
   });
 
-  it("skips catalog entries duplicating core twins", () => {
+  it("skips catalog entries duplicating a core command", () => {
     const { groups } = buildSurfaceCommands(CATALOG, CTX);
     const generated = groups.slice(1).flatMap((g) => g.commands.map((c) => c.tool));
     for (const twin of Array.from(CORE_TWIN_TOOLS)) {
       expect(generated).not.toContain(twin);
     }
-    // simulation_tool is also a twin even though this catalog doesn't carry it.
-    expect(CORE_TWIN_TOOLS.has("simulation_tool")).toBe(true);
+    expect(CORE_TWIN_TOOLS.has("run_simulation")).toBe(true);
   });
 
   it("generates commands with prettified labels, short descs, and policy flags", () => {

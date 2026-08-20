@@ -302,6 +302,10 @@ def run_sim_isolated(
     # and is a last-resort fallback in post_synth — it never overrides the
     # platform the synthesis run recorded (see the post_synth branch below).
     platform: Optional[str] = None,
+    # The caller PINNING the stdcell set, as opposed to ``platform`` above,
+    # which is only intent. Used by the escape hatch on the simulation tool:
+    # "link against this PDK's models whatever the run recorded".
+    platform_override: Optional[str] = None,
     sim_profile: str = "auto",
     # None/"" = resolve from the manifest's passMarker, then the default.
     # An explicit marker still wins (dev#44 precedence chain).
@@ -359,6 +363,7 @@ def run_sim_isolated(
             workspace=workspace,
             run_id=run_id,
             netlist_file=netlist_file,
+            platform=platform_override,
             fallback_platform=platform,
         )
         if res_err is not None:

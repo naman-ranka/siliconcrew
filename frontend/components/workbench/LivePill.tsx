@@ -26,8 +26,7 @@ import { relativeTime } from "./runStatus";
 // still name a live tool (test/toolRegistry.coverage.test.ts).
 export const TOOL_LABELS: Record<string, string> = {
   linter_tool: "Lint",
-  run_isolated_simulation: "Sim",
-  simulation_tool: "Sim",
+  run_simulation: "Sim",
   start_synthesis: "Synth",
   retry_pd: "P&R",
   write_file: "Write",

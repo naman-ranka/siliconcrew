@@ -82,9 +82,6 @@ export interface CommandDef {
   /** Real backend tool name — matches what the agent calls and what the
    *  activity log records, so feed rows and palette entries speak one language. */
   tool: string;
-  /** Other tool names whose activity events belong to this command (the older
-   *  agent-side twin of the same flow step). */
-  alsoTools?: readonly string[];
   description: string;
   async: boolean;
   /** Display shortcut, rendered as ⌘/Ctrl + key. */
@@ -125,8 +122,7 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
   sim: {
     id: "sim",
     label: "Simulate",
-    tool: "run_isolated_simulation",
-    alsoTools: ["simulation_tool"],
+    tool: "run_simulation",
     description:
       "Manifest-driven sim in its own sim_runs/sim_NNNN/ dir — own VCD + provenance.",
     async: false,
@@ -254,7 +250,7 @@ export function commandValuesForFile(
 export function commandForTool(tool: string): CommandId | null {
   for (const id of RUN_ORDER) {
     const def = COMMANDS[id];
-    if (def.tool === tool || def.alsoTools?.includes(tool)) return id;
+    if (def.tool === tool) return id;
   }
   return null;
 }

@@ -5,7 +5,6 @@ from typing import Any, Literal, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from src.tools.run_linter import run_linter
-from src.tools.run_simulation import run_simulation
 from src.tools.read_waveform import read_waveform
 from src.tools.run_cocotb import run_cocotb
 from src.tools.run_sby import run_sby
@@ -337,83 +336,6 @@ def linter_tool(
     lines = "\n".join(_fmt(d) for d in (errors + warnings)) or result["stderr"]
     return f"Lint FAILED — {len(errors)} error(s), {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
 
-@tool(parse_docstring=True)
-@policy(category="essential", protected=False, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True,
-        attempt_role="checkpoint", attempt_parser=attempt_simulation)
-def simulation_tool(
-    verilog_files: list[str],
-    top_module: str,
-    mode: Literal["rtl", "post_synth"] = "rtl",
-    run_id: str = None,
-    netlist_file: str = None,
-    platform: str = None,
-    sim_profile: Literal["auto", "pinned", "compat"] = "auto",
-    pass_marker: str = "",
-) -> str:
-    """
-    Compiles and runs an iverilog simulation of an EXPLICIT file list, in the
-    workspace root. Returns JSON whose `status` is exactly one of:
-      compile_failed - iverilog did not build the design
-      sim_failed     - the run crashed, or its $readmem data never loaded (a
-                       pass marker printed by such a run is NOT believed)
-      test_failed    - the run finished without printing the pass marker
-      test_passed    - the run printed the pass marker
-    plus stdout/stderr tails, the marker actually used, and — for post_synth —
-    the run, netlist and stdcell set that were resolved.
-    Prefer run_isolated_simulation: it takes the file set from the manifest,
-    runs in its own sim_runs/sim_NNNN/ directory, stages $readmem data files
-    beside the executable, and keeps a run record. Use this tool when you must
-    compile a file set the manifest does not describe. Both write a VCD; this
-    one writes it into the workspace root, where the next run overwrites it.
-
-    Args:
-        verilog_files: Every file to compile, testbench included.
-        top_module: Top module of the testbench.
-        mode: 'rtl' compiles the listed sources. 'post_synth' drops the design
-            RTL, substitutes the gate netlist from a synthesis run, and links
-            stdcell models.
-        run_id: post_synth only - which synthesis run's netlist to simulate.
-            Omit for the most recent run.
-        netlist_file: post_synth only - an explicit gate netlist, overriding the
-            one the run recorded.
-        platform: post_synth only - the PDK whose stdcell models get linked.
-            Omit to use the platform the run itself recorded; that is almost
-            always right, and a wrong value here produces unresolved cells.
-        sim_profile: 'pinned' links the vendor's real stdcell models. 'compat'
-            substitutes SiliconCrew's behavioral models, which exist for asap7
-            ONLY and are a no-op on every other platform. 'auto' picks compat
-            for asap7 and pinned elsewhere.
-        pass_marker: stdout substring that means PASS. Empty uses the manifest's
-            passMarker, then "TEST PASSED".
-    """
-    workspace = get_workspace_path()
-    verilog_files = _normalize_verilog_files_arg(verilog_files)
-    abs_files = []
-    for f in verilog_files or []:
-        abs_files.append(f if os.path.isabs(f) else os.path.join(workspace, f))
-
-    for f in abs_files:
-        if not os.path.exists(f):
-            return f"Error: File {f} does not exist."
-
-    abs_netlist = None
-    if netlist_file:
-        abs_netlist = netlist_file if os.path.isabs(netlist_file) else os.path.join(workspace, netlist_file)
-
-    result = run_simulation(
-        verilog_files=abs_files,
-        top_module=top_module,
-        cwd=workspace,
-        mode=mode,
-        run_id=run_id,
-        netlist_file=abs_netlist,
-        platform=platform,
-        sim_profile=sim_profile,
-        pass_marker=pass_marker,
-    )
-    return json.dumps(result, indent=2)
-
 from src.tools.search_logs import search_logs
 from src.tools import manifest as manifest_mod
 from src.tools.sim_manager import run_sim_isolated
@@ -505,53 +427,88 @@ def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -
 @tool(parse_docstring=True)
 @policy(category="essential", protected=False, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
-        # Same attempt record as simulation_tool. Without these the preferred
-        # sim path — and the IDE's Simulate button, which routes here — logged
-        # rtl_sim: "not_run" for a run that actually passed.
+        # Every simulation leaves the same attempt record. Declaring none made a
+        # passing run record as "not_run" — the honest-state invariant inverted.
         attempt_role="checkpoint", attempt_parser=attempt_simulation)
-def run_isolated_simulation(
+def run_simulation(
     sim_top: str = "",
+    verilog_files: list[str] | str = None,
     mode: Literal["rtl", "post_synth"] = "rtl",
     run_id: str = None,
+    netlist_file: str = None,
+    platform: str = None,
     sim_profile: Literal["auto", "pinned", "compat"] = "auto",
     pass_marker: str = "",
 ) -> str:
     """
-    Runs the manifest's simulate file set (roles rtl + tb + include) in its own
-    sim_runs/sim_NNNN/ directory: its own VCD, its $readmem data files staged in
-    beside it, a persisted run record and provenance. The default way to
-    simulate.
+    Compiles and runs an iverilog simulation in its own sim_runs/sim_NNNN/
+    directory: its own VCD, its $readmem data files staged in beside it, a
+    persisted run record and provenance. Nothing overwrites the previous run.
+    By default it compiles what the MANIFEST says to simulate (roles rtl + tb +
+    include) — fix the roles with update_manifest rather than listing files by
+    hand. Pass verilog_files only to compile a set the manifest does not
+    describe.
     Returns JSON. `status` is passed | failed; the finer verdict is `simStatus`
-    (compile_failed | sim_failed | test_failed | test_passed). Also `vcdPath` —
-    the VCD to hand to waveform_tool — `xDetected` (x/z seen after t=0; a
-    warning surface, not a verdict), `stagedDataFiles`, and for post_synth the
-    run and netlist that were resolved.
-    It compiles what the MANIFEST says. To compile a different set, fix the
-    roles with update_manifest, or use simulation_tool.
+    (compile_failed | sim_failed | test_failed | test_passed). A run whose
+    $readmem data never loaded is sim_failed even if it printed the pass marker.
+    Also `vcdPath` — the VCD to hand to waveform_tool — `xDetected` (x/z seen
+    after t=0; a warning surface, not a verdict), `stagedDataFiles`, and for
+    post_synth the run, netlist and stdcell set that were resolved.
 
     Args:
         sim_top: Testbench top module. Empty uses the manifest's simTop.
-        mode: 'rtl', or 'post_synth' to simulate a synthesis run's gate netlist.
-        run_id: post_synth only - which synthesis run. Omit for the most recent.
-        sim_profile: 'auto' | 'pinned' | 'compat', as simulation_tool.
+        verilog_files: Explicit file list to compile, testbench included — the
+            escape hatch for a set the manifest does not describe. Omit it (the
+            normal case) to compile the manifest's simulate set.
+        mode: 'rtl' compiles the sources. 'post_synth' drops the design RTL,
+            substitutes the gate netlist from a synthesis run, and links
+            stdcell models.
+        run_id: post_synth only - which synthesis run's netlist to simulate.
+            Omit for the most recent run.
+        netlist_file: post_synth only - an explicit gate netlist, overriding the
+            one the run recorded.
+        platform: post_synth only - the PDK whose stdcell models get linked.
+            Omit to use the platform the run itself recorded; that is almost
+            always right, and a wrong value here produces unresolved cells.
+        sim_profile: 'pinned' links the vendor's real stdcell models. 'compat'
+            substitutes SiliconCrew's behavioral models, which exist for asap7
+            ONLY and are a no-op on every other platform. 'auto' picks compat
+            for asap7 and pinned elsewhere.
         pass_marker: stdout substring that means PASS. Empty uses the manifest's
             passMarker, then "TEST PASSED".
     """
     workspace = get_workspace_path()
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
+    files = _normalize_verilog_files_arg(verilog_files) if verilog_files else []
+    explicit = bool(files)
+
+    if explicit:
+        for f in files:
+            path = f if os.path.isabs(f) else os.path.join(workspace, f)
+            if not os.path.exists(path):
+                return f"Error: File {f} does not exist."
+    else:
+        files = manifest_mod.files_for_stage(m, "simulate")
+        if not files:
+            return ("Error: manifest has no rtl/tb files to simulate. Set the roles "
+                    "with update_manifest, or pass verilog_files.")
+
     top = sim_top or m.simTop
     if not top:
         return "Error: no simTop in manifest and none provided. Set it with update_manifest."
-    files = manifest_mod.files_for_stage(m, "simulate")
-    if not files:
-        return "Error: manifest has no rtl/tb files to simulate."
+
     result = run_sim_isolated(
         workspace=workspace,
         verilog_files=files,
         top_module=top,
         mode=mode,
         run_id=run_id,
+        netlist_file=netlist_file,
+        # The manifest's platform is design INTENT — a fallback consulted only
+        # when the synthesis run recorded none. An explicit argument is the
+        # caller pinning the stdcell set and wins outright.
         platform=m.platform,
+        platform_override=platform,
         sim_profile=sim_profile,
         pass_marker=pass_marker,
     )
@@ -792,10 +749,9 @@ def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
     change, first 2000 rows, with a footer saying how many were withheld.
 
     Args:
-        vcd_file: The .vcd to read. run_isolated_simulation returns it as
-            `vcdPath` (sim_runs/sim_NNNN/...); simulation_tool leaves it
-            wherever the testbench's $dumpfile put it, usually the workspace
-            root.
+        vcd_file: The .vcd to read. run_simulation returns it as `vcdPath`
+            (sim_runs/sim_NNNN/...). An older run may have left one in the
+            workspace root, wherever the testbench's $dumpfile put it.
         signals: Signal names. A full hierarchical path ('tb.dut.count') always
             resolves; a bare leaf name resolves when exactly one scope has it,
             and is an error listing the candidates when several do.
@@ -1334,7 +1290,7 @@ def build_interactive_sim(
     every displayed state must come from onUpdate. If this tool fails, say so;
     do not ship a mock. Only offer dashboards for designs with human-shaped
     I/O (buttons, LEDs, displays, games, controllers); for datapath/protocol
-    blocks (FIFOs, bus bridges, ALU pipelines) recommend simulation_tool +
+    blocks (FIFOs, bus bridges, ALU pipelines) recommend run_simulation +
     waveform_tool instead of building a junk switch panel.
     The browser engine sustains roughly 1-10k cycles/sec, so RTL whose time
     constants assume a real clock (debounce counters, ms tick dividers) will
@@ -1484,7 +1440,7 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
     # JSON, not prose: raw simulator output legitimately contains words like
     # "Error", and the API-side substring heuristic would classify a passing
     # run as an error from its own tail. A structured status keeps the verdict
-    # out of the tail's hands (same contract as simulation_tool).
+    # out of the tail's hands (same contract as run_simulation).
     if status == "PASS":
         payload = {
             "status": "test_passed",
@@ -2079,8 +2035,7 @@ ALL_TOOLS = [
     update_manifest,
     # Verification tools
     linter_tool,
-    simulation_tool,
-    run_isolated_simulation,
+    run_simulation,
     waveform_tool,
     cocotb_tool,
     sby_tool,
