@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  BookOpen,
   ChevronDown,
   CircleDot,
   Clock,
@@ -562,6 +563,17 @@ export function Launcher() {
             </div>
             <AccountChip />
             <ThemeToggle />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              aria-label="Skills"
+              title="Skills"
+              data-testid="open-skills"
+              onClick={() => router.push("/skills")}
+            >
+              <BookOpen className="h-4 w-4" />
+            </Button>
             <Button
               variant="ghost"
               size="icon"

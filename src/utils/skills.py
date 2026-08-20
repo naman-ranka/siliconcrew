@@ -565,7 +565,13 @@ def save_user_skill(text: str, user_id=_UNSET) -> str:
         (directory / SKILL_FILENAME).write_text(text, encoding="utf-8")
         config = read_config(root)
         if shipped is not None:
-            config["forked"][skill.name] = shipped.sha256
+            # The fork point is recorded ONCE and does not move when the user
+            # edits their own text again: re-saving your version is not
+            # re-forking from ours, and pretending otherwise would clear a
+            # "the built-in moved" marker for a change nobody ever looked at.
+            # Resetting drops the record, so reset-then-replace is how you
+            # adopt a new shipped version.
+            config["forked"].setdefault(skill.name, shipped.sha256)
         else:
             config["forked"].pop(skill.name, None)
         write_config(root, config)

@@ -124,6 +124,23 @@ def test_updating_a_builtin_never_overrides_a_replacement(local):
     assert entry.skill.body.strip() == "MINE-BODY"        # ...and nothing moved
 
 
+def test_editing_your_own_copy_does_not_clear_a_builtin_that_moved(local):
+    """Re-saving your text is not re-forking from ours. The marker survives an
+    edit and is cleared by resetting — which IS adopting the shipped version."""
+    name = _a_builtin()
+    sk.save_user_skill(_text(name, body="MINE-BODY"), user_id=None)
+    config = json.loads((local / store_mod.CONFIG_FILENAME).read_text())
+    config["forked"][name] = "0" * 64
+    (local / store_mod.CONFIG_FILENAME).write_text(json.dumps(config))
+
+    sk.save_user_skill(_text(name, body="MINE-BODY-V2"), user_id=None)
+    assert sk.resolve_skills(None).get(name).builtin_changed is True
+
+    sk.delete_user_skill(name, user_id=None)
+    sk.save_user_skill(_text(name, body="MINE-BODY-V3"), user_id=None)
+    assert sk.resolve_skills(None).get(name).builtin_changed is False
+
+
 def test_a_skill_written_by_hand_reports_no_verdict_on_the_builtin(local):
     """Absent, not "unchanged": nobody recorded what it was forked from."""
     name = _a_builtin()
