@@ -480,3 +480,75 @@ def test_the_page_can_clear_a_choice_that_no_longer_matches_anything(client, tmp
     assert client.put("/api/skills/a-skill-that-was-renamed/enabled",
                       json={"enabled": True}).status_code == 200
     assert client.get("/api/skills").json()["unmatched_disabled"] == []
+
+
+def test_a_reference_file_under_a_users_skill_is_reachable_from_remote_storage(tmp_path):
+    """Tier three still works when the layer is not on this machine's disk.
+
+    The staged copy that parsed the skill is already deleted by the time anyone
+    asks for a file beside it, so the read re-opens the owner's store — and it
+    still may not leave that skill's directory.
+    """
+    set_user_skill_store(ObjectUserSkillStore(_RecordingStore(tmp_path)))
+    sk.save_user_skill(_text("my-own-thing"), user_id="owner_a")
+
+    from src.platform_engines.user_skill_store import get_user_skill_store
+
+    with get_user_skill_store().edit("owner_a") as root:
+        (root / "my-own-thing" / "references").mkdir(parents=True)
+        (root / "my-own-thing" / "references" / "extra.md").write_text("EXTRA", encoding="utf-8")
+        (root / "elsewhere.md").write_text("NOT-YOURS-TO-READ", encoding="utf-8")
+
+    assert sk.read_skill_file("my-own-thing", "references/extra.md", user_id="owner_a") == "EXTRA"
+    with pytest.raises(sk.SkillError):
+        sk.read_skill_file("my-own-thing", "../elsewhere.md", user_id="owner_a")
+
+
+def test_deleting_cannot_reach_outside_the_layer(local, tmp_path):
+    """The name comes from a URL path segment and the next line removes a tree.
+
+    Pre-fix this walked out of the layer and deleted a sibling directory:
+    ``Path(root) / "../victim"`` is a real directory, so the guard was doing
+    nothing. Percent-encoding a slash is enough to spell it, so the refusal
+    lives with the delete, not only in the route.
+    """
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("KEEP", encoding="utf-8")
+
+    assert sk.delete_user_skill("../victim", user_id=None) is False
+    assert (victim / "keep.txt").read_text() == "KEEP"
+
+
+def test_an_unreadable_layer_is_a_refusal_not_an_empty_one(tmp_path):
+    """Serving the built-in pack after a storage failure would silently undo a
+    replacement and switch a disabled skill back on."""
+
+    class _Broken:
+        def get_tree(self, key, local_dir):
+            raise RuntimeError("object storage is unreachable")
+
+    set_user_skill_store(ObjectUserSkillStore(_Broken()))
+    with pytest.raises(sk.SkillError) as exc:
+        sk.resolve_skills("owner_a")
+    assert "could not be read" in str(exc.value)
+
+
+def test_a_binary_file_in_the_layer_is_reported_not_raised(local):
+    directory = local / "my-own-thing"
+    directory.mkdir(parents=True)
+    (directory / sk.SKILL_FILENAME).write_bytes(b"\xff\xfe not text at all")
+
+    entry = sk.resolve_skills(None).get("my-own-thing")
+    assert entry.error and entry.skill is None
+    assert [s.name for s in sk.resolve_skills(None).active] == [s.name for s in _builtins()]
+
+
+def test_a_skill_is_a_procedure_not_a_data_file(local):
+    """An always-load body rides every prompt of every turn, so the size of one
+    is a real cost and is refused at a stated ceiling rather than at a bill."""
+    huge = _text("my-own-thing", body="x" * (sk.MAX_SKILL_BYTES + 1))
+    with pytest.raises(sk.SkillError) as exc:
+        sk.save_user_skill(huge, user_id=None)
+    assert "KB" in str(exc.value)
+    assert not (local / "my-own-thing").exists()

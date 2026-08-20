@@ -48,3 +48,26 @@ layout belongs in the copy, not in the store.
 `self-verification-standard`, `sim-failure-debug` and `xls-dslx-frontend` are
 useful to anyone writing RTL with any agent. `pd-diagnosis` and `pareto-sweep`
 name SiliconCrew tools and are of little use without them.
+
+## Your own skills sit on top of this pack
+
+This directory is the built-in layer and is read-only to users. A second layer
+holds skills a user writes — a folder under the data directory when you run
+SiliconCrew yourself, an owner-scoped tree in object storage when it is hosted
+for you — and the Skills page (`/skills`) is where you read, write and switch
+them. Four rules merge the two, and there are only four:
+
+1. A skill you write with the same name **replaces** the built-in one.
+2. You may switch a skill **off** — a name in a small list, never a copy.
+3. Updating a built-in never overrides your replacement; the page marks it as
+   moved instead, and resetting is how you adopt the newer text.
+4. The two layers are **never** merged. Replacement only.
+
+`self-verification-standard` can be switched off like anything else — forcing it
+secretly would be dishonest — but the page marks it apart from the others and
+every run records which skills were off, so a result produced without the safety
+net can never be mistaken for one produced with it.
+
+Importing someone else's pack is deliberately absent. A skill is instructions
+executed with your own tool credentials, which makes an imported pack a
+prompt-injection surface; it is deferred rather than half-built.

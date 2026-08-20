@@ -320,7 +320,7 @@ def _read_user_layer(root: Optional[Path]) -> tuple[Dict[str, Skill], Dict[str, 
             continue
         try:
             skill = parse_skill_file(skill_file)
-        except SkillError as exc:
+        except (SkillError, ValueError, OSError) as exc:
             errors[entry.name] = str(exc)
             continue
         found[skill.name] = skill
@@ -341,9 +341,18 @@ def resolve_skills(user_id=_UNSET) -> SkillSet:
     owner = current_owner() if user_id is _UNSET else user_id
     builtins = {s.name: s for s in discover_skills(SKILLS_ROOT)}
 
-    with get_user_skill_store().open(owner) as root:
-        user_skills, errors = _read_user_layer(root)
-        config = read_config(root)
+    try:
+        with get_user_skill_store().open(owner) as root:
+            user_skills, errors = _read_user_layer(root)
+            config = read_config(root)
+    except SkillError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - storage outage, reported as one
+        # Falling back to the built-in pack would silently undo a replacement
+        # and switch a disabled skill back on — the agent would run
+        # instructions the user turned off, with nothing to show for it. An
+        # unreadable layer is a refusal, not an empty one (invariant 4).
+        raise SkillError(f"Your skill layer could not be read: {exc}") from exc
 
     disabled = set(config["disabled"])
     forked = config["forked"]
@@ -529,6 +538,13 @@ def _name_from_text(text: str) -> str:
     return name.strip()
 
 
+#: A ceiling on one skill file. A skill may flag itself always-load, and an
+#: always-load body is pasted into every prompt of every turn — so the cost of
+#: an accidentally-pasted logfile is real, and bounded here rather than
+#: discovered on a bill.
+MAX_SKILL_BYTES = 256 * 1024
+
+
 def validate_skill_text(text: str) -> Skill:
     """Parse ``text`` exactly as discovery would, without storing anything.
 
@@ -537,6 +553,13 @@ def validate_skill_text(text: str) -> Skill:
     to parse on the next turn.
     """
     name = _name_from_text(text)
+    size = len(text.encode("utf-8"))
+    if size > MAX_SKILL_BYTES:
+        raise SkillError(
+            f"That skill is {size // 1024} KB; the limit is {MAX_SKILL_BYTES // 1024} KB. "
+            "A skill is a procedure the agent reads, not a data file — put bulk beside "
+            "it under references/ instead."
+        )
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp) / name
         directory.mkdir()
@@ -587,6 +610,11 @@ def delete_user_skill(name: str, user_id=_UNSET) -> bool:
     from src.platform_engines.user_skill_store import get_user_skill_store, read_config, write_config
 
     owner = current_owner() if user_id is _UNSET else user_id
+    if not NAME_PATTERN.fullmatch(name):
+        # This name arrives from a URL path segment, and the next line removes
+        # a directory tree. Nothing that is not a legal skill name gets that
+        # far — no traversal, however it was spelled on the way in.
+        return False
     with get_user_skill_store().edit(owner) as root:
         directory = Path(root) / name
         if not directory.is_dir():
