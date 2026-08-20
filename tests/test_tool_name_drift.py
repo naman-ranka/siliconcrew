@@ -35,11 +35,14 @@ grammar plus the small ``BENIGN`` allowlist at the bottom — 15 entries, each
 justified on its own line, and each asserted to still match something.
 
 Known gaps, stated plainly: a tool name passed POSITIONALLY to a helper whose
-own name says nothing about tools (``_ui_log_call(ws, sid, "linter_tool", ...)``
-in ``src/api/actions.py``) is not detected — covering it needs cross-file
-argument resolution. A line-context rule ("any tool-shaped string on a line
-mentioning tools") was measured instead: +423 references covered, but +22
-suppressions, so it was rejected as the kind of noise that gets a test deleted.
+own name says nothing about tools is not detected here — covering it in general
+needs cross-file argument resolution. The one place it mattered
+(``_ui_log_call(ws, sid, "linter_tool", ...)`` in ``src/api/actions.py``) is now
+resolved exactly, by signature, in
+``tests/test_tool_policy.py::test_ui_action_event_names_are_live_tools``. A
+line-context rule ("any tool-shaped string on a line mentioning tools") was
+measured instead: +423 references covered, but +22 suppressions, so it was
+rejected as the kind of noise that gets a test deleted.
 """
 from __future__ import annotations
 
@@ -506,8 +509,12 @@ def test_detector_flags_a_renamed_tool():
 
 
 def test_catalog_policy_sets_reference_live_tools_only():
-    """Policy lives in tool_catalog as literal name sets; a rename that misses
-    them silently drops a tool's category/auth/sync classification."""
+    """The catalog's policy views must name live tools only.
+
+    They are now DERIVED from the tools' own ``@policy`` declarations
+    (src/tools/wrappers.py), so this can no longer fail by someone forgetting to
+    rename a string here — but it stays as the cheap end-to-end check that the
+    derivation still produces real names."""
     from src.api import tool_catalog
 
     live = live_tool_names()

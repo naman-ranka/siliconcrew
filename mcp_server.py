@@ -181,11 +181,6 @@ from src.api.tool_catalog import (
     MUTATING_TOOLS as _SHARED_MUTATING_TOOLS,
 )
 
-# Flatten for easy lookup
-ALL_CATEGORIZED_TOOLS = set()
-for tools in TOOL_CATEGORIES.values():
-    ALL_CATEGORIZED_TOOLS.update(tools)
-
 
 def langchain_to_mcp_schema(langchain_tool) -> Tool:
     """

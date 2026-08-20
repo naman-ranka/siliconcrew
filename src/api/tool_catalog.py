@@ -140,9 +140,10 @@ def category_of(tool_name: str) -> str:
 def requires_session(tool_name: str) -> bool:
     """Whether the tool needs an active session/workspace to run.
 
-    Every tool in the registry does today, which is what makes the MCP server's
-    blanket session gate correct. The field exists on the policy so the server's
-    own hand-written session tools can be folded into this registry later
+    Every MCP-surfaced tool does today (the agent-only sleep_tool does not),
+    which is what makes the MCP server's blanket session gate correct. The field
+    exists on the policy so the server's own hand-written session tools — which
+    a stranger must call BEFORE any session exists — can be folded in later
     (finding A-H9) without that gate rejecting a stranger's first call.
     """
     return policy_for(tool_name).requires_session

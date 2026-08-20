@@ -78,14 +78,19 @@ def test_sync_policy_covers_the_live_registry():
         the catalog fails here instead of silently dropping a tool's policy.
 
     Dead tool-name references anywhere else in the repo (docs, prompts,
-    frontend, MCP) are covered by ``tests/test_tool_name_drift.py``.
+    frontend, MCP) are covered by ``tests/test_tool_name_drift.py``; that the
+    policy EXISTS at all, on the tool itself, is covered by
+    ``tests/test_tool_policy.py``.
     """
-    from src.tools.wrappers import mcp_tools
+    from src.tools.wrappers import ALL_TOOLS
     from src.api.tool_catalog import (
         ASYNC_TOOLS, EXCLUDED_FROM_UI, PROTECTED_TOOLS, TOOL_CATEGORIES,
     )
 
-    live = {t.name for t in mcp_tools}
+    # The whole registry, not just the MCP surface: policy now covers the
+    # agent-only tools too (sleep_tool had none precisely because it was not
+    # here), so scoping this to mcp_tools would report them as dead names.
+    live = {t.name for t in ALL_TOOLS}
     classified = {name for names in TOOL_CATEGORIES.values() for name in names}
 
     unclassified = live - classified
