@@ -119,7 +119,7 @@ export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
       { key: "platform", label: "platform", editor: "enum", options: PLATFORMS, def: (c: SurfaceCtx) => c.manifest?.platform ?? "sky130hd", source: "manifest" },
       { key: "maxStage", label: "max_stage", editor: "enum", options: SYNTH_STAGES, def: "finish", source: "choice", hint: "“synth” = fast synthesis-only estimate" },
       { key: "clockPeriodNs", label: "clock_period_ns", editor: "number", def: (c: SurfaceCtx) => c.manifest?.clockPeriodNs ?? 10, min: 0.1, step: 0.1, unit: "ns", source: "manifest" },
-      { key: "utilization", label: "utilization", editor: "number", def: 5, min: 1, max: 100, step: 1, unit: "%", source: "default", adv: true },
+      { key: "utilization", label: "utilization", editor: "number", def: 40, min: 1, max: 100, step: 1, unit: "%", source: "default", adv: true },
       { key: "aspectRatio", label: "aspect_ratio", editor: "number", def: 1.0, min: 0.1, step: 0.1, source: "default", adv: true },
       { key: "coreMargin", label: "core_margin", editor: "number", def: 2.0, min: 0, step: 0.5, unit: "µm", source: "default", adv: true },
       { key: "runEquiv", label: "run_equiv", editor: "bool", def: false, source: "default", adv: true },

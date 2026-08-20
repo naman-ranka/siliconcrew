@@ -152,7 +152,7 @@ export function defaultValues(
         platform: ctx.manifest?.platform ?? "sky130hd",
         maxStage: "finish",
         clockPeriodNs: ctx.manifest?.clockPeriodNs ?? 10,
-        utilization: 5,
+        utilization: 40,
         aspectRatio: 1.0,
         coreMargin: 2.0,
         runEquiv: false,

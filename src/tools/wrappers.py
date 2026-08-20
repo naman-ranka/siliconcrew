@@ -273,20 +273,27 @@ def read_file(filename: str) -> str:
         f"{tail}"
     )
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="essential", protected=False, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="checkpoint", attempt_parser=attempt_lint)
-def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
+def linter_tool(
+    verilog_files: list[str] | str,
+    engine: Literal["auto", "iverilog", "verilator"] = "auto",
+) -> str:
     """
     Lints Verilog files. Supports single-file or multi-file linting.
+
     Args:
-        verilog_files: Filename string or list of filenames (e.g., 'design.v' or ['design.v','tb.v']).
-        When linting a testbench, include all dependent RTL files in the same call
-        (for example ['seq_detector.v', 'seq_detector_tb.v']) so module references resolve.
-        engine: 'auto' (verilator if installed, else iverilog), 'iverilog'
-        (syntax/elaboration only), or 'verilator' (real lint: latches, width
-        mismatches, unsynthesizable constructs — lint RTL only, not testbenches).
+        verilog_files: Filename string or list of filenames (e.g. 'design.v' or
+            ['design.v', 'tb.v']). When linting a testbench, include all
+            dependent RTL files in the same call (for example
+            ['seq_detector.v', 'seq_detector_tb.v']) so module references
+            resolve.
+        engine: 'auto' picks verilator if installed, else iverilog. 'iverilog'
+            is syntax/elaboration only. 'verilator' is a real lint (latches,
+            width mismatches, unsynthesizable constructs) — lint RTL only with
+            it, not testbenches.
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
@@ -482,28 +489,36 @@ def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -
     return {"manifestWarnings": warnings, **result}
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="essential", protected=False, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def run_isolated_simulation(
     sim_top: str = "",
-    mode: str = "rtl",
+    mode: Literal["rtl", "post_synth"] = "rtl",
     run_id: str = None,
-    sim_profile: str = "auto",
+    sim_profile: Literal["auto", "pinned", "compat"] = "auto",
     pass_marker: str = "",
 ) -> str:
     """
-    Runs a manifest-driven simulation in an isolated sim_runs/sim_NNNN/ directory
-    (its own VCD, persisted run record + provenance). Prefer this over simulation_tool
-    so runs stay comparable and waveforms never collide.
+    Runs the manifest's simulate file set (roles rtl + tb + include) in its own
+    sim_runs/sim_NNNN/ directory: its own VCD, its $readmem data files staged in
+    beside it, a persisted run record and provenance. The default way to
+    simulate.
+    Returns JSON. `status` is passed | failed; the finer verdict is `simStatus`
+    (compile_failed | sim_failed | test_failed | test_passed). Also `vcdPath` —
+    the VCD to hand to waveform_tool — `xDetected` (x/z seen after t=0; a
+    warning surface, not a verdict), `stagedDataFiles`, and for post_synth the
+    run and netlist that were resolved.
+    It compiles what the MANIFEST says. To compile a different set, fix the
+    roles with update_manifest, or use simulation_tool.
+
     Args:
-        sim_top: testbench top module; defaults to the manifest's simTop.
-        mode: 'rtl' or 'post_synth'.
-        run_id: optional synthesis run id for post_synth mode (resolves the netlist).
-        sim_profile: 'auto' (default), 'pinned', or 'compat'.
-        pass_marker: stdout substring required for a passing status. Leave empty
-            to use the manifest's passMarker field (set it with update_manifest so
-            it matches what your testbench $displays), else "TEST PASSED".
+        sim_top: Testbench top module. Empty uses the manifest's simTop.
+        mode: 'rtl', or 'post_synth' to simulate a synthesis run's gate netlist.
+        run_id: post_synth only - which synthesis run. Omit for the most recent.
+        sim_profile: 'auto' | 'pinned' | 'compat', as simulation_tool.
+        pass_marker: stdout substring that means PASS. Empty uses the manifest's
+            passMarker, then "TEST PASSED".
     """
     workspace = get_workspace_path()
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
@@ -658,7 +673,7 @@ def retry_pd(
     )
     return json.dumps(result, indent=2)
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def get_synthesis_status(run_id: str) -> str:
@@ -668,6 +683,10 @@ def get_synthesis_status(run_id: str) -> str:
     metrics, and poll_after_sec guidance. Self-healing: a run whose worker
     died is reconciled from on-disk evidence (completed from artifacts, or
     failed once past its timeout ceiling) instead of reading "running" forever.
+
+    Args:
+        run_id: Run to report on, from start_synthesis or retry_pd. Required —
+            this reader has no "latest" fallback.
     """
     workspace = get_workspace_path()
     result = collect_synthesis_status(run_id, workspace=workspace)
@@ -720,7 +739,7 @@ def _wait_for_synthesis_job(
     return status
 
 
-@tool
+@tool(parse_docstring=True)
 # No "ui" surface: a bounded blocking poll built for agent turn economy. The
 # UI is a viewer, not an actor (invariant 6) and has its own live polling.
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
@@ -729,10 +748,13 @@ def wait_for_synthesis(run_id: str, max_wait_sec: int = 30, poll_interval_sec: i
     """
     MCP-safe bounded wait for synthesis completion — the ONE blocking
     convenience, defined as a bounded poll loop over get_synthesis_status.
+
     Args:
         run_id: Synthesis run id from start_synthesis / retry_pd.
-        max_wait_sec: Max seconds to block in this call (default 30, capped 120).
-        poll_interval_sec: Fallback poll interval when guidance is absent.
+        max_wait_sec: Max seconds to block in this call (default 30, capped
+            120).
+        poll_interval_sec: Fallback poll interval, seconds, when the run gives
+            no guidance.
     """
     workspace = get_workspace_path()
     result = _wait_for_synthesis_job(workspace, run_id, max_wait_sec, poll_interval_sec)
@@ -740,19 +762,29 @@ def wait_for_synthesis(run_id: str, max_wait_sec: int = 30, poll_interval_sec: i
 
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="verification", protected=False, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
                   end_time: Optional[int] = None) -> str:
     """
-    Reads a VCD waveform file to inspect signal values.
-    Use this when simulation fails to understand WHY.
+    Reads signal values out of a VCD. Use it when a simulation fails, to find
+    where the design diverges — x/z propagation, a shifted output cycle, reset
+    behaviour.
+    Returns a tab-separated Time / Signal / Value table, one row per value
+    change, first 2000 rows, with a footer saying how many were withheld.
+
     Args:
-        vcd_file: Name of the .vcd file (e.g., 'dump.vcd').
-        signals: List of signal names to inspect (e.g., ['clk', 'rst', 'count']).
-        start_time: Start time to view.
-        end_time: End time to view; omit to read to the end of the waveform.
+        vcd_file: The .vcd to read. run_isolated_simulation returns it as
+            `vcdPath` (sim_runs/sim_NNNN/...); simulation_tool leaves it
+            wherever the testbench's $dumpfile put it, usually the workspace
+            root.
+        signals: Signal names. A full hierarchical path ('tb.dut.count') always
+            resolves; a bare leaf name resolves when exactly one scope has it,
+            and is an error listing the candidates when several do.
+        start_time: Start of the window, in the VCD's OWN time units — the
+            integers after '#' in the file, NOT nanoseconds.
+        end_time: End of the window, same units. Omit to read to the end.
     """
     workspace = get_workspace_path()
     abs_file = os.path.join(workspace, vcd_file)
@@ -783,7 +815,7 @@ def search_logs_tool(query: str, run_id: str = None) -> str:
     return search_logs(query, workspace, run_id=run_id)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="checkpoint", attempt_parser=attempt_synthesis_metrics)
@@ -796,71 +828,107 @@ def get_synthesis_metrics(run_id: str = None) -> str:
     so it reads 0.00 for any design that met timing. fmax_mhz is the achieved
     frequency at timing_corner (null when the run carries no slack data — never
     the clock target); parse_notes says when it was derived rather than read.
+
+    Args:
+        run_id: Synthesis run. Omit for the most recent run.
     """
     workspace = get_workspace_path()
     result = collect_synthesis_metrics(workspace=workspace, run_id=run_id)
     return json.dumps(result, indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
-def read_stage_report(stage: str, run_id: str = None) -> str:
+def read_stage_report(
+    stage: Literal["floorplan", "place", "cts", "grt", "route", "finish"],
+    run_id: str = None,
+) -> str:
     """
-    Reads the main ORFS artifact for a physical-design stage.
-    Supported stages currently include floorplan, place, cts, grt, route, and finish.
+    Returns the main ORFS artifact for one physical-design stage as a text
+    excerpt (first 12000 chars) plus its path. Use it when the structured
+    summaries do not carry the detail you need.
+
+    Args:
+        stage: floorplan (2_floorplan_final.rpt), place (3_3_place_gp.json),
+            cts (4_cts_final.rpt), grt (congestion.rpt), route
+            (5_route_drc.rpt) or finish (6_finish.rpt).
+        run_id: Synthesis run. Omit for the most recent run.
     """
     workspace = get_workspace_path()
     result = collect_stage_report(workspace=workspace, stage=stage, run_id=run_id)
     return json.dumps(result, indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def get_route_drc_summary(run_id: str = None) -> str:
     """
-    Summarizes the final route DRC report from ORFS.
-    Treats an empty 5_route_drc.rpt as a clean final route result.
+    Structured final-routing DRC summary for a run: `clean`, violation_count,
+    unique_violation_count, sample_violations and route_stage_status. An empty
+    5_route_drc.rpt counts as clean ONLY when the route stage completed — an
+    empty report from an unfinished route is reported as not-clean, with a note
+    saying so.
+
+    Args:
+        run_id: Synthesis run. Omit for the most recent run.
     """
     workspace = get_workspace_path()
     result = collect_route_drc_summary(workspace=workspace, run_id=run_id)
     return json.dumps(result, indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def get_cts_summary(run_id: str = None) -> str:
     """
-    Summarizes the ORFS CTS final report.
-    Extracts timing, skew, violation counts, and critical-path summary fields.
+    Structured clock-tree-synthesis summary for a run: wns_ns, tns_ns,
+    worst_slack_ns, clock_fmax_mhz, setup_skew_ns and max_slew / max_fanout
+    violation counts, parsed from 4_cts_final.rpt. Read this first when a run
+    misses timing.
+
+    Args:
+        run_id: Synthesis run. Omit for the most recent run.
     """
     workspace = get_workspace_path()
     result = collect_cts_summary(workspace=workspace, run_id=run_id)
     return json.dumps(result, indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def get_congestion_summary(run_id: str = None) -> str:
     """
-    Summarizes ORFS global-routing congestion from congestion.rpt or 5_1_grt.log.
-    Extracts per-layer resource, demand, usage, and overflow totals.
+    Structured global-routing congestion for a run, from congestion.rpt or
+    5_1_grt.log: per-layer resource, demand, usage_pct and overflow, plus
+    totals. Read it when timing degrades between placement and routing — that
+    points at wire delay rather than logic depth.
+
+    Args:
+        run_id: Synthesis run. Omit for the most recent run.
     """
     workspace = get_workspace_path()
     result = collect_congestion_summary(workspace=workspace, run_id=run_id)
     return json.dumps(result, indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def compare_pd_runs(child_run_id: str, parent_run_id: str = None) -> str:
     """
-    Compares a PD retry child run against its parent.
-    If parent_run_id is omitted, uses the child run lineage metadata when available.
+    Metric delta between a retry_pd child run and its parent — the honest answer
+    to "did that knob help". Compares wns_ns, worst_slack_ns, tns_ns, area_um2,
+    cell_count and power_uw with the direction that counts as better for each,
+    plus the routing-DRC status of both runs.
+
+    Args:
+        child_run_id: The retry child run.
+        parent_run_id: Run to compare against. Omit to use the parent recorded
+            in the child's lineage; it is required when the child records none.
     """
     workspace = get_workspace_path()
     result = collect_pd_run_comparison(
@@ -1145,15 +1213,18 @@ Proceed to implement the RTL following this specification."""
         return f"Error loading YAML spec: {str(e)}"
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def schematic_tool(verilog_file: str, top_module: str) -> str:
     """
-    Generates a visual schematic (SVG) from a Verilog file.
+    Renders an SVG schematic of one Verilog module with Yosys + netlistsvg, for
+    the workbench's Schematic tab. Self-host only: it needs a local
+    Yosys/Docker toolchain and refuses on the hosted platform.
+
     Args:
-        verilog_file: Name of the Verilog file (e.g., 'design.v').
-        top_module: Name of the top-level module.
+        verilog_file: Verilog source, e.g. 'counter.v'.
+        top_module: Module to draw.
     """
     # Hosted has no local Docker, so the Yosys-schematic path can't run — return
     # an honest answer instead of leaking a raw docker-socket error to the
@@ -1180,7 +1251,7 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
     else:
         return f"Failed to generate schematic: {result['error']}"
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="verification", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def build_interactive_sim(
@@ -1194,7 +1265,6 @@ def build_interactive_sim(
     simulation in the user's browser. Follow up by writing
     `<top>.dashboard.html` with write_file: a self-contained HTML/CSS/JS page
     (no external scripts/styles — everything inline) that
-
       * declares its netlist via
         `<meta name="siliconcrew-sim" content="<top>.websim.json">`, and
       * drives the design ONLY through the injected `window.simBridge` API:
@@ -1212,20 +1282,19 @@ def build_interactive_sim(
                                            declare it with a second meta tag:
                                            <meta name="siliconcrew-sim-clock"
                                            content="<port>">.
-
     NEVER re-implement or approximate the design's behavior in dashboard JS —
     every displayed state must come from onUpdate. If this tool fails, say so;
     do not ship a mock. Only offer dashboards for designs with human-shaped
     I/O (buttons, LEDs, displays, games, controllers); for datapath/protocol
     blocks (FIFOs, bus bridges, ALU pipelines) recommend simulation_tool +
     waveform_tool instead of building a junk switch panel.
-
     The browser engine sustains roughly 1-10k cycles/sec, so RTL whose time
     constants assume a real clock (debounce counters, ms tick dividers) will
     feel frozen. When the design exposes them as top-module parameters (the
     CLK_FREQ / TICKS_PER_MILLI idiom), pass integer overrides via
     `parameters` to re-elaborate at browser speed — the override is recorded
     in the artifact and shown to the user, never hidden.
+    Returns the design's port list so you can wire dashboard widgets to real pins.
 
     Args:
         verilog_files: RTL file name(s), e.g. 'counter.v' or ['simon.v', 'simon_game.v'].
@@ -1234,7 +1303,6 @@ def build_interactive_sim(
             e.g. {'TICKS_PER_MILLI': 1}. Timing constants only — do not use
             it to change design behavior.
 
-    Returns the design's port list so you can wire dashboard widgets to real pins.
     """
     workspace = get_workspace_path()
     files = _normalize_verilog_files_arg(verilog_files)
@@ -1256,7 +1324,7 @@ def build_interactive_sim(
     )
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="reporting", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def save_metrics_tool(
@@ -1268,24 +1336,20 @@ def save_metrics_tool(
     run_id: str = None
 ) -> str:
     """
-    Saves PPA metrics that you found (e.g., via search_logs_tool) for the design report.
-
-    LAST RESORT ONLY. `get_synthesis_metrics` parses these same five fields from
-    the run's own reports, and the design report ranks that parse ABOVE anything
-    saved here: a saved value fills a field the parse could not measure, and is
-    otherwise ignored. If a saved value contradicts the parsed one, the report
-    prints the parsed value and flags the disagreement. So use this only for a
-    run whose reports genuinely do not carry the number.
+    Records PPA numbers for the design report when a run's own reports do not
+    carry them. LAST RESORT: get_synthesis_metrics parses these same five fields
+    from the run, the report ranks that parse ABOVE anything saved here, and a
+    saved value that contradicts a parsed one is printed as a flagged
+    disagreement rather than used.
 
     Args:
-        area_um2: Chip area in square micrometers (e.g., 142.5)
-        cell_count: Number of standard cells (e.g., 48)
-        wns_ns: Worst Negative Slack in nanoseconds (e.g., 0.85 or -0.12)
-        tns_ns: Total Negative Slack in nanoseconds (e.g., 0.0 or -1.5)
-        power_uw: Total power in microwatts (e.g., 12.34)
-        
-    Returns:
-        Confirmation of saved metrics
+        area_um2: Cell area in square micrometers.
+        cell_count: Standard-cell count.
+        wns_ns: Worst negative slack, nanoseconds.
+        tns_ns: Total negative slack, nanoseconds.
+        power_uw: Total power in MICROwatts. get_synthesis_metrics also reports
+            power_mw — do not paste a milliwatt figure here.
+        run_id: Run these attach to. Omit for the most recent run.
     """
     workspace = get_workspace_path()
     
@@ -1317,20 +1381,20 @@ These will be included in the design report when you call `generate_report_tool`
         return f"Error saving metrics: {str(e)}"
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="reporting", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="checkpoint")
 def generate_report_tool(run_id: str = None) -> str:
     """
-    Generates a comprehensive design report comparing the specification vs actual results.
-    Call this at the end of a design session to summarize verification and synthesis outcomes.
-    
-    Note: If metric extraction was incomplete but you found values via search_logs_tool, use save_metrics_tool 
-    first to persist those values, then call this.
-    
-    Returns:
-        The generated report content and the path where it was saved
+    Writes a Markdown design report comparing the spec against measured results
+    — lint and simulation outcomes, synthesis metrics, timing verdict — and
+    returns its content. Saved as synth_runs/<run_id>/design_report.md, or
+    <module>_report.md at the workspace root when there is no run. Call it at
+    the end of a design session.
+
+    Args:
+        run_id: Run to report on. Omit for the most recent run.
     """
     workspace = get_workspace_path()
     
@@ -1366,15 +1430,15 @@ class RunPythonAnalysisArgs(BaseModel):
         surfaces=ALL_SURFACES, requires_session=True)
 def run_python_analysis(script_file: str, args: list[str] = None) -> str:
     """
-    Run a workspace Python script for small engineering-support analysis —
-    generating golden/expected vectors, .mem/.hex/.csv files, fixed-point/CRC/DSP
-    checks, or plotting simulation outputs. Write the script with write_file
-    first (it is recorded as exactly what ran); this tool executes a FILE, not
-    inline code. Isolated subprocess: 30s timeout, workspace-only cwd, scrubbed
-    env (no backend secrets), pinned libs (stdlib + numpy + matplotlib + pyyaml +
-    vcdvcd) — no pip, no network in docker mode. NOT a cocotb replacement, REPL,
-    or general shell. Returns JSON with exit_code, output tails, and the files
-    the run produced (open them as artifacts).
+    Run a workspace Python script for engineering-support analysis: golden/
+    expected vectors, .mem/.hex/.csv generation, fixed-point/CRC/DSP checks,
+    plotting simulation output. SELF-HOST ONLY — off on the hosted platform.
+    Write the script with write_file first: this runs a FILE, not inline code,
+    and the file is the record of exactly what ran. Isolated subprocess: 30 s
+    wall timeout, workspace-only cwd, scrubbed env (no backend secrets), pinned
+    libraries (stdlib + numpy + matplotlib + pyyaml + vcdvcd), no pip and no
+    network in docker mode. Not a cocotb replacement, a REPL, or a shell.
+    Returns JSON with exit_code, output tails, and the files the run produced.
     """
     # Load-bearing hosted gate (PA3/PA4): the tool runs local toolchains and is
     # OFF on the hosted platform. Placed at the wrapper entry so EVERY path
@@ -1398,7 +1462,7 @@ def run_python_analysis(script_file: str, args: list[str] = None) -> str:
     return json.dumps(result, indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="verification", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
@@ -1460,20 +1524,18 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
         }
     return json.dumps(payload, indent=2)
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="verification", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def sby_tool(sby_file: str) -> str:
     """
     Run formal verification with SymbiYosys (SBY).
-
     Proves or disproves assertions/properties about a design by exploring reachable states
     (bounded or unbounded), rather than running specific input vectors. Well suited to checking
     invariants that should hold for all inputs: state-machine legality (one-hot, no illegal states),
     value and occupancy bounds (a counter or FIFO level stays in range), protocol/handshake
     properties (request held until acknowledge, no overflow/underflow), and absence of deadlock or
     combinational loops.
-
     HOW TO WRITE A WORKING SETUP (these are the common mistakes):
       * Clocks and resets are NORMAL input ports of your design. NEVER drive a clock with $anyseq.
         Use $anyseq / $anyconst only for free DATA inputs you want the solver to range over.
@@ -1482,7 +1544,6 @@ def sby_tool(sby_file: str) -> str:
       * Engine: use `smtbmc z3` (z3 is the installed solver). boolector/yices are NOT available.
       * `[files]` paths are resolved from the workspace root — list them workspace-relative
         (e.g. `rtl/dut.sv`, `verif/dut_formal.sv`). (The tool also auto-resolves/normalizes these.)
-
     Minimal example — dut_formal.sby:
         [options]
         mode bmc
@@ -1556,7 +1617,7 @@ def list_files_tool() -> str:
         
     return "Files in workspace:\n" + "\n".join(sorted(files))
 
-@tool
+@tool(parse_docstring=True)
 # Agent-only turn-economy helper: it paces the poll loop of the async synthesis
 # contract (hence the category), touches no workspace, and is on no other
 # surface.
@@ -1566,23 +1627,26 @@ def sleep_tool(seconds: int) -> str:
     """
     Blocks briefly before the next action.
     Use this to honor synthesis polling guidance from get_synthesis_status.
+
     Args:
-        seconds: Requested sleep time (clamped to 1..30 seconds).
+        seconds: Requested sleep time in seconds (clamped to 1..30).
     """
     wait_s = max(1, min(int(seconds), 30))
     time.sleep(wait_s)
     return f"Slept for {wait_s} second(s)."
 
 # New Google XLS / DSLX HLS tools
-@tool
+@tool(parse_docstring=True)
 @policy(category="hls", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def run_dslx_interpreter(filename: str) -> str:
     """
-    Runs the DSLX interpreter on a .x file in the active workspace to check syntax
-    and execute built-in unit tests (#[test] blocks).
+    Type-checks a DSLX (.x) source and runs its `#[test]` blocks — the fastest
+    way to find out whether DSLX code is valid before compiling it. Writes no
+    files.
+
     Args:
-        filename: Name of the DSLX file (e.g. 'saturating_add.x').
+        filename: DSLX file, e.g. 'saturating_add.x'.
     """
     from src.tools.run_xls import run_dslx_interpreter as run_interpreter
     workspace = get_workspace_path()
@@ -1607,16 +1671,19 @@ def compile_dslx_to_ir(filename: str, top_module: str) -> str:
     result = compile_to_ir(filename, top_module, cwd=workspace)
     return json.dumps(result, indent=2)
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="hls", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def experimental_compile_cpp_to_ir(filename: str, top_name: str, block_from_class: bool = False) -> str:
     """
-    Translates C++ hardware description code into XLS IR via xlscc (experimental).
+    Compiles C++ to XLS IR with xlscc. EXPERIMENTAL and usually unavailable: it
+    needs an xlscc image most installs do not have. DSLX via run_xls_flow is the
+    supported HLS frontend. Writes `<top_name>.ir`.
+
     Args:
-        filename: Name of the C++ file (e.g., 'design.cc').
-        top_name: Name of the top-level function or class.
-        block_from_class: True if compiling a class-based block/stateful system.
+        filename: C++ source, e.g. 'design.cc'.
+        top_name: Top-level function or class.
+        block_from_class: True when the top is a class-based stateful block.
     """
     from src.tools.run_xls import experimental_compile_cpp_to_ir as compile_cpp
     workspace = get_workspace_path()
@@ -1641,28 +1708,37 @@ def optimize_xls_ir(ir_filename: str) -> str:
     result = optimize_ir(ir_filename, cwd=workspace)
     return json.dumps(result, indent=2)
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="hls", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def codegen_xls(
     opt_ir_filename: str,
-    generator: str = "combinational",
+    generator: Literal["combinational", "pipeline"] = "combinational",
     pipeline_stages: int = 0,
     clock_period_ps: int = 0,
-    delay_model: str = "sky130",
+    delay_model: Literal["sky130", "asap7", "unit", ""] = "sky130",
     module_name: str = None,
     use_system_verilog: bool = False,
 ) -> str:
     """
-    Schedules optimized XLS IR and generates synthesizable Verilog.
+    Schedules optimized XLS IR and emits synthesizable Verilog. Writes
+    `<base>.v` in the WORKSPACE ROOT — the input's directory is not preserved —
+    and returns `verilog_filename` and `generated_module`.
+    Step 4 of 4. Use run_xls_flow unless you are debugging one step.
+
     Args:
-        opt_ir_filename: Name of the optimized IR file.
-        generator: 'combinational' or 'pipeline'.
-        pipeline_stages: Number of pipeline stages for pipelined designs.
-        clock_period_ps: Target clock period in picoseconds.
-        delay_model: Delay model (e.g., 'sky130', 'asap7').
-        module_name: Optional custom name for the generated Verilog module.
-        use_system_verilog: If True, emit SystemVerilog (default is False to ensure Yosys synthesis compatibility).
+        opt_ir_filename: Optimized IR from optimize_xls_ir.
+        generator: 'combinational' emits one cycle of pure logic; 'pipeline'
+            inserts registers to meet a timing target.
+        pipeline_stages: Pipeline depth. IGNORED unless generator='pipeline'.
+        clock_period_ps: Target period in PICOseconds, not nanoseconds. IGNORED
+            unless generator='pipeline'.
+        delay_model: Timing model used for scheduling: 'sky130', 'asap7',
+            'unit', or '' for the tool default. IGNORED unless
+            generator='pipeline'.
+        module_name: Name for the generated module; defaults to the IR's top.
+        use_system_verilog: Emit SystemVerilog. Leave False — the Yosys
+            synthesis path downstream expects Verilog.
     """
     from src.tools.run_xls import codegen_xls as run_codegen
     workspace = get_workspace_path()
@@ -1678,51 +1754,67 @@ def codegen_xls(
     )
     return json.dumps(result, indent=2)
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="hls", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
-def benchmark_xls(opt_ir_filename: str, delay_model: str = "sky130") -> str:
+def benchmark_xls(
+    opt_ir_filename: str,
+    delay_model: Literal["sky130", "asap7", "unit", ""] = "sky130",
+) -> str:
     """
-    Evaluates XLS IR for performance, area complexity, and estimated critical path delay.
+    Estimates area and estimated critical-path delay for optimized XLS IR
+    without running synthesis — a fast way to compare two DSLX formulations.
+    Writes nothing, and is NOT part of run_xls_flow; call it separately.
+
     Args:
-        opt_ir_filename: Name of the optimized IR file.
-        delay_model: Delay model (e.g., 'sky130', 'asap7').
+        opt_ir_filename: Optimized IR from optimize_xls_ir, or run_xls_flow's
+            artifacts.opt_ir_file.
+        delay_model: 'sky130', 'asap7', 'unit', or '' for the tool default.
     """
     from src.tools.run_xls import benchmark_xls as run_benchmark
     workspace = get_workspace_path()
     result = run_benchmark(opt_ir_filename, delay_model=delay_model, cwd=workspace)
     return json.dumps(result, indent=2)
 
-@tool
+@tool(parse_docstring=True)
 @policy(category="hls", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def run_xls_flow(
     dslx_file: str,
     top_module: str,
-    generator: str = "combinational",
+    generator: Literal["combinational", "pipeline"] = "combinational",
     pipeline_stages: int = 0,
     clock_period_ps: int = 0,
-    delay_model: str = "sky130",
+    delay_model: Literal["sky130", "asap7", "unit", ""] = "sky130",
     module_name: str = None,
     keep_intermediates: bool = True,
     run_lint: bool = True,
     use_system_verilog: bool = False,
 ) -> str:
     """
-    Executes the entire high-level XLS synthesis flow:
-    DSLX Interpreter -> IR Conversion -> Optimization -> Codegen.
-    This is the preferred agent path for compiling DSLX code to Verilog.
+    Compiles DSLX to synthesizable Verilog end to end: interpreter and #[test]
+    checks -> IR -> optimization -> codegen -> optional lint. The preferred XLS
+    path; the four single-step tools are its stages, exposed for debugging one
+    of them.
+    Suits algorithmic and datapath kernels — arithmetic, bit manipulation,
+    encoders/decoders, fixed-point math, filters. Treat the result as compiler
+    output: wrap it in a small adapter module rather than hand-editing it, then
+    verify it through the normal linter_tool / simulation flow. Returns the
+    artifacts, the generated module name, and per-stage results.
+
     Args:
-        dslx_file: Name of the DSLX file (e.g. 'saturating_add.x').
-        top_module: Name of the top-level function or proc.
+        dslx_file: DSLX source, e.g. 'saturating_add.x'.
+        top_module: Top-level DSLX function or proc.
         generator: 'combinational' or 'pipeline'.
-        pipeline_stages: Number of pipeline stages for pipelined designs.
-        clock_period_ps: Target clock period in picoseconds.
-        delay_model: Delay model (e.g., 'sky130', 'asap7').
-        module_name: Optional custom name for the generated Verilog module.
-        keep_intermediates: Preserve .ir and .opt.ir artifacts for debugging/provenance.
-        run_lint: Run Icarus Verilog syntax lint on generated Verilog before returning success.
-        use_system_verilog: If True, emit SystemVerilog (default is False to ensure Yosys synthesis compatibility).
+        pipeline_stages: Pipeline depth. Ignored unless generator='pipeline'.
+        clock_period_ps: Target period in PICOseconds. Ignored unless
+            generator='pipeline'.
+        delay_model: 'sky130', 'asap7', 'unit' or ''. Ignored unless
+            generator='pipeline'.
+        module_name: Name for the generated module; defaults to top_module.
+        keep_intermediates: Keep the .ir and .opt.ir artifacts for provenance.
+        run_lint: Lint the generated Verilog before returning success.
+        use_system_verilog: Emit SystemVerilog. Leave False for the Yosys path.
     """
     from src.tools.run_xls import run_xls_flow as run_flow
     workspace = get_workspace_path()
