@@ -80,6 +80,7 @@ class PlatformSettings:
     # exists would take the gallery down on deploy. So: bucket set → gcs, else
     # local, overridable via TEMPLATES_ENGINE.
     templates_engine: str     # "local" | "gcs"
+    user_skills_engine: str   # "local" | "object"
     templates_bucket: str     # GCS bucket for the official gallery (gcs only)
 
     # Persistence
@@ -253,6 +254,15 @@ def get_settings() -> PlatformSettings:
     templates_bucket = _env("TEMPLATES_BUCKET")
     templates_engine = _env("TEMPLATES_ENGINE") or ("gcs" if templates_bucket else "local")
 
+    # User skills follow the workspace, not the gallery: they are per-owner
+    # writable state, so hosted needs an object store and self-host must stay on
+    # a plain folder with no cloud dependency. Same explicit-config-wins shape as
+    # the two above — the store used to read this env var itself, which put a
+    # sixth engine decision outside the one place engine decisions live.
+    user_skills_engine = _env("USER_SKILLS_ENGINE") or (
+        "object" if (hosted and _env("WORKSPACE_BUCKET")) else "local"
+    )
+
     return PlatformSettings(
         hosted=hosted,
         orfs_engine=orfs_engine,
@@ -277,6 +287,7 @@ def get_settings() -> PlatformSettings:
         mcp_scopes_supported=mcp_scopes_supported,
         workspace_engine=workspace_engine,
         workspace_bucket=_env("WORKSPACE_BUCKET"),
+        user_skills_engine=user_skills_engine,
         workspace_scratch_dir=_env("WORKSPACE_SCRATCH_DIR", "/tmp/siliconcrew-scratch"),
         templates_engine=templates_engine,
         templates_bucket=templates_bucket,

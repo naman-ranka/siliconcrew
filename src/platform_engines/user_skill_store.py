@@ -223,9 +223,10 @@ def get_user_skill_store():
     from src.platform_engines.settings import get_settings
 
     settings = get_settings()
-    engine = (os.environ.get("USER_SKILLS_ENGINE") or "").strip().lower()
-    if not engine:
-        engine = "object" if (settings.hosted and settings.workspace_bucket) else "local"
+    # The engine decision lives in settings with every other engine decision,
+    # not here. Reading the env var directly put a sixth selection outside the
+    # one place that owns them, which is how two of them drift apart.
+    engine = settings.user_skills_engine
 
     if engine == "object":
         from src.platform_engines.workspace_provider import GcsObjectStore

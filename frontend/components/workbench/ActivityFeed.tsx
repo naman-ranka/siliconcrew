@@ -216,7 +216,10 @@ export function ActivityFeed() {
             const isOpen = !!expanded[e.id];
             const cmd = commandForTool(e.tool);
             const run = e.runId ? runs.find((r) => r.id === e.runId) : undefined;
-            const isAgent = e.source === "agent" || e.source === "mcp";
+            // A delegated child is the agent working, not the human. Without
+            // "subagent" here its rows were attributed to "You".
+            const isAgent =
+              e.source === "agent" || e.source === "mcp" || e.source === "subagent";
             const showLintDiags =
               isOpen && e.tool === TOOL.linter && !!lintResult && e.id === latestLintId;
             return (

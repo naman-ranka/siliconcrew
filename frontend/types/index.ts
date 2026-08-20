@@ -347,7 +347,11 @@ export interface Slice<T> {
 export interface ActivityEvent {
   id: string;
   ts: string;
-  source: "agent" | "user" | "mcp";
+  // "subagent" is a delegated child's work. The backend has always been able
+  // to tell it apart; until this existed the dock rendered it as the human's.
+  source: "agent" | "user" | "mcp" | "subagent";
+  /** Which delegated role produced this row, when source is "subagent". */
+  role?: string | null;
   tool: string;
   args: Record<string, unknown>;
   status: "ok" | "error" | "running";
