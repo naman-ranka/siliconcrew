@@ -978,8 +978,14 @@ def save_metrics_tool(
 ) -> str:
     """
     Saves PPA metrics that you found (e.g., via search_logs_tool) for the design report.
-    Use this when ppa_tool fails but you found metrics manually through log searching.
-    
+
+    LAST RESORT ONLY. `get_synthesis_metrics` parses these same five fields from
+    the run's own reports, and the design report ranks that parse ABOVE anything
+    saved here: a saved value fills a field the parse could not measure, and is
+    otherwise ignored. If a saved value contradicts the parsed one, the report
+    prints the parsed value and flags the disagreement. So use this only for a
+    run whose reports genuinely do not carry the number.
+
     Args:
         area_um2: Chip area in square micrometers (e.g., 142.5)
         cell_count: Number of standard cells (e.g., 48)
@@ -1026,7 +1032,7 @@ def generate_report_tool(run_id: str = None) -> str:
     Generates a comprehensive design report comparing the specification vs actual results.
     Call this at the end of a design session to summarize verification and synthesis outcomes.
     
-    Note: If ppa_tool failed but you found metrics via search_logs_tool, use save_metrics_tool 
+    Note: If metric extraction was incomplete but you found values via search_logs_tool, use save_metrics_tool 
     first to persist those values, then call this.
     
     Returns:
