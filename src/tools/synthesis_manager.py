@@ -326,26 +326,32 @@ def _submit_with_quota_release(reservation, fn, *fn_args):
         agent_prov = None
 
     def runner():
-        # Rebind the dispatching request's session context inside the worker
-        # thread: the completion event (and hosted sync) need session identity,
-        # and contextvars do not cross thread submission on their own.
-        if ctx is not None:
-            try:
-                from src.utils.session_context import set_current_session
+        # Rebind the dispatching request's session context and provenance stamp
+        # inside the worker thread: the completion event (and hosted sync) need
+        # session identity, the run record must name the prompt and skills the
+        # DISPATCHER was running, and contextvars do not cross thread submission
+        # on their own.
+        #
+        # Both bind UNCONDITIONALLY and both reset in the finally below. This
+        # pool reuses threads, so a binding left in place outlives its job: the
+        # next job on that worker, if it carries nothing of its own, would read
+        # the previous job's session and stamp. Binding None is what makes
+        # "nothing of my own" read as nothing instead of as somebody else's —
+        # and once skills are populated, somebody else's is owner data.
+        session_token = None
+        prov_token = None
+        try:
+            from src.utils.session_context import set_current_session
 
-                set_current_session(ctx)
-            except Exception:
-                pass
-        # Same reason, same rule: the run record stamped inside this thread must
-        # name the prompt/skills the DISPATCHER was running, not re-derive them
-        # from a worker that has no owner.
-        if agent_prov is not None:
-            try:
-                from src.platform_engines.provenance import set_agent_provenance
+            session_token = set_current_session(ctx)
+        except Exception:
+            session_token = None
+        try:
+            from src.platform_engines.provenance import set_agent_provenance
 
-                set_agent_provenance(agent_prov)
-            except Exception:
-                pass
+            prov_token = set_agent_provenance(agent_prov)
+        except Exception:
+            prov_token = None
         try:
             result = fn(*fn_args)
             # One announcement per terminal transition (both workers end by
@@ -364,6 +370,21 @@ def _submit_with_quota_release(reservation, fn, *fn_args):
                 _sync_current_session_workspace(ctx, provider)
             except Exception:
                 pass
+            # Unbind before this worker is handed to the next job.
+            if prov_token is not None:
+                try:
+                    from src.platform_engines.provenance import reset_agent_provenance
+
+                    reset_agent_provenance(prov_token)
+                except Exception:
+                    pass
+            if session_token is not None:
+                try:
+                    from src.utils.session_context import reset_current_session
+
+                    reset_current_session(session_token)
+                except Exception:
+                    pass
             if reservation is not None and _QUOTA_MANAGER is not None:
                 try:
                     _QUOTA_MANAGER.release_synth_run(reservation)

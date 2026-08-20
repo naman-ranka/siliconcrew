@@ -279,6 +279,17 @@ def set_agent_provenance(agent: Optional[AgentProvenance]):
     return _AGENT_PROVENANCE.set(agent)
 
 
+def reset_agent_provenance(token) -> None:
+    """Restore the previous stamp (pair with :func:`set_agent_provenance`).
+
+    Needed wherever a stamp is bound on a POOLED thread. Without it the binding
+    outlives the job: the next job on that worker, if it has no stamp of its
+    own, reads the previous one — and once skills are populated that is another
+    owner's data.
+    """
+    _AGENT_PROVENANCE.reset(token)
+
+
 @contextmanager
 def agent_provenance_scope(agent: AgentProvenance) -> Iterator[AgentProvenance]:
     token = _AGENT_PROVENANCE.set(agent)
