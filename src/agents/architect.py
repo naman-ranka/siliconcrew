@@ -7,6 +7,7 @@ and synthesis. Uses a ReAct pattern with comprehensive tool access.
 
 import os
 from dotenv import load_dotenv
+from langchain_core.messages import SystemMessage
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     AgentMiddleware,
@@ -67,12 +68,27 @@ MODEL_NODE = "model"
 TOOLS_NODE = "tools"
 
 
-def _without_reasoning_blocks(messages):
+def _model_facing_messages(messages):
     """Return (messages, changed) with `thinking`/`redacted_thinking` content
-    blocks dropped. Copies only the messages that actually needed a change."""
+    blocks dropped, and any STORED system message removed. Copies only the
+    messages that actually needed a change.
+
+    Why system messages go too: the running prompt is delivered as
+    `create_agent(system_prompt=...)`, which arrives as its own request field,
+    while a thread started before that carries a SystemMessage of its own inside
+    the checkpoint. The model then receives two prompts — the current one and a
+    128-line predecessor that prescribes a fixed flow the current one
+    deliberately dropped — and follows whichever it likes. Every future prompt
+    revision would repeat this on every existing thread, so the fix belongs
+    here, on the model-facing view, not in a one-off migration: the checkpoint
+    keeps its history and the model is sent exactly one prompt, today's.
+    """
     cleaned = []
     changed = False
     for msg in messages:
+        if isinstance(msg, SystemMessage):
+            changed = True
+            continue
         content = getattr(msg, "content", None)
         if isinstance(content, list):
             kept = [
@@ -87,9 +103,10 @@ def _without_reasoning_blocks(messages):
 
 
 class ReasoningStripMiddleware(AgentMiddleware):
-    """Drop `thinking`/`redacted_thinking` content blocks from every message
-    right before the LLM sees them. The checkpoint is NOT touched — this
-    rewrites only the model-facing view of the messages.
+    """Drop `thinking`/`redacted_thinking` content blocks — and any stored
+    system prompt — from every message right before the LLM sees them. The
+    checkpoint is NOT touched: this rewrites only the model-facing view of the
+    messages.
 
     Reasoning blocks are provider- and often model-version-specific. A thread
     can switch models mid-conversation (the picker allows it per turn), so a
@@ -117,11 +134,11 @@ class ReasoningStripMiddleware(AgentMiddleware):
     """
 
     def wrap_model_call(self, request, handler):
-        messages, changed = _without_reasoning_blocks(request.messages)
+        messages, changed = _model_facing_messages(request.messages)
         return handler(request.override(messages=messages) if changed else request)
 
     async def awrap_model_call(self, request, handler):
-        messages, changed = _without_reasoning_blocks(request.messages)
+        messages, changed = _model_facing_messages(request.messages)
         return await handler(request.override(messages=messages) if changed else request)
 
 

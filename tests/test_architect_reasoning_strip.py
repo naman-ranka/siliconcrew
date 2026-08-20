@@ -21,13 +21,13 @@ from typing import List
 
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 
 from src.agents.architect import (
     ReasoningStripMiddleware,
-    _without_reasoning_blocks,
+    _model_facing_messages,
     architect_middleware,
 )
 
@@ -42,7 +42,7 @@ def test_strips_thinking_and_redacted_thinking_blocks():
         _msg([{"type": "thinking", "thinking": ""}, {"type": "text", "text": "hello"}]),
         _msg([{"type": "redacted_thinking", "data": "xyz"}, {"type": "text", "text": "ok"}]),
     ]
-    cleaned, changed = _without_reasoning_blocks(history)
+    cleaned, changed = _model_facing_messages(history)
     assert changed
     assert cleaned[0] is history[0]  # untouched HumanMessage passes through
     assert cleaned[1].content == [{"type": "text", "text": "hello"}]
@@ -54,18 +54,36 @@ def test_malformed_thinking_block_missing_required_field_is_still_stripped():
     # present but missing its own "thinking" text — stripped regardless of
     # whether the block is well-formed, since we never resend the type at all.
     history = [_msg([{"type": "thinking"}, {"type": "text", "text": "hi"}])]
-    cleaned, changed = _without_reasoning_blocks(history)
+    cleaned, changed = _model_facing_messages(history)
     assert changed
     assert cleaned[0].content == [{"type": "text", "text": "hi"}]
 
 
 def test_no_op_when_no_reasoning_blocks_present():
     history = [HumanMessage(content="hi"), _msg("plain string content")]
-    cleaned, changed = _without_reasoning_blocks(history)
+    cleaned, changed = _model_facing_messages(history)
     # Unmodified — same list, not copies, when nothing needed stripping. The
     # middleware skips `request.override` entirely in that case.
     assert changed is False
     assert cleaned is history
+
+
+# --- the stored prompt ------------------------------------------------------
+# A thread started before the prompt moved into `create_agent(system_prompt=)`
+# carries a SystemMessage of its own in the checkpoint. Left alone, the model
+# receives that prompt AND today's — two sets of instructions that contradict
+# each other, since the old one prescribed a fixed flow the new one drops on
+# purpose. Every future prompt revision would repeat it, so the strip is
+# permanent rather than a one-off migration.
+
+def test_a_stored_system_prompt_is_dropped_from_the_model_view():
+    history = [
+        SystemMessage(content="OLD 128-LINE PROMPT: always execute the full flow"),
+        HumanMessage(content="hi"),
+    ]
+    cleaned, changed = _model_facing_messages(history)
+    assert changed
+    assert [type(m).__name__ for m in cleaned] == ["HumanMessage"]
 
 
 def test_the_architect_ships_the_strip_middleware():
@@ -139,6 +157,46 @@ def test_checkpoint_keeps_original_while_model_never_sees_the_bad_block_async():
 
     asyncio.run(run())
     _assert_stripped_but_checkpointed(model, graph, config)
+
+
+def test_a_thread_started_on_the_old_prompt_gets_exactly_one_prompt():
+    """End to end: an existing thread's stored prompt stays in the checkpoint
+    (nothing is migrated or lost) and the model is sent today's prompt, once."""
+    model = _RecordingModel()
+    checkpointer = InMemorySaver()
+    graph = create_agent(
+        model=model, tools=[], checkpointer=checkpointer,
+        system_prompt="TODAY'S PROMPT",
+        middleware=[ReasoningStripMiddleware()],
+    )
+    config = {"configurable": {"thread_id": "old-thread"}}
+    graph.update_state(config, {"messages": [
+        SystemMessage(content="YESTERDAY'S PROMPT"),
+        HumanMessage(content="earlier turn"),
+        AIMessage(content="earlier reply"),
+    ]})
+
+    graph.invoke({"messages": [HumanMessage(content="continue")]}, config)
+
+    sent = model.seen[-1]
+    prompts = [m for m in sent if isinstance(m, SystemMessage)]
+    assert [m.content for m in prompts] == ["TODAY'S PROMPT"]
+    # ...and the thread's own history is untouched.
+    stored = graph.get_state(config).values["messages"]
+    assert any(isinstance(m, SystemMessage) and "YESTERDAY" in m.content for m in stored)
+    # The user's turns still reach the model — only the prompt was removed.
+    assert any(isinstance(m, HumanMessage) and m.content == "earlier turn" for m in sent)
+
+
+def test_the_turn_driver_writes_no_system_message_into_new_threads():
+    """The other half: a new thread must not store a prompt either, or the same
+    contradiction is recreated on the next prompt revision."""
+    import os
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "api.py"), encoding="utf-8-sig") as fh:
+        source = fh.read()
+    assert "input_messages.append(SystemMessage(" not in source
 
 
 def test_checkpoint_keeps_original_while_model_never_sees_the_bad_block_sync():

@@ -2067,8 +2067,13 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             tool_call_id=tool_id,
                         ))
 
-                if not snapshot.values or not snapshot.values.get("messages"):
-                    input_messages.append(SystemMessage(content=load_system_prompt()))
+                # No system message is written into the thread. The prompt
+                # reaches the model as `create_agent(system_prompt=...)`, which
+                # is composed fresh every turn, so storing a copy in the
+                # checkpoint only pinned the version this thread STARTED on —
+                # and the model then received both. The middleware drops any
+                # stored one (threads created before this still carry theirs);
+                # not writing new ones is the other half of the same fix.
                 input_messages.append(("user", message))
 
                 # Stream the agent turn. A background task drains astream() into
