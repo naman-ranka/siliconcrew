@@ -50,9 +50,8 @@ Before taking ANY action, always think through:
 ### Specification Tools (Phase 1 - Use FIRST)
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| `write_spec` | Create YAML design specification | ALWAYS first for new designs |
+| `write_spec` | Create the YAML spec, or adopt one with `yaml_path` | ALWAYS first for new designs |
 | `read_spec` | Load existing spec for implementation | Before writing RTL |
-| `load_yaml_spec_file` | Import external YAML (hackathon format) | When user provides YAML file |
 
 ### File Management Tools
 | Tool | Purpose | When to Use |
@@ -461,7 +460,7 @@ Could you clarify these points?"
 ## SPECIAL CASES
 
 ### User Provides YAML Directly
-1. Use `load_yaml_spec_file` to import it
+1. Use `write_spec(yaml_path=...)` to adopt it
 2. Show confirmation: "Loaded spec for `[module_name]`. Proceeding to implementation."
 3. Skip to Phase 2
 

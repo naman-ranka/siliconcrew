@@ -313,3 +313,31 @@ def test_dashboard_generation(tmp_path):
     text = out.read_text(encoding="utf-8")
     assert "p1" in text
     assert "area_um2" in text
+
+
+def test_yaml_spec_prompt_carries_the_spec_text_not_a_host_path(tmp_path):
+    """The harness reads the spec; the agent never gets a host path.
+
+    The prompt used to hand the agent an absolute path and tell it to load that
+    file, which only worked because the spec loader would read anywhere on the
+    host. That read is closed, so the harness — which does have filesystem
+    access — inlines the spec and the agent writes it into its own workspace.
+    """
+    from bench_orchestrator.config import ProblemConfig
+    from bench_orchestrator.problems import build_agent_prompt, prepare_problem
+
+    spec = tmp_path / "p7.yaml"
+    spec.write_text("adder:\n  description: add two numbers\n", encoding="utf-8")
+    problem = ProblemConfig(
+        id="p7", suite="asu", kind="yaml_spec", path=spec, agent="fake",
+        model="gpt-5.5", flow="verilog", mcp_server="rtl-codex",
+        evaluation="siliconcrew_pnr", timeout_sec=600,
+    )
+
+    prepared = prepare_problem(problem, tmp_path)
+    assert prepared["spec_text"] == "adder:\n  description: add two numbers\n"
+
+    prompt = build_agent_prompt(problem, prepared, "sess", None)
+    assert "add two numbers" in prompt
+    assert "write_spec(yaml_path='problem_spec.yaml')" in prompt
+    assert str(spec) not in prompt.split("--- problem_spec.yaml ---")[0]

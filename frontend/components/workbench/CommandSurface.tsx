@@ -99,7 +99,6 @@ export const SURFACE_ICONS: Record<string, LucideIcon> = {
   read_file: FileText,
   list_files_tool: ListTree,
   edit_file: PenLine,
-  load_yaml_spec_file: FileText,
   run_xls_flow: Package,
   run_dslx_interpreter: Package,
   compile_dslx_to_ir: Package,

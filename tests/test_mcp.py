@@ -29,7 +29,7 @@ async def _run_mcp_server_test():
     tool_names = [t.name for t in tools]
     expected_tools = [
         "create_session_tool", "list_sessions_tool", "set_active_session", "get_current_session",
-        "write_spec", "read_spec", "load_yaml_spec_file",
+        "write_spec", "read_spec",
         "write_file", "read_file", "edit_file", "list_files_tool",
         "linter_tool", "run_simulation", "waveform_tool",
         "start_synthesis", "get_synthesis_status", "get_synthesis_metrics", "search_logs_tool",

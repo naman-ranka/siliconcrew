@@ -204,7 +204,6 @@ EXPECTED_TOOL_ACTIONS = {
     "schematic_tool": "synthesize",
     # everything else protected -> SAVE
     "write_spec": "save",
-    "load_yaml_spec_file": "save",
     "write_file": "save",
     "edit_file": "save",
     "update_manifest": "save",
@@ -376,8 +375,7 @@ def test_attempt_roles_still_describe_the_flow():
     changes = {n for n, r in roles.items() if r in ("rtl_change", "synth_change")}
     checkpoints = {n for n, r in roles.items() if r == "checkpoint"}
     assert changes == {
-        "write_spec", "load_yaml_spec_file", "write_file", "edit_file",
-        "start_synthesis",
+        "write_spec", "write_file", "edit_file", "start_synthesis",
     }
     assert checkpoints == {
         "linter_tool", "run_simulation",

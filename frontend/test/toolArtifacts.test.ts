@@ -51,7 +51,7 @@ describe("artifactKeyForToolCall — file family → code:<file>", () => {
 });
 
 describe("artifactKeyForToolCall — spec family → spec", () => {
-  it.each(["write_spec", "read_spec", "load_yaml_spec_file"])("%s → spec", (tool) => {
+  it.each(["write_spec", "read_spec"])("%s → spec", (tool) => {
     expect(artifactKeyForToolCall(tool, {})).toBe("spec");
   });
 });

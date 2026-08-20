@@ -105,7 +105,7 @@ function pythonAnalysisArtifactKey(
  * tool, so a renamed or merged tool takes the button down loudly.
  *
  *   write_file / edit_file (either form)           → code:<file>
- *   write_spec / read_spec / load_yaml_spec_file   → spec
+ *   write_spec / read_spec                         → spec
  *   run_simulation                                 → wave:<runId from result>
  *   start_synthesis / retry_pd / get_synthesis_metrics /
  *   read_stage_report / generate_report_tool       → report:<runId from args|result>
@@ -148,7 +148,6 @@ export const TOOL_ARTIFACT_RESOLVERS: Readonly<Record<string, ArtifactResolver>>
 
   write_spec: specArtifact,
   read_spec: specArtifact,
-  load_yaml_spec_file: specArtifact,
 
   run_simulation: simArtifact,
 

@@ -260,11 +260,16 @@ class ToolArgumentError(Exception):
 # the session workspace, but not all of them re-check containment (the write
 # path does via file_ops; some read paths don't). Any argument that names a
 # file must stay inside the workspace, whatever the tool does with it.
-_FILE_ARG_KEYS = ("_file", "_files", "filename", "file_path")
+# Suffixes first, then exact names. ``_path`` is here because an argument that
+# says "path" is exactly as dangerous as one that says "file" — the spec adopter
+# took ``yaml_path`` and matched nothing, so it was the one file argument this
+# rule never saw.
+_FILE_ARG_SUFFIXES = ("_file", "_files", "_path")
+_FILE_ARG_NAMES = ("filename", "file_path")
 
 
 def _looks_like_file_arg(key: str) -> bool:
-    return key.endswith(_FILE_ARG_KEYS[0]) or key.endswith(_FILE_ARG_KEYS[1]) or key in _FILE_ARG_KEYS[2:]
+    return key.endswith(_FILE_ARG_SUFFIXES) or key in _FILE_ARG_NAMES
 
 
 def enforce_file_containment(workspace: str, arguments: Dict[str, Any]) -> None:

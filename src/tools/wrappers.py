@@ -990,23 +990,28 @@ from src.tools.spec_manager import (
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="rtl_change")
 def write_spec(
-    module_name: str,
-    description: str,
-    ports: list[dict],
+    module_name: str = "",
+    description: str = "",
+    ports: list[dict] = None,
     clock_period_ns: float = 10.0,
     tech_node: str = "SkyWater 130HD",
     parameters: dict = None,
     module_signature: str = "",
-    behavioral_description: str = ""
+    behavioral_description: str = "",
+    yaml_path: str = "",
 ) -> str:
     """
     Creates the design spec `<module_name>_spec.yaml` AND writes (overwriting)
     `constraints.sdc` from clock_period_ns. Call it before writing RTL:
     synthesis reads this spec to build each run's real timing constraints.
+    When the user SUPPLIED a spec file, pass yaml_path instead of authoring the
+    fields: the file is adopted as this design's spec — re-saved under the
+    module name it declares, with constraints.sdc regenerated from it — and the
+    reply carries the spec as design instructions.
 
     Args:
         module_name: Verilog module name, e.g. 'counter_8bit'. Names the spec
-            file.
+            file. Required unless yaml_path is given.
         description: One line on what the module does.
         ports: Port list. Each entry {name, direction} plus optional type,
             width, description. direction is 'input', 'output' or 'inout';
@@ -1025,11 +1030,28 @@ def write_spec(
         module_signature: Exact module signature to enforce. Generated from
             ports when omitted.
         behavioral_description: Detailed behavioral requirements, free text.
+        yaml_path: An existing YAML spec file INSIDE the workspace to adopt,
+            e.g. 'problem_spec.yaml'. Mutually exclusive with the authoring
+            fields above.
     """
     workspace = get_workspace_path()
     if not os.path.exists(workspace):
         os.makedirs(workspace)
-    
+
+    if yaml_path:
+        authored = [module_name, description, ports, module_signature,
+                    behavioral_description]
+        if any(authored):
+            return ("Error: pass yaml_path to adopt a spec file, or the spec "
+                    "fields to author one — not both.")
+        return _adopt_yaml_spec(workspace, yaml_path)
+
+    if not module_name or not description or not ports:
+        return ("Error: write_spec needs module_name, description and ports to "
+                "author a spec — or yaml_path to adopt one the user supplied.")
+
+    ports = list(ports)
+
     # Create DesignSpec from arguments
     spec = create_spec_from_dict({
         "module_name": module_name,
@@ -1135,51 +1157,35 @@ Use this specification to write the RTL. The module signature MUST match exactly
         return f"Error parsing spec file: {str(e)}"
 
 
-@tool(parse_docstring=True)
-@policy(category="editing", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True,
-        attempt_role="rtl_change")
-def load_yaml_spec_file(yaml_path: str) -> str:
-    """
-    Adopts an existing YAML spec as this design's spec: it is re-saved as
-    `<module_name>_spec.yaml` and `constraints.sdc` is regenerated from it,
-    replacing whatever write_spec produced.
-    Use it when the user supplied a spec file; use write_spec to author one.
+def _adopt_yaml_spec(workspace: str, yaml_path: str) -> str:
+    """Adopt a YAML spec file the user supplied as this design's spec.
 
-    Args:
-        yaml_path: The YAML spec file to adopt, e.g. 'problem_spec.yaml'.
+    The path is resolved INSIDE the workspace and nowhere else. This used to
+    accept an absolute path, and to fall back to the REPO ROOT when the name did
+    not resolve in the workspace — an arbitrary-file read on every surface,
+    because the argument's name matched none of the containment key patterns
+    ``/invoke`` checks. The confinement now lives in the tool, so the agent, MCP
+    and REST are all covered by construction.
     """
-    workspace = get_workspace_path()
-    
-    # Handle relative paths
-    if not os.path.isabs(yaml_path):
-        # Try workspace first
-        check_path = os.path.join(workspace, yaml_path)
-        if not os.path.exists(check_path):
-            # Try project root
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            check_path = os.path.join(project_root, yaml_path)
-        yaml_path = check_path
-    
-    if not os.path.exists(yaml_path):
-        return f"Error: YAML file not found at {yaml_path}"
-    
     try:
-        spec = load_yaml_file(yaml_path)
-        
-        # Copy to workspace as the active spec
+        resolved = resolve_in_workspace(yaml_path, workspace=workspace)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    if not os.path.exists(resolved):
+        return (f"Error: YAML file not found in the workspace at {yaml_path}. "
+                "Write it into the workspace first (write_file), then adopt it.")
+
+    try:
+        spec = load_yaml_file(resolved)
+
         spec_filename = f"{spec.module_name}_spec.yaml"
-        spec_filepath = os.path.join(workspace, spec_filename)
-        save_yaml_file(spec, spec_filepath)
-        
-        # Generate SDC
+        save_yaml_file(spec, os.path.join(workspace, spec_filename))
+
         sdc_content = spec.generate_sdc()
-        sdc_filepath = os.path.join(workspace, "constraints.sdc")
-        with open(sdc_filepath, "w") as f:
+        with open(os.path.join(workspace, "constraints.sdc"), "w") as f:
             f.write(sdc_content)
-        
+
         prompt = spec_to_prompt(spec)
-        
         return f"""**Loaded External Spec: {spec.module_name}**
 
 {prompt}
@@ -2000,7 +2006,6 @@ ALL_TOOLS = [
     # Specification tools (use FIRST)
     write_spec,
     read_spec,
-    load_yaml_spec_file,
     # File management
     write_file,
     read_file,

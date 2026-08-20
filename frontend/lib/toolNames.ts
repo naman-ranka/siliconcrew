@@ -45,7 +45,6 @@ export const WORKSPACE_MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "compile_dslx_to_ir",
   "edit_file",
   "generate_report_tool",
-  "load_yaml_spec_file",
   "optimize_xls_ir",
   "retry_pd",
   "run_dslx_interpreter",

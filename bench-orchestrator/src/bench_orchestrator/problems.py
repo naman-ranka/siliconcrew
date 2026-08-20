@@ -99,7 +99,11 @@ def build_agent_prompt(problem: ProblemConfig, prepared: dict[str, Any], session
     if problem.kind == "yaml_spec":
         body = (
             f"Problem kind: YAML spec.\n"
-            f"Load this spec with load_yaml_spec_file: {prepared['path']}\n"
+            "Write the spec below into your session workspace as 'problem_spec.yaml' "
+            "(write_file), then adopt it with write_spec(yaml_path='problem_spec.yaml').\n"
+            "--- problem_spec.yaml ---\n"
+            f"{prepared['spec_text']}\n"
+            "--- end problem_spec.yaml ---\n"
             "Run the complete SiliconCrew flow: implementation, RTL testbench, lint, RTL simulation, "
             "synthesis, metrics, post-synthesis simulation when available, and report generation.\n"
         )
@@ -222,8 +226,19 @@ def _flow_rules(flow: str) -> str:
 
 
 def _yaml_spec(problem: ProblemConfig) -> dict[str, Any]:
+    """Read the spec HERE, in the harness, and carry its text.
+
+    The agent used to be handed a host path and told to load it. That worked
+    only because the spec loader accepted absolute paths and fell back to the
+    repo root — an arbitrary-file read from any agent, which is now closed. The
+    harness has filesystem access and the agent does not, so the harness reads
+    the file and puts its content in the prompt; the agent writes it into its
+    own workspace and adopts it from there.
+    """
     assert problem.path is not None
-    return {"path": str(problem.path), "exists": problem.path.exists()}
+    exists = problem.path.exists()
+    text = problem.path.read_text(encoding="utf-8") if exists else ""
+    return {"path": str(problem.path), "exists": exists, "spec_text": text}
 
 
 def _prompt(problem: ProblemConfig) -> dict[str, Any]:

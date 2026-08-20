@@ -226,10 +226,9 @@ Claude has access to all 23 tools:
 - `get_current_session` - Get active session info
 - `delete_session_tool` - Delete session and files
 
-### Specification Tools (3 tools)
-- `write_spec` - Create YAML spec (ALWAYS first!)
+### Specification Tools (2 tools)
+- `write_spec` - Create the YAML spec (ALWAYS first!), or adopt one the user supplied with `yaml_path`
 - `read_spec` - Load existing spec
-- `load_yaml_spec_file` - Import external YAML
 
 ### File Management (4 tools)
 - `write_file` - Create files
