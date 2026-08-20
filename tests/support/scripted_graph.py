@@ -35,6 +35,15 @@ class ScriptedChatModel(BaseChatModel):
 
     script: List[AIMessage] = []
     calls: List[int] = []
+    seen: List[List[BaseMessage]] = []
+    """The message list handed to the model on each round, in order.
+
+    Middleware that edits the model's VIEW without editing stored state (the
+    reasoning strip, context compaction) is invisible from the checkpoint by
+    design, so a test asserting "it fired" has nowhere else to look. Recorded
+    here rather than reconstructed, because a reconstruction would assert the
+    test's model of the middleware instead of the middleware.
+    """
 
     @property
     def _llm_type(self) -> str:
@@ -57,6 +66,7 @@ class ScriptedChatModel(BaseChatModel):
     ) -> ChatResult:
         idx = len(self.calls)
         self.calls.append(idx)
+        self.seen.append(list(messages))
         msg = self.script[idx] if idx < len(self.script) else self.script[-1]
         # Fresh copy each call: LangGraph appends these to state, and a reused
         # object would alias across turns.
@@ -103,7 +113,7 @@ def build_real_graph_with_model(script: List[AIMessage], tools=None, checkpointe
     counts model round-trips, which is the only honest way to measure the step
     budget a turn actually gets at a given recursion limit.
     """
-    model = ScriptedChatModel(script=script, calls=[])
+    model = ScriptedChatModel(script=script, calls=[], seen=[])
     graph = create_agent(
         model=model,
         tools=list(tools) if tools is not None else [echo_tool, exploding_tool],

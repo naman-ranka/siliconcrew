@@ -8,7 +8,11 @@ and synthesis. Uses a ReAct pattern with comprehensive tool access.
 import os
 from dotenv import load_dotenv
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    ClearToolUsesEdit,
+    ContextEditingMiddleware,
+)
 from pathlib import Path
 from src.tools.wrappers import architect_tools
 from src.config import DEFAULT_MODEL
@@ -121,8 +125,79 @@ class ReasoningStripMiddleware(AgentMiddleware):
         return await handler(request.override(messages=messages) if changed else request)
 
 
+def context_compaction_middleware():
+    """Keep a long design session inside the model's context window.
+
+    A chip design session is long by nature — spec, RTL, lint, several
+    simulation rounds, a synthesis run, then debugging — and nothing used to
+    trim it, so a thread simply grew until the provider refused it. The user
+    hit that wall at the deepest point of their work, and the only recovery was
+    to start a new session and lose the thread.
+
+    What this does, and just as importantly what it does NOT do
+    -----------------------------------------------------------
+    Once the message list crosses the trigger, the CONTENT of every tool result
+    except the most recent few is replaced with ``[cleared]`` — in a deep copy
+    handed to the model. Nothing is removed and nothing is stored:
+    ``ContextEditingMiddleware`` is a ``wrap_model_call`` hook, so it never
+    produces a state update and the checkpoint is left content-identical
+    (verified against a real AsyncSqliteSaver, and pinned by
+    ``tests/test_context_compaction.py``).
+
+    That distinction is the whole point of this being its own change. The
+    checkpoint IS the user's chat transcript — ``api._read_thread_history``
+    rebuilds the panel from it and there is no ``messages`` table behind it — so
+    a summarizing middleware, which rewrites the stored list and drops the
+    user's own turns, would not be compaction but silent, unrecoverable data
+    loss. ``SummarizationMiddleware`` was probed and refused for exactly that.
+
+    Why clearing OLD TOOL RESULTS is the honest thing to drop: they are the only
+    part of the history that is reproducible. The workspace and the run
+    directory are the sources of truth, so a cleared ``read_file`` or
+    ``get_synthesis_status`` is one tool call away from being recovered, and an
+    old one describes a state that has since moved anyway. The user's words and
+    the model's own reasoning are not reproducible, and are never touched.
+
+    Pairing safety: a model request carrying a tool call whose result is missing
+    is a provider 400. This strategy edits content in place and never removes a
+    message, so a call and its result cannot be separated regardless of where
+    the retention boundary falls — it is structural, not bookkeeping. It also
+    composes with the start-of-turn dangling-call repair in ``api.py``, which
+    reads the CHECKPOINT (untouched here) to find calls an interrupted run left
+    open.
+
+    Token counting is the local ``chars/4`` approximation on purpose:
+    ``token_count_method="model"`` would put a provider round-trip in front of
+    every model call.
+
+    Returns an empty list when the trigger is 0, so compaction is one env var
+    away from being off.
+    """
+    from src.platform_engines.settings import get_settings
+
+    settings = get_settings()
+    if settings.chat_context_edit_trigger <= 0:
+        return []
+    return [
+        ContextEditingMiddleware(
+            edits=[
+                ClearToolUsesEdit(
+                    trigger=settings.chat_context_edit_trigger,
+                    keep=settings.chat_context_edit_keep,
+                )
+            ],
+            token_count_method="approximate",
+        )
+    ]
+
+
 def architect_middleware():
     """The middleware the architect ships, in order.
+
+    Order is outermost-first for the wrap hooks, so the reasoning strip runs
+    before compaction: compaction then counts tokens on the message list the
+    model will really be sent, rather than on blocks that were about to be
+    dropped anyway.
 
     Two rules this list is held to, both enforced by tests:
 
@@ -138,9 +213,11 @@ def architect_middleware():
        pin, cost accounting and the hosted-tier spend limiter — an uncapped
        BYOK/free-tier hole. If one is ever needed, it must be built from the
        same `create_llm(model_name, api_key=...)` call as the main model and its
-       usage summed into the turn totals.
+       usage summed into the turn totals. ``ContextEditingMiddleware`` is clean
+       on this point: with approximate counting it holds no model at all, and
+       with model counting it would borrow the REQUEST's model, never its own.
     """
-    return [ReasoningStripMiddleware()]
+    return [ReasoningStripMiddleware(), *context_compaction_middleware()]
 
 
 def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=None):

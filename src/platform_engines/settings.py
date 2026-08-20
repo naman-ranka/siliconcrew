@@ -117,6 +117,15 @@ class PlatformSettings:
     # nodes the agent graph runs per round — see the default below.
     chat_recursion_limit: int
 
+    # Context compaction for the chat agent (P4). MODEL-VIEW ONLY: the trigger
+    # is an approximate token count over the messages the model would be sent,
+    # and crossing it replaces the CONTENT of older tool results with a
+    # placeholder in a copy. The checkpoint — which is also the user's chat
+    # transcript, since there is no messages table — is never written.
+    # `chat_context_edit_trigger = 0` turns compaction off entirely.
+    chat_context_edit_trigger: int
+    chat_context_edit_keep: int
+
     # Hosted free-tier guardrails (per-user daily tokens; global $ ceiling).
     hosted_tier_tokens_per_day: int
     hosted_tier_cost_ceiling_usd: float
@@ -280,6 +289,26 @@ def get_settings() -> PlatformSettings:
         # node-style middleware is ever added (each one costs a step per round).
         # Pinned by test_the_step_budget_a_turn_actually_gets_is_unchanged.
         chat_recursion_limit=_int_env("CHAT_RECURSION_LIMIT", 54),
+        # 100_000 approximate message tokens, the same default Anthropic uses
+        # for clear_tool_uses. The number has to leave room for everything the
+        # trigger does NOT count: the count covers the message list only, not
+        # the system prompt, not the schemas of the tools bound to the call,
+        # and not the reply the model still has to fit. It also runs on a
+        # chars/4 approximation, which UNDER-counts Verilog, logs and reports,
+        # so the real figure at the trigger is higher than the trigger. The
+        # smallest context window in the model catalog is 200k (Anthropic), so
+        # the budget is 100k counted with ~100k left for schemas, prompt and
+        # output. A trigger set near the window fires after the provider
+        # has already refused the request, which is the failure this exists to
+        # prevent. Pinned by
+        # test_the_shipped_trigger_leaves_room_under_the_smallest_context_window.
+        chat_context_edit_trigger=_int_env("CHAT_CONTEXT_EDIT_TRIGGER", 100_000),
+        # How many of the most recent tool results keep their real content. The
+        # recent ones are the ones the model is still reasoning about; the old
+        # ones describe a workspace state that has since moved, and every one of
+        # them is re-obtainable by calling the tool again — the workspace and
+        # the run directory are the sources of truth, not the transcript.
+        chat_context_edit_keep=_int_env("CHAT_CONTEXT_EDIT_KEEP", 3),
         hosted_tier_tokens_per_day=_int_env("HOSTED_TIER_TOKENS_PER_DAY", 2_000_000),
         hosted_tier_cost_ceiling_usd=float(_env("HOSTED_TIER_COST_CEILING_USD", "50.0")),
         dev_insecure_auth=_flag("SILICONCREW_DEV_INSECURE_AUTH", default=False),
