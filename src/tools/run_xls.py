@@ -306,9 +306,12 @@ def _lint_generated_verilog(cwd: str, verilog_filename: str) -> Dict[str, Any]:
     return run_linter([path], cwd=cwd)
 
 
+STOP_AFTER_STAGES = ("interpret", "ir", "opt", "codegen", "lint")
+
+
 def run_xls_flow(
-    dslx_file: str,
-    top_module: str,
+    dslx_file: Optional[str] = None,
+    top_module: Optional[str] = None,
     generator: str = "combinational",
     pipeline_stages: int = 0,
     clock_period_ps: int = 0,
@@ -318,22 +321,40 @@ def run_xls_flow(
     keep_intermediates: bool = True,
     run_lint: bool = True,
     use_system_verilog: bool = False,
+    stop_after: str = "lint",
+    from_ir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Execute the preferred SiliconCrew XLS frontend path.
+    Execute the SiliconCrew XLS frontend path.
 
-    Stages:
-      1. DSLX interpreter/tests
-      2. DSLX -> XLS IR
-      3. XLS IR optimization
-      4. XLS codegen -> Verilog
-      5. Optional Icarus Verilog lint of generated RTL
+    Stages, in order:
+      interpret  DSLX interpreter/tests
+      ir         DSLX -> XLS IR
+      opt        XLS IR optimization (+ an area/delay estimate, free of charge)
+      codegen    XLS codegen -> Verilog
+      lint       Icarus Verilog lint of the generated RTL
+
+    ``stop_after`` ends the run after that stage — the debugging path that used
+    to be four separate tools. ``from_ir`` enters partway: an IR file skips
+    interpret and ir, and an ``.opt.ir`` (this flow's own optimized artifact)
+    skips the optimizer too and goes straight to codegen.
     """
     try:
         workspace = _ensure_workspace(cwd)
     except ValueError as exc:
         return _failure("setup", str(exc))
 
+    if stop_after not in STOP_AFTER_STAGES:
+        return _failure(
+            "setup",
+            f"Invalid stop_after '{stop_after}'. Allowed: {', '.join(STOP_AFTER_STAGES)}.",
+        )
+    if not from_ir and not dslx_file:
+        return _failure("setup", "Pass dslx_file to compile DSLX, or from_ir to enter at the IR.")
+    if not from_ir and not top_module:
+        return _failure("setup", "top_module is required when compiling DSLX.")
+
+    stage_results: Dict[str, Any] = {}
     artifacts: Dict[str, Optional[str]] = {
         "dslx_file": None,
         "ir_file": None,
@@ -341,40 +362,81 @@ def run_xls_flow(
         "verilog_file": None,
     }
 
-    interp = run_dslx_interpreter(dslx_file, cwd=workspace)
-    artifacts["dslx_file"] = interp.get("dslx_file")
-    if not interp.get("success"):
-        return {
-            **_failure("interpreter", interp.get("stderr", ""), interp.get("command", "")),
+    def done(extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """A run that stopped where it was asked to stop is a SUCCESS."""
+        result = {
+            "success": True,
+            "stage": "completed",
+            "stopped_after": stop_after,
             "artifacts": artifacts,
-            "stage_results": {"interpreter": interp},
-            "next_action": "Fix DSLX syntax or failing #[test] blocks, then rerun run_xls_flow.",
+            "stage_results": stage_results,
         }
+        result.update(extra or {})
+        return result
 
-    ir_comp = compile_dslx_to_ir(dslx_file, top_module, cwd=workspace)
-    artifacts["ir_file"] = ir_comp.get("ir_filename")
-    if not ir_comp.get("success"):
-        return {
-            **_failure("ir_conversion", ir_comp.get("stderr", ""), ir_comp.get("command", "")),
-            "artifacts": artifacts,
-            "stage_results": {"interpreter": interp, "ir_conversion": ir_comp},
-            "next_action": "Fix the top function name or DSLX constructs unsupported by IR conversion.",
-        }
+    if from_ir:
+        # The flow's own optimized artifact is recognised by name — hand back
+        # what it produced and it will not redo the optimization.
+        already_optimized = from_ir.endswith(".opt.ir")
+        artifacts["opt_ir_file" if already_optimized else "ir_file"] = from_ir
+        if stop_after in ("interpret", "ir"):
+            return _failure(
+                "setup",
+                f"stop_after='{stop_after}' has nothing to do: from_ir starts after that stage.",
+            )
+    else:
+        interp = run_dslx_interpreter(dslx_file, cwd=workspace)
+        artifacts["dslx_file"] = interp.get("dslx_file")
+        stage_results["interpreter"] = interp
+        if not interp.get("success"):
+            return {
+                **_failure("interpreter", interp.get("stderr", ""), interp.get("command", "")),
+                "artifacts": artifacts,
+                "stage_results": stage_results,
+                "next_action": "Fix DSLX syntax or failing #[test] blocks, then rerun run_xls_flow.",
+            }
+        if stop_after == "interpret":
+            return done()
 
-    opt = optimize_xls_ir(ir_comp["ir_filename"], cwd=workspace)
-    artifacts["opt_ir_file"] = opt.get("opt_ir_filename")
-    if not opt.get("success"):
-        if not keep_intermediates and artifacts["ir_file"]:
-            _safe_remove(workspace, artifacts["ir_file"])
-        return {
-            **_failure("optimization", opt.get("stderr", ""), opt.get("command", "")),
-            "artifacts": artifacts,
-            "stage_results": {"interpreter": interp, "ir_conversion": ir_comp, "optimization": opt},
-            "next_action": "Inspect XLS optimization error; simplify the DSLX or lower-level IR path.",
-        }
+        ir_comp = compile_dslx_to_ir(dslx_file, top_module, cwd=workspace)
+        artifacts["ir_file"] = ir_comp.get("ir_filename")
+        stage_results["ir_conversion"] = ir_comp
+        if not ir_comp.get("success"):
+            return {
+                **_failure("ir_conversion", ir_comp.get("stderr", ""), ir_comp.get("command", "")),
+                "artifacts": artifacts,
+                "stage_results": stage_results,
+                "next_action": "Fix the top function name or DSLX constructs unsupported by IR conversion.",
+            }
+        if stop_after == "ir":
+            return done()
+
+    if not artifacts["opt_ir_file"]:
+        opt = optimize_xls_ir(artifacts["ir_file"], cwd=workspace)
+        artifacts["opt_ir_file"] = opt.get("opt_ir_filename")
+        stage_results["optimization"] = opt
+        if not opt.get("success"):
+            if not keep_intermediates and artifacts["ir_file"]:
+                _safe_remove(workspace, artifacts["ir_file"])
+            return {
+                **_failure("optimization", opt.get("stderr", ""), opt.get("command", "")),
+                "artifacts": artifacts,
+                "stage_results": stage_results,
+                "next_action": "Inspect XLS optimization error; simplify the DSLX or lower-level IR path.",
+            }
+
+    # Area and estimated critical-path delay for the optimized IR, without
+    # running synthesis. This was a tool of its own; it is two numbers about an
+    # artifact the flow just produced, so the flow reports them.
+    bench = benchmark_xls(artifacts["opt_ir_file"], delay_model=delay_model, cwd=workspace)
+    stage_results["benchmark"] = bench
+    estimate = {"benchmark": _benchmark_fields(bench)}
+
+    if stop_after == "opt":
+        return done(estimate)
 
     codegen = codegen_xls(
-        opt_ir_filename=opt["opt_ir_filename"],
+        opt_ir_filename=artifacts["opt_ir_file"],
         generator=generator,
         pipeline_stages=pipeline_stages,
         clock_period_ps=clock_period_ps,
@@ -384,6 +446,7 @@ def run_xls_flow(
         cwd=workspace,
     )
     artifacts["verilog_file"] = codegen.get("verilog_filename")
+    stage_results["codegen"] = codegen
 
     if not keep_intermediates:
         for temp_file in [artifacts["ir_file"], artifacts["opt_ir_file"]]:
@@ -398,54 +461,17 @@ def run_xls_flow(
         return {
             **_failure("codegen", codegen.get("stderr", ""), codegen.get("command", "")),
             "artifacts": artifacts,
-            "stage_results": {
-                "interpreter": interp,
-                "ir_conversion": ir_comp,
-                "optimization": opt,
-                "codegen": codegen,
-            },
+            "stage_results": stage_results,
+            **estimate,
             "next_action": "Adjust XLS codegen options or simplify DSLX, then rerun run_xls_flow.",
         }
 
-    lint_result = None
-    if bool(run_lint):
-        lint_result = _lint_generated_verilog(workspace, codegen["verilog_filename"])
-        if not lint_result.get("success"):
-            return {
-                "success": False,
-                "stage": "verilog_lint",
-                "stdout": lint_result.get("stdout", ""),
-                "stderr": lint_result.get("stderr", ""),
-                "command": lint_result.get("command", ""),
-                "artifacts": artifacts,
-                "verilog_filename": codegen["verilog_filename"],
-                "generated_module": codegen["generated_module"],
-                "stage_results": {
-                    "interpreter": interp,
-                    "ir_conversion": ir_comp,
-                    "optimization": opt,
-                    "codegen": codegen,
-                    "verilog_lint": lint_result,
-                },
-                "next_action": "Inspect generated Verilog lint failure; use a wrapper or adjust XLS codegen options.",
-            }
-
-    return {
-        "success": True,
-        "stage": "completed",
-        "artifacts": artifacts,
+    generated = {
         "verilog_filename": codegen["verilog_filename"],
         "generated_module": codegen["generated_module"],
         "generator": codegen["generator"],
         "pipeline_stages": codegen["pipeline_stages"],
         "clock_period_ps": codegen["clock_period_ps"],
-        "stage_results": {
-            "interpreter": interp,
-            "ir_conversion": ir_comp,
-            "optimization": opt,
-            "codegen": codegen,
-            "verilog_lint": lint_result,
-        },
         "stdout": codegen.get("stdout", ""),
         "stderr": codegen.get("stderr", ""),
         "command": codegen.get("command", ""),
@@ -454,6 +480,51 @@ def run_xls_flow(
             "or write a wrapper if the benchmark/spec expects a different module signature."
         ),
     }
+
+    if stop_after == "codegen" or not bool(run_lint):
+        stage_results["verilog_lint"] = None
+        return done({**estimate, **generated})
+
+    lint_result = _lint_generated_verilog(workspace, codegen["verilog_filename"])
+    stage_results["verilog_lint"] = lint_result
+    if not lint_result.get("success"):
+        return {
+            "success": False,
+            "stage": "verilog_lint",
+            "stdout": lint_result.get("stdout", ""),
+            "stderr": lint_result.get("stderr", ""),
+            "command": lint_result.get("command", ""),
+            "artifacts": artifacts,
+            "verilog_filename": codegen["verilog_filename"],
+            "generated_module": codegen["generated_module"],
+            "stage_results": stage_results,
+            **estimate,
+            "next_action": "Inspect generated Verilog lint failure; use a wrapper or adjust XLS codegen options.",
+        }
+
+    return done({**estimate, **generated})
+
+
+_BENCHMARK_LINE = re.compile(
+    r"^\s*(Delay|Area|Total delay|Total area|Max reg-to-reg delay)\s*:?\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _benchmark_fields(bench: Dict[str, Any]) -> Dict[str, Any]:
+    """The estimate, flattened out of benchmark_main's stdout.
+
+    Honest about not knowing: when the estimator is unavailable (no XLS image)
+    or its output does not carry the lines, ``available`` is False and the raw
+    stderr says why — the flow itself never fails on it.
+    """
+    if not bench.get("success"):
+        return {"available": False, "reason": (bench.get("stderr") or "").strip()[:400]}
+    fields = {
+        key.strip().lower().replace(" ", "_"): value.strip()
+        for key, value in _BENCHMARK_LINE.findall(bench.get("stdout", "") or "")
+    }
+    return {"available": True, "delay_model": bench.get("delay_model"), **fields}
 
 
 def _safe_remove(cwd: str, rel_path: str) -> None:

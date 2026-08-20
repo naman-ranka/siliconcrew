@@ -185,11 +185,9 @@ def _authorities(tmp_path) -> Dict[Tuple[str, str], Set[str]]:
         # exists (wrappers._STAGE_SUMMARIES), or return the artifact. A third
         # view added to the Literal without a branch fails here.
         ("read_stage_report", "view"): {"summary", "raw"},
-        ("codegen_xls", "generator"): set(run_xls._VALID_GENERATORS),
-        ("codegen_xls", "delay_model"): set(run_xls._VALID_DELAY_MODELS),
-        ("benchmark_xls", "delay_model"): set(run_xls._VALID_DELAY_MODELS),
         ("run_xls_flow", "generator"): set(run_xls._VALID_GENERATORS),
         ("run_xls_flow", "delay_model"): set(run_xls._VALID_DELAY_MODELS),
+        ("run_xls_flow", "stop_after"): set(run_xls.STOP_AFTER_STAGES),
     }
 
 

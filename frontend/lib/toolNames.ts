@@ -38,16 +38,11 @@ export const TOOL = {
  * here, or the coverage test fails.
  */
 export const WORKSPACE_MUTATING_TOOLS: ReadonlySet<string> = new Set([
-  "benchmark_xls",
   "build_interactive_sim",
   "cocotb_tool",
-  "codegen_xls",
-  "compile_dslx_to_ir",
   "edit_file",
   "generate_report_tool",
-  "optimize_xls_ir",
   "retry_pd",
-  "run_dslx_interpreter",
   "run_simulation",
   "run_python_analysis",
   "run_xls_flow",

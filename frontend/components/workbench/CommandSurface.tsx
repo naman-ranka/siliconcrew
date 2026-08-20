@@ -100,11 +100,6 @@ export const SURFACE_ICONS: Record<string, LucideIcon> = {
   list_files_tool: ListTree,
   edit_file: PenLine,
   run_xls_flow: Package,
-  run_dslx_interpreter: Package,
-  compile_dslx_to_ir: Package,
-  optimize_xls_ir: Package,
-  codegen_xls: Package,
-  benchmark_xls: Package,
 };
 
 const iconFor = (id: string): LucideIcon => SURFACE_ICONS[id] ?? Terminal;

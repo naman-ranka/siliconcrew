@@ -212,11 +212,6 @@ EXPECTED_TOOL_ACTIONS = {
     "build_interactive_sim": "save",
     "generate_report_tool": "save",
     "run_python_analysis": "save",
-    "run_dslx_interpreter": "save",
-    "compile_dslx_to_ir": "save",
-    "optimize_xls_ir": "save",
-    "codegen_xls": "save",
-    "benchmark_xls": "save",
     "run_xls_flow": "save",
 }
 

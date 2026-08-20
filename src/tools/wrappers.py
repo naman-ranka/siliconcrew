@@ -1546,134 +1546,13 @@ def list_files_tool() -> str:
         
     return "Files in workspace:\n" + "\n".join(sorted(files))
 
-# New Google XLS / DSLX HLS tools
-@tool(parse_docstring=True)
-@policy(category="hls", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def run_dslx_interpreter(filename: str) -> str:
-    """
-    Type-checks a DSLX (.x) source and runs its `#[test]` blocks — the fastest
-    way to find out whether DSLX code is valid before compiling it. Writes no
-    files.
-
-    Args:
-        filename: DSLX file, e.g. 'saturating_add.x'.
-    """
-    from src.tools.run_xls import run_dslx_interpreter as run_interpreter
-    workspace = get_workspace_path()
-    result = run_interpreter(filename, cwd=workspace)
-    return json.dumps(result, indent=2)
-
-@tool(parse_docstring=True)
-@policy(category="hls", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def compile_dslx_to_ir(filename: str, top_module: str) -> str:
-    """
-    Compiles DSLX to XLS IR. Writes `<top_module>.ir` in the workspace and
-    returns it as `ir_filename` — feed that to optimize_xls_ir.
-    Step 2 of 4. Use run_xls_flow unless you are debugging one step.
-
-    Args:
-        filename: DSLX source file, e.g. 'saturating_add.x'.
-        top_module: Top-level DSLX function or proc. Also names the output file.
-    """
-    from src.tools.run_xls import compile_dslx_to_ir as compile_to_ir
-    workspace = get_workspace_path()
-    result = compile_to_ir(filename, top_module, cwd=workspace)
-    return json.dumps(result, indent=2)
-
-@tool(parse_docstring=True)
-@policy(category="hls", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def optimize_xls_ir(ir_filename: str) -> str:
-    """
-    Runs the XLS IR optimization passes. Writes `<name>.opt.ir` beside the input
-    and returns it as `opt_ir_filename` — feed that to codegen_xls or
-    benchmark_xls.
-    Step 3 of 4. Use run_xls_flow unless you are debugging one step.
-
-    Args:
-        ir_filename: IR file from compile_dslx_to_ir, e.g. 'saturating_add.ir'.
-    """
-    from src.tools.run_xls import optimize_xls_ir as optimize_ir
-    workspace = get_workspace_path()
-    result = optimize_ir(ir_filename, cwd=workspace)
-    return json.dumps(result, indent=2)
-
-@tool(parse_docstring=True)
-@policy(category="hls", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def codegen_xls(
-    opt_ir_filename: str,
-    generator: Literal["combinational", "pipeline"] = "combinational",
-    pipeline_stages: int = 0,
-    clock_period_ps: int = 0,
-    delay_model: Literal["sky130", "asap7", "unit", ""] = "sky130",
-    module_name: str = None,
-    use_system_verilog: bool = False,
-) -> str:
-    """
-    Schedules optimized XLS IR and emits synthesizable Verilog. Writes
-    `<base>.v` in the WORKSPACE ROOT — the input's directory is not preserved —
-    and returns `verilog_filename` and `generated_module`.
-    Step 4 of 4. Use run_xls_flow unless you are debugging one step.
-
-    Args:
-        opt_ir_filename: Optimized IR from optimize_xls_ir.
-        generator: 'combinational' emits one cycle of pure logic; 'pipeline'
-            inserts registers to meet a timing target.
-        pipeline_stages: Pipeline depth. IGNORED unless generator='pipeline'.
-        clock_period_ps: Target period in PICOseconds, not nanoseconds. IGNORED
-            unless generator='pipeline'.
-        delay_model: Timing model used for scheduling: 'sky130', 'asap7',
-            'unit', or '' for the tool default. IGNORED unless
-            generator='pipeline'.
-        module_name: Name for the generated module; defaults to the IR's top.
-        use_system_verilog: Emit SystemVerilog. Leave False — the Yosys
-            synthesis path downstream expects Verilog.
-    """
-    from src.tools.run_xls import codegen_xls as run_codegen
-    workspace = get_workspace_path()
-    result = run_codegen(
-        opt_ir_filename=opt_ir_filename,
-        generator=generator,
-        pipeline_stages=pipeline_stages,
-        clock_period_ps=clock_period_ps,
-        delay_model=delay_model,
-        module_name=module_name,
-        use_system_verilog=use_system_verilog,
-        cwd=workspace
-    )
-    return json.dumps(result, indent=2)
-
-@tool(parse_docstring=True)
-@policy(category="hls", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def benchmark_xls(
-    opt_ir_filename: str,
-    delay_model: Literal["sky130", "asap7", "unit", ""] = "sky130",
-) -> str:
-    """
-    Estimates area and estimated critical-path delay for optimized XLS IR
-    without running synthesis — a fast way to compare two DSLX formulations.
-    Writes nothing, and is NOT part of run_xls_flow; call it separately.
-
-    Args:
-        opt_ir_filename: Optimized IR from optimize_xls_ir, or run_xls_flow's
-            artifacts.opt_ir_file.
-        delay_model: 'sky130', 'asap7', 'unit', or '' for the tool default.
-    """
-    from src.tools.run_xls import benchmark_xls as run_benchmark
-    workspace = get_workspace_path()
-    result = run_benchmark(opt_ir_filename, delay_model=delay_model, cwd=workspace)
-    return json.dumps(result, indent=2)
-
+# Google XLS / DSLX HLS
 @tool(parse_docstring=True)
 @policy(category="hls", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def run_xls_flow(
-    dslx_file: str,
-    top_module: str,
+    dslx_file: str = "",
+    top_module: str = "",
     generator: Literal["combinational", "pipeline"] = "combinational",
     pipeline_stages: int = 0,
     clock_period_ps: int = 0,
@@ -1682,37 +1561,53 @@ def run_xls_flow(
     keep_intermediates: bool = True,
     run_lint: bool = True,
     use_system_verilog: bool = False,
+    stop_after: Literal["interpret", "ir", "opt", "codegen", "lint"] = "lint",
+    from_ir: str = "",
 ) -> str:
     """
     Compiles DSLX to synthesizable Verilog end to end: interpreter and #[test]
-    checks -> IR -> optimization -> codegen -> optional lint. The preferred XLS
-    path; the four single-step tools are its stages, exposed for debugging one
-    of them.
+    checks -> IR -> optimization -> codegen -> optional lint. Every stage's
+    result comes back under `stage_results`, plus the artifacts, the generated
+    module name, and an area / critical-path-delay estimate for the optimized IR
+    (`benchmark`) — a fast way to compare two DSLX formulations without running
+    synthesis.
     Suits algorithmic and datapath kernels — arithmetic, bit manipulation,
     encoders/decoders, fixed-point math, filters. Treat the result as compiler
     output: wrap it in a small adapter module rather than hand-editing it, then
-    verify it through the normal linter_tool / simulation flow. Returns the
-    artifacts, the generated module name, and per-stage results.
+    verify it through the normal linter_tool / run_simulation flow.
+    Debugging one stage is two arguments, not four tools: `stop_after` ends the
+    run early, and `from_ir` starts it partway.
 
     Args:
-        dslx_file: DSLX source, e.g. 'saturating_add.x'.
-        top_module: Top-level DSLX function or proc.
-        generator: 'combinational' or 'pipeline'.
-        pipeline_stages: Pipeline depth. Ignored unless generator='pipeline'.
-        clock_period_ps: Target period in PICOseconds. Ignored unless
-            generator='pipeline'.
-        delay_model: 'sky130', 'asap7', 'unit' or ''. Ignored unless
-            generator='pipeline'.
+        dslx_file: DSLX source, e.g. 'saturating_add.x'. Required unless
+            from_ir is given.
+        top_module: Top-level DSLX function or proc. Required with dslx_file;
+            it also names the IR file.
+        generator: 'combinational' emits one cycle of pure logic; 'pipeline'
+            inserts registers to meet a timing target.
+        pipeline_stages: Pipeline depth. IGNORED unless generator='pipeline'.
+        clock_period_ps: Target period in PICOseconds, not nanoseconds. IGNORED
+            unless generator='pipeline'.
+        delay_model: Timing model for scheduling AND for the area/delay
+            estimate: 'sky130', 'asap7', 'unit', or '' for the tool default.
         module_name: Name for the generated module; defaults to top_module.
         keep_intermediates: Keep the .ir and .opt.ir artifacts for provenance.
         run_lint: Lint the generated Verilog before returning success.
-        use_system_verilog: Emit SystemVerilog. Leave False for the Yosys path.
+        use_system_verilog: Emit SystemVerilog. Leave False — the Yosys
+            synthesis path downstream expects Verilog.
+        stop_after: Stage to stop after: 'interpret' (type-check and run the
+            #[test] blocks only — the fastest way to find out whether DSLX is
+            valid), 'ir', 'opt' (includes the area/delay estimate), 'codegen'
+            or 'lint' (the default: the whole flow).
+        from_ir: Enter the flow at an existing IR file instead of compiling
+            DSLX. An '.opt.ir' — this flow's own optimized artifact — enters at
+            codegen; any other IR is optimized first.
     """
     from src.tools.run_xls import run_xls_flow as run_flow
     workspace = get_workspace_path()
     result = run_flow(
-        dslx_file=dslx_file,
-        top_module=top_module,
+        dslx_file=dslx_file or None,
+        top_module=top_module or None,
         generator=generator,
         pipeline_stages=pipeline_stages,
         clock_period_ps=clock_period_ps,
@@ -1721,9 +1616,12 @@ def run_xls_flow(
         keep_intermediates=keep_intermediates,
         run_lint=run_lint,
         use_system_verilog=use_system_verilog,
-        cwd=workspace
+        stop_after=stop_after,
+        from_ir=from_ir or None,
+        cwd=workspace,
     )
     return json.dumps(result, indent=2)
+
 
 # =============================================================================
 # Session tools — the bootstrap of the MCP surface
@@ -2034,12 +1932,7 @@ ALL_TOOLS = [
     generate_report_tool,
     # Analysis (local-only Python analysis tool)
     run_python_analysis,
-    # Google XLS HLS tools
-    run_dslx_interpreter,
-    compile_dslx_to_ir,
-    optimize_xls_ir,
-    codegen_xls,
-    benchmark_xls,
+    # Google XLS HLS
     run_xls_flow,
 ]
 
