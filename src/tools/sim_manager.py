@@ -298,6 +298,9 @@ def run_sim_isolated(
     mode: str = "rtl",
     run_id: Optional[str] = None,
     netlist_file: Optional[str] = None,
+    # The manifest's platform: design INTENT. It labels provenance in rtl mode
+    # and is a last-resort fallback in post_synth — it never overrides the
+    # platform the synthesis run recorded (see the post_synth branch below).
     platform: Optional[str] = None,
     sim_profile: str = "auto",
     # None/"" = resolve from the manifest's passMarker, then the default.
@@ -314,6 +317,11 @@ def run_sim_isolated(
     ``$dumpfile`` VCD and the compiled ``a.out`` land inside it and never
     collide with other runs. Returns a :class:`SimRun`-shaped dict (camelCase,
     per data-model.md) plus the raw simulation log fields.
+
+    In ``post_synth`` mode the netlist, top and **platform** come from the
+    synthesis run's sim contract — the record of what was actually built.
+    ``platform`` here is only the caller's intent (the manifest's field) and is
+    used solely when the run recorded no platform of its own.
     """
     _ensure_dir(workspace)
     sim_run_id, run_dir = _allocate_run_dir(workspace)
@@ -339,11 +347,19 @@ def run_sim_isolated(
     if mode == "post_synth":
         from src.tools.sim_contract import resolve_post_synth
 
+        # ``platform`` reaching here is the MANIFEST's platform (both callers —
+        # the run_isolated_simulation wrapper and the IDE's Simulate button —
+        # pass it, and neither exposes a platform override). The manifest is
+        # design intent, defaults to sky130hd, and synthesis never writes the
+        # real platform back to it; the run's sim contract is the record of what
+        # was actually synthesised. Linking an asap7 gate netlist against
+        # sky130 stdcell models is a hardware-correctness bug, so intent goes in
+        # as ``fallback_platform`` — used only if the run recorded none.
         resolution, res_err = resolve_post_synth(
             workspace=workspace,
             run_id=run_id,
             netlist_file=netlist_file,
-            platform=platform,
+            fallback_platform=platform,
         )
         if res_err is not None:
             # Typed, semantic failure — a SimRun card, never a leaked traceback.

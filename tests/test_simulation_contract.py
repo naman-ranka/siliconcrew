@@ -527,3 +527,78 @@ def test_strip_modules_removes_only_the_named_blocks(tmp_path):
     assert rs._collect_defined_modules([out]) == {"A", "C"}
     # Nothing to strip -> reports False and writes nothing.
     assert rs._strip_modules(src, {"ZZZ"}, str(tmp_path / "none.v")) is False
+
+
+def test_isolated_post_synth_links_the_runs_stdcells_not_the_manifests(monkeypatch):
+    """The hardware consequence, end-to-end through the REAL run_simulation:
+    which standard-cell model set a gate netlist is linked against.
+
+    ``run_sim_isolated`` is handed the manifest's platform (sky130hd by default,
+    and synthesis never writes the real platform back to it). The run was
+    synthesised for asap7, so asap7 cell models — and the asap7 'compat' profile
+    — must be what gets compiled. Linking sky130 models against an asap7 netlist
+    is a hardware-correctness bug, not a preference."""
+    with tempfile.TemporaryDirectory() as ws:
+        tb, gate_abs, gate_rel = _make_synth_run_with_contract(ws, platform="asap7")
+        stdcell = os.path.join(ws, "_stdcells", "asap7", "sim", "dummy.v")
+        os.makedirs(os.path.dirname(stdcell), exist_ok=True)
+        open(stdcell, "w").write("module dummy; endmodule")
+
+        captured = {}
+
+        def fake_resolve(workspace_arg, platform_arg):
+            captured["stdcell_platform"] = platform_arg
+            return ([stdcell], {"files": []})
+
+        monkeypatch.setattr(rs, "resolve_stdcell_models", fake_resolve)
+        monkeypatch.setattr(rs, "_compile", lambda **kwargs: {
+            "returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"})
+        monkeypatch.setattr(rs, "_simulate", lambda **kwargs: {
+            "returncode": 0, "stdout": "TEST PASSED\n", "stderr": "", "command": "vvp"})
+
+        sim_run = sm.run_sim_isolated(
+            workspace=ws, verilog_files=[tb], top_module="tb",
+            mode="post_synth", run_id="synth_0001",
+            platform="sky130hd",  # the manifest's intent — must not win
+            pass_marker="TEST PASSED",
+        )
+
+        assert sim_run["status"] == "passed"
+        assert captured["stdcell_platform"] == "asap7"
+        assert sim_run["stdcellSource"] == "asap7"
+        assert sim_run["provenance"]["pdk"] == "asap7"
+
+
+def test_simulation_tool_path_defers_to_the_runs_platform(monkeypatch):
+    """simulation_tool does NOT share the defect: its ``platform`` argument
+    defaults to None and is forwarded to run_simulation as-is, so post-synth
+    resolution takes the platform from the run's contract. Locked here at the
+    run_simulation seam simulation_tool calls."""
+    with tempfile.TemporaryDirectory() as ws:
+        tb, gate_abs, gate_rel = _make_synth_run_with_contract(ws, platform="asap7")
+        stdcell = os.path.join(ws, "_stdcells", "asap7", "sim", "dummy.v")
+        os.makedirs(os.path.dirname(stdcell), exist_ok=True)
+        open(stdcell, "w").write("module dummy; endmodule")
+
+        captured = {}
+
+        def fake_resolve(workspace_arg, platform_arg):
+            captured["stdcell_platform"] = platform_arg
+            return ([stdcell], {"files": []})
+
+        monkeypatch.setattr(rs, "resolve_stdcell_models", fake_resolve)
+        monkeypatch.setattr(rs, "_compile", lambda **kwargs: {
+            "returncode": 0, "stdout": "", "stderr": "", "command": "iverilog"})
+        monkeypatch.setattr(rs, "_simulate", lambda **kwargs: {
+            "returncode": 0, "stdout": "TEST PASSED\n", "stderr": "", "command": "vvp"})
+
+        result = rs.run_simulation(
+            verilog_files=[tb], top_module="tb", cwd=ws, workspace=ws,
+            mode="post_synth", run_id="synth_0001",  # platform omitted (None)
+        )
+
+        assert result["status"] == "test_passed"
+        assert captured["stdcell_platform"] == "asap7"
+        assert result["stdcell_source"] == "asap7"
+        # auto profile is keyed off the same platform: asap7 -> compat.
+        assert result["sim_profile"] == "compat"

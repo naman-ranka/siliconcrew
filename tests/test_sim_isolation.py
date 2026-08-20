@@ -304,3 +304,82 @@ def test_post_synth_gets_past_run_resolution_with_real_runner(tmp_path):
     assert "Unknown run_id" not in blob
     assert "no latest run available" not in blob
     assert "requires a valid synthesized netlist" not in blob
+
+
+def test_post_synth_platform_comes_from_the_run_not_the_manifest(tmp_path):
+    """HARDWARE CORRECTNESS regression: the RUN's recorded platform wins over
+    the manifest's.
+
+    The manifest's ``platform`` is *intent* (it defaults to ``sky130hd`` and
+    synthesis never writes the platform back to it). The synthesis run's sim
+    contract is the record of what was actually built. Both callers of
+    ``run_sim_isolated`` (the ``run_isolated_simulation`` wrapper and the IDE's
+    Simulate button) hand it the manifest's platform; before the fix that value
+    won, so a design synthesised for asap7 had its gate netlist linked against
+    sky130 standard-cell models — a silently wrong post-synth simulation.
+    """
+    ws = str(tmp_path)
+    open(os.path.join(ws, "tb.v"), "w").close()
+    gate_abs, gate_rel = _make_synth_run_with_contract(ws, platform="asap7")
+
+    captured = {}
+
+    def spy_runner(verilog_files, top_module, cwd, mode, run_id, netlist_file,
+                   platform, sim_profile, pass_marker, timeout, log_path=None):
+        captured.update(netlist_file=netlist_file, platform=platform)
+        with open(os.path.join(cwd, f"{top_module}.out"), "w") as f:
+            f.write("bin")
+        return {"status": "test_passed", "pass_marker_found": True,
+                "compile_command": "iverilog", "sim_command": "vvp",
+                "stdout_tail": "", "stderr_tail": "", "log_truncated": False,
+                "failure_type": None, "first_failure_line": None}
+
+    r = sm.run_sim_isolated(
+        ws, ["tb.v"], "tb", mode="post_synth", run_id="synth_0001",
+        platform="sky130hd",  # the manifest's default — intent, not fact
+        _runner=spy_runner,
+    )
+
+    # The stdcell model set (and the auto sim_profile downstream) is keyed by
+    # this platform: it must be the one the netlist was synthesised for.
+    assert captured["platform"] == "asap7"
+    assert os.path.normpath(captured["netlist_file"]) == os.path.normpath(gate_abs)
+    # ...and the persisted record echoes the same honest answer.
+    assert r["stdcellSource"] == "asap7"
+    assert r["provenance"]["pdk"] == "asap7"
+    assert sm.get_sim_run(ws, r["id"])["stdcellSource"] == "asap7"
+
+
+def test_post_synth_uses_manifest_platform_only_when_run_recorded_none(tmp_path):
+    """The manifest's platform is still the last-resort fallback: a run record
+    that names no platform (very old runs) keeps resolving instead of failing."""
+    import json
+
+    ws = str(tmp_path)
+    open(os.path.join(ws, "tb.v"), "w").close()
+    gate_abs, gate_rel = _make_synth_run_with_contract(ws, platform="asap7")
+    meta_path = os.path.join(ws, "synth_runs", "synth_0001", "run_meta.json")
+    meta = json.load(open(meta_path))
+    meta["platform"] = None
+    meta["sim_contract"]["platform"] = None
+    json.dump(meta, open(meta_path, "w"))
+
+    captured = {}
+
+    def spy_runner(verilog_files, top_module, cwd, mode, run_id, netlist_file,
+                   platform, sim_profile, pass_marker, timeout, log_path=None):
+        captured.update(platform=platform)
+        with open(os.path.join(cwd, f"{top_module}.out"), "w") as f:
+            f.write("bin")
+        return {"status": "test_passed", "pass_marker_found": True,
+                "compile_command": "iverilog", "sim_command": "vvp",
+                "stdout_tail": "", "stderr_tail": "", "log_truncated": False,
+                "failure_type": None, "first_failure_line": None}
+
+    r = sm.run_sim_isolated(
+        ws, ["tb.v"], "tb", mode="post_synth", run_id="synth_0001",
+        platform="sky130hd", _runner=spy_runner,
+    )
+
+    assert r["status"] == "passed"
+    assert captured["platform"] == "sky130hd"

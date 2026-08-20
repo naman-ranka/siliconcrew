@@ -159,3 +159,78 @@ def test_legacy_fallback_resolves_gate_netlist_not_recorded_rtl_path(tmp_path):
     assert res.source == "legacy_find_netlist"
     assert os.path.basename(res.netlist_abs) == "6_final.v"
     assert os.path.normpath(res.netlist_abs) != os.path.normpath(rtl)
+
+
+def test_fallback_platform_never_overrides_the_recorded_platform(tmp_path):
+    """Design INTENT (the manifest's platform) must not override recorded FACT.
+
+    ``fallback_platform`` exists for callers holding the manifest's ``platform``
+    — which defaults to sky130hd and is never updated by synthesis. It may only
+    fill a gap, never win against the run's own record; otherwise an asap7
+    netlist gets linked against sky130 standard cells.
+    """
+    ws = str(tmp_path)
+    _write_synth_run(ws, platform="asap7", contract={
+        "schema_version": 1, "mode": "post_synth", "platform": "asap7",
+        "top": "top", "stdcell_platform": "asap7",
+        "netlist": "synth_runs/synth_0001/orfs_results/asap7/top/base/6_final.v",
+    })
+
+    resolution, err = sc.resolve_post_synth(ws, fallback_platform="sky130hd")
+    assert err is None
+    assert resolution.platform == "asap7"
+    assert resolution.stdcell_source == "asap7"
+
+    # Legacy (pre-contract) runs record the platform on the run_meta itself —
+    # that is fact too, and equally beats the fallback.
+    ws2 = str(tmp_path / "legacy")
+    os.makedirs(ws2, exist_ok=True)
+    _write_synth_run(ws2, platform="asap7", contract=None)
+    resolution, err = sc.resolve_post_synth(ws2, fallback_platform="sky130hd")
+    assert err is None
+    assert resolution.platform == "asap7"
+
+
+def test_fallback_platform_fills_a_run_that_recorded_none(tmp_path):
+    """A run with no platform anywhere still resolves via the fallback."""
+    ws = str(tmp_path)
+    run_dir, gate_abs = _write_synth_run(ws, platform="asap7", contract={
+        "schema_version": 1, "mode": "post_synth", "platform": None,
+        "top": "top", "stdcell_platform": None,
+        "netlist": "synth_runs/synth_0001/orfs_results/asap7/top/base/6_final.v",
+    })
+    meta_path = os.path.join(run_dir, "run_meta.json")
+    meta = json.load(open(meta_path))
+    meta["platform"] = None
+    json.dump(meta, open(meta_path, "w"))
+
+    resolution, err = sc.resolve_post_synth(ws, fallback_platform="sky130hd")
+    assert err is None
+    assert resolution.platform == "sky130hd"
+
+    # ...and with neither record nor fallback it stays an honest typed error,
+    # not a silent guess.
+    resolution, err = sc.resolve_post_synth(ws)
+    assert resolution is None
+    assert err.code == "platform_unknown"
+
+
+def test_explicit_platform_argument_still_overrides_the_record(tmp_path):
+    """simulation_tool's documented ``platform`` override is unchanged: an
+    explicit platform is a caller decision (invariant #1, free entry), while a
+    fallback is only a suggestion. Its default is None, so simulation_tool
+    normally defers to the run's recorded platform."""
+    ws = str(tmp_path)
+    _write_synth_run(ws, platform="asap7", contract={
+        "schema_version": 1, "mode": "post_synth", "platform": "asap7",
+        "top": "top", "stdcell_platform": "asap7",
+        "netlist": "synth_runs/synth_0001/orfs_results/asap7/top/base/6_final.v",
+    })
+
+    resolution, err = sc.resolve_post_synth(ws, platform="nangate45")
+    assert err is None
+    assert resolution.platform == "nangate45"
+
+    resolution, err = sc.resolve_post_synth(ws, platform=None)
+    assert err is None
+    assert resolution.platform == "asap7"
