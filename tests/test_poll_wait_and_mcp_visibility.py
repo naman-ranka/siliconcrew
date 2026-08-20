@@ -58,9 +58,6 @@ def test_mcp_advertises_the_run_id_keyed_readers():
         names = {t.name for t in tools}
 
         assert "read_stage_report" in names
-        assert "get_route_drc_summary" in names
-        assert "get_cts_summary" in names
-        assert "get_congestion_summary" in names
         assert "compare_pd_runs" in names
         assert "retry_pd" in names
         # Wave 9: one status tool keyed by run_id.

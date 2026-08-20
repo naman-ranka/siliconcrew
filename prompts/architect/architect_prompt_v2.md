@@ -50,11 +50,11 @@ it), and verify the result through the normal lint/simulation flow.
 
 PD Diagnosis (mandatory when WNS < 0):
 1. Call get_synthesis_status and read its stages/stage_history to confirm which stages produced artifacts.
-2. Read structured summaries before grepping logs:
-   - get_cts_summary        -> WNS/TNS, setup_skew, clock_fmax, violation counts, sample paths
-   - get_congestion_summary -> per-layer usage_pct, total_overflow, has_overflow, wirelength
-   - get_route_drc_summary  -> clean flag, violation_count, route_stage_status
-   - read_stage_report      -> raw stage artifact when summaries are insufficient
+2. Read structured summaries before grepping logs, via read_stage_report(stage):
+   - stage="cts"   -> WNS/TNS, setup_skew, clock_fmax, violation counts, sample paths
+   - stage="grt"   -> per-layer usage_pct, total_overflow, has_overflow, wirelength
+   - stage="route" -> clean flag, violation_count, route_stage_status
+   - view="raw"    -> the stage artifact itself, when the summary is insufficient
 3. Use search_logs_tool only for evidence the structured summaries do not surface (PDN errors,
    path-level detail, ORFS-specific warnings).
 4. Diagnose the failure class from this evidence. Do not assume the cause without reading the data.

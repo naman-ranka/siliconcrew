@@ -3432,16 +3432,18 @@ def _find_artifact_file(run_dir: str, subdir: str, name: str) -> Optional[str]:
     return None
 
 
+# ONE name per stage. There used to be three extra keys here — placement,
+# global_route, final — that the tool's own enum never offered, so they were a
+# second vocabulary no surface advertised and nothing tested end to end. A
+# caller who uses one now gets a refusal that lists the real names, which is
+# more useful than a synonym only the implementation knew about.
 _STAGE_REPORT_CANDIDATES: Dict[str, List[tuple[str, str]]] = {
     "floorplan": [("orfs_reports", "2_floorplan_final.rpt")],
     "place": [("orfs_logs", "3_3_place_gp.json")],
-    "placement": [("orfs_logs", "3_3_place_gp.json")],
     "cts": [("orfs_reports", "4_cts_final.rpt")],
     "grt": [("orfs_reports", "congestion.rpt")],
-    "global_route": [("orfs_reports", "congestion.rpt")],
     "route": [("orfs_reports", "5_route_drc.rpt")],
     "finish": [("orfs_reports", "6_finish.rpt")],
-    "final": [("orfs_reports", "6_finish.rpt")],
 }
 
 

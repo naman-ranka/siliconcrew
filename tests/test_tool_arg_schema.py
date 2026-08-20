@@ -164,11 +164,10 @@ def _authorities(tmp_path) -> Dict[Tuple[str, str], Set[str]]:
         sm.start_synthesis_job(workspace=workspace, verilog_files=[],
                                top_module="x", max_stage="not_a_stage")
     )
-    # read_stage_report's supported list includes three pure aliases
-    # (placement/global_route/final); the schema deliberately offers the six
-    # canonical names, so the authority is the canonical subset — asserted to
-    # BE a subset just below, in test_stage_aliases_are_a_superset.
-    report_stages = set(sm._STAGE_REPORT_CANDIDATES) - {"placement", "global_route", "final"}
+    # ONE name per stage: what the reader accepts IS what the schema offers,
+    # asserted as an equality just below (there used to be three alias keys the
+    # enum never advertised).
+    report_stages = set(sm._STAGE_REPORT_CANDIDATES)
 
     return {
         ("linter_tool", "engine"): set(run_linter.ENGINES),
@@ -182,6 +181,10 @@ def _authorities(tmp_path) -> Dict[Tuple[str, str], Set[str]]:
         ("retry_pd", "start_stage"): retry_stages,
         ("retry_pd", "max_stage"): retry_max_stages,
         ("read_stage_report", "stage"): report_stages,
+        # The reader has exactly two branches: parse the stage when a parser
+        # exists (wrappers._STAGE_SUMMARIES), or return the artifact. A third
+        # view added to the Literal without a branch fails here.
+        ("read_stage_report", "view"): {"summary", "raw"},
         ("codegen_xls", "generator"): set(run_xls._VALID_GENERATORS),
         ("codegen_xls", "delay_model"): set(run_xls._VALID_DELAY_MODELS),
         ("benchmark_xls", "delay_model"): set(run_xls._VALID_DELAY_MODELS),
@@ -228,16 +231,24 @@ def test_retry_pd_and_constraints_mode_enums_are_the_real_domains(tmp_path):
     assert "bypass" in real_modes
 
 
-def test_stage_aliases_are_a_superset_of_the_offered_stages():
-    """read_stage_report also answers to placement/global_route/final. Narrowing
-    the enum to the six canonical names is a curation, not a lie — so the
-    offered set must stay a strict subset of what the reader accepts."""
+def test_the_offered_stages_are_exactly_the_accepted_stages(tmp_path):
+    """One vocabulary. The reader used to answer to three synonyms
+    (placement/global_route/final) that no schema advertised, so no surface
+    could reach them and nothing tested them end to end. A caller who uses one
+    now gets a refusal naming the real stages."""
     from src.tools import synthesis_manager as sm
 
     offered = set(_all_schemas()["read_stage_report"]["stage"]["enum"])
     accepted = set(sm._STAGE_REPORT_CANDIDATES)
-    assert offered < accepted
-    assert accepted - offered == {"placement", "global_route", "final"}
+    assert offered == accepted
+
+    workspace = tmp_path / "ws"
+    (workspace / "synth_runs" / "synth_0001").mkdir(parents=True)
+    rejected = sm.read_stage_report(workspace=str(workspace), stage="placement",
+                                    run_id="synth_0001")
+    assert rejected["status"] == "error"
+    assert "Unsupported stage" in rejected["message"]
+    assert sorted(rejected["supported_stages"]) == sorted(offered)
 
 
 def test_the_checkers_actually_bite():

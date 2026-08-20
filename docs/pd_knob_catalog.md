@@ -159,9 +159,9 @@ Recommendation:
 1. run start_synthesis(...)
 2. inspect:
    - get_synthesis_status (stages / stage_history)
-   - get_cts_summary
-   - get_congestion_summary
-   - get_route_drc_summary
+   - read_stage_report(stage="cts")
+   - read_stage_report(stage="grt")
+   - read_stage_report(stage="route")
 3. choose retry stage window
 4. apply one or a few targeted ORFS overrides through retry_pd
 5. compare parent and child

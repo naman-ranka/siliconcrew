@@ -801,81 +801,66 @@ def get_synthesis_metrics(run_id: str = None) -> str:
     return json.dumps(result, indent=2)
 
 
+# The stages that have a STRUCTURED reader, and the one that reads it. The other
+# three stages have only their ORFS artifact — asking for a summary there gets
+# the artifact back, with the reply saying so rather than pretending.
+_STAGE_SUMMARIES = {
+    "cts": collect_cts_summary,
+    "grt": collect_congestion_summary,
+    "route": collect_route_drc_summary,
+}
+
+
 @tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True)
 def read_stage_report(
     stage: Literal["floorplan", "place", "cts", "grt", "route", "finish"],
     run_id: str = None,
+    view: Literal["summary", "raw"] = "summary",
 ) -> str:
     """
-    Returns the main ORFS artifact for one physical-design stage as a text
-    excerpt (first 12000 chars) plus its path. Use it when the structured
-    summaries do not carry the detail you need.
+    Reads one physical-design stage of a synthesis run. Three stages parse into
+    a structured summary; every stage can return its raw ORFS artifact.
+      cts   - wns_ns, tns_ns, worst_slack_ns, clock_fmax_mhz, setup_skew_ns and
+              max_slew / max_fanout violation counts (4_cts_final.rpt). Read
+              this first when a run misses timing.
+      grt   - per-layer resource, demand, usage_pct and overflow, plus totals
+              (congestion.rpt / 5_1_grt.log). Read it when timing degrades
+              between placement and routing: that points at wire delay rather
+              than logic depth.
+      route - `clean`, violation_count, unique_violation_count,
+              sample_violations and route_stage_status (5_route_drc.rpt). An
+              empty report counts as clean ONLY when the route stage completed;
+              an empty report from an unfinished route is reported as not-clean,
+              with a note saying so.
+    The reply always carries the `view` you actually got.
 
     Args:
         stage: floorplan (2_floorplan_final.rpt), place (3_3_place_gp.json),
             cts (4_cts_final.rpt), grt (congestion.rpt), route
             (5_route_drc.rpt) or finish (6_finish.rpt).
         run_id: Synthesis run. Omit for the most recent run.
+        view: 'summary' parses the stage when a parser exists — the default,
+            and far smaller than the artifact. 'raw' returns the artifact text
+            (first 12000 chars) plus its path; use it when the summary does not
+            carry the detail you need. floorplan, place and finish have no
+            parser, so they answer 'raw' either way and say so.
     """
     workspace = get_workspace_path()
+    summarize = _STAGE_SUMMARIES.get(stage) if view == "summary" else None
+    if summarize is not None:
+        result = summarize(workspace=workspace, run_id=run_id)
+        result["view"] = "summary"
+        return json.dumps(result, indent=2)
+
     result = collect_stage_report(workspace=workspace, stage=stage, run_id=run_id)
-    return json.dumps(result, indent=2)
-
-
-@tool(parse_docstring=True)
-@policy(category="synthesis", protected=True, mutates=False, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def get_route_drc_summary(run_id: str = None) -> str:
-    """
-    Structured final-routing DRC summary for a run: `clean`, violation_count,
-    unique_violation_count, sample_violations and route_stage_status. An empty
-    5_route_drc.rpt counts as clean ONLY when the route stage completed — an
-    empty report from an unfinished route is reported as not-clean, with a note
-    saying so.
-
-    Args:
-        run_id: Synthesis run. Omit for the most recent run.
-    """
-    workspace = get_workspace_path()
-    result = collect_route_drc_summary(workspace=workspace, run_id=run_id)
-    return json.dumps(result, indent=2)
-
-
-@tool(parse_docstring=True)
-@policy(category="synthesis", protected=True, mutates=False, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def get_cts_summary(run_id: str = None) -> str:
-    """
-    Structured clock-tree-synthesis summary for a run: wns_ns, tns_ns,
-    worst_slack_ns, clock_fmax_mhz, setup_skew_ns and max_slew / max_fanout
-    violation counts, parsed from 4_cts_final.rpt. Read this first when a run
-    misses timing.
-
-    Args:
-        run_id: Synthesis run. Omit for the most recent run.
-    """
-    workspace = get_workspace_path()
-    result = collect_cts_summary(workspace=workspace, run_id=run_id)
-    return json.dumps(result, indent=2)
-
-
-@tool(parse_docstring=True)
-@policy(category="synthesis", protected=True, mutates=False, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def get_congestion_summary(run_id: str = None) -> str:
-    """
-    Structured global-routing congestion for a run, from congestion.rpt or
-    5_1_grt.log: per-layer resource, demand, usage_pct and overflow, plus
-    totals. Read it when timing degrades between placement and routing — that
-    points at wire delay rather than logic depth.
-
-    Args:
-        run_id: Synthesis run. Omit for the most recent run.
-    """
-    workspace = get_workspace_path()
-    result = collect_congestion_summary(workspace=workspace, run_id=run_id)
+    result["view"] = "raw"
+    if view == "summary":
+        result["note"] = (
+            f"No structured summary exists for stage '{stage}' — this is the raw "
+            "report artifact."
+        )
     return json.dumps(result, indent=2)
 
 
@@ -2036,9 +2021,6 @@ ALL_TOOLS = [
     get_synthesis_status,
     get_synthesis_metrics,
     read_stage_report,
-    get_route_drc_summary,
-    get_cts_summary,
-    get_congestion_summary,
     compare_pd_runs,
     search_logs_tool,
     schematic_tool,

@@ -214,7 +214,7 @@ def test_tool_call_turn_logs_timing_lines(wiring, capsys):
     tool call and the overall turn take (nothing else is logged/printed from
     run_turn today). This asserts the tag, tool name, and thread/turn id are
     present — loose on exact timing values, strict on presence/shape."""
-    tool_item = types.SimpleNamespace(type="mcptoolcall", id="c1", tool="get_cts_summary",
+    tool_item = types.SimpleNamespace(type="mcptoolcall", id="c1", tool="read_stage_report",
                                       arguments={})
     done_item = types.SimpleNamespace(type="mcptoolcall", id="c1",
                                       status="completed",
@@ -256,8 +256,8 @@ def test_tool_call_turn_logs_timing_lines(wiring, capsys):
     # the tool_call_start / tool_result pair for the actual tool, matched by
     # call_id, with a numeric elapsed duration on the result line.
     start_lines = [l for l in lines if "event=tool_call_start" in l]
-    assert start_lines and "tool=get_cts_summary" in start_lines[0] and "call_id=c1" in start_lines[0]
-    result_lines = [l for l in lines if "tool=get_cts_summary" in l and "call_id=c1" in l and "status=" in l]
+    assert start_lines and "tool=read_stage_report" in start_lines[0] and "call_id=c1" in start_lines[0]
+    result_lines = [l for l in lines if "tool=read_stage_report" in l and "call_id=c1" in l and "status=" in l]
     assert result_lines
     assert "elapsed=" in result_lines[0] and result_lines[0].rstrip().endswith("s")
 
