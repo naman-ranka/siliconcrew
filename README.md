@@ -117,7 +117,7 @@ The full pipeline (problem selection, agent run, container grading, and a proven
 │                                                                            │
 │   System prompt (~130-line methodology, versioned in prompts/architect/)   │
 │   + Provider-selected LLM (Gemini / OpenAI / Anthropic)                                 │
-│   + 35 LangChain tools                                                     │
+│   + 19 LangChain tools (6 more are hidden by default)                      │
 │                                                                            │
 │   Workflow: Spec → RTL → Testbench → Lint → Simulate → Debug → Synthesize │
 └──────────────────────────────────┬─────────────────────────────────────────┘
@@ -129,12 +129,13 @@ The full pipeline (problem selection, agent run, container grading, and a proven
      │ Spec & Files   │  │  Verification  │  │   Synthesis    │
      ├────────────────┤  ├────────────────┤  ├────────────────┤
      │ write_spec     │  │ linter_tool    │  │ start_synthesis│
-     │ read_spec      │  │ run_simulation │  │ get_synthesis_metrics│
-     │ load_yaml_spec │  │ waveform_tool  │  │ search_logs    │
-     │ write_file     │  │ cocotb_tool    │  │ schematic_tool │
-     │ read_file      │  │ sby_tool       │  │ save_metrics   │
-     │ edit_file_tool │  │                │  │ generate_report│
-     │ list_files     │  │                │  │                │
+     │ read_spec      │  │ run_simulation │  │ get_synthesis_status│
+     │ write_file     │  │ waveform_tool  │  │ get_synthesis_metrics│
+     │ read_file      │  │                │  │ read_stage_report│
+     │ edit_file      │  │                │  │ retry_pd       │
+     │ list_files_tool│  │                │  │ compare_pd_runs│
+     │ get_manifest   │  │                │  │ search_logs_tool│
+     │ update_manifest│  │                │  │ generate_report_tool│
      └───────┬────────┘  └───────┬────────┘  └───────┬────────┘
              │                   │                    │
              ▼                   ▼                    ▼
@@ -392,7 +393,7 @@ counter_4bit:
 │   ├── state/
 │   │   └── state.py                # DesignState TypedDict
 │   ├── tools/
-│   │   ├── wrappers.py             # 35 LangChain @tool definitions
+│   │   ├── wrappers.py             # 31 LangChain @tool definitions + their policy
 │   │   ├── spec_manager.py         # YAML spec handling + validation
 │   │   ├── run_linter.py           # Icarus Verilog linting
 │   │   ├── run_simulation.py       # Simulation orchestration
