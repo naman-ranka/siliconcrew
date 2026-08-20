@@ -192,3 +192,31 @@ def test_a_failing_lint_reports_the_generated_module_anyway(stages, monkeypatch)
     assert res["success"] is False and res["stage"] == "verilog_lint"
     assert res["generated_module"] == "adder"
     assert res["benchmark"]["available"] is True
+
+
+# --- cleanup never touches what the caller supplied ---------------------------
+
+def test_intermediates_the_flow_made_are_cleaned_up(stages, monkeypatch):
+    removed: list[str] = []
+    monkeypatch.setattr(run_xls, "_safe_remove", lambda cwd, rel: removed.append(rel))
+    _flow(dslx_file="adder.x", top_module="adder", keep_intermediates=False)
+    assert set(removed) == {"adder.ir", "adder.opt.ir"}
+
+
+def test_a_caller_supplied_ir_is_never_deleted(stages, monkeypatch):
+    """keep_intermediates tidies what the flow produced. The IR the caller
+    handed in is an input — deleting it would destroy evidence, not tidy."""
+    removed: list[str] = []
+    monkeypatch.setattr(run_xls, "_safe_remove", lambda cwd, rel: removed.append(rel))
+    _flow(from_ir="handwritten.ir", keep_intermediates=False)
+    assert removed == ["handwritten.opt.ir"]   # the optimizer's output, not the input
+
+
+def test_a_failed_optimizer_does_not_delete_the_supplied_ir(stages, monkeypatch):
+    removed: list[str] = []
+    monkeypatch.setattr(run_xls, "_safe_remove", lambda cwd, rel: removed.append(rel))
+    monkeypatch.setattr(run_xls, "optimize_xls_ir", lambda ir_filename, cwd=None: {
+        "success": False, "stderr": "pass crashed"})
+    res = _flow(from_ir="handwritten.ir", keep_intermediates=False)
+    assert res["success"] is False and res["stage"] == "optimization"
+    assert removed == []
