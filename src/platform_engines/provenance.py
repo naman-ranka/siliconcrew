@@ -23,9 +23,16 @@ benchmark number could ever be attributed to a prompt version (finding B9). The
   * ``skills_loaded``  — names of the skill files in force
   * ``skills_sha``     — stable content hash of those skills
   * ``tool_set``       — identifier of the tool set the agent could see
+  * ``context_edit``   — the context-compaction settings the turn ran under
 
 Skills and tool sets do not exist yet, so those three are present and ABSENT
 today; the later phase fills them with data, not with new fields.
+
+``context_edit`` is filled in: once compaction is on, a long run reaches the
+model with older tool results replaced by a placeholder, so it is not the same
+experiment as the same prompt on an uncompacted run. Comparing two benchmark
+numbers without knowing which side compacted would be comparing two different
+inputs.
 
 Collection is best-effort and never raises: a missing git binary or unpinned
 image degrades to ``None``/``"unknown"`` rather than failing a synth run.
@@ -74,6 +81,7 @@ class AgentProvenance:
     skills_loaded: Optional[List[str]] = None
     skills_sha: Optional[str] = None
     tool_set: Optional[str] = None
+    context_edit: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +98,7 @@ class Provenance:
     skills_loaded: Optional[List[str]] = None
     skills_sha: Optional[str] = None
     tool_set: Optional[str] = None
+    context_edit: Optional[str] = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -181,6 +190,35 @@ def prompt_identity(prompt_path: Optional[Path] = None) -> Tuple[Optional[str], 
     return version, "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def context_edit_identity() -> str:
+    """The context-compaction settings this process would run a turn under.
+
+    Compaction is process-wide config, not owner state — the same argument that
+    lets the prompt pair be resolved here — so this reads the settings directly
+    and carries no tenancy risk.
+
+    The string is deliberately flat and greppable rather than a nested block:
+    ``"off"`` or ``"clear_tool_uses:trigger=<tokens>,keep=<n>"``. It is built
+    from the SAME two settings ``src.agents.architect.context_compaction_middleware``
+    builds the middleware from, and this module stays free of the LangGraph
+    import (the reason ``active_prompt_version`` re-implements its rule too);
+    ``test_provenance_context_edit_matches_the_middleware_actually_shipped``
+    is what keeps the two honest.
+
+    Never raises: stamping a run must not be the thing that fails a run.
+    """
+    try:
+        from src.platform_engines.settings import get_settings
+
+        settings = get_settings()
+        trigger = int(settings.chat_context_edit_trigger)
+        if trigger <= 0:
+            return "off"
+        return f"clear_tool_uses:trigger={trigger},keep={int(settings.chat_context_edit_keep)}"
+    except Exception:
+        return "unknown"
+
+
 def skills_digest(skills: Mapping[str, str]) -> Tuple[List[str], str]:
     """``(sorted names, sha256:<hex>)`` for a set of ``name -> body`` skills.
 
@@ -252,7 +290,9 @@ def resolve_agent_provenance(user_id: Optional[str] = None) -> AgentProvenance:
     which is the truthful reading: nothing looked, so nothing was chosen.
     """
     version, sha = prompt_identity()
-    return AgentProvenance(prompt_version=version, prompt_sha=sha)
+    return AgentProvenance(
+        prompt_version=version, prompt_sha=sha, context_edit=context_edit_identity()
+    )
 
 
 def collect_provenance(
@@ -273,7 +313,9 @@ def collect_provenance(
         agent = current_agent_provenance()
     if agent is None:
         version, sha = prompt_identity()
-        agent = AgentProvenance(prompt_version=version, prompt_sha=sha)
+        agent = AgentProvenance(
+            prompt_version=version, prompt_sha=sha, context_edit=context_edit_identity()
+        )
     return Provenance(
         repo_commit=repo_commit(),
         orfs_image_digest=orfs_image_digest(orfs_image),
@@ -285,4 +327,5 @@ def collect_provenance(
         skills_loaded=list(agent.skills_loaded) if agent.skills_loaded is not None else None,
         skills_sha=agent.skills_sha,
         tool_set=agent.tool_set,
+        context_edit=agent.context_edit,
     )
