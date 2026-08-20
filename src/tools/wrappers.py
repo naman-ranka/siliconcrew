@@ -997,8 +997,8 @@ from src.tools.build_interactive_sim import build_websim_netlist
 from src.tools.generate_schematic import generate_schematic
 from src.tools.design_report import generate_design_report, save_design_report
 from src.tools.spec_manager import (
-    DesignSpec, PortSpec, parse_yaml_spec, validate_spec, 
-    spec_to_prompt, save_yaml_file, load_yaml_file, create_spec_from_dict
+    validate_spec, spec_to_prompt, save_yaml_file, load_yaml_file,
+    create_spec_from_dict,
 )
 
 @tool(parse_docstring=True)
