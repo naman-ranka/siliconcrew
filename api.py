@@ -61,6 +61,7 @@ from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
 from src.tools import manifest as manifest_mod
 from src.api.actions import build_actions_router
 from src.api import workspace_fs
+from src.utils import skills as skills_mod
 from src.utils import templates as templates_mod
 from src.platform_engines import template_source as template_source_mod
 
@@ -1048,6 +1049,124 @@ async def delete_key(provider: str, identity: Identity = Depends(require_signed_
 
 
 # =============================================================================
+# SKILLS — the built-in pack, and the caller's own layer over it
+# =============================================================================
+# Two layers and four rules, all of them in src.utils.skills: a user skill with
+# the same name replaces the built-in, a name in a small list is off, an updated
+# built-in never overrides a replacement, and the two are never auto-merged.
+# These routes are a thin owner-scoped shell over that one implementation — they
+# add no rule of their own, and they can only ever name the caller's own layer:
+# the owner comes from the resolved identity, never from the path or the body.
+# There is deliberately no route that reads or imports another owner's skills.
+
+class SkillText(BaseModel):
+    text: str
+
+
+class SkillEnabled(BaseModel):
+    enabled: bool
+
+
+def _skill_entry_payload(entry) -> Dict[str, Any]:
+    skill = entry.skill
+    return {
+        "name": entry.name,
+        "layer": entry.layer,
+        "enabled": entry.enabled,
+        "description": skill.description if skill is not None else None,
+        # The one skill with no trigger. The UI marks it differently because its
+        # failure mode is silence — nothing ever says "your test was too easy" —
+        # and a user turning it off must be doing it on purpose, with the cost
+        # in front of them.
+        "always_load": bool(skill is not None and skill.always_load),
+        "builtin_changed": entry.builtin_changed,
+        "error": entry.error,
+    }
+
+
+@app.get("/api/skills")
+async def list_skills_layered(identity: Identity = Depends(get_identity)):
+    """Every skill in force for the caller, and which layer answered for it."""
+    resolved = skills_mod.resolve_skills(_uid(identity))
+    return {
+        "skills": [_skill_entry_payload(e) for e in resolved.entries],
+        # Names switched off that match nothing — a built-in renamed under a
+        # saved choice. Surfaced, never swallowed: silently dropping the entry
+        # would turn a skill the user switched off back on with no trace.
+        "unmatched_disabled": list(resolved.unmatched_disabled),
+    }
+
+
+@app.get("/api/skills/{name}")
+async def read_skill_layered(name: str, identity: Identity = Depends(get_identity)):
+    """One skill's full text, plus the shipped text when there is one.
+
+    Both are returned so the page can show what a replacement replaced and
+    offer a reset, without a second round trip or a second notion of "the
+    built-in version" living in the browser.
+    """
+    uid = _uid(identity)
+    entry = skills_mod.resolve_skills(uid).get(name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"No skill named '{name}'.")
+    shipped = skills_mod.skills_by_name(skills_mod.SKILLS_ROOT).get(name)
+    payload = _skill_entry_payload(entry)
+    payload["text"] = entry.skill.raw if entry.skill is not None else None
+    payload["builtin_text"] = shipped.raw if shipped is not None else None
+    return payload
+
+
+@app.put("/api/skills/{name}/enabled")
+async def set_skill_enabled(
+    name: str, data: SkillEnabled, identity: Identity = Depends(require_signed_in)
+):
+    """On or off. That is the whole vocabulary — no conditions, no ordering."""
+    try:
+        skills_mod.set_skill_enabled(name, data.enabled, user_id=_uid(identity))
+    except skills_mod.SkillError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"ok": True, "name": name, "enabled": data.enabled}
+
+
+@app.put("/api/skills/{name}")
+async def put_skill(
+    name: str, data: SkillText, identity: Identity = Depends(require_signed_in)
+):
+    """Write (or replace) one of the caller's own skills.
+
+    Validated exactly as discovery validates the shipped pack — same parser,
+    same spec-only frontmatter rule — so a skill saved here is a skill any
+    other Agent Skills client could read.
+    """
+    try:
+        saved = skills_mod.validate_skill_text(data.text)
+    except skills_mod.SkillError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if saved.name != name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The skill names itself '{saved.name}' but was saved as '{name}'.",
+        )
+    try:
+        skills_mod.save_user_skill(data.text, user_id=_uid(identity))
+    except (skills_mod.SkillError, PermissionError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "name": name}
+
+
+@app.delete("/api/skills/{name}")
+async def delete_skill(name: str, identity: Identity = Depends(require_signed_in)):
+    """Drop the caller's copy. Over a built-in that is "reset to shipped"."""
+    try:
+        removed = skills_mod.delete_user_skill(name, user_id=_uid(identity))
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"You have no skill named '{name}'.")
+    return {"ok": True, "name": name}
+
+
+# =============================================================================
 # CODEX ACCOUNT AUTH (device-auth). Always present; degrade cleanly when the
 # Codex extension is off/absent (runtime_enabled=false, not connected).
 # =============================================================================
@@ -1435,11 +1554,19 @@ async def prewarm_thread_runtime(
         return {"state": "unavailable"}
     # Same workspace resolution as a real turn (hydrates in hosted; off-loop).
     workspace = await asyncio.to_thread(get_workspace_provider().workspace_for, session_id)
-    state = await fn(
-        session_id=session_id, thread_id=tid, user_id=uid, workspace=workspace,
-        tier=identity.tier, auth_token=auth_engine.parse_bearer(authorization),
-        thread_row=row,
-    )
+    # ...and the same OWNER binding as a real turn. The runtime's system prompt
+    # carries the caller's own skill layer, and the prompt is part of the warm
+    # worker's fingerprint: pre-warming outside the caller's context would
+    # compose the built-in pack alone, and the first real turn would throw away
+    # the worker it just paid to start.
+    with session_scope(SessionContext(
+        session_id=session_id, workspace=workspace, user_id=uid, tier=identity.tier,
+    )):
+        state = await fn(
+            session_id=session_id, thread_id=tid, user_id=uid, workspace=workspace,
+            tier=identity.tier, auth_token=auth_engine.parse_bearer(authorization),
+            thread_row=row,
+        )
     return {"state": state}
 
 

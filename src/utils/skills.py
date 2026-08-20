@@ -36,11 +36,24 @@ in this module, or anywhere in the repo, names a skill.
 Discovery is a directory scan. Add a directory with a valid ``SKILL.md`` and it
 is in the index; delete it and it is gone. There is no registration step and no
 list to update.
+
+Two layers. The built-in pack above ships with SiliconCrew and is the same text
+for everyone; a user may write their own skills, and :func:`resolve_skills`
+layers the two by four rules with no priority language — a user skill with the
+same name REPLACES the built-in, a name in a small list is OFF, an updated
+built-in never overrides a replacement (it is marked as moved instead), and the
+two are NEVER auto-merged. Where a user's layer is stored differs by deployment
+(``src.platform_engines.user_skill_store``: a folder self-host, an owner-scoped
+object tree hosted); how it is layered does not, because the store hands back a
+local directory and everything after that is this one function.
 """
 from __future__ import annotations
 
 import hashlib
 import os
+import re
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -89,6 +102,10 @@ class Skill:
     path: Path
     always_load: bool
     sha256: str
+    #: The whole ``SKILL.md`` as written, frontmatter included. Carried because
+    #: a user's layer may be staged from remote storage and gone by the time
+    #: anyone asks to read or edit it — the bytes travel with the skill.
+    raw: str = ""
 
     @property
     def directory(self) -> Path:
@@ -164,6 +181,7 @@ def parse_skill_file(path: Path) -> Skill:
         path=path,
         always_load=always,
         sha256=hashlib.sha256(raw).hexdigest(),
+        raw=text,
     )
 
 
@@ -173,8 +191,16 @@ def discover_skills(root: Optional[Path] = None) -> List[Skill]:
     A directory with no ``SKILL.md`` is not a skill and is ignored silently
     (``references/`` and friends live under a skill, never beside it). A
     directory WITH one that fails validation raises — see :class:`SkillError`.
+
+    With NO root this returns the ACTIVE set — the built-in pack layered with
+    the requesting owner's own skills (see :func:`resolve_skills`). That is the
+    only sane default: the index in the system prompt, the index ``list_skills``
+    serves, and the body ``read_skill`` returns must all describe the same
+    skills, or the agent is told about a skill it cannot read.
     """
-    base = Path(root) if root is not None else SKILLS_ROOT
+    if root is None:
+        return list(resolve_skills().active)
+    base = Path(root)
     if not base.is_dir():
         return []
     found: List[Skill] = []
@@ -190,6 +216,166 @@ def discover_skills(root: Optional[Path] = None) -> List[Skill]:
 
 def skills_by_name(root: Optional[Path] = None) -> Dict[str, Skill]:
     return {s.name: s for s in discover_skills(root)}
+
+
+# ---------------------------------------------------------------------------
+# The second layer: a user's own skills
+# ---------------------------------------------------------------------------
+# Four sentences, and they are the whole design:
+#
+#   1. A user skill with the same name REPLACES the built-in.
+#   2. A user may DISABLE a skill — a name in a small list, never a copy.
+#   3. Updating a built-in never overrides a replacement; the replacement is
+#      marked as forked from a version that has since moved.
+#   4. Never auto-merge. Replacement only.
+#
+# This function is the only place they are implemented, and it is reached
+# identically in self-host and hosted: the storage engine hands back a local
+# directory and everything below this line is one code path over two folders.
+
+BUILTIN = "builtin"
+USER = "user"
+REPLACEMENT = "user-replaces-builtin"
+
+_UNSET = object()
+
+
+@dataclass(frozen=True)
+class SkillEntry:
+    """One name, and which layer answered for it."""
+
+    skill: Optional[Skill]
+    name: str
+    layer: str
+    enabled: bool
+    #: A replacement whose built-in has changed since it was forked. ``None``
+    #: means the question does not apply (not a replacement) or was never
+    #: answerable (a skill dropped into the folder by hand, with no record of
+    #: what it was forked from) — absent, not "unchanged".
+    builtin_changed: Optional[bool] = None
+    #: Why this name has no usable skill, if it has none. A user's own broken
+    #: file must not take the platform down, but it may not vanish either.
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class SkillSet:
+    """What is in force for one owner, and everything the UI needs to say why."""
+
+    entries: tuple
+    #: Names switched off — the built-in pack's included. Provenance records
+    #: this, because a benchmark number from a session with the safety net
+    #: removed must never look like one from a session with it in place.
+    disabled: tuple
+    #: Disable entries that match nothing. They changed no behaviour, so they
+    #: are not "disabled"; they are a config error the Skills page shows as one
+    #: (a built-in was renamed under a user's saved choice — finding A3-H3).
+    unmatched_disabled: tuple
+
+    @property
+    def active(self) -> List[Skill]:
+        return [e.skill for e in self.entries if e.enabled and e.skill is not None]
+
+    def get(self, name: str) -> Optional[SkillEntry]:
+        for entry in self.entries:
+            if entry.name == name:
+                return entry
+        return None
+
+
+def current_owner() -> Optional[str]:
+    """The owner this request resolved, or ``None``.
+
+    Read from the task-local session context, per call, never cached: the
+    composed index is owner-scoped state, and a module-level cache of it is the
+    cross-tenant leak finding A3-C1 describes — user A's skill bodies rendered
+    into user B's prompt. ``None`` is self-host (one user, one folder) and, in
+    hosted, "no identity resolved here" — which yields the built-in pack alone,
+    never someone else's.
+    """
+    from src.utils.session_context import get_current_session
+
+    ctx = get_current_session()
+    return ctx.user_id if ctx is not None else None
+
+
+def _read_user_layer(root: Optional[Path]) -> tuple[Dict[str, Skill], Dict[str, str]]:
+    """``({name: skill}, {name: error})`` for a user's folder — never raises.
+
+    A malformed file in the BUILT-IN pack is a bad deploy and raises. A
+    malformed file in a user's own folder is a user's typo: it is skipped, its
+    parse error is carried to the Skills page, and the built-in of the same name
+    (if any) stays in force. Bricking every turn over one bad file would be the
+    wrong kind of loud.
+    """
+    if root is None or not Path(root).is_dir():
+        return {}, {}
+    found: Dict[str, Skill] = {}
+    errors: Dict[str, str] = {}
+    for entry in sorted(Path(root).iterdir(), key=lambda p: p.name):
+        if not entry.is_dir():
+            continue
+        skill_file = entry / SKILL_FILENAME
+        if not skill_file.is_file():
+            continue
+        try:
+            skill = parse_skill_file(skill_file)
+        except SkillError as exc:
+            errors[entry.name] = str(exc)
+            continue
+        found[skill.name] = skill
+    return found, errors
+
+
+def resolve_skills(user_id=_UNSET) -> SkillSet:
+    """Layer the built-in pack with ``user_id``'s own skills. The merge, once.
+
+    ``user_id`` defaults to whatever the enclosing request scope resolved, so
+    the native agent (whose prompt composition takes no owner argument), the
+    Codex runtime and the MCP subprocess all get the right layer without any of
+    them learning that layers exist. Pass it explicitly to answer for a
+    specific owner — the REST endpoints do.
+    """
+    from src.platform_engines.user_skill_store import get_user_skill_store, read_config
+
+    owner = current_owner() if user_id is _UNSET else user_id
+    builtins = {s.name: s for s in discover_skills(SKILLS_ROOT)}
+
+    with get_user_skill_store().open(owner) as root:
+        user_skills, errors = _read_user_layer(root)
+        config = read_config(root)
+
+    disabled = set(config["disabled"])
+    forked = config["forked"]
+
+    entries: List[SkillEntry] = []
+    for name in sorted(set(builtins) | set(user_skills) | set(errors)):
+        mine = user_skills.get(name)
+        shipped = builtins.get(name)
+        if mine is not None:
+            layer = REPLACEMENT if shipped is not None else USER
+            changed = None
+            if shipped is not None and name in forked:
+                # Rule 3: the update did not touch their file. Say so instead.
+                changed = forked[name] != shipped.sha256
+            entries.append(SkillEntry(
+                skill=mine, name=name, layer=layer,
+                enabled=name not in disabled, builtin_changed=changed,
+            ))
+            continue
+        entries.append(SkillEntry(
+            skill=shipped, name=name,
+            layer=BUILTIN if shipped is not None else USER,
+            enabled=shipped is not None and name not in disabled,
+            error=errors.get(name),
+        ))
+
+    known = {e.name for e in entries}
+    return SkillSet(
+        entries=tuple(entries),
+        disabled=tuple(sorted(n for n in disabled if n in known)),
+        unmatched_disabled=tuple(sorted(n for n in disabled if n not in known)),
+    )
 
 
 def skill_index(skills: Optional[Sequence[Skill]] = None) -> str:
@@ -247,25 +433,186 @@ def skills_provenance(skills: Optional[Sequence[Skill]] = None) -> tuple[List[st
     return skills_digest({s.name: s.body for s in skills})
 
 
-def read_skill_file(name: str, relative: str = "", root: Optional[Path] = None) -> str:
-    """The text of one skill's ``SKILL.md``, or a file under its directory.
+def active_skills_provenance(user_id=_UNSET) -> tuple[List[str], str, List[str]]:
+    """``(names in force, digest, names switched off)`` for one owner's layer.
 
-    ``relative`` serves tier three (``references/``, ``scripts/``, ``assets/``).
-    It is resolved inside the skill's own directory and refused otherwise: this
-    tool reads outside the session workspace by design, so it does its own
-    containment rather than borrowing the workspace guard.
+    The third element is why this exists. ``skills_loaded`` already moves when a
+    user replaces a skill, because the digest is over CONTENT — but a skill the
+    user turned OFF leaves no trace in a list of what was on, and the one skill
+    whose absence produces no error anywhere is exactly the one a user might
+    turn off. A benchmark number from a session with the safety net removed must
+    not be indistinguishable from one with it in place.
     """
-    skills = skills_by_name(root)
-    skill = skills.get(name)
-    if skill is None:
-        known = ", ".join(sorted(skills)) or "none"
-        raise SkillError(f"no skill named {name!r}. Available: {known}")
-    if not relative:
-        return skill.path.read_text(encoding="utf-8")
-    target = (skill.directory / relative).resolve()
-    if not is_within(str(skill.directory), str(target)) or not target.is_file():
+    resolved = resolve_skills(user_id)
+    names, digest = skills_provenance(resolved.active)
+    return names, digest, list(resolved.disabled)
+
+
+def _read_reference(directory: Path, name: str, relative: str) -> str:
+    """A file under one skill's directory, or a refusal. Containment is ours.
+
+    This route reads OUTSIDE the session workspace by design, so it cannot
+    borrow the workspace guard and does its own.
+    """
+    target = (Path(directory) / relative).resolve()
+    if not is_within(str(directory), str(target)) or not target.is_file():
         raise SkillError(
             f"{relative!r} is not a file inside skill {name!r}. "
             f"Reference files live under {os.path.join(name, 'references')}/."
         )
     return target.read_text(encoding="utf-8")
+
+
+def read_skill_file(name: str, relative: str = "", root: Optional[Path] = None,
+                    user_id=_UNSET) -> str:
+    """The text of one skill's ``SKILL.md``, or a file under its directory.
+
+    ``relative`` serves tier three (``references/``, ``scripts/``, ``assets/``).
+
+    With no ``root`` this reads the ACTIVE skill of that name — a user's
+    replacement if they wrote one, the built-in otherwise — so the body the
+    agent reads is the body the index advertised. A disabled name reads as
+    absent, because it is.
+    """
+    if root is not None:
+        skills = skills_by_name(root)
+        skill = skills.get(name)
+        if skill is None:
+            known = ", ".join(sorted(skills)) or "none"
+            raise SkillError(f"no skill named {name!r}. Available: {known}")
+        return skill.raw if not relative else _read_reference(skill.directory, name, relative)
+
+    resolved = resolve_skills(user_id)
+    entry = resolved.get(name)
+    if entry is None or entry.skill is None or not entry.enabled:
+        known = ", ".join(s.name for s in resolved.active) or "none"
+        raise SkillError(f"no skill named {name!r}. Available: {known}")
+    if not relative:
+        return entry.skill.raw
+    if entry.layer == BUILTIN:
+        return _read_reference(entry.skill.directory, name, relative)
+
+    # A user's layer may live in object storage; the copy parsed a moment ago
+    # is gone. Re-open the owner's store to reach the file beside the skill.
+    from src.platform_engines.user_skill_store import get_user_skill_store
+
+    owner = current_owner() if user_id is _UNSET else user_id
+    with get_user_skill_store().open(owner) as staged:
+        if staged is None:
+            raise SkillError(f"skill {name!r} has no readable directory.")
+        return _read_reference(Path(staged) / name, name, relative)
+
+
+# ---------------------------------------------------------------------------
+# Writing the user layer
+# ---------------------------------------------------------------------------
+# Everything below writes ONE owner's folder. There is no route, here or in the
+# API, that names another owner's layer: the owner is always the one the request
+# resolved. Importing someone else's pack is deliberately absent — a skill is
+# instructions executed with the reader's own tool credentials, which makes an
+# imported pack a prompt-injection surface, and it is deferred rather than
+# half-built.
+
+#: The Agent Skills naming rule, enforced on write. Also what makes a name safe
+#: as a directory segment: no separators, no dots, nothing to traverse with.
+NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+
+
+def _name_from_text(text: str) -> str:
+    data, _ = _split_frontmatter(text, Path("SKILL.md"))
+    name = data.get("name")
+    if not isinstance(name, str) or not NAME_PATTERN.fullmatch(name.strip()):
+        raise SkillError(
+            f"'name' must be lowercase letters, digits and hyphens (got {name!r}). "
+            "It is both the skill's identity and its folder name."
+        )
+    return name.strip()
+
+
+def validate_skill_text(text: str) -> Skill:
+    """Parse ``text`` exactly as discovery would, without storing anything.
+
+    Validation happens BEFORE the store is touched, so a rejected skill cannot
+    half-land — the folder a turn reads never contains a file that would fail
+    to parse on the next turn.
+    """
+    name = _name_from_text(text)
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp) / name
+        directory.mkdir()
+        target = directory / SKILL_FILENAME
+        target.write_text(text, encoding="utf-8")
+        return parse_skill_file(target)
+
+
+def save_user_skill(text: str, user_id=_UNSET) -> str:
+    """Write one skill into the owner's layer; returns its name.
+
+    If a built-in of the same name exists this is a REPLACEMENT — rule 1 — and
+    the built-in's current hash is recorded so that a later change to the
+    shipped version can be reported (rule 3) instead of silently overriding
+    what the user wrote (rule 4).
+    """
+    from src.platform_engines.user_skill_store import get_user_skill_store, read_config, write_config
+
+    skill = validate_skill_text(text)
+    owner = current_owner() if user_id is _UNSET else user_id
+    shipped = skills_by_name(SKILLS_ROOT).get(skill.name)
+
+    with get_user_skill_store().edit(owner) as root:
+        directory = Path(root) / skill.name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / SKILL_FILENAME).write_text(text, encoding="utf-8")
+        config = read_config(root)
+        if shipped is not None:
+            config["forked"][skill.name] = shipped.sha256
+        else:
+            config["forked"].pop(skill.name, None)
+        write_config(root, config)
+    return skill.name
+
+
+def delete_user_skill(name: str, user_id=_UNSET) -> bool:
+    """Remove the owner's copy. For a replacement this IS "reset to shipped".
+
+    Returns False when there was no copy to remove — the caller turns that into
+    a 404 rather than reporting a delete that deleted nothing.
+    """
+    from src.platform_engines.user_skill_store import get_user_skill_store, read_config, write_config
+
+    owner = current_owner() if user_id is _UNSET else user_id
+    with get_user_skill_store().edit(owner) as root:
+        directory = Path(root) / name
+        if not directory.is_dir():
+            return False
+        shutil.rmtree(directory)
+        config = read_config(root)
+        config["forked"].pop(name, None)
+        write_config(root, config)
+    return True
+
+
+def set_skill_enabled(name: str, enabled: bool, user_id=_UNSET) -> None:
+    """Switch one skill on or off for this owner. On/off, and nothing else.
+
+    Turning something ON is always allowed, including a name that no longer
+    matches anything: that is how a stale entry left by a renamed built-in gets
+    cleared. Turning something OFF requires the name to exist right now, so the
+    list can only ever contain choices the user actually made about skills that
+    actually existed.
+    """
+    from src.platform_engines.user_skill_store import get_user_skill_store, read_config, write_config
+
+    owner = current_owner() if user_id is _UNSET else user_id
+    if not enabled and resolve_skills(user_id).get(name) is None:
+        raise SkillError(f"no skill named {name!r} to switch off.")
+
+    with get_user_skill_store().edit(owner) as root:
+        config = read_config(root)
+        disabled = set(config["disabled"])
+        if enabled:
+            disabled.discard(name)
+        else:
+            disabled.add(name)
+        config["disabled"] = sorted(disabled)
+        write_config(root, config)

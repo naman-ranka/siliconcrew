@@ -41,7 +41,14 @@ def _write_skill(root, name, description="Does a thing when a thing is needed.",
 # =============================================================================
 
 def _shipped():
-    return sk.discover_skills()
+    """The BUILT-IN pack, scanned at its root.
+
+    Explicitly the root, not the default: with no root ``discover_skills``
+    answers with the active set — built-ins layered with the caller's own
+    skills — and these tests are about what SiliconCrew ships. Collection runs
+    before fixtures, so this cannot lean on the layer isolation in conftest.
+    """
+    return sk.discover_skills(sk.SKILLS_ROOT)
 
 
 def test_the_shipped_pack_is_not_empty():

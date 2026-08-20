@@ -22,6 +22,7 @@ benchmark number could ever be attributed to a prompt version (finding B9). The
                          without the version changing)
   * ``skills_loaded``  — names of the skill files in force
   * ``skills_sha``     — stable content hash of those skills
+  * ``skills_disabled``— skills the owner switched OFF for this run
   * ``tool_set``       — identifier of the tool set the agent could see
   * ``context_edit``   — the context-compaction settings the turn ran under
 
@@ -82,6 +83,11 @@ class AgentProvenance:
     prompt_sha: Optional[str] = None
     skills_loaded: Optional[List[str]] = None
     skills_sha: Optional[str] = None
+    #: Names the owner switched off. ``[]`` is "asked, nothing off"; ``None`` is
+    #: "nobody asked". A run made with the always-loaded safety skill turned off
+    #: is not the same experiment as one made with it in force, and a list of
+    #: what WAS loaded cannot show an absence — so the absence is recorded.
+    skills_disabled: Optional[List[str]] = None
     tool_set: Optional[str] = None
     context_edit: Optional[str] = None
 
@@ -99,6 +105,7 @@ class Provenance:
     prompt_sha: Optional[str] = None
     skills_loaded: Optional[List[str]] = None
     skills_sha: Optional[str] = None
+    skills_disabled: Optional[List[str]] = None
     tool_set: Optional[str] = None
     context_edit: Optional[str] = None
 
@@ -304,18 +311,21 @@ def resolve_agent_provenance(user_id: Optional[str] = None) -> AgentProvenance:
     ``tool_set`` stays ``None`` = absent: nothing resolves one yet.
     """
     version, sha = prompt_identity()
-    names, digest = _skills_identity()
+    names, digest, disabled = _skills_identity(user_id)
     return AgentProvenance(
         prompt_version=version,
         prompt_sha=sha,
         skills_loaded=names,
         skills_sha=digest,
+        skills_disabled=disabled,
         context_edit=context_edit_identity(),
     )
 
 
-def _skills_identity() -> Tuple[Optional[List[str]], Optional[str]]:
-    """``(names, digest)`` for the active skill store, or ``(None, None)``.
+def _skills_identity(
+    user_id: Optional[str] = None,
+) -> Tuple[Optional[List[str]], Optional[str], Optional[List[str]]]:
+    """``(names, digest, disabled)`` for ``user_id``'s layer, or all ``None``.
 
     ``None`` when discovery could not run at all — a build shipped without the
     pack, or a malformed file — because "nothing looked" and "looked, found
@@ -324,11 +334,14 @@ def _skills_identity() -> Tuple[Optional[List[str]], Optional[str]]:
     Never raises; stamping a run must not be the thing that fails a run.
     """
     try:
-        from src.utils.skills import skills_provenance
+        from src.utils.skills import active_skills_provenance
 
-        return skills_provenance()
+        # The owner is passed EXPLICITLY. Composing a user's layer anywhere the
+        # owner is ambient is finding A3-C1's leak; this is the one call site
+        # that knows who is asking.
+        return active_skills_provenance(user_id)
     except Exception:
-        return None, None
+        return None, None, None
 
 
 def collect_provenance(
@@ -362,6 +375,9 @@ def collect_provenance(
         prompt_sha=agent.prompt_sha,
         skills_loaded=list(agent.skills_loaded) if agent.skills_loaded is not None else None,
         skills_sha=agent.skills_sha,
+        skills_disabled=(
+            list(agent.skills_disabled) if agent.skills_disabled is not None else None
+        ),
         tool_set=agent.tool_set,
         context_edit=agent.context_edit,
     )
