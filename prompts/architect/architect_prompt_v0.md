@@ -170,7 +170,7 @@ Before taking ANY action, always think through:
 
 11. **Start synthesis**: `start_synthesis` with appropriate parameters
     - Clock period from spec
-    - Default utilization (5%) is safe for most designs
+    - Start at 40% utilization; use core_margin >= 4 for very small designs (< 30 cells)
 
 12. **Wait/poll status**:
     - Loop `wait_for_synthesis(run_id, max_wait_sec=30-60)` until terminal;

@@ -287,3 +287,45 @@ def test_descriptions_do_not_restate_the_server_instructions():
             if phrase in low:
                 offenders.append(f"{t.name}: {phrase!r}")
     assert not offenders, "\n".join(offenders)
+
+
+def test_no_tool_ships_an_unsubstituted_template():
+    """A `{placeholder}` that reaches a client is a description that lies.
+
+    Some descriptions are generated — the manifest role list is built from the
+    FileRole Literal so it cannot advertise roles that no longer exist. That
+    substitution has to reach the SCHEMA too, not just the description string,
+    because parse_docstring lifts argument prose into schema fields and MCP
+    clients read the schema.
+    """
+    import re
+
+    from src.tools.wrappers import ALL_TOOLS
+
+    placeholder = re.compile(r"\{[a-z_]+\}")
+    leaks = []
+    for t in ALL_TOOLS:
+        for m in placeholder.findall(t.description or ""):
+            leaks.append(f"{t.name} description: {m}")
+        if t.args_schema is None:
+            continue
+        for arg, spec in t.args_schema.model_json_schema().get("properties", {}).items():
+            for m in placeholder.findall(spec.get("description", "") or ""):
+                leaks.append(f"{t.name}.{arg} schema: {m}")
+    assert not leaks, "unsubstituted templates reaching clients: " + "; ".join(leaks)
+
+
+def test_the_two_simulation_tools_record_the_same_attempt():
+    """Both sim paths must leave the same evidence.
+
+    run_isolated_simulation is the preferred path and the IDE's Simulate button
+    routes to it. Declaring no attempt policy made a passing run record as
+    "not_run", which is the honest-state invariant inverted: the run happened
+    and the log said it did not.
+    """
+    from src.tools.wrappers import run_isolated_simulation, simulation_tool
+
+    a = run_isolated_simulation.func.__tool_policy__
+    b = simulation_tool.func.__tool_policy__
+    assert a.attempt_role == b.attempt_role
+    assert a.attempt_parser is b.attempt_parser

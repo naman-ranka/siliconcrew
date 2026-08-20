@@ -388,8 +388,13 @@ def test_attempt_roles_still_describe_the_flow():
         "apply_patch_tool", "start_synthesis",
     }
     assert checkpoints == {
-        "linter_tool", "simulation_tool", "get_synthesis_metrics", "generate_report_tool",
+        "linter_tool", "simulation_tool", "run_isolated_simulation",
+        "get_synthesis_metrics", "generate_report_tool",
     }
+    # run_isolated_simulation joined deliberately. It is the PREFERRED sim path
+    # and the IDE's Simulate button routes to it, but it declared no attempt
+    # policy, so a passing run recorded rtl_sim: "not_run" — the honest-state
+    # invariant inverted, since the run happened and the log denied it.
     assert roles["start_synthesis"] == "synth_change"
 
 

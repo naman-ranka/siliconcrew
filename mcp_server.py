@@ -102,34 +102,20 @@ load_dotenv()
 # its ADVERTISEMENT was ever gated on --codex-tools).
 TOOL_REGISTRY = {t.name: t for t in (*mcp_tools, *tools_on_surface("codex"))}
 
-PROMPTS_DIR = Path(__file__).resolve().parent / "prompts" / "architect"
-DEFAULT_ARCHITECT_PROMPT_VERSION = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v2") or "v2").strip().lower()
-if not DEFAULT_ARCHITECT_PROMPT_VERSION:
-    DEFAULT_ARCHITECT_PROMPT_VERSION = "v2"
+# Prompt resolution lives in src.utils.architect_prompt — ONE answer to "which
+# prompt is running", shared with the agent. This file used to carry its own
+# copy plus a fallback to an embedded constant, which meant a missing prompt
+# file quietly served a stale prompt and reported it as version "legacy".
+# The shared module has no heavy imports, so the reason the copy existed — not
+# paying LangGraph's import cost on every Codex subprocess spawn — still holds.
+from src.utils.architect_prompt import (  # noqa: E402
+    PROMPTS_DIR,
+    PromptUnavailable,
+    load_with_provenance as _load_architect_prompt,
+    resolved_version,
+)
 
-
-def _load_architect_prompt() -> tuple[str, str, str]:
-    """
-    Load a versioned architect prompt from prompts/architect.
-    Falls back to SYSTEM_PROMPT if the file is unavailable.
-    Returns: (prompt_text, source_label, resolved_version)
-    """
-    resolved = DEFAULT_ARCHITECT_PROMPT_VERSION
-    prompt_file = PROMPTS_DIR / f"architect_prompt_{resolved}.md"
-    if prompt_file.exists():
-        try:
-            return prompt_file.read_text(encoding="utf-8"), str(prompt_file), resolved
-        except Exception:
-            # Fall through to SYSTEM_PROMPT fallback.
-            pass
-
-    # Lazy: the LangGraph agent stack behind SYSTEM_PROMPT is only needed on
-    # this fallback (prompt file missing/unreadable) — importing it at module
-    # load taxed every Codex MCP subprocess spawn for a constant that is
-    # almost never used (4C, hosted-latency plan).
-    from src.agents.architect import SYSTEM_PROMPT
-
-    return SYSTEM_PROMPT, "src.agents.architect.SYSTEM_PROMPT", "legacy"
+DEFAULT_ARCHITECT_PROMPT_VERSION = resolved_version()
 
 
 # =============================================================================

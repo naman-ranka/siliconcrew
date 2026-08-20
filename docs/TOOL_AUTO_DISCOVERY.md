@@ -235,6 +235,14 @@ async def list_tools(self):
     mcp_tools = []
     
     # 1. Session tools - MCP-specific, manually defined
+> **SUPERSEDED.** The session tools shown below as hand-written `Tool(...)`
+> objects are ordinary registry tools now. They were the last six schemas
+> maintained by hand, which meant they were invisible to the tool catalog, the
+> policy decorator, the drift guard and the argument-schema tests that cover
+> every other tool. The example is kept because the mechanism it illustrates —
+> auto-discovery from the registry — is still how this works; only these six
+> stopped being the exception to it.
+
     mcp_tools.extend([
         Tool(name="create_session_tool", ...),
         Tool(name="list_sessions_tool", ...),

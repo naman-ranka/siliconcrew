@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from langchain_core.messages import SystemMessage
-from src.agents.architect import create_architect_agent, SYSTEM_PROMPT
+from src.agents.architect import create_architect_agent, load_system_prompt
 
 def main():
     load_dotenv()
@@ -28,7 +28,7 @@ def main():
         # Run the agent
         # We use a recursion limit to prevent infinite loops
         events = agent_graph.stream(
-            {"messages": [SystemMessage(content=SYSTEM_PROMPT), ("user", goal)]},
+            {"messages": [SystemMessage(content=load_system_prompt()), ("user", goal)]},
             {"recursion_limit": 50}
         )
         

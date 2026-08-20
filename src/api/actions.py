@@ -83,7 +83,10 @@ class SynthesizeRequest(BaseModel):
     synthTop: Optional[str] = None
     platform: Optional[str] = None
     clockPeriodNs: Optional[float] = None
-    utilization: int = 5
+    # 40 matches start_synthesis and the frontend. A UI-dispatched run must
+    # not silently differ from an agent-dispatched one; that divergence is
+    # what made this value have five sources of truth.
+    utilization: int = 40
     aspectRatio: float = 1.0
     coreMargin: float = 2.0
     runEquiv: bool = False

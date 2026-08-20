@@ -504,7 +504,11 @@ def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -
 
 @tool(parse_docstring=True)
 @policy(category="essential", protected=False, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
+        surfaces=ALL_SURFACES, requires_session=True,
+        # Same attempt record as simulation_tool. Without these the preferred
+        # sim path — and the IDE's Simulate button, which routes here — logged
+        # rtl_sim: "not_run" for a run that actually passed.
+        attempt_role="checkpoint", attempt_parser=attempt_simulation)
 def run_isolated_simulation(
     sim_top: str = "",
     mode: Literal["rtl", "post_synth"] = "rtl",
