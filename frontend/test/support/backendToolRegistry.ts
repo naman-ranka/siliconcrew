@@ -27,8 +27,20 @@ export interface BackendTool {
 
 const WRAPPERS = path.resolve(__dirname, "../../../src/tools/wrappers.py");
 
+/** The named surface sets the registry declares (`ALL_SURFACES = ("agent", ...)`),
+ *  read from the same file rather than copied — a set whose membership changed
+ *  would otherwise silently change what this parse believes. */
+function namedSurfaceSets(src: string): Record<string, string[]> {
+  const sets: Record<string, string[]> = {};
+  for (const m of Array.from(src.matchAll(/^([A-Z][A-Z_]*)\s*=\s*\(([^)]*)\)/gm))) {
+    const values = Array.from(m[2].matchAll(/"(\w+)"/g)).map((v) => v[1]);
+    if (values.length) sets[m[1]] = values;
+  }
+  return sets;
+}
+
 /** `@policy(...)` argument text → the fields we care about. */
-function parsePolicyArgs(argText: string): Omit<BackendTool, "name"> {
+function parsePolicyArgs(argText: string, surfaceSets: Record<string, string[]>): Omit<BackendTool, "name"> {
   const str = (key: string): string | null =>
     new RegExp(`${key}\\s*=\\s*"([^"]*)"`).exec(argText)?.[1] ?? null;
   const bool = (key: string): boolean | null => {
@@ -44,12 +56,11 @@ function parsePolicyArgs(argText: string): Omit<BackendTool, "name"> {
     throw new Error(`unparseable @policy(...) in wrappers.py: ${argText}`);
   }
 
-  // surfaces=ALL_SURFACES | ("agent", "mcp") | ("agent",) | frozenset({...})
+  // surfaces=<a named set> | ("agent", "mcp") | ("agent",) | frozenset({...})
   const rawSurfaces =
-    /surfaces\s*=\s*(ALL_SURFACES|frozenset\([^)]*\)|\([^)]*\)|\w+)/.exec(argText)?.[1]?.trim() ?? "";
-  const surfaces = rawSurfaces.startsWith("ALL_SURFACES")
-    ? ["agent", "mcp", "ui"]
-    : Array.from(rawSurfaces.matchAll(/"(\w+)"/g)).map((m) => m[1]);
+    /surfaces\s*=\s*(frozenset\([^)]*\)|\([^)]*\)|\w+)/.exec(argText)?.[1]?.trim() ?? "";
+  const surfaces =
+    surfaceSets[rawSurfaces] ?? Array.from(rawSurfaces.matchAll(/"(\w+)"/g)).map((m) => m[1]);
   if (surfaces.length === 0) {
     throw new Error(`unparseable surfaces= in wrappers.py: ${argText}`);
   }
@@ -74,9 +85,10 @@ export function backendTools(): BackendTool[] {
   const blocks = Array.from(
     src.matchAll(/@policy\(([\s\S]*?)\)\n(?:#[^\n]*\n)*def\s+(\w+)\s*\(/g)
   );
+  const surfaceSets = namedSurfaceSets(src);
   const tools = blocks.map(([, argText, name]) => ({
     name,
-    ...parsePolicyArgs(argText),
+    ...parsePolicyArgs(argText, surfaceSets),
   }));
 
   // Cross-check against the registry list itself, so a tool the regex missed

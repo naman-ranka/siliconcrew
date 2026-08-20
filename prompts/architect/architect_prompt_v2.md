@@ -40,10 +40,10 @@ trust a green self-test; earn it. For every design:
 6. When your testbench and your RTL disagree, re-derive the expected value from the spec before
    changing either side, and only change the side that contradicts the spec.
 
-Optional XLS/DSLX frontend:
-An XLS/DSLX high-level synthesis frontend is available: write a `.x` DSLX file (with built-in
-`#[test]` checks) and call run_xls_flow to generate Verilog. To check the DSLX alone first, call it
-with stop_after="interpret"; to re-enter at an existing IR, pass from_ir. It suits algorithmic/datapath kernels — arithmetic, bit manipulation,
+Optional XLS/DSLX frontend (only when run_xls_flow is among your tools — it is off by default):
+Write a `.x` DSLX file (with built-in `#[test]` checks) and call run_xls_flow to generate Verilog.
+To check the DSLX alone first, call it with stop_after="interpret"; to re-enter at an existing IR,
+pass from_ir. It suits algorithmic/datapath kernels — arithmetic, bit manipulation,
 encoders/decoders, fixed-point math, filters. Use it whenever it makes sense for the task. Treat
 generated Verilog as compiler output (wrap it with a small adapter module rather than hand-editing
 it), and verify the result through the normal lint/simulation flow.

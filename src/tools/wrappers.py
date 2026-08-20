@@ -85,11 +85,28 @@ from src.utils.attempt_logger import (
     attempt_synthesis_metrics,
 )
 
-# Where a tool is offered. "ui" means the Command Surface / REST /invoke;
-# "codex" means the Codex-bound MCP server only, which serves it in addition to
-# everything on the "mcp" surface.
+# Where a tool is offered. "agent" is the in-process architect's tool list;
+# "mcp" is what a default MCP connection is advertised; "ui" is the Command
+# Surface / REST /invoke; "codex" is served ONLY by a server started with
+# --codex-tools, in addition to the "mcp" set — that flag is how our own first
+# party clients start it (the Codex runtime and the benchmark harness), so it
+# means "this client asked for the extra tools", not "this client is Codex".
 SURFACE_NAMES = frozenset({"agent", "mcp", "ui", "codex"})
 ALL_SURFACES = ("agent", "mcp", "ui")
+
+# HIDDEN BY DEFAULT, and hidden from WHOM: a rare-flow or environment-dependent
+# tool that no longer costs an agent description bytes it will almost never use.
+# It is NOT deleted and NOT unreachable — a person can still run it from the
+# Command Surface, and a first-party client that started the server with
+# --codex-tools is still offered it. What it leaves is the two surfaces that pay
+# for every description on every turn: the architect's tool list, and the
+# default MCP advertisement a stranger's client caches.
+#
+# Formal verification and cocotb are differentiators; they are hidden because
+# they are rarely the next step, never because they are unimportant. Re-enabling
+# them for an agent is connect-time tool scoping, which P6 owns; there is
+# deliberately no runtime toggle (the last one leaked across tenants).
+HIDDEN_BY_DEFAULT = ("ui", "codex")
 
 # How a tool call moves the attempt log forward (see attempt_logger).
 ATTEMPT_ROLES = frozenset({"rtl_change", "synth_change", "checkpoint"})
@@ -1201,7 +1218,7 @@ Proceed to implement the RTL following this specification."""
 
 @tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def schematic_tool(verilog_file: str, top_module: str) -> str:
     """
     Renders an SVG schematic of one Verilog module with Yosys + netlistsvg, for
@@ -1239,7 +1256,7 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
 
 @tool(parse_docstring=True)
 @policy(category="verification", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def build_interactive_sim(
     verilog_files: list[str] | str,
     top_module: str,
@@ -1356,7 +1373,7 @@ class RunPythonAnalysisArgs(BaseModel):
 
 @tool(args_schema=RunPythonAnalysisArgs)
 @policy(category="analysis", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def run_python_analysis(script_file: str, args: list[str] = None) -> str:
     """
     Run a workspace Python script for engineering-support analysis: golden/
@@ -1393,7 +1410,7 @@ def run_python_analysis(script_file: str, args: list[str] = None) -> str:
 
 @tool(parse_docstring=True)
 @policy(category="verification", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
     """
     Run a cocotb (Python) testbench against your RTL in a pinned simulator container.
@@ -1455,7 +1472,7 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
 
 @tool(parse_docstring=True)
 @policy(category="verification", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def sby_tool(sby_file: str) -> str:
     """
     Run formal verification with SymbiYosys (SBY).
@@ -1549,7 +1566,7 @@ def list_files_tool() -> str:
 # Google XLS / DSLX HLS
 @tool(parse_docstring=True)
 @policy(category="hls", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def run_xls_flow(
     dslx_file: str = "",
     top_module: str = "",

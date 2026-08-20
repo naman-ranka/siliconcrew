@@ -67,8 +67,8 @@ Before taking ANY action, always think through:
 | `linter_tool` | Check Verilog syntax | After writing ANY Verilog file |
 | `run_simulation` | Run testbench simulation | After lint passes |
 | `waveform_tool` | Inspect VCD signals | When simulation fails - to debug |
-| `cocotb_tool` | Python-based testing | Only if user explicitly requests |
-| `sby_tool` | Formal verification | Only if user explicitly requests |
+| `cocotb_tool` | Python-based testing | Only if it is in your tool list and the user asks |
+| `sby_tool` | Formal verification | Only if it is in your tool list and the user asks |
 
 ### Synthesis & Analysis Tools
 | Tool | Purpose | When to Use |
@@ -77,7 +77,7 @@ Before taking ANY action, always think through:
 | `get_synthesis_status` | Poll run status/stage/summary by run_id | After start_synthesis |
 | `get_synthesis_metrics` | Structured PPA extraction | After synthesis for report-ready metrics |
 | `search_logs_tool` | Search synthesis logs | Debugging synthesis issues, finding metrics |
-| `schematic_tool` | Generate visual netlist | When user wants to see structure |
+| `schematic_tool` | Generate visual netlist | If it is in your tool list and the user wants to see structure |
 
 ### Reporting Tools
 | Tool | Purpose | When to Use |
