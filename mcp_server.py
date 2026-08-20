@@ -194,8 +194,6 @@ class RTLDesignMCPServer:
         
         self.session_manager = SessionManager(base_dir=workspace_dir, db_path=db_path)
         self.current_session = None  # Track active session
-        self.tool_filter_mode = "all"  # Options: "all", "essential", "custom"
-        self.custom_tool_filter = None  # List of tool names or categories
         self.codex_tools = codex_tools  # Expose Codex-only MCP helpers when enabled
         # 4B (hosted-latency plan): when the parent process owns the once-per-
         # turn workspace sync (the Codex engine sets this env key for the bound
@@ -598,34 +596,15 @@ Ready to design! What would you like to create?"""
         
         raise ValueError(f"Unknown prompt: {name}")
     
-    def _should_include_tool(self, tool_name: str) -> bool:
-        """Determine if a tool should be included based on current filter mode."""
-        if self.tool_filter_mode == "all":
-            return True
-        
-        if self.tool_filter_mode == "essential":
-            return tool_name in TOOL_CATEGORIES["essential"]
-        
-        if self.tool_filter_mode == "custom" and self.custom_tool_filter:
-            # Check if tool name is directly in filter
-            if tool_name in self.custom_tool_filter:
-                return True
-            # Check if any category in filter contains this tool
-            for item in self.custom_tool_filter:
-                if item in TOOL_CATEGORIES and tool_name in TOOL_CATEGORIES[item]:
-                    return True
-            return False
-        
-        return True
-    
     async def list_tools(self) -> list[Tool]:
         """
-        Expose RTL design tools using AUTO-DISCOVERY with optional filtering.
+        Expose RTL design tools using AUTO-DISCOVERY.
         Automatically converts LangChain tools to MCP format.
-        
-        Filtering controlled by:
-        - self.tool_filter_mode: "all" | "essential" | "custom"
-        - self.custom_tool_filter: List of tool names or categories
+
+        The list is derived purely from the registry and is IDENTICAL for every
+        connection: the MCP spec requires a server not to vary tools/list per
+        connection except by auth scope, and per-process filter state leaked
+        across tenants on the multiplexed streamable-HTTP transport.
         """
         tools_out = []
         
@@ -674,30 +653,6 @@ Ready to design! What would you like to create?"""
             ),
         ])
         
-        # Add tool filtering control tool
-        tools_out.append(
-            Tool(
-                name="configure_tool_filter",
-                description="Control which tools are visible to reduce cognitive load. Use 'essential' for basic workflow, 'all' for everything, or specify custom categories.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "mode": {
-                            "type": "string",
-                            "enum": ["all", "essential", "custom"],
-                            "description": "Filter mode: 'all', 'essential' (7 core tools), or 'custom' (specify categories/tools)"
-                        },
-                        "custom_filter": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "List of tool names or categories (essential, verification, synthesis, editing, reporting, hls)"
-                        }
-                    },
-                    "required": ["mode"]
-                }
-            )
-        )
-
         # Codex-only helper tools (disabled by default for other MCP clients)
         if self.codex_tools:
             tools_out.append(
@@ -716,13 +671,9 @@ Ready to design! What would you like to create?"""
                 )
             )
         
-        # AUTO-DISCOVER all LangChain tools from mcp_tools (with filtering)
+        # AUTO-DISCOVER all LangChain tools from mcp_tools
         for langchain_tool in mcp_tools:
             try:
-                # Apply filter
-                if not self._should_include_tool(langchain_tool.name):
-                    continue
-                
                 mcp_tool = langchain_to_mcp_schema(langchain_tool)
                 tools_out.append(mcp_tool)
             except Exception as e:
@@ -842,34 +793,6 @@ Ready to design! What would you like to create?"""
             except Exception as e:
                 return [TextContent(type="text", text=f"❌ Error deleting session: {str(e)}")]
         
-        elif name == "configure_tool_filter":
-            mode = arguments["mode"]
-            custom_filter = arguments.get("custom_filter")
-            
-            self.tool_filter_mode = mode
-            self.custom_tool_filter = custom_filter
-            
-            # Count how many tools will be visible
-            visible_count = 0
-            for tool in mcp_tools:
-                if self._should_include_tool(tool.name):
-                    visible_count += 1
-            
-            visible_count += 6  # Session tools + configure_tool_filter
-            
-            import json
-            response = f"✅ Tool filter updated to '{mode}'\n"
-            response += f"📊 Visible tools: {visible_count}\n"
-            
-            if mode == "essential":
-                response += f"\nEssential tools: {', '.join(TOOL_CATEGORIES['essential'])}"
-            elif mode == "custom" and custom_filter:
-                response += f"\nCustom filter: {json.dumps(custom_filter)}"
-            
-            response += "\n\n⚠️  Note: Client may need to refresh tool list to see changes."
-            
-            return [TextContent(type="text", text=response)]
-
         elif name == "inject_architect_prompt":
             session_id = arguments.get("session_id")
             workspace = None

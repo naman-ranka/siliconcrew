@@ -119,6 +119,27 @@ def write_spec(
 
 #### The Solution: Dynamic Tool Filtering
 
+> **SUPERSEDED — `configure_tool_filter` was removed (P0 of the agent platform
+> overhaul; see `siliconcrew-dev/plans/agent-platform-overhaul.md`).** The
+> section below is kept as a record of the original decision and why it was
+> reversed. Do not follow it.
+>
+> Three things were wrong with it:
+> 1. **It leaked across tenants.** The filter mode was stored as per-process
+>    state on the server, and the hosted streamable-HTTP transport is
+>    multiplexed — so one user changing their filter changed what other users
+>    saw from `tools/list`.
+> 2. **It is not MCP-conformant.** The spec says a server MUST NOT vary
+>    `tools/list` per connection except by auth scope, and clients cache the
+>    list, so runtime mutation left them holding a stale set.
+> 3. **The counts in this section were already wrong** — "Essential (7 tools)"
+>    while `TOOL_CATEGORIES["essential"]` holds 8.
+>
+> The underlying goal — not showing an agent every tool at once — is still
+> right, and is being met instead by merging overlapping tools, hiding
+> rare-flow ones by default, and (later) scoping at connect time via auth
+> scope rather than by runtime mutation.
+
 We added `configure_tool_filter` tool with 3 modes:
 
 ##### Mode 1: Essential (7 tools)
@@ -229,7 +250,7 @@ def _should_include_tool(self, tool_name: str) -> bool:
 
 1. **Keep Auto-Discovery**: Perfect for your multi-consumer architecture
 2. **Enhance Source Docstrings**: Add examples to tool definitions in `wrappers.py`
-3. **Use Essential Mode by Default**: Update prompt to suggest `configure_tool_filter("essential")` for simple tasks
+3. ~~**Use Essential Mode by Default**~~: superseded — `configure_tool_filter` was removed (see the note above). Reduce the surface at the registry instead: merge overlapping tools, hide rare-flow ones by default.
 4. **Document Categories**: Update MCP_SETUP.md with filtering examples
 
 ### Future Enhancements 🚀
