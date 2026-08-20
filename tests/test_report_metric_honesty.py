@@ -121,8 +121,9 @@ def test_the_dead_ppa_parsers_are_gone():
 # --- P0: a hand-typed metric must never outrank a measured one ---------------
 #
 # load_metrics used to read design_metrics.json as its TOP tier, so a number the
-# agent typed by hand (save_metrics_tool) beat the number parsed from the run's
-# own synthesis reports. The parse wins now; the saved file fills gaps only.
+# agent typed by hand beat the number parsed from the run's own synthesis
+# reports. The parse wins now, the saved file fills gaps only, and the tool that
+# wrote such a file by hand has since been deleted for the same reason.
 
 
 def _save_metrics_file(workspace: str, payload: dict, run_id: str = "synth_0001") -> None:

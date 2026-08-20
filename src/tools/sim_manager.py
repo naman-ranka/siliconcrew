@@ -352,8 +352,8 @@ def run_sim_isolated(
         from src.tools.sim_contract import resolve_post_synth
 
         # ``platform`` reaching here is the MANIFEST's platform (both callers —
-        # the run_isolated_simulation wrapper and the IDE's Simulate button —
-        # pass it, and neither exposes a platform override). The manifest is
+        # the run_simulation wrapper and the IDE's Simulate button — pass it as
+        # intent; a caller PINNING a PDK passes platform_override). The manifest is
         # design intent, defaults to sky130hd, and synthesis never writes the
         # real platform back to it; the run's sim contract is the record of what
         # was actually synthesised. Linking an asap7 gate netlist against

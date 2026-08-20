@@ -374,6 +374,11 @@ def run_xls_flow(
         result.update(extra or {})
         return result
 
+    # Only artifacts the FLOW created may be cleaned up. A caller-supplied
+    # from_ir is an input, and deleting someone's input file because
+    # keep_intermediates is False would be destroying evidence, not tidying.
+    produced_here: set = set()
+
     if from_ir:
         # The flow's own optimized artifact is recognised by name — hand back
         # what it produced and it will not redo the optimization.
@@ -400,6 +405,7 @@ def run_xls_flow(
 
         ir_comp = compile_dslx_to_ir(dslx_file, top_module, cwd=workspace)
         artifacts["ir_file"] = ir_comp.get("ir_filename")
+        produced_here.add(artifacts["ir_file"])
         stage_results["ir_conversion"] = ir_comp
         if not ir_comp.get("success"):
             return {
@@ -414,9 +420,10 @@ def run_xls_flow(
     if not artifacts["opt_ir_file"]:
         opt = optimize_xls_ir(artifacts["ir_file"], cwd=workspace)
         artifacts["opt_ir_file"] = opt.get("opt_ir_filename")
+        produced_here.add(artifacts["opt_ir_file"])
         stage_results["optimization"] = opt
         if not opt.get("success"):
-            if not keep_intermediates and artifacts["ir_file"]:
+            if not keep_intermediates and artifacts["ir_file"] in produced_here:
                 _safe_remove(workspace, artifacts["ir_file"])
             return {
                 **_failure("optimization", opt.get("stderr", ""), opt.get("command", "")),
@@ -450,7 +457,7 @@ def run_xls_flow(
 
     if not keep_intermediates:
         for temp_file in [artifacts["ir_file"], artifacts["opt_ir_file"]]:
-            if temp_file:
+            if temp_file and temp_file in produced_here:
                 _safe_remove(workspace, temp_file)
                 if temp_file == artifacts["ir_file"]:
                     artifacts["ir_file"] = None

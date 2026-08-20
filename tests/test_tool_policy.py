@@ -6,8 +6,8 @@ policy for 40 tools lived in five name-keyed string sets in a DIFFERENT file
 a per-tool ``if tool == "..."`` chain in the same logger. A tool missing from
 those sets **failed open**: ``tool_flags()`` answered ``requiresSignIn=False,
 mutates=False`` for any unknown name — an unauthenticated write tool whose
-changes never sync to object storage. ``sleep_tool`` had no policy anywhere
-precisely because nothing checked.
+changes never sync to object storage. One tool (since deleted) had no policy
+anywhere at all, precisely because nothing checked.
 
 These tests are the "nothing checked" part. Four guards:
 

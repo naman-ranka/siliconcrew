@@ -66,7 +66,7 @@ load_dotenv()
 # Single source of truth for tool dispatch: derive the name→tool map from the
 # same ``mcp_tools`` list that ``list_tools`` advertises from. Building it by
 # hand drifted (tools got listed but not dispatchable → "Unknown tool", e.g.
-# run_isolated_simulation / get_manifest / update_manifest); deriving it keeps
+# the isolated sim tool / get_manifest / update_manifest); deriving it keeps
 # "advertised" and "callable" in lockstep. See test_mcp_tool_registry.
 # The Codex-surface tool is dispatchable on every server (it always was — only
 # its ADVERTISEMENT was ever gated on --codex-tools).

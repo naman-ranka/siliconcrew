@@ -368,8 +368,7 @@ def get_manifest() -> str:
     list, and warnings such as two files declaring the same module. Derived by
     scanning the workspace when absent.
     This is what decides which files each stage compiles, and where
-    run_isolated_simulation gets simTop and every simulation gets its default
-    pass marker.
+    run_simulation gets its file set, its simTop and its default pass marker.
     """
     workspace = get_workspace_path()
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
