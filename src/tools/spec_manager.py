@@ -6,6 +6,7 @@ managing design specifications in YAML format.
 """
 
 import os
+import re
 import yaml
 from typing import Dict, Any, Optional, List, Union
 from dataclasses import dataclass, field, asdict
@@ -135,6 +136,10 @@ def _normalize_port_entry(port_data: Dict[str, Any]) -> Dict[str, Any]:
     return {str(k).strip().strip('\'"'): v for k, v in port_data.items()}
 
 
+#: Verilog-2001 identifier. A module name that is not one is malformed input.
+_VERILOG_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+
+
 def parse_yaml_spec(yaml_content: str) -> DesignSpec:
     """
     Parse YAML content into a DesignSpec object.
@@ -157,6 +162,20 @@ def parse_yaml_spec(yaml_content: str) -> DesignSpec:
 
     # Get the top-level key (module name)
     module_name = list(data.keys())[0]
+
+    # A module name is an IDENTIFIER, and every consumer treats it as one —
+    # including the ones that build a filename out of it. Validating here means
+    # that holds by construction rather than at each call site: an adopted YAML
+    # keyed "../../pwned" used to produce a spec whose module_name escaped the
+    # workspace when written. Verilog's own identifier rule is the right shape;
+    # anything else is malformed input, not a path.
+    if not isinstance(module_name, str) or not _VERILOG_IDENTIFIER.fullmatch(module_name):
+        raise ValueError(
+            f"Invalid spec YAML: the top-level key is the module name and must be a "
+            f"Verilog identifier (letter or underscore, then letters, digits, "
+            f"underscores or $). Got {module_name!r}."
+        )
+
     spec_data = data[module_name]
 
     if not isinstance(spec_data, dict):
