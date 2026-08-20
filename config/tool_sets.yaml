@@ -1,0 +1,107 @@
+# Tool sets — WHICH TOOLS AN AGENT SEES. Data, not code.
+#
+# ============================================================================
+# THE FENCE (read this before editing anything below)
+# ============================================================================
+# FOCUS is which tools an agent SEES. That is what this file controls, and it
+# is safe to hand to a user: hiding a tool shortens a prompt, it does not
+# protect anything.
+#
+# AUTHORITY is which tools may RUN. That is code, and only code: the protected
+# set (sign-in), the capability checks inside each wrapper, owner scoping, and
+# workspace containment. Nothing in this file can grant a tool to an agent that
+# authority would refuse, and nothing here can take away a check.
+#
+# The two must never merge. A tool removed from a set below is still callable
+# by anyone the code says may call it — through /invoke, through MCP, through
+# the Command Surface. If you are reaching for this file to stop something from
+# happening, you are in the wrong file.
+# ============================================================================
+#
+# Vocabulary: there is none of our own. A set is a SELECTION over policy the
+# tools already declare at their definition site (`@policy(...)` in
+# src/tools/wrappers.py):
+#
+#   surface              one of agent | mcp | ui | codex — the registry a tool
+#                        is already in.
+#   categories           whole categories, mutating tools included.
+#   read_only_categories the same categories minus every tool declared
+#                        `mutates=True`. This is the read-only mechanism: it is
+#                        a filter over `mutates`, not a second list.
+#
+# No tool NAMES appear here, deliberately. A name here would be a second list
+# that drifts the first time a tool is renamed; a category cannot drift,
+# because the tool carries it. An unknown surface or category is a loud error
+# at load (tests/test_tool_sets.py), never a silently empty set.
+#
+# Changing which tools an agent sees is an edit to THIS FILE and nothing else.
+
+tool_sets:
+
+  # The main agent. No `categories` key means "every category on this surface",
+  # i.e. exactly the tools whose policy puts them on the agent surface — the
+  # same list `architect_tools` has always been, now stated where it can be
+  # changed without a commit to Python.
+  architect:
+    description: Everything the in-process architect agent is offered.
+    surface: agent
+
+  # A sweep child: it runs ONE point of a PPA sweep and reports it. It gets the
+  # whole synthesis category (dispatch, poll, metrics, stage reports, compare)
+  # and can read — never write — the design it is measuring. A sweep that edits
+  # RTL is not a sweep, and the missing write tools say so before the prompt
+  # has to.
+  pd-sweep:
+    description: One point of a power/performance/area sweep, measured and reported.
+    surface: agent
+    categories: [synthesis]
+    read_only_categories: [essential, manifest, skills]
+
+  # A verification child: it writes and runs ONE testbench. Writing is the job,
+  # so `essential` comes whole — files, simulation and lint together; the
+  # manifest is read-only because a child must not re-point the design's tops
+  # under the parent.
+  verify-tb:
+    description: One testbench, written, run, and judged.
+    surface: agent
+    categories: [essential, verification]
+    read_only_categories: [manifest, skills]
+
+# The built-in subagent roles. Two, on purpose: this is not a general spawner.
+#
+# `skills` names skills from the shipped store (skills/), which is where
+# procedure already lives — a subagent role is procedure plus a tool set, so it
+# needs no file format of its own. The bodies named here are pasted into the
+# child's system prompt in full; the child has no chat history to discover them
+# in, so progressive disclosure has nothing to disclose to.
+#
+# `output` is the contract the child's last message must satisfy. The runner
+# parses a trailing JSON object out of it and hands the parent structure
+# instead of prose; a child that ignores the contract is reported as prose,
+# never as a fabricated number.
+subagents:
+
+  pd-sweep:
+    tool_set: pd-sweep
+    skills: [pareto-sweep, pd-diagnosis]
+    description: >-
+      Run one sweep point — one knob setting — to completion and report its
+      measured PPA. One child per knob.
+    output: >-
+      A JSON object as the last thing in your reply, with keys: "knob" (the
+      setting you were given), "run_id", "wns_ns", "area_um2", "power_mw",
+      "status" ("ok" or "failed"), and "note" (one sentence). Every number must
+      come from a report you actually read. Use null for anything the run did
+      not produce — never an estimate.
+
+  verify-tb:
+    tool_set: verify-tb
+    skills: [self-verification-standard, sim-failure-debug]
+    description: >-
+      Write, run and judge one testbench, and say honestly whether it passed.
+      One child per testbench.
+    output: >-
+      A JSON object as the last thing in your reply, with keys: "testbench"
+      (the file you wrote), "status" ("pass", "fail" or "inconclusive"),
+      "cases" (how many you exercised), and "note" (one sentence naming the
+      first failure, or why you believe the pass is real).

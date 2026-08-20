@@ -140,8 +140,8 @@ def __getattr__(name: str) -> Any:
 
 def reset_caches() -> None:
     """Drop every cached view of the registry (tests that alter it)."""
-    global _policies, _derived, _catalog_cache, _tools_by_name
-    _policies = _derived = _catalog_cache = _tools_by_name = None
+    global _policies, _derived, _catalog_cache, _tools_by_name, _focus_cache
+    _policies = _derived = _catalog_cache = _tools_by_name = _focus_cache = None
 
 
 def category_of(tool_name: str) -> str:
@@ -168,6 +168,198 @@ def tools_with_attempt_parser(parser) -> frozenset:
     return frozenset(
         n for n, p in _load_policies().items() if p.attempt_parser is parser
     )
+
+
+# --- Focus: tool sets, read from a data file ----------------------------------
+#
+# THE FENCE, in code, where it cannot be missed:
+#
+#   FOCUS   = which tools an agent SEES. Data (config/tool_sets.yaml),
+#             user-editable, and safe to be: hiding a tool shortens a prompt.
+#   AUTHORITY = which tools may RUN. Code, and only code: ``PROTECTED_TOOLS``
+#             (sign-in), the capability checks inside each wrapper, owner
+#             scoping, workspace containment. None of it is reachable from the
+#             data file, by construction — this module resolves a set to NAMES
+#             and nothing else, and every one of those names still goes through
+#             the same gates it always did.
+#
+# Hiding a tool is not a security boundary. These two must never merge; if a
+# future change lets the YAML turn a check off, that change is the bug.
+#
+# Why a file and not a Python dict: "changing which tools an agent sees touches
+# zero code files" is a claim this repo makes, and a dict of category names in
+# Python is the same hardcoding one level up. The vocabulary is the tools' OWN
+# policy — surface, category, and the ``mutates`` flag — so there is no second
+# list to keep in step with the first.
+
+TOOL_SETS_FILENAME = "tool_sets.yaml"
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TOOL_SETS_PATH = os.path.join(_REPO_ROOT, "config", TOOL_SETS_FILENAME)
+
+_SET_KEYS = frozenset({"description", "surface", "categories", "read_only_categories"})
+_ROLE_KEYS = frozenset({"tool_set", "skills", "description", "output"})
+
+_focus_cache: Optional[Dict[str, Any]] = None
+
+
+class ToolSetError(RuntimeError):
+    """The tool-set data file is malformed or names something that does not exist.
+
+    Loud on purpose, exactly like a broken skill file. A set that silently
+    resolves to nothing is an agent with no tools that still answers — the
+    failure looks like a bad model, not a bad config, and costs an afternoon.
+    """
+
+
+def tool_sets_path() -> str:
+    """Where the tool sets are read from. ``SILICONCREW_TOOL_SETS_FILE``
+    overrides it (one deploy, one file — no code change either way)."""
+    return os.environ.get("SILICONCREW_TOOL_SETS_FILE") or TOOL_SETS_PATH
+
+
+def _known_categories() -> frozenset:
+    return frozenset(p.category for p in _load_policies().values())
+
+
+def _validate_set(name: str, spec: Any, path: str) -> Dict[str, Any]:
+    from src.tools.wrappers import SURFACE_NAMES
+
+    if not isinstance(spec, dict):
+        raise ToolSetError(f"{path}: tool set {name!r} must be a mapping")
+    unknown = sorted(set(spec) - _SET_KEYS)
+    if unknown:
+        raise ToolSetError(
+            f"{path}: tool set {name!r} has unknown key(s) {unknown}; allowed: {sorted(_SET_KEYS)}"
+        )
+    surface = spec.get("surface")
+    if surface not in SURFACE_NAMES:
+        raise ToolSetError(
+            f"{path}: tool set {name!r} declares surface {surface!r}; known: {sorted(SURFACE_NAMES)}"
+        )
+    known = _known_categories()
+    for key in ("categories", "read_only_categories"):
+        value = spec.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
+            raise ToolSetError(f"{path}: tool set {name!r} key {key!r} must be a list of category names")
+        bad = sorted(set(value) - known)
+        if bad:
+            raise ToolSetError(
+                f"{path}: tool set {name!r} names categor(ies) {bad} that no tool declares; "
+                f"known: {sorted(known)}"
+            )
+    return spec
+
+
+def _load_focus(path: Optional[str] = None) -> Dict[str, Any]:
+    """Parse + validate the tool-set file once per process."""
+    global _focus_cache
+    if path is None and _focus_cache is not None:
+        return _focus_cache
+    target = path or tool_sets_path()
+    import yaml
+
+    try:
+        with open(target, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except OSError as exc:
+        raise ToolSetError(f"{target}: could not be read: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise ToolSetError(f"{target}: is not valid YAML: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ToolSetError(f"{target}: must be a mapping with 'tool_sets' and 'subagents'")
+    unknown = sorted(set(data) - {"tool_sets", "subagents"})
+    if unknown:
+        raise ToolSetError(f"{target}: unknown top-level key(s) {unknown}")
+
+    sets = data.get("tool_sets") or {}
+    if not isinstance(sets, dict) or not sets:
+        raise ToolSetError(f"{target}: 'tool_sets' must be a non-empty mapping")
+    sets = {name: _validate_set(name, spec, target) for name, spec in sets.items()}
+
+    roles = data.get("subagents") or {}
+    if not isinstance(roles, dict):
+        raise ToolSetError(f"{target}: 'subagents' must be a mapping")
+    for role, spec in roles.items():
+        if not isinstance(spec, dict):
+            raise ToolSetError(f"{target}: subagent {role!r} must be a mapping")
+        bad = sorted(set(spec) - _ROLE_KEYS)
+        if bad:
+            raise ToolSetError(
+                f"{target}: subagent {role!r} has unknown key(s) {bad}; allowed: {sorted(_ROLE_KEYS)}"
+            )
+        if spec.get("tool_set") not in sets:
+            raise ToolSetError(
+                f"{target}: subagent {role!r} uses tool set {spec.get('tool_set')!r}, "
+                f"which is not defined here; defined: {sorted(sets)}"
+            )
+        skills = spec.get("skills")
+        if not isinstance(skills, list) or not skills or not all(isinstance(x, str) for x in skills):
+            raise ToolSetError(f"{target}: subagent {role!r} must list at least one skill name")
+
+    resolved = {"tool_sets": sets, "subagents": roles, "path": target}
+    # Resolve every set eagerly: a typo that empties a set must fail at load,
+    # not at the moment an agent is built with no tools.
+    for name in sets:
+        if not _resolve_set(name, resolved):
+            raise ToolSetError(
+                f"{target}: tool set {name!r} resolves to no tools at all — an agent "
+                "with no tools is a config error, not a focus choice"
+            )
+    if path is None:
+        _focus_cache = resolved
+    return resolved
+
+
+def _resolve_set(name: str, focus: Dict[str, Any]) -> tuple:
+    spec = focus["tool_sets"][name]
+    surface = spec["surface"]
+    cats = set(spec.get("categories") or ())
+    ro_cats = set(spec.get("read_only_categories") or ())
+    everything = "categories" not in spec and "read_only_categories" not in spec
+    out = []
+    for tool_name, p in _load_policies().items():
+        if surface not in p.surfaces:
+            continue
+        if everything or p.category in cats or (p.category in ro_cats and not p.mutates):
+            out.append(tool_name)
+    return tuple(out)
+
+
+def tool_set_names(path: Optional[str] = None) -> tuple:
+    return tuple(_load_focus(path)["tool_sets"])
+
+
+def tool_names_in_set(name: str, read_only: bool = False, path: Optional[str] = None) -> tuple:
+    """The tool names a set resolves to, in registry order.
+
+    ``read_only=True`` is the whole of read-only mode: drop every tool that
+    declares ``mutates=True``. There is no read-only LIST — the tools already
+    say which of them write, and this is the one place that asks.
+    """
+    focus = _load_focus(path)
+    if name not in focus["tool_sets"]:
+        raise ToolSetError(f"no tool set named {name!r}; defined: {sorted(focus['tool_sets'])}")
+    names = _resolve_set(name, focus)
+    if read_only:
+        policies = _load_policies()
+        names = tuple(n for n in names if not policies[n].mutates)
+    return names
+
+
+def tools_in_set(name: str, read_only: bool = False, path: Optional[str] = None) -> List[Any]:
+    """The live tool objects for a set, in registry order."""
+    from src.tools.wrappers import ALL_TOOLS
+
+    wanted = set(tool_names_in_set(name, read_only=read_only, path=path))
+    return [t for t in ALL_TOOLS if t.name in wanted]
+
+
+def subagent_roles(path: Optional[str] = None) -> Dict[str, Any]:
+    """The built-in subagent roles, as declared. Data in, data out."""
+    return dict(_load_focus(path)["subagents"])
+
 
 
 # --- Catalog (introspected once per process) ----------------------------------
