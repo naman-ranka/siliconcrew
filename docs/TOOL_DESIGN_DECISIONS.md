@@ -307,3 +307,31 @@ Custom mode:    16 tools (essential + verification)
 ```
 
 Your instinct was correct on all three points! 🎯
+
+---
+
+## Tool naming: why the names are NOT namespaced (decided during the merge wave)
+
+MCP guidance suggests prefixing tool names per server (a "sc_" or
+"siliconcrew." prefix on every one) so a client that mounts several servers
+cannot collide.
+It was considered here and **deliberately not done**:
+
+1. **The wire is already namespaced by the client.** A tool reaches a model as
+   `mcp__silicon_crew__read_file`; Codex addresses it as
+   `mcp_servers.siliconcrew.<tool>`. A prefix of our own would stutter inside a
+   prefix the protocol already applies.
+2. **The surviving names do not collide with each other.** After the merges no
+   two tools share a stem, and the pairs that were genuinely confusable — two
+   editors, two simulators, four stage readers, a status reader and a waiter —
+   are one tool each now.
+3. **The real ambiguity is not the name.** "Whose filesystem does `read_file`
+   read?" is a question about the DESCRIPTION (they resolve inside the session
+   workspace, and the descriptions now say so), not about the name.
+4. **The cost is a flag day.** Roughly 1,500 hardcoded occurrences, with no
+   alias window, buys symmetry rather than clarity.
+
+The `_tool` suffix is likewise inconsistent (`linter_tool` and `waveform_tool`
+next to `write_file` and `retry_pd`). It carries no information, but renaming
+for consistency alone is the same trade: churn without clarity. Left alone,
+recorded here so the next reader knows it was a decision and not an oversight.
