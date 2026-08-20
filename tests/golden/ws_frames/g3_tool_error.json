@@ -1,0 +1,18 @@
+[
+  {
+    "type": "start"
+  },
+  {
+    "tool": {
+      "args": {
+        "text": "kaboom"
+      },
+      "name": "exploding_tool"
+    },
+    "type": "tool_call"
+  },
+  {
+    "error": "boom: kaboom",
+    "type": "error"
+  }
+]
