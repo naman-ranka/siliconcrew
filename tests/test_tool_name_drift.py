@@ -385,7 +385,7 @@ BENIGN: Dict[str, str] = {
     "apply_cocotb_compat_patches": "function in cvdp-pipeline/_cocotb_compat.py",
     "run_docker_command": "src/platform_engines helper function, cited in deploy/RUNBOOK.md",
     "get_synthesis": "deliberately fake name in frontend/test/activityFilters.test.ts (prefix fallback)",
-    "get_synthesis_report": "deliberately fake name in the same test — proves get_synthesis_* maps to synth",
+    "get_synthesis_report": "deliberately fake name in a frontend test — asserts an UNREGISTERED tool falls to 'other'. The get_synthesis_* prefix heuristic it once guarded is gone; synthesis membership is now totality-tested against the backend category.",
     "rm_rf": "deliberately unknown tool in the /invoke 404 test (test_workbench_v2_api.py)",
     "synthesis_run": "SYSTEM pseudo-tool on run-completion events (attempt_logger), never a registry tool",
     "configure_tool_filter": "docs/TOOL_DESIGN_DECISIONS.md records it as REMOVED — deliberate history",
