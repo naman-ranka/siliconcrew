@@ -163,3 +163,68 @@ def test_gate_error_points_at_the_recovery_tool(make_server):
     assert bootstrap in message, f"gate error does not name the recovery tool: {message!r}"
     dead = {tok for tok in _SNAKE.findall(message) if "_" in tok} - set(advertised) - {gated}
     assert not dead, f"gate error names tools that are not advertised: {sorted(dead)}"
+
+
+def test_the_session_gate_is_the_policy_not_a_list(make_server):
+    """The gate refuses exactly the tools whose policy says they need a session.
+
+    Before the fold, the six session tools were handled by a chain of
+    ``if name == "..."`` branches ABOVE the gate, and the gate itself was a
+    blanket "no session → refuse". Both halves were hand-keyed to names. Now the
+    gate asks ``requires_session(name)``, so this walks the whole advertised
+    surface: every design tool is refused on a fresh server, and every tool that
+    waives the gate actually runs. A tool added on either side with the wrong
+    declaration fails here.
+    """
+    from src.api.tool_catalog import requires_session
+
+    advertised = _advertised(make_server())
+    # The gate's own words — "No active session" alone would also match
+    # get_current_session's honest answer that there is none.
+    refusal = "has no workspace to act on"
+
+    # Refused tools change nothing, so one server serves them all.
+    gated_server = make_server()
+    waived = []
+    for name, tool in sorted(advertised.items()):
+        if requires_session(name):
+            out = asyncio.run(gated_server.call_tool(name, _probe_args(tool)))
+            assert refusal in out[0].text, f"{name} ran with no session"
+            assert gated_server.current_session is None
+        else:
+            waived.append(name)
+
+    assert waived, "no tool can bootstrap a session — a stranger is locked out"
+    for name in waived:
+        # A fresh server each: one of these creates a session, and that would
+        # clear the gate for the next.
+        server = make_server()
+        out = asyncio.run(server.call_tool(name, _probe_args(advertised[name])))
+        assert refusal not in out[0].text, f"{name} was refused before it could bootstrap"
+
+
+def test_a_stranger_bootstraps_with_no_session_of_any_kind(make_server):
+    """The A-H9 risk, stated as a test: folding the session tools into the
+    registry must not put them behind the gate they exist to satisfy.
+
+    A brand-new server, no session anywhere, first call of the connection is the
+    bootstrap tool — it must produce a real, active session and a workspace that
+    exists on disk, not a refusal.
+    """
+    import os
+
+    bootstrap = _bootstrap_tool(make_server)
+    server = make_server()
+    assert server.current_session is None
+
+    out = asyncio.run(server.call_tool(bootstrap, {"session_name": "stranger_design"}))[0].text
+
+    assert server.current_session, f"first call did not activate a session: {out!r}"
+    assert "No active session" not in out
+    # A real session, not just a pointer: the workspace exists and the manager
+    # owns a row for it. (Asserted through the session manager rather than
+    # server.workspace_path, which answers from a process-cached workspace
+    # provider that other servers in this test module have already built.)
+    sid = server.current_session
+    assert os.path.isdir(server.session_manager.get_workspace_path(sid))
+    assert sid in server.session_manager.get_all_sessions()

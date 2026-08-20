@@ -363,6 +363,18 @@ def test_attempt_summary_tolerates_names_that_are_not_registry_tools():
     assert _tool_policy("linter_tool") is not None
 
 
+def test_the_reports_lint_cell_asks_the_registry_which_tool_lints():
+    """``design_report`` used to test an event row for ``tool == "linter_tool"``.
+    It asks for the tools that declare the lint parser instead — the same
+    declaration the attempt log reads — so a rename or a second lint tool
+    reaches the report without anyone remembering it exists."""
+    from src.api.tool_catalog import tools_with_attempt_parser
+    from src.utils.attempt_logger import attempt_lint
+
+    assert tools_with_attempt_parser(attempt_lint) == {"linter_tool"}
+    assert tools_with_attempt_parser(lambda *a: None) == frozenset()
+
+
 def test_attempt_roles_still_describe_the_flow():
     """The two sets that used to live in attempt_logger, now read off the tools.
     Pinned so a policy typo cannot quietly stop attempt tracking."""

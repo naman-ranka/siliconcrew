@@ -396,3 +396,42 @@ def test_tool_policy_still_opt_out_via_env(wiring, monkeypatch):
     prompt = _handler(wiring, [])._system_prompt()
     assert prompt == "system"
     assert "sandbox" not in prompt
+
+
+# --- the bound server's disabled tools are the tools' own declaration --------
+
+def test_disabled_tools_are_derived_from_policy(wiring):
+    """The Codex client is told to disable exactly the tools a session-bound
+    MCP server refuses.
+
+    Those four names used to be typed here AND in mcp_server.py's refusal, with
+    nothing keeping the two in step: disable one client-side and forget the
+    server-side refusal (or the reverse) and a bound Codex turn could mint or
+    delete sessions outside its own. Both now read ``disabled_when_bound`` off
+    the tools, so this asserts the wire config carries that set and nothing
+    else.
+    """
+    import json
+    import os
+
+    from src.api.tool_catalog import DISABLED_WHEN_BOUND
+    from src.agents.codex.codex_engine import CodexEngine, CodexTurn
+
+    engine = CodexEngine(enabled=True, state_dir=wiring.state_dir,
+                         mcp_data_dir=wiring.db, repo_root=os.getcwd())
+    turn = CodexTurn(session_id="s1", thread_id="th1", message="hi",
+                     workspace=wiring.workspace, user_id="alice",
+                     model_name="gpt-5.5", api_key="sk-test")
+
+    engine._prepare_paths(turn)
+    overrides = engine._config_overrides(turn)
+    line = [o for o in overrides if o.startswith("mcp_servers.siliconcrew.disabled_tools=")]
+    assert len(line) == 1, overrides
+    disabled = json.loads(line[0].split("=", 1)[1])
+
+    assert set(disabled) == set(DISABLED_WHEN_BOUND)
+    assert disabled  # a bound server that disables nothing is the pre-fix bug
+    # And the server it launches refuses the same set — same source, both ends.
+    args = [json.loads(o.split("=", 1)[1]) for o in overrides
+            if o.startswith("mcp_servers.siliconcrew.args=")]
+    assert len(args) == 1 and "--bound-session" in args[0]
