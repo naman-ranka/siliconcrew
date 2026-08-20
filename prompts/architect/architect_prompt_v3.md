@@ -34,6 +34,3 @@ matches the situation you are actually in — before diagnosing a physical-desig
 failure, before debugging a failing simulation, before planning verification.
 Loading a skill is cheap; improvising its content is not. A skill may point at
 further files; read them when it says to.
-
----
-PROMPT_VERSION: v3

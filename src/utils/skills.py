@@ -219,13 +219,10 @@ def compose_skills_block(skills: Optional[Sequence[Skill]] = None) -> str:
     skills = discover_skills() if skills is None else list(skills)
     if not skills:
         return ""
-    parts = [
-        "\n\n# Skills",
-        "\nThese are available on demand. Read one with `read_skill(name)` when "
-        "its description matches the situation you are in; `list_skills` "
-        "re-lists them at any time.\n",
-        skill_index(skills),
-    ]
+    # No explanation here of what a skill is or how to load one: the prompt
+    # says that once, and the tool descriptions say it again to a client that
+    # never sees our prompt. A third copy is the drift this layer exists to end.
+    parts = ["\n\n# Skills\n", skill_index(skills)]
     for skill in skills:
         if not skill.always_load:
             continue
