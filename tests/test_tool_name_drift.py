@@ -149,10 +149,17 @@ def live_tool_names() -> Set[str]:
     The whole registry, not a union of surfaces: a tool served on ONE surface
     (the Codex-only prompt tool) is just as live as one served on all of them,
     and the surfaces are themselves derived from the same list."""
+    from src.agents.subagents import subagent_tool_names
     from src.tools.wrappers import ALL_TOOLS
 
     names = {t.name for t in ALL_TOOLS}
     names |= _mcp_server_declared_tools()
+    # The delegation tool is native-agent-only and cannot be a registry entry —
+    # it closes over the turn's resolved key and pinned model, so it has no
+    # identity to advertise ahead of time (src/agents/subagents.py). It is still
+    # a tool name people write down, so it is still live here. Derived, like
+    # everything else in this function.
+    names |= set(subagent_tool_names())
     return names
 
 

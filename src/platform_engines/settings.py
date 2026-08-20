@@ -152,6 +152,30 @@ class PlatformSettings:
     python_engine: str = "docker"
     python_image: str = "siliconcrew/python-analysis:1"
 
+    # Subagents (P6) — the two built-in fan-out roles. NATIVE AGENT ONLY: a
+    # subagent needs a loop, and an MCP client is not one. Off on hosted no
+    # matter what this says, because a child's tokens are invisible to the
+    # hosted free-tier spend limiter (see src/agents/subagents.py).
+    subagents_enabled: bool = True
+    # A child's step budget. Same arithmetic as chat_recursion_limit: the child
+    # graph is model+tools with wrap-style middleware only, so two graph steps
+    # per round and 24 buys 12 model calls. A child does ONE bounded job —
+    # dispatch, poll, read a report, answer — and 12 calls is generous for
+    # that. The ceiling exists so a confused child cannot spend without end.
+    subagent_recursion_limit: int = 24
+    # How many children one delegation may run. Extra tasks are dropped, not
+    # queued: the parent asked for a fan-out it can read in one reply.
+    subagent_max_children: int = 6
+
+    # Read-only mode (L9): the agent is offered every tool that does NOT
+    # declare `mutates`, and nothing else. That is the whole mechanism — a
+    # filter over policy the tools already carry, not a mode system. It is
+    # FOCUS, never authority: a read-only agent is one whose tool list is
+    # shorter, not one the code refuses to let write. There is deliberately no
+    # "auto"/"ask" mode to go with it — that would be a switch for
+    # confirmations this product does not have.
+    agent_read_only: bool = False
+
     @property
     def workos_configured(self) -> bool:
         """True when WorkOS token validation can run (hosted web + MCP auth).
@@ -318,6 +342,10 @@ def get_settings() -> PlatformSettings:
         # Docker-preferred locally (native fallback when docker is absent); hosted
         # never runs this tool. See src/tools/run_python.py.
         python_engine=_env("PYTHON_ENGINE", "native" if hosted else "docker"),
+        subagents_enabled=_flag("SILICONCREW_SUBAGENTS", default=True),
+        subagent_recursion_limit=_int_env("SUBAGENT_RECURSION_LIMIT", 24),
+        subagent_max_children=_int_env("SUBAGENT_MAX_CHILDREN", 6),
+        agent_read_only=_flag("SILICONCREW_AGENT_READ_ONLY", default=False),
         python_image=_env("PYTHON_ANALYSIS_IMAGE", "siliconcrew/python-analysis:1"),
     )
 

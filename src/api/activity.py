@@ -20,15 +20,41 @@ from typing import Any, Dict, List, Optional
 from src.utils.attempt_logger import EVENTS_FILE, _read_events
 
 # Sources recorded by attempt_logger → UI actor buckets. The agent's WS loop
-# logs "api_ws"; MCP logs "mcp"; the REST action layer logs "ui".
+# logs "api_ws"; MCP logs "mcp"; the REST action layer logs "ui"; a subagent
+# child logs "subagent:<role>" (src/agents/subagents.py).
 _SOURCE_MAP = {"api_ws": "agent", "agent": "agent", "ui": "user", "user": "user", "mcp": "mcp"}
+
+# A child's tool calls used to fall through this map's default and land in the
+# "agent" bucket, which made a subagent's work indistinguishable from its
+# parent's: five children sweeping five knobs read as one agent that called
+# start_synthesis five times, with no way to see which result belonged to which
+# child. The role travels in the source string because that is where "who did
+# this" already lives — the event schema needs no new column, and any older log
+# reads exactly as it did before.
+_SUBAGENT_SOURCE = "subagent"
 
 _RUN_ID_PAT = re.compile(r"\b(?:sim|synth)_\d{1,6}\b")
 _RESULT_SUMMARY_MAX = 500
 
 
 def _map_source(raw: Any) -> str:
-    return _SOURCE_MAP.get(str(raw or "").lower(), "agent")
+    value = str(raw or "").lower()
+    if value.split(":", 1)[0] == _SUBAGENT_SOURCE:
+        return _SUBAGENT_SOURCE
+    return _SOURCE_MAP.get(value, "agent")
+
+
+def _subagent_role(raw: Any) -> Optional[str]:
+    """``"pd-sweep"`` from ``"subagent:pd-sweep"``; None for every other actor.
+
+    This is what lets the activity dock label a child row with the role that
+    produced it, and group a fan-out's rows together.
+    """
+    value = str(raw or "")
+    head, _, role = value.partition(":")
+    if head.lower() != _SUBAGENT_SOURCE:
+        return None
+    return role or _SUBAGENT_SOURCE
 
 
 def _iso_delta_ms(start: Optional[str], end: Optional[str]) -> Optional[int]:
@@ -86,6 +112,7 @@ def build_activity_events(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                 "id": str(cid) if cid else f"evt-{i}",
                 "ts": ts,
                 "source": _map_source(rec.get("source")),
+                "subagent": _subagent_role(rec.get("source")),
                 "tool": tool,
                 "args": args,
                 "status": "running",
@@ -119,6 +146,7 @@ def build_activity_events(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                 "id": str(cid) if cid else f"evt-{i}",
                 "ts": ts,
                 "source": _map_source(rec.get("source")),
+                "subagent": _subagent_role(rec.get("source")),
                 "tool": tool,
                 "args": args,
                 "status": "running",

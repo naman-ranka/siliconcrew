@@ -15,9 +15,17 @@ from langchain.agents.middleware import (
     ContextEditingMiddleware,
 )
 from pathlib import Path
-from src.tools.wrappers import architect_tools
+from src.api.tool_catalog import tools_in_set
 from src.config import DEFAULT_MODEL
 from src.llm import create_llm
+
+#: The tool set this agent is built from. The NAME is here; the membership is
+#: in config/tool_sets.yaml, so changing which tools the architect sees is an
+#: edit to a data file and no code at all. The set resolves to exactly the
+#: tools whose own policy puts them on the "agent" surface — the same list
+#: `src.tools.wrappers.architect_tools` has always been, pinned by
+#: tests/test_tool_sets.py so the two can never quietly disagree.
+ARCHITECT_TOOL_SET = "architect"
 
 load_dotenv()
 
@@ -237,7 +245,37 @@ def architect_middleware():
     return [ReasoningStripMiddleware(), *context_compaction_middleware()]
 
 
-def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=None):
+def architect_tool_list(model_name, api_key, read_only: bool):
+    """The tools one turn's architect is offered: a data-defined set, plus the
+    delegation tool when subagents are available.
+
+    FOCUS vs AUTHORITY — the fence this repo keeps, written where it is easiest
+    to break. Everything decided here is FOCUS: which tools the model SEES.
+    Focus is data (config/tool_sets.yaml), it is user-controllable, and it is
+    allowed to be, because hiding a tool is not a security boundary — it
+    shortens a prompt. AUTHORITY — which tools may RUN — is decided nowhere in
+    this function: it is `PROTECTED_TOOLS` (sign-in), the capability checks
+    inside each wrapper, owner scoping and workspace containment, all of which
+    apply to every caller by construction. Never merge the two. A tool dropped
+    from the set below is still callable by anyone the code says may call it,
+    and a tool present in the set is still refused by every check it fails.
+
+    `read_only` is the whole of read-only mode: drop the tools that declare
+    `mutates`. It is one filter over policy the tools already carry.
+    """
+    tools = list(tools_in_set(ARCHITECT_TOOL_SET, read_only=read_only))
+    # Subagents are built HERE, per turn, closed over this turn's resolved key
+    # and pinned model — which is what stops a child from spending outside the
+    # parent's key resolution and cost accounting. They are native-agent-only
+    # for the same reason they cannot be registry tools: a subagent needs a
+    # loop, and an MCP client is not one.
+    from src.agents.subagents import subagent_tools
+
+    return tools + subagent_tools(model_name=model_name, api_key=api_key, read_only=read_only)
+
+
+def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=None,
+                           read_only=None):
     """
     Creates the Architect agent using LangChain's `create_agent`.
 
@@ -246,10 +284,17 @@ def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=
         model_name: Name of the LLM model to use
         api_key: Optional request-scoped LLM key (BYOK / hosted tier). When None,
             create_llm falls back to the environment key (self-host behavior).
+        read_only: Offer only the tools that do not mutate. None (the default)
+            reads `agent_read_only` from settings, so a deployment can run the
+            agent read-only without a caller change.
 
     Returns:
         Compiled LangGraph agent
     """
+    from src.platform_engines.settings import get_settings
+
+    if read_only is None:
+        read_only = get_settings().agent_read_only
     llm = create_llm(model_name=model_name, temperature=0.0, api_key=api_key)
     runtime_prompt = load_system_prompt()
 
@@ -259,7 +304,7 @@ def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=
     # A signature mismatch is a wiring bug and must fail loudly at construction.
     agent_graph = create_agent(
         model=llm,
-        tools=architect_tools,
+        tools=architect_tool_list(model_name, api_key, read_only),
         checkpointer=checkpointer,
         system_prompt=runtime_prompt,
         middleware=architect_middleware(),
