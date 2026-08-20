@@ -603,7 +603,7 @@ def test_invoke_signed_in_gate(tmp_path):
     app = FastAPI()
     app.include_router(build_actions_router(resolve, get_identity=lambda: Anon()))
     c = TestClient(app)
-    r = c.post(f"/api/workspace/{SID}/invoke", json={"tool": "save_metrics_tool", "arguments": {"wns_ns": 0.1}})
+    r = c.post(f"/api/workspace/{SID}/invoke", json={"tool": "generate_report_tool", "arguments": {}})
     assert r.status_code == 401
     assert r.json()["detail"]["error"]["code"] == "signin_required"
 

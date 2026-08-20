@@ -228,43 +228,6 @@ def _resolve_run_clock_fields(run_meta: Dict[str, Any], spec: Optional[DesignSpe
     return requested_clock, None, None
 
 
-def save_metrics(workspace_path: str, metrics: Dict[str, Any], run_id: str = None) -> str:
-    """
-    Save PPA metrics to a JSON file in the workspace.
-    Called by the agent when it finds metrics through any means.
-    
-    Args:
-        workspace_path: Path to workspace
-        metrics: Dict with keys like area_um2, wns_ns, power_uw, cell_count
-        
-    Returns:
-        Path to saved file
-    """
-    target_dir, _ = _resolve_report_scope(workspace_path, run_id)
-    metrics_path = os.path.join(target_dir, METRICS_FILENAME)
-    
-    # Merge with existing metrics (don't overwrite if new value is None)
-    existing = {}
-    if os.path.exists(metrics_path):
-        try:
-            with open(metrics_path, 'r') as f:
-                existing = json.load(f)
-        except:
-            pass
-    
-    # Update with new metrics (only non-None values)
-    for key, value in metrics.items():
-        if value is not None:
-            existing[key] = value
-    
-    existing["updated_at"] = datetime.now().isoformat()
-    
-    with open(metrics_path, 'w') as f:
-        json.dump(existing, f, indent=2)
-    
-    return metrics_path
-
-
 def _metric_values_agree(saved: Any, parsed: Any) -> bool:
     """True when a saved value and a parsed value are the same measurement.
 
@@ -286,9 +249,9 @@ def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
     Ranking (invariant #4, honest state):
     1. get_synthesis_metrics for the resolved run — the ONE structured parser
        every other surface uses. Authoritative.
-    2. design_metrics.json (hand-saved by the agent via save_metrics_tool).
-       Read for legacy runs and for gap-filling ONLY; it can never override a
-       parsed value.
+    2. design_metrics.json, left by an older run (a hand-save tool used to
+       write it; it was deleted once the parse outranked it). Read for legacy
+       runs and for gap-filling ONLY; it can never override a parsed value.
 
     When both sources carry a value for the same field and they disagree, the
     parsed value is used and the conflict is reported under the

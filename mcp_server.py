@@ -44,41 +44,11 @@ from mcp.types import (
 )
 
 from dotenv import load_dotenv
+# Only the registry seam is imported here: the server advertises and dispatches
+# ``mcp_tools`` (plus the Codex surface), so naming individual tools would be a
+# second, hand-kept list of what exists — the exact drift ``tools_on_surface``
+# removes.
 from src.tools.wrappers import (
-    write_spec,
-    read_spec,
-    load_yaml_spec_file,
-    write_file,
-    read_file,
-    apply_patch_tool,
-    edit_file_tool,
-    list_files_tool,
-    linter_tool,
-    simulation_tool,
-    waveform_tool,
-    cocotb_tool,
-    sby_tool,
-    start_synthesis,
-    retry_pd,
-    get_synthesis_status,
-    wait_for_synthesis,
-    get_synthesis_metrics,
-    read_stage_report,
-    get_route_drc_summary,
-    get_cts_summary,
-    get_congestion_summary,
-    compare_pd_runs,
-    search_logs_tool,
-    schematic_tool,
-    save_metrics_tool,
-    generate_report_tool,
-    run_dslx_interpreter,
-    compile_dslx_to_ir,
-    experimental_compile_cpp_to_ir,
-    optimize_xls_ir,
-    codegen_xls,
-    benchmark_xls,
-    run_xls_flow,
     get_workspace_path,
     mcp_tools,
     session_host,

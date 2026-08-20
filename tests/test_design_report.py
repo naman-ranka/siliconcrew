@@ -8,7 +8,6 @@ import tempfile
 import shutil
 import json
 from src.tools.design_report import (
-    save_metrics,
     load_metrics,
     generate_design_report,
     save_design_report,
@@ -17,8 +16,31 @@ from src.tools.design_report import (
 from src.tools.spec_manager import DesignSpec, PortSpec, save_yaml_file, load_yaml_file
 
 
-class TestSaveMetrics(unittest.TestCase):
-    """Tests for metrics persistence."""
+def save_metrics(workspace_path: str, metrics: dict, run_id: str = None) -> str:
+    """Write a LEGACY ``design_metrics.json`` the way older runs left one.
+
+    The tool that used to write this file is gone (the run parse outranks it and
+    covers all five fields), but ``load_metrics`` still READS it so a run
+    recorded before the deletion keeps rendering. This helper stands in for that
+    history: it is how those files exist on disk, and the tests below prove the
+    read tier still handles them.
+    """
+    from src.tools.design_report import _resolve_report_scope
+
+    target_dir, _ = _resolve_report_scope(workspace_path, run_id)
+    metrics_path = os.path.join(target_dir, METRICS_FILENAME)
+    existing = {}
+    if os.path.exists(metrics_path):
+        with open(metrics_path) as fh:
+            existing = json.load(fh)
+    existing.update({k: v for k, v in metrics.items() if v is not None})
+    with open(metrics_path, "w") as fh:
+        json.dump(existing, fh, indent=2)
+    return metrics_path
+
+
+class TestLegacyMetricsFile(unittest.TestCase):
+    """The legacy ``design_metrics.json`` tier, still read for old runs."""
     
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
@@ -26,7 +48,7 @@ class TestSaveMetrics(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.test_dir)
     
-    def test_save_metrics_creates_file(self):
+    def test_legacy_file_is_read_back(self):
         metrics = {
             "area_um2": 123.45,
             "cell_count": 50,
@@ -41,9 +63,8 @@ class TestSaveMetrics(unittest.TestCase):
         
         self.assertEqual(saved["area_um2"], 123.45)
         self.assertEqual(saved["cell_count"], 50)
-        self.assertIn("updated_at", saved)
     
-    def test_save_metrics_merges_existing(self):
+    def test_legacy_file_merges_across_writes(self):
         # Save initial metrics
         save_metrics(self.test_dir, {"area_um2": 100.0})
         
@@ -58,7 +79,7 @@ class TestSaveMetrics(unittest.TestCase):
         self.assertEqual(saved["area_um2"], 100.0)
         self.assertEqual(saved["cell_count"], 25)
     
-    def test_save_metrics_skips_none(self):
+    def test_legacy_file_skips_none(self):
         save_metrics(self.test_dir, {"area_um2": 100.0, "cell_count": None})
         
         metrics_path = os.path.join(self.test_dir, METRICS_FILENAME)

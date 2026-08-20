@@ -28,7 +28,7 @@ def _xls_run(command: str, workspace: str) -> Dict[str, Any]:
     The command is cwd-relative (no ``/workspace`` paths), so it runs the same
     whether the docker engine mounts ``workspace`` at ``/workspace`` or the
     native engine runs directly in ``workspace``. Binaries (interpreter_main,
-    ir_converter_main, opt_main, codegen_main, benchmark_main, xlscc) come from
+    ir_converter_main, opt_main, codegen_main, benchmark_main) come from
     the XLS image (docker) or PATH (native / hosted image).
     """
     return get_tool_engine().run(
@@ -195,40 +195,6 @@ def compile_dslx_to_ir(filename: str, top_module: str, cwd: str) -> Dict[str, An
     result["top_module"] = safe_top
     result["ir_filename"] = out_ir if result.get("success") else None
     return _with_stage(result, "ir_conversion")
-
-
-def experimental_compile_cpp_to_ir(
-    filename: str,
-    top_name: str,
-    block_from_class: bool = False,
-    cwd: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Compile C++ to XLS IR via xlscc.
-
-    This is intentionally labeled experimental.  SiliconCrew's primary HLS
-    frontend is DSLX; C++ support should not be the default agent path.
-    """
-    try:
-        workspace = _ensure_workspace(cwd)
-        safe_file = validate_safe_relative_path(filename)
-        safe_top = validate_identifier(top_name, "top_name")
-    except ValueError as exc:
-        return _failure("cpp_ir_conversion", str(exc))
-
-    if not _artifact_exists(workspace, safe_file):
-        return _failure("cpp_ir_conversion", f"C++ file not found: {safe_file}")
-
-    out_ir = f"{safe_top}.ir"
-    args = [f"--top={safe_top}"]
-    if bool(block_from_class):
-        args.append("--block_from_class")
-
-    result = _xls_run(f"xlscc {' '.join(args)} {safe_file} > {out_ir}", workspace)
-    result["source_file"] = safe_file
-    result["top_name"] = safe_top
-    result["ir_filename"] = out_ir if result.get("success") else None
-    return _with_stage(result, "cpp_ir_conversion")
 
 
 def optimize_xls_ir(ir_filename: str, cwd: str) -> Dict[str, Any]:

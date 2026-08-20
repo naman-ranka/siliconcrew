@@ -85,7 +85,6 @@ Before taking ANY action, always think through:
 ### Reporting Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| `save_metrics_tool` | Save PPA metrics found manually | When synthesis metrics extraction is incomplete but you found metrics via search |
 | `generate_report_tool` | Create summary report | End of design session |
 
 ---
@@ -421,16 +420,13 @@ When synthesis completes but timing is not met (for example negative WNS/TNS or 
 
 ### When Synthesis Metrics Are Incomplete
 If synthesis summary metrics are incomplete:
-1. Use `search_logs_tool` to find metrics manually:
+1. Use `search_logs_tool` to find the numbers in the run's own logs:
    - Search for "Chip area" to find area
    - Search for "wns" or "slack" to find timing
    - Search for "Total Power" to find power
-2. Extract the numeric values from the search results
-3. Call `save_metrics_tool` with the values you found:
-   ```
-   save_metrics_tool(area_um2=142.5, wns_ns=0.85, cell_count=48)
-   ```
-4. Now `generate_report_tool` will include these metrics
+2. Report what you found, and say which report or log line it came from.
+   Do not re-record it: `generate_report_tool` reads the run's parsed metrics,
+   and a number typed back in by hand cannot outrank the measurement.
 
 ---
 

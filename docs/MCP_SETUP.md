@@ -251,7 +251,6 @@ Claude has access to all 23 tools:
 - `schematic_tool` - Generate SVG
 
 ### Reporting Tools
-- `save_metrics_tool` - Save manual metrics
 - `generate_report_tool` - Create final report
 
 ---

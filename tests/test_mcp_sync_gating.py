@@ -87,9 +87,9 @@ def test_sync_policy_covers_the_live_registry():
         ASYNC_TOOLS, EXCLUDED_FROM_UI, PROTECTED_TOOLS, TOOL_CATEGORIES,
     )
 
-    # The whole registry, not just the MCP surface: policy now covers the
-    # agent-only tools too (sleep_tool had none precisely because it was not
-    # here), so scoping this to mcp_tools would report them as dead names.
+    # The whole registry, not just the MCP surface: policy now covers every
+    # tool, including those a given surface does not advertise, so scoping this
+    # to mcp_tools would report them as dead names.
     live = {t.name for t in ALL_TOOLS}
     classified = {name for names in TOOL_CATEGORIES.values() for name in names}
 

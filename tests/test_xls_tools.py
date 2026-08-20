@@ -14,7 +14,6 @@ from src.tools.run_xls import (
     validate_safe_relative_path,
 )
 from src.tools.wrappers import (
-    experimental_compile_cpp_to_ir,
     get_workspace_path,
     run_xls_flow,
 )
@@ -105,13 +104,6 @@ def test_path_safety_rejection_in_tool(isolated_workspace):
     assert flow_res["success"] is False
     assert flow_res["stage"] == "interpreter"
     assert "Path traversal" in flow_res["stderr"]
-
-
-def test_experimental_compile_cpp_to_ir_rejects_unsafe_path(isolated_workspace):
-    res_str = experimental_compile_cpp_to_ir.invoke({"filename": "../secret.cc", "top_name": "my_func"})
-    res = json.loads(res_str)
-    assert res["success"] is False
-    assert "Path traversal" in res["stderr"]
 
 
 def test_get_workspace_path_respects_isolated_workspace(isolated_workspace):

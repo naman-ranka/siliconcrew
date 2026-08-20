@@ -97,7 +97,6 @@ export const SURFACE_ICONS: Record<string, LucideIcon> = {
   get_manifest: Settings2,
   update_manifest: Settings2,
   generate_report_tool: BarChart3,
-  save_metrics_tool: PenLine,
   run_python_analysis: FileCode2,
   write_spec: FileText,
   read_spec: FileText,
@@ -113,7 +112,6 @@ export const SURFACE_ICONS: Record<string, LucideIcon> = {
   optimize_xls_ir: Package,
   codegen_xls: Package,
   benchmark_xls: Package,
-  experimental_compile_cpp_to_ir: Package,
 };
 
 const iconFor = (id: string): LucideIcon => SURFACE_ICONS[id] ?? Terminal;

@@ -15,7 +15,7 @@ Required full flow:
 2. Implementation: write RTL and self-checking testbench.
 3. Verification: linter_tool then RTL simulation_tool.
 4. Synthesis: start_synthesis + bounded wait_for_synthesis polling (run_id).
-5. Metrics: get_synthesis_metrics; use search_logs_tool and save_metrics_tool if metrics are incomplete.
+5. Metrics: get_synthesis_metrics; use search_logs_tool for evidence the parse does not surface.
 6. Gate-level check: simulation_tool in post_synth mode.
 7. Reporting: generate_report_tool.
 

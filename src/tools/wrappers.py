@@ -1016,7 +1016,7 @@ def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> st
 
 from src.tools.build_interactive_sim import build_websim_netlist
 from src.tools.generate_schematic import generate_schematic
-from src.tools.design_report import generate_design_report, save_design_report, save_metrics
+from src.tools.design_report import generate_design_report, save_design_report
 from src.tools.spec_manager import (
     DesignSpec, PortSpec, parse_yaml_spec, validate_spec, 
     spec_to_prompt, save_yaml_file, load_yaml_file, create_spec_from_dict
@@ -1343,63 +1343,6 @@ def build_interactive_sim(
 
 @tool(parse_docstring=True)
 @policy(category="reporting", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def save_metrics_tool(
-    area_um2: float = None,
-    cell_count: int = None,
-    wns_ns: float = None,
-    tns_ns: float = None,
-    power_uw: float = None,
-    run_id: str = None
-) -> str:
-    """
-    Records PPA numbers for the design report when a run's own reports do not
-    carry them. LAST RESORT: get_synthesis_metrics parses these same five fields
-    from the run, the report ranks that parse ABOVE anything saved here, and a
-    saved value that contradicts a parsed one is printed as a flagged
-    disagreement rather than used.
-
-    Args:
-        area_um2: Cell area in square micrometers.
-        cell_count: Standard-cell count.
-        wns_ns: Worst negative slack, nanoseconds.
-        tns_ns: Total negative slack, nanoseconds.
-        power_uw: Total power in MICROwatts. get_synthesis_metrics also reports
-            power_mw — do not paste a milliwatt figure here.
-        run_id: Run these attach to. Omit for the most recent run.
-    """
-    workspace = get_workspace_path()
-    
-    metrics = {}
-    if area_um2 is not None:
-        metrics["area_um2"] = area_um2
-    if cell_count is not None:
-        metrics["cell_count"] = cell_count
-    if wns_ns is not None:
-        metrics["wns_ns"] = wns_ns
-    if tns_ns is not None:
-        metrics["tns_ns"] = tns_ns
-    if power_uw is not None:
-        metrics["power_uw"] = power_uw
-    
-    if not metrics:
-        return "Error: No metrics provided. Please specify at least one metric."
-    
-    try:
-        save_metrics(workspace, metrics, run_id=run_id)
-        
-        saved_str = ", ".join([f"{k}={v}" for k, v in metrics.items()])
-        return f"""Metrics saved successfully! 📊
-
-**Saved**: {saved_str}
-
-These will be included in the design report when you call `generate_report_tool`."""
-    except Exception as e:
-        return f"Error saving metrics: {str(e)}"
-
-
-@tool(parse_docstring=True)
-@policy(category="reporting", protected=True, mutates=True, async_job=False,
         surfaces=ALL_SURFACES, requires_session=True,
         attempt_role="checkpoint")
 def generate_report_tool(run_id: str = None) -> str:
@@ -1634,24 +1577,6 @@ def list_files_tool() -> str:
         
     return "Files in workspace:\n" + "\n".join(sorted(files))
 
-@tool(parse_docstring=True)
-# Agent-only turn-economy helper: it paces the poll loop of the async synthesis
-# contract (hence the category), touches no workspace, and is on no other
-# surface.
-@policy(category="synthesis", protected=False, mutates=False, async_job=False,
-        surfaces=("agent",), requires_session=False)
-def sleep_tool(seconds: int) -> str:
-    """
-    Blocks briefly before the next action.
-    Use this to honor synthesis polling guidance from get_synthesis_status.
-
-    Args:
-        seconds: Requested sleep time in seconds (clamped to 1..30).
-    """
-    wait_s = max(1, min(int(seconds), 30))
-    time.sleep(wait_s)
-    return f"Slept for {wait_s} second(s)."
-
 # New Google XLS / DSLX HLS tools
 @tool(parse_docstring=True)
 @policy(category="hls", protected=True, mutates=True, async_job=False,
@@ -1686,25 +1611,6 @@ def compile_dslx_to_ir(filename: str, top_module: str) -> str:
     from src.tools.run_xls import compile_dslx_to_ir as compile_to_ir
     workspace = get_workspace_path()
     result = compile_to_ir(filename, top_module, cwd=workspace)
-    return json.dumps(result, indent=2)
-
-@tool(parse_docstring=True)
-@policy(category="hls", protected=True, mutates=True, async_job=False,
-        surfaces=ALL_SURFACES, requires_session=True)
-def experimental_compile_cpp_to_ir(filename: str, top_name: str, block_from_class: bool = False) -> str:
-    """
-    Compiles C++ to XLS IR with xlscc. EXPERIMENTAL and usually unavailable: it
-    needs an xlscc image most installs do not have. DSLX via run_xls_flow is the
-    supported HLS frontend. Writes `<top_name>.ir`.
-
-    Args:
-        filename: C++ source, e.g. 'design.cc'.
-        top_name: Top-level function or class.
-        block_from_class: True when the top is a class-based stateful block.
-    """
-    from src.tools.run_xls import experimental_compile_cpp_to_ir as compile_cpp
-    workspace = get_workspace_path()
-    result = compile_cpp(filename, top_name, block_from_class, cwd=workspace)
     return json.dumps(result, indent=2)
 
 @tool(parse_docstring=True)
@@ -2163,20 +2069,16 @@ ALL_TOOLS = [
     schematic_tool,
     build_interactive_sim,
     # Reporting & Metrics
-    save_metrics_tool,
     generate_report_tool,
     # Analysis (local-only Python analysis tool)
     run_python_analysis,
     # Google XLS HLS tools
     run_dslx_interpreter,
     compile_dslx_to_ir,
-    experimental_compile_cpp_to_ir,
     optimize_xls_ir,
     codegen_xls,
     benchmark_xls,
     run_xls_flow,
-    # Agent-only helpers
-    sleep_tool,
 ]
 
 
