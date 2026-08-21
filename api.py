@@ -47,6 +47,11 @@ from src.utils.paths import is_within
 from src.platform_engines.workspace_provider import get_workspace_provider
 from src.platform_engines.workspace_flusher import get_workspace_flusher
 from src.platform_engines.identity import Action, AuthError, Identity
+from src.platform_engines.provenance import (
+    reset_agent_provenance,
+    resolve_agent_provenance,
+    set_agent_provenance,
+)
 from src.platform_engines import auth as auth_engine
 from src.platform_engines.llm_keys import (
     build_key_vault,
@@ -1950,6 +1955,11 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
         session_id=session_id, workspace=workspace, user_id=uid, tier=identity.tier,
     ))
 
+    # The provenance stamp bound for the turn currently in flight (see the
+    # native-turn binding below). Held on the connection so it can be released
+    # in LIFO order — before the next turn's, and in the finally below.
+    _turn_prov_token = None
+
     try:
         while True:
             # Receive message from client. A frame replayed from the legacy
@@ -1995,6 +2005,17 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 continue
             # Bump activity + auto-title an untitled thread from the first message.
             session_manager.touch_thread(thread_id, user_id=uid, auto_title_from=message)
+
+            # The previous turn's provenance stamp is released HERE, before the
+            # runtime dispatch below decides whose turn this is — never later.
+            # An extension turn resolves its own stamp inside
+            # ``session_request_scope``, and that scope deliberately does not
+            # re-resolve over one already bound ("the outermost turn's stamp
+            # wins"), so a native stamp left over from the previous message on
+            # this socket would be the stamp a Codex run recorded.
+            if _turn_prov_token is not None:
+                reset_agent_provenance(_turn_prov_token)
+                _turn_prov_token = None
 
             # --- Runtime dispatch seam (plans/codex-runtime-extension.md) ------
             # Extensions (e.g. Codex) register a handler + own a per-thread
@@ -2120,6 +2141,37 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 get_workspace_flusher().flush_soon(session_id)
                 continue
             # --- native LangChain turn (unchanged) ----------------------------
+
+            # Bind "what is driving this turn" — the prompt identity and the
+            # skills in force — for the length of this turn.
+            #
+            # ``session_request_scope`` is the writer everywhere ELSE (REST
+            # actions, MCP calls); this connection never enters it. It binds
+            # its SessionContext once, at connect, and runs the agent inline —
+            # so the primary experiment path, the native chat turn, dispatched
+            # synthesis with NOTHING resolved and ``run_meta.json`` recorded
+            # skills_loaded / skills_sha / skills_disabled as ABSENT. Those are
+            # the fields that say which knowledge produced a number, and the
+            # runs people quote are these runs.
+            #
+            # Per TURN, not per connection: a user can edit or switch off a
+            # skill between two messages on one socket, and the second turn
+            # must stamp what the second turn actually ran on. Strict LIFO —
+            # the previous turn's token was released above, before this one is
+            # taken, and the last one in the WebSocket's `finally` — because
+            # contextvar tokens must be reset in the order they were set.
+            #
+            # Absent stays distinguishable from empty: this binds only what a
+            # resolver actually produced, and on failure binds nothing at all
+            # rather than an empty stamp that would read as "looked, found
+            # none". Provenance must never be the thing that fails a turn.
+            try:
+                _turn_prov_token = set_agent_provenance(
+                    resolve_agent_provenance(user_id=uid)
+                )
+            except Exception as _prov_exc:
+                print(f"[WARN] could not resolve turn provenance: {_prov_exc}")
+                _turn_prov_token = None
 
             # One live run per thread: a new message SUPERSEDES a run that is
             # still executing for this thread (left running headless after a
@@ -2563,6 +2615,16 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             await websocket.send_json({"type": "error", "error": str(e)})
         except:
             pass
+    finally:
+        # Bind, and unbind in finally — the discipline the job runner had to
+        # learn. This context dies with the connection's task, so nothing can
+        # read a leftover stamp; releasing it anyway is what keeps the rule one
+        # rule instead of a judgement call about which bindings are pooled.
+        if _turn_prov_token is not None:
+            try:
+                reset_agent_provenance(_turn_prov_token)
+            except Exception:
+                pass
 
 
 # =============================================================================
