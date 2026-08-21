@@ -83,7 +83,10 @@ class SynthesizeRequest(BaseModel):
     synthTop: Optional[str] = None
     platform: Optional[str] = None
     clockPeriodNs: Optional[float] = None
-    utilization: int = 5
+    # 40 matches start_synthesis and the frontend. A UI-dispatched run must
+    # not silently differ from an agent-dispatched one; that divergence is
+    # what made this value have five sources of truth.
+    utilization: int = 40
     aspectRatio: float = 1.0
     coreMargin: float = 2.0
     runEquiv: bool = False
@@ -654,7 +657,7 @@ def build_actions_router(
             rel_files = manifest_mod.files_for_stage(manifest, "simulate")
             if not rel_files:
                 return {"error": "no_files"}
-            call_id = _ui_log_call(workspace, session_id, "run_isolated_simulation", {
+            call_id = _ui_log_call(workspace, session_id, "run_simulation", {
                 "verilog_files": rel_files, "top_module": top, "mode": body.mode,
             })
             sim_run = run_sim_isolated(
@@ -667,7 +670,7 @@ def build_actions_router(
             )
             passed = sim_run.get("status") == "passed"
             _ui_log_result(
-                workspace, session_id, "run_isolated_simulation", call_id,
+                workspace, session_id, "run_simulation", call_id,
                 {"run_id": sim_run.get("id"), "status": sim_run.get("status"),
                  "vcdPath": sim_run.get("vcdPath")},
                 ok=passed,

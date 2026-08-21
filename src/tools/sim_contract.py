@@ -146,6 +146,7 @@ def resolve_post_synth(
     run_id: Optional[str] = None,
     netlist_file: Optional[str] = None,
     platform: Optional[str] = None,
+    fallback_platform: Optional[str] = None,
 ) -> Tuple[Optional[PostSynthResolution], Optional[ResolutionError]]:
     """Resolve the netlist + platform for a post-synth sim from the run record.
 
@@ -156,6 +157,13 @@ def resolve_post_synth(
          platform + stdcell set) — the authoritative record.
       3. Legacy ``netlist_path`` on the run_meta (older runs, pre-contract) so
          previously-working runs keep working.
+      4. ``fallback_platform`` — a *suggestion* (typically the manifest's
+         ``platform``, which is design INTENT and defaults to ``sky130hd``).
+         It is consulted ONLY when the run itself recorded no platform. The
+         manifest describes what the user means to build; the run record
+         describes what was actually built, and for choosing the stdcell model
+         set to link a gate netlist against, only the latter is a fact. Callers
+         holding an intent value must pass it here, never as ``platform``.
 
     Returns ``(resolution, None)`` on success or ``(None, error)`` with a typed
     semantic cause. All paths are resolved against ``workspace`` — never a
@@ -211,7 +219,7 @@ def resolve_post_synth(
             source = "explicit" if explicit_netlist_abs else "contract"
             if netlist_abs is None:
                 netlist_abs = _abs_netlist(workspace, contract.get("netlist"))
-            platform = platform or contract.get("platform")
+            platform = platform or contract.get("platform") or fallback_platform
             top = contract.get("top")
         else:
             # Legacy fallback (pre-contract runs): resolve the gate netlist from
@@ -224,7 +232,7 @@ def resolve_post_synth(
             if netlist_abs is None:
                 found = _find_netlist(run_dir, top or "")
                 netlist_abs = found or _abs_netlist(workspace, meta.get("netlist_path"))
-            platform = platform or meta.get("platform")
+            platform = platform or meta.get("platform") or fallback_platform
 
     if not netlist_abs or not os.path.exists(netlist_abs):
         return None, ResolutionError(

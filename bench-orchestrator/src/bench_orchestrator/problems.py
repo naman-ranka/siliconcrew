@@ -36,7 +36,7 @@ def _lean_cvdp_prompt(problem: ProblemConfig, prepared: dict[str, Any], session_
         "2. Use that session for all SiliconCrew tool calls. (Do NOT call inject_architect_prompt — this "
         "prompt is self-contained.)\n\n"
         "Available SiliconCrew MCP tools (already provided — use them directly, no need to search/discover "
-        "tools): create_session_tool, write_file, read_file, list_files_tool, linter_tool, simulation_tool, "
+        "tools): create_session_tool, write_file, read_file, list_files_tool, linter_tool, run_simulation, "
         "cocotb_tool, sby_tool, waveform_tool.\n\n"
         "You are an expert RTL design agent solving a Chip Verification & Design Problem (CVDP). Deliver a "
         "correct, spec-matching SystemVerilog/Verilog design verified by RTL simulation. RTL-SIMULATION "
@@ -78,7 +78,7 @@ def _lean_cvdp_prompt(problem: ProblemConfig, prepared: dict[str, Any], session_
         "legality, occupancy/value bounds, handshake stability, no deadlock/comb-loop) — these hold across "
         "all reachable states without needing expected outputs.\n\n"
         "Before declaring done, list which spec requirements you DID and did NOT verify and report residual "
-        "risk honestly. Tool argument contract: pass verilog_files to linter_tool/simulation_tool as a "
+        "risk honestly. Tool argument contract: pass verilog_files to linter_tool/run_simulation as a "
         'JSON-array string (e.g. "[\\"rtl/dut.sv\\",\\"verif/tb.sv\\"]"), including DUT, TB, and '
         "dependencies.\n"
     )
@@ -99,7 +99,11 @@ def build_agent_prompt(problem: ProblemConfig, prepared: dict[str, Any], session
     if problem.kind == "yaml_spec":
         body = (
             f"Problem kind: YAML spec.\n"
-            f"Load this spec with load_yaml_spec_file: {prepared['path']}\n"
+            "Write the spec below into your session workspace as 'problem_spec.yaml' "
+            "(write_file), then adopt it with write_spec(yaml_path='problem_spec.yaml').\n"
+            "--- problem_spec.yaml ---\n"
+            f"{prepared['spec_text']}\n"
+            "--- end problem_spec.yaml ---\n"
             "Run the complete SiliconCrew flow: implementation, RTL testbench, lint, RTL simulation, "
             "synthesis, metrics, post-synthesis simulation when available, and report generation.\n"
         )
@@ -117,7 +121,7 @@ def build_agent_prompt(problem: ProblemConfig, prepared: dict[str, Any], session
             "Copy each context file into your active SC session workspace at the SAME relative path "
             "(write_file with the relative path) before coding. Do not modify provided context testbenches.\n"
             f"Write only the solution files (patch targets): {targets_line}\n"
-            "Tool argument contract: pass verilog_files to linter_tool/simulation_tool as a JSON-array "
+            "Tool argument contract: pass verilog_files to linter_tool/run_simulation as a JSON-array "
             "string (e.g. \"[\\\"rtl/dut.sv\\\",\\\"verif/tb.sv\\\"]\"), including DUT, TB, and dependencies; "
             "do not pass space-separated filenames.\n"
             "Verify with RTL simulation against the provided/context testbench and iterate until it passes.\n"
@@ -185,8 +189,8 @@ def _flow_rules(flow: str) -> str:
         return (
             "Flow: agent's choice (XLS/DSLX frontend is AVAILABLE but OPTIONAL).\n"
             "- You decide the implementation path. You MAY use the XLS/DSLX HLS frontend "
-            "(run_xls_flow, run_dslx_interpreter, codegen_xls, ...) if you judge it beneficial for "
-            "arithmetic/datapath cores, OR write Verilog/SystemVerilog directly. Your call.\n"
+            "(run_xls_flow) if you judge it beneficial for arithmetic/datapath cores, OR write "
+            "Verilog/SystemVerilog directly. Your call.\n"
             "- If you use XLS, wrap the generated Verilog so the public module matches the EXACT "
             "required interface (port names, widths, reset style) and latency/handshake contract.\n"
             "- Pick whichever path most reliably satisfies the provided testbench and contract.\n"
@@ -198,7 +202,7 @@ def _flow_rules(flow: str) -> str:
             "to avoid XLS for existing-Verilog/legacy/exact-interface/bug-repair tasks. For THIS run, XLS "
             "is REQUIRED regardless of the interface being fixed.\n"
             "- You MUST implement the core combinational/datapath logic in DSLX and generate Verilog via "
-            "run_xls_flow (DSLX -> IR -> codegen_xls). Writing the core logic directly in Verilog/"
+            "run_xls_flow (DSLX -> IR -> codegen). Writing the core logic directly in Verilog/"
             "SystemVerilog is NOT allowed for this run.\n"
             "- You MAY hand-write ONLY a thin SystemVerilog WRAPPER that instantiates the XLS-generated "
             "module and adapts it to the exact required interface (port names, widths, reset, latency).\n"
@@ -222,8 +226,19 @@ def _flow_rules(flow: str) -> str:
 
 
 def _yaml_spec(problem: ProblemConfig) -> dict[str, Any]:
+    """Read the spec HERE, in the harness, and carry its text.
+
+    The agent used to be handed a host path and told to load it. That worked
+    only because the spec loader accepted absolute paths and fell back to the
+    repo root — an arbitrary-file read from any agent, which is now closed. The
+    harness has filesystem access and the agent does not, so the harness reads
+    the file and puts its content in the prompt; the agent writes it into its
+    own workspace and adopts it from there.
+    """
     assert problem.path is not None
-    return {"path": str(problem.path), "exists": problem.path.exists()}
+    exists = problem.path.exists()
+    text = problem.path.read_text(encoding="utf-8") if exists else ""
+    return {"path": str(problem.path), "exists": exists, "spec_text": text}
 
 
 def _prompt(problem: ProblemConfig) -> dict[str, Any]:

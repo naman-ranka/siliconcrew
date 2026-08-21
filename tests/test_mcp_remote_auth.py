@@ -57,7 +57,7 @@ def test_local_mode_is_authless_and_unchanged(server):
     assert server._hosted is False
     # Trusted local user, unscoped store — byte-for-byte today's behavior.
     assert server._current_identity() is LOCAL_IDENTITY
-    assert server._scoped_user_id() is None
+    assert server.scoped_user_id() is None
     assert server._resolve_identity() is LOCAL_IDENTITY
     # No auth middleware, no metadata route mounted in local mode.
     assert server._hosted_auth_middleware() == []
@@ -76,7 +76,7 @@ def test_hosted_uses_per_request_identity(server, monkeypatch):
     token = _bind_request(alice)
     try:
         assert server._current_identity().user_id == "workos_alice"
-        assert server._scoped_user_id() == "workos_alice"
+        assert server.scoped_user_id() == "workos_alice"
     finally:
         request_ctx.reset(token)
 
@@ -88,7 +88,7 @@ def test_hosted_two_users_are_isolated(server, monkeypatch):
     for uid in ("workos_alice", "workos_bob"):
         token = _bind_request(Identity(user_id=uid, provider="workos"))
         try:
-            assert server._scoped_user_id() == uid
+            assert server.scoped_user_id() == uid
         finally:
             request_ctx.reset(token)
 

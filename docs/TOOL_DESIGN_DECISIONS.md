@@ -119,6 +119,27 @@ def write_spec(
 
 #### The Solution: Dynamic Tool Filtering
 
+> **SUPERSEDED — `configure_tool_filter` was removed (P0 of the agent platform
+> overhaul; see `siliconcrew-dev/plans/agent-platform-overhaul.md`).** The
+> section below is kept as a record of the original decision and why it was
+> reversed. Do not follow it.
+>
+> Three things were wrong with it:
+> 1. **It leaked across tenants.** The filter mode was stored as per-process
+>    state on the server, and the hosted streamable-HTTP transport is
+>    multiplexed — so one user changing their filter changed what other users
+>    saw from `tools/list`.
+> 2. **It is not MCP-conformant.** The spec says a server MUST NOT vary
+>    `tools/list` per connection except by auth scope, and clients cache the
+>    list, so runtime mutation left them holding a stale set.
+> 3. **The counts in this section were already wrong** — "Essential (7 tools)"
+>    while `TOOL_CATEGORIES["essential"]` holds 8.
+>
+> The underlying goal — not showing an agent every tool at once — is still
+> right, and is being met instead by merging overlapping tools, hiding
+> rare-flow ones by default, and (later) scoping at connect time via auth
+> scope rather than by runtime mutation.
+
 We added `configure_tool_filter` tool with 3 modes:
 
 ##### Mode 1: Essential (7 tools)
@@ -131,7 +152,7 @@ Essential tools (core workflow):
   - write_file
   - read_file
   - linter_tool
-  - simulation_tool
+  - run_simulation
   - list_files_tool
   
 ✅ 13 total tools (7 essential + 6 session management)
@@ -178,7 +199,7 @@ Claude: Let me start with essential tools only for clarity.
 ✅ Tool filter updated to 'essential'
 📊 Visible tools: 13
 
-[Proceeds with: write_spec → write_file → linter_tool → simulation_tool]
+[Proceeds with: write_spec → write_file → linter_tool → run_simulation]
 ```
 
 **Scenario 2: Complex design with synthesis**
@@ -229,7 +250,7 @@ def _should_include_tool(self, tool_name: str) -> bool:
 
 1. **Keep Auto-Discovery**: Perfect for your multi-consumer architecture
 2. **Enhance Source Docstrings**: Add examples to tool definitions in `wrappers.py`
-3. **Use Essential Mode by Default**: Update prompt to suggest `configure_tool_filter("essential")` for simple tasks
+3. ~~**Use Essential Mode by Default**~~: superseded — `configure_tool_filter` was removed (see the note above). Reduce the surface at the registry instead: merge overlapping tools, hide rare-flow ones by default.
 4. **Document Categories**: Update MCP_SETUP.md with filtering examples
 
 ### Future Enhancements 🚀
@@ -286,3 +307,31 @@ Custom mode:    16 tools (essential + verification)
 ```
 
 Your instinct was correct on all three points! 🎯
+
+---
+
+## Tool naming: why the names are NOT namespaced (decided during the merge wave)
+
+MCP guidance suggests prefixing tool names per server (a "sc_" or
+"siliconcrew." prefix on every one) so a client that mounts several servers
+cannot collide.
+It was considered here and **deliberately not done**:
+
+1. **The wire is already namespaced by the client.** A tool reaches a model as
+   `mcp__silicon_crew__read_file`; Codex addresses it as
+   `mcp_servers.siliconcrew.<tool>`. A prefix of our own would stutter inside a
+   prefix the protocol already applies.
+2. **The surviving names do not collide with each other.** After the merges no
+   two tools share a stem, and the pairs that were genuinely confusable — two
+   editors, two simulators, four stage readers, a status reader and a waiter —
+   are one tool each now.
+3. **The real ambiguity is not the name.** "Whose filesystem does `read_file`
+   read?" is a question about the DESCRIPTION (they resolve inside the session
+   workspace, and the descriptions now say so), not about the name.
+4. **The cost is a flag day.** Roughly 1,500 hardcoded occurrences, with no
+   alias window, buys symmetry rather than clarity.
+
+The `_tool` suffix is likewise inconsistent (`linter_tool` and `waveform_tool`
+next to `write_file` and `retry_pd`). It carries no information, but renaming
+for consistency alone is the same trade: churn without clarity. Left alone,
+recorded here so the next reader knows it was a decision and not an oversight.

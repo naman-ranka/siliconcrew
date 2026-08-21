@@ -399,7 +399,7 @@ function installMocks(page: Page) {
       };
       state.runs = [run, ...state.runs];
       state.simRunsDir.push({ name: id, path: `sim_runs/${id}`, kind: "dir" });
-      serverEvent("run_isolated_simulation", fail ? "error" : "ok", `${id} ${run.status}`, id);
+      serverEvent("run_simulation", fail ? "error" : "ok", `${id} ${run.status}`, id);
       return json(route, { ok: true, run });
     }
 
@@ -590,7 +590,7 @@ test("sim options: TB combobox suggests manifest testbenches; POST carries simTo
   await openPalette(page);
   await page.getByRole("button", { name: "Simulate options" }).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByText("run_isolated_simulation")).toBeVisible();
+  await expect(dialog.getByText("run_simulation")).toBeVisible();
 
   // The TB combo defaults to the manifest simTop and suggests the manifest's
   // derived testbench modules on focus.

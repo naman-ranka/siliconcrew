@@ -17,7 +17,7 @@ Sweep strategy:
    - Relaxed: 2x and 1.5x baseline (confirm power floor, check if area reduces)
    - Aggressive: 0.85x, 0.75x, 0.65x baseline (find Fmax boundary)
    Start all jobs upfront — they queue server-side. Poll in parallel using simultaneous
-   wait_for_synthesis calls with max_wait_sec=30-60. Do not wait for one to finish
+   get_synthesis_status calls with wait_sec=30-60. Do not wait for one to finish
    before starting the next.
 
 2. Utilization exploration
@@ -36,7 +36,7 @@ Sweep strategy:
 
 At each data point:
 
-- Run get_synthesis_metrics + search_logs ("Total power", "Design area") to verify numbers.
+- Run get_synthesis_metrics + search_logs_tool ("Total power", "Design area") to verify numbers.
 - If WNS < 0: run PD diagnosis (search "startpoint", "endpoint", "data arrival time",
   "slack (VIOLATED)"). Classify the failure:
     - Violation in 2_floorplan_final.rpt → process floor, stop pushing this direction.
@@ -78,4 +78,3 @@ against logs. Accuracy of the table matters more than speed of delivery.
 
 ---
 PROMPT_VERSION: v1
-PROMPT_SOURCE: C:\Users\naman\Desktop\Projects\RTL_AGENT\prompts\architect\pareto_sweep_prompt_v1.md

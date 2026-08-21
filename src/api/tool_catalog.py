@@ -11,12 +11,17 @@ MCP clients all speak one contract with zero drift:
   * ``validate_and_execute``— schema-validate arguments with the tool's own
                               pydantic model, then run the SAME wrapper
                               function the agent runs, inside the caller's
-                              session scope.
+                              session scope. Two rules apply on THIS surface
+                              only: file arguments stay in the workspace, and a
+                              blocking wait is clamped to zero (invariant 6).
 
-Policy (what is NOT derivable from schemas) lives here as small explicit sets:
-categories, sign-in gating, async-ness, workspace mutation. ``mcp_server``
-imports the category/protected policy FROM here, so there is one policy, not
-two.
+Policy (what is NOT derivable from schemas) is declared ON each tool, once, at
+its definition site (``@policy(...)`` in ``src/tools/wrappers.py``). This module
+DERIVES the views everything else reads — ``TOOL_CATEGORIES``,
+``PROTECTED_TOOLS``, ``ASYNC_TOOLS``, ``MUTATING_TOOLS``, ``EXCLUDED_FROM_UI``,
+``DISABLED_WHEN_BOUND`` — from those declarations. ``mcp_server`` imports the category/protected policy
+FROM here, so there is one policy, not two, and adding a tool means editing one
+file.
 
 No heavy imports at module load — ``wrappers`` (LangChain) is imported lazily
 inside functions so the action router stays importable/testable without the
@@ -25,85 +30,336 @@ agent stack.
 from __future__ import annotations
 
 import os
+from types import MappingProxyType
 from typing import Any, Dict, List, Optional
 
 from src.utils.paths import is_within
 
-# --- Policy (explicit, reviewed — everything else is introspected) -----------
+# --- Policy (DERIVED from the tools — never hand-maintained here) -------------
+#
+# Policy is declared at each tool's definition site (``@policy(...)`` in
+# src/tools/wrappers.py). Everything below is a VIEW of those declarations,
+# computed once per process. The historical names (TOOL_CATEGORIES,
+# PROTECTED_TOOLS, ASYNC_TOOLS, MUTATING_TOOLS, EXCLUDED_FROM_UI) still exist
+# and still mean the same thing, so every existing consumer keeps working — but
+# they are now derived values, and every one of them is immutable: editing this
+# file to change a tool's policy is no longer possible, which is the point.
+#
+# They are exposed through a module-level ``__getattr__`` (PEP 562) so importing
+# this module stays free of the LangChain tool stack; the registry is imported
+# on FIRST ACCESS to a derived name, exactly like ``build_catalog()``.
 
-TOOL_CATEGORIES: Dict[str, List[str]] = {
-    "essential": [
-        "write_spec", "read_spec", "write_file", "read_file",
-        "linter_tool", "simulation_tool", "run_isolated_simulation",
-        "list_files_tool",
-    ],
-    "manifest": [
-        "get_manifest", "update_manifest",
-    ],
-    "verification": [
-        "waveform_tool", "cocotb_tool", "sby_tool", "build_interactive_sim",
-    ],
-    "synthesis": [
-        "start_synthesis", "retry_pd", "get_synthesis_status", "wait_for_synthesis",
-        "get_synthesis_metrics", "read_stage_report", "get_route_drc_summary",
-        "get_cts_summary", "get_congestion_summary", "compare_pd_runs",
-        "search_logs_tool", "schematic_tool",
-    ],
-    "editing": [
-        "apply_patch_tool", "edit_file_tool", "load_yaml_spec_file",
-    ],
-    "reporting": [
-        "save_metrics_tool", "generate_report_tool",
-    ],
-    "analysis": [
-        "run_python_analysis",
-    ],
-    "hls": [
-        "run_xls_flow", "run_dslx_interpreter", "compile_dslx_to_ir",
-        "optimize_xls_ir", "codegen_xls", "benchmark_xls",
-        "experimental_compile_cpp_to_ir",
-    ],
-}
+# Presentation order for the Command Surface's groups (the frontend renders
+# catalog categories in first-seen order). Pure presentation — not policy, and
+# not a tool list. A category missing here is caught by tests/test_tool_policy.py
+# rather than silently sorting last.
+CATEGORY_ORDER = (
+    "essential", "manifest", "verification", "synthesis",
+    "editing", "reporting", "analysis", "hls",
+    # MCP-only: the session tools never reach the Command Surface (the web UI
+    # has its own session management), so this group is always empty there.
+    "session",
+    # Agent + MCP: reading the skill store is the agent's own business, and the
+    # web UI has no skills surface yet, so this group is empty there too.
+    "skills",
+)
 
-_CATEGORY_BY_TOOL: Dict[str, str] = {
-    name: cat for cat, names in TOOL_CATEGORIES.items() for name in names
-}
-
-# Mutate/persist or compute-heavy → signed-in user required (same policy the
-# MCP server enforces for external clients; imported by mcp_server).
-PROTECTED_TOOLS = frozenset(TOOL_CATEGORIES["synthesis"]) | {
-    "write_spec", "write_file", "apply_patch_tool", "edit_file_tool",
-    "load_yaml_spec_file", "update_manifest",
-    "save_metrics_tool", "generate_report_tool",
-    "cocotb_tool", "sby_tool", "build_interactive_sim",
-    "run_python_analysis",
-    *TOOL_CATEGORIES["hls"],
-}
-
-# Dispatch-then-poll jobs (the UI renders them as async, never blocks on them).
-ASYNC_TOOLS = frozenset({"start_synthesis", "retry_pd"})
-
-# Tools whose execution writes into the workspace → hosted mode must sync the
-# workspace back to object storage after the call.
-MUTATING_TOOLS = frozenset({
-    "write_spec", "write_file", "apply_patch_tool", "edit_file_tool",
-    "load_yaml_spec_file", "update_manifest",
-    "simulation_tool", "run_isolated_simulation", "cocotb_tool", "sby_tool",
-    "start_synthesis", "retry_pd",
-    "save_metrics_tool", "generate_report_tool", "schematic_tool",
-    "build_interactive_sim",
-    "run_python_analysis",
-    *TOOL_CATEGORIES["hls"],
+_DERIVED_NAMES = frozenset({
+    "TOOL_CATEGORIES", "PROTECTED_TOOLS", "ASYNC_TOOLS", "MUTATING_TOOLS",
+    "EXCLUDED_FROM_UI", "DISABLED_WHEN_BOUND",
 })
 
-# In the registry but not surfaced/invocable from the UI:
-#   wait_for_synthesis — a blocking poll loop built for agent turn economy;
-#   the UI has live job polling instead.
-EXCLUDED_FROM_UI = frozenset({"wait_for_synthesis"})
+
+class UnknownToolError(KeyError):
+    """Asked for the policy of a name no registered tool answers to.
+
+    Deliberately loud. The previous behaviour returned permissive defaults for
+    any unknown name (no sign-in required, does not mutate), which would have
+    made a mis-typed or unregistered tool an unauthenticated write whose
+    changes are never synced to object storage.
+    """
+
+
+_policies: Optional[Dict[str, Any]] = None
+_derived: Optional[Dict[str, Any]] = None
+
+
+def _load_policies() -> Dict[str, Any]:
+    """{tool name: ToolPolicy} for every registered tool, from the registry.
+
+    Lazy import (LangChain): callers surface an ImportError honestly rather
+    than this module dragging the agent stack into the action router.
+    """
+    global _policies
+    if _policies is None:
+        from src.tools.wrappers import ALL_TOOLS, tool_policy
+
+        _policies = {t.name: tool_policy(t) for t in ALL_TOOLS}
+    return _policies
+
+
+def policy_for(name: str):
+    """The declared :class:`ToolPolicy` for ``name``. Raises for anything else."""
+    try:
+        return _load_policies()[name]
+    except KeyError:
+        raise UnknownToolError(name) from None
+
+
+def _derive() -> Dict[str, Any]:
+    global _derived
+    if _derived is None:
+        policies = _load_policies()
+        by_category: Dict[str, List[str]] = {}
+        for name, p in policies.items():
+            by_category.setdefault(p.category, []).append(name)
+        order = {cat: i for i, cat in enumerate(CATEGORY_ORDER)}
+        categories = {
+            cat: tuple(by_category[cat])
+            for cat in sorted(by_category, key=lambda c: (order.get(c, len(order)), c))
+        }
+        _derived = {
+            "TOOL_CATEGORIES": MappingProxyType(categories),
+            "PROTECTED_TOOLS": frozenset(n for n, p in policies.items() if p.protected),
+            "ASYNC_TOOLS": frozenset(n for n, p in policies.items() if p.async_job),
+            "MUTATING_TOOLS": frozenset(n for n, p in policies.items() if p.mutates),
+            "EXCLUDED_FROM_UI": frozenset(n for n, p in policies.items() if "ui" not in p.surfaces),
+            "DISABLED_WHEN_BOUND": frozenset(
+                n for n, p in policies.items() if p.disabled_when_bound
+            ),
+        }
+    return _derived
+
+
+def __getattr__(name: str) -> Any:
+    """PEP 562: the derived policy views, computed on first access."""
+    if name in _DERIVED_NAMES:
+        return _derive()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def reset_caches() -> None:
+    """Drop every cached view of the registry (tests that alter it)."""
+    global _policies, _derived, _catalog_cache, _tools_by_name, _focus_cache
+    _policies = _derived = _catalog_cache = _tools_by_name = _focus_cache = None
 
 
 def category_of(tool_name: str) -> str:
-    return _CATEGORY_BY_TOOL.get(tool_name, "other")
+    return policy_for(tool_name).category
+
+
+def requires_session(tool_name: str) -> bool:
+    """Whether the tool needs an active session/workspace to run.
+
+    This is what the MCP server's session gate reads before every call. It is
+    False for the session tools themselves — a stranger has to be able to call
+    create_session_tool with no session yet — and True for everything else,
+    which is why that gate can be blanket without naming a single tool.
+    """
+    return policy_for(tool_name).requires_session
+
+
+def tools_with_attempt_parser(parser) -> frozenset:
+    """Every tool whose results ``parser`` reads (declared in its ``@policy``).
+
+    Lets a consumer ask "which tool produces a lint verdict?" instead of
+    hardcoding ``"linter_tool"`` — the same question the attempt log asks.
+    """
+    return frozenset(
+        n for n, p in _load_policies().items() if p.attempt_parser is parser
+    )
+
+
+# --- Focus: tool sets, read from a data file ----------------------------------
+#
+# THE FENCE, in code, where it cannot be missed:
+#
+#   FOCUS   = which tools an agent SEES. Data (config/tool_sets.yaml),
+#             user-editable, and safe to be: hiding a tool shortens a prompt.
+#   AUTHORITY = which tools may RUN. Code, and only code: ``PROTECTED_TOOLS``
+#             (sign-in), the capability checks inside each wrapper, owner
+#             scoping, workspace containment. None of it is reachable from the
+#             data file, by construction — this module resolves a set to NAMES
+#             and nothing else, and every one of those names still goes through
+#             the same gates it always did.
+#
+# Hiding a tool is not a security boundary. These two must never merge; if a
+# future change lets the YAML turn a check off, that change is the bug.
+#
+# Why a file and not a Python dict: "changing which tools an agent sees touches
+# zero code files" is a claim this repo makes, and a dict of category names in
+# Python is the same hardcoding one level up. The vocabulary is the tools' OWN
+# policy — surface, category, and the ``mutates`` flag — so there is no second
+# list to keep in step with the first.
+
+TOOL_SETS_FILENAME = "tool_sets.yaml"
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TOOL_SETS_PATH = os.path.join(_REPO_ROOT, "config", TOOL_SETS_FILENAME)
+
+_SET_KEYS = frozenset({"description", "surface", "categories", "read_only_categories"})
+_ROLE_KEYS = frozenset({"tool_set", "skills", "description", "output"})
+
+_focus_cache: Optional[Dict[str, Any]] = None
+
+
+class ToolSetError(RuntimeError):
+    """The tool-set data file is malformed or names something that does not exist.
+
+    Loud on purpose, exactly like a broken skill file. A set that silently
+    resolves to nothing is an agent with no tools that still answers — the
+    failure looks like a bad model, not a bad config, and costs an afternoon.
+    """
+
+
+def tool_sets_path() -> str:
+    """Where the tool sets are read from. ``SILICONCREW_TOOL_SETS_FILE``
+    overrides it (one deploy, one file — no code change either way)."""
+    return os.environ.get("SILICONCREW_TOOL_SETS_FILE") or TOOL_SETS_PATH
+
+
+def _known_categories() -> frozenset:
+    return frozenset(p.category for p in _load_policies().values())
+
+
+def _validate_set(name: str, spec: Any, path: str) -> Dict[str, Any]:
+    from src.tools.wrappers import SURFACE_NAMES
+
+    if not isinstance(spec, dict):
+        raise ToolSetError(f"{path}: tool set {name!r} must be a mapping")
+    unknown = sorted(set(spec) - _SET_KEYS)
+    if unknown:
+        raise ToolSetError(
+            f"{path}: tool set {name!r} has unknown key(s) {unknown}; allowed: {sorted(_SET_KEYS)}"
+        )
+    surface = spec.get("surface")
+    if surface not in SURFACE_NAMES:
+        raise ToolSetError(
+            f"{path}: tool set {name!r} declares surface {surface!r}; known: {sorted(SURFACE_NAMES)}"
+        )
+    known = _known_categories()
+    for key in ("categories", "read_only_categories"):
+        value = spec.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
+            raise ToolSetError(f"{path}: tool set {name!r} key {key!r} must be a list of category names")
+        bad = sorted(set(value) - known)
+        if bad:
+            raise ToolSetError(
+                f"{path}: tool set {name!r} names categor(ies) {bad} that no tool declares; "
+                f"known: {sorted(known)}"
+            )
+    return spec
+
+
+def _load_focus(path: Optional[str] = None) -> Dict[str, Any]:
+    """Parse + validate the tool-set file once per process."""
+    global _focus_cache
+    if path is None and _focus_cache is not None:
+        return _focus_cache
+    target = path or tool_sets_path()
+    import yaml
+
+    try:
+        with open(target, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except OSError as exc:
+        raise ToolSetError(f"{target}: could not be read: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise ToolSetError(f"{target}: is not valid YAML: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ToolSetError(f"{target}: must be a mapping with 'tool_sets' and 'subagents'")
+    unknown = sorted(set(data) - {"tool_sets", "subagents"})
+    if unknown:
+        raise ToolSetError(f"{target}: unknown top-level key(s) {unknown}")
+
+    sets = data.get("tool_sets") or {}
+    if not isinstance(sets, dict) or not sets:
+        raise ToolSetError(f"{target}: 'tool_sets' must be a non-empty mapping")
+    sets = {name: _validate_set(name, spec, target) for name, spec in sets.items()}
+
+    roles = data.get("subagents") or {}
+    if not isinstance(roles, dict):
+        raise ToolSetError(f"{target}: 'subagents' must be a mapping")
+    for role, spec in roles.items():
+        if not isinstance(spec, dict):
+            raise ToolSetError(f"{target}: subagent {role!r} must be a mapping")
+        bad = sorted(set(spec) - _ROLE_KEYS)
+        if bad:
+            raise ToolSetError(
+                f"{target}: subagent {role!r} has unknown key(s) {bad}; allowed: {sorted(_ROLE_KEYS)}"
+            )
+        if spec.get("tool_set") not in sets:
+            raise ToolSetError(
+                f"{target}: subagent {role!r} uses tool set {spec.get('tool_set')!r}, "
+                f"which is not defined here; defined: {sorted(sets)}"
+            )
+        skills = spec.get("skills")
+        if not isinstance(skills, list) or not skills or not all(isinstance(x, str) for x in skills):
+            raise ToolSetError(f"{target}: subagent {role!r} must list at least one skill name")
+
+    resolved = {"tool_sets": sets, "subagents": roles, "path": target}
+    # Resolve every set eagerly: a typo that empties a set must fail at load,
+    # not at the moment an agent is built with no tools.
+    for name in sets:
+        if not _resolve_set(name, resolved):
+            raise ToolSetError(
+                f"{target}: tool set {name!r} resolves to no tools at all — an agent "
+                "with no tools is a config error, not a focus choice"
+            )
+    if path is None:
+        _focus_cache = resolved
+    return resolved
+
+
+def _resolve_set(name: str, focus: Dict[str, Any]) -> tuple:
+    spec = focus["tool_sets"][name]
+    surface = spec["surface"]
+    cats = set(spec.get("categories") or ())
+    ro_cats = set(spec.get("read_only_categories") or ())
+    everything = "categories" not in spec and "read_only_categories" not in spec
+    out = []
+    for tool_name, p in _load_policies().items():
+        if surface not in p.surfaces:
+            continue
+        if everything or p.category in cats or (p.category in ro_cats and not p.mutates):
+            out.append(tool_name)
+    return tuple(out)
+
+
+def tool_set_names(path: Optional[str] = None) -> tuple:
+    return tuple(_load_focus(path)["tool_sets"])
+
+
+def tool_names_in_set(name: str, read_only: bool = False, path: Optional[str] = None) -> tuple:
+    """The tool names a set resolves to, in registry order.
+
+    ``read_only=True`` is the whole of read-only mode: drop every tool that
+    declares ``mutates=True``. There is no read-only LIST — the tools already
+    say which of them write, and this is the one place that asks.
+    """
+    focus = _load_focus(path)
+    if name not in focus["tool_sets"]:
+        raise ToolSetError(f"no tool set named {name!r}; defined: {sorted(focus['tool_sets'])}")
+    names = _resolve_set(name, focus)
+    if read_only:
+        policies = _load_policies()
+        names = tuple(n for n in names if not policies[n].mutates)
+    return names
+
+
+def tools_in_set(name: str, read_only: bool = False, path: Optional[str] = None) -> List[Any]:
+    """The live tool objects for a set, in registry order."""
+    from src.tools.wrappers import ALL_TOOLS
+
+    wanted = set(tool_names_in_set(name, read_only=read_only, path=path))
+    return [t for t in ALL_TOOLS if t.name in wanted]
+
+
+def subagent_roles(path: Optional[str] = None) -> Dict[str, Any]:
+    """The built-in subagent roles, as declared. Data in, data out."""
+    return dict(_load_focus(path)["subagents"])
+
 
 
 # --- Catalog (introspected once per process) ----------------------------------
@@ -113,13 +369,15 @@ _tools_by_name: Optional[Dict[str, Any]] = None
 
 
 def _load_tools() -> Dict[str, Any]:
-    """Lazy-import the agent tool registry (LangChain). Raises ImportError when
-    the agent stack isn't installed — callers surface that honestly."""
+    """The UI-invocable tools, keyed by name. Lazy-imports the agent tool
+    registry (LangChain); raises ImportError when the agent stack isn't
+    installed — callers surface that honestly. Membership is the tools' own
+    ``surfaces`` declaration, not a list kept here."""
     global _tools_by_name
     if _tools_by_name is None:
-        from src.tools.wrappers import mcp_tools
+        from src.tools.wrappers import tools_on_surface
 
-        _tools_by_name = {t.name: t for t in mcp_tools if t.name not in EXCLUDED_FROM_UI}
+        _tools_by_name = {t.name: t for t in tools_on_surface("ui")}
     return _tools_by_name
 
 
@@ -148,27 +406,31 @@ def build_catalog() -> List[Dict[str, Any]]:
                 schema = _clean_schema(t.args_schema.model_json_schema())
             else:
                 schema = {"type": "object", "properties": {}}
+            p = policy_for(name)
             entries.append({
                 "name": name,
                 "description": (t.description or "").strip(),
-                "category": category_of(name),
+                "category": p.category,
                 "argsSchema": schema,
-                "requiresSignIn": name in PROTECTED_TOOLS,
-                "async": name in ASYNC_TOOLS,
-                "mutates": name in MUTATING_TOOLS,
+                "requiresSignIn": p.protected,
+                "async": p.async_job,
+                "mutates": p.mutates,
             })
         # Stable order: catalog category order, then registry order within.
-        cat_rank = {cat: i for i, cat in enumerate(TOOL_CATEGORIES)}
+        cat_rank = {cat: i for i, cat in enumerate(_derive()["TOOL_CATEGORIES"])}
         entries.sort(key=lambda e: cat_rank.get(e["category"], 99))
         _catalog_cache = entries
     return _catalog_cache
 
 
 def tool_flags(name: str) -> Dict[str, bool]:
+    """The gate flags for one REGISTERED tool. Raises UnknownToolError
+    otherwise — an unknown name must never resolve to permissive defaults."""
+    p = policy_for(name)
     return {
-        "requiresSignIn": name in PROTECTED_TOOLS,
-        "mutates": name in MUTATING_TOOLS,
-        "async": name in ASYNC_TOOLS,
+        "requiresSignIn": p.protected,
+        "mutates": p.mutates,
+        "async": p.async_job,
     }
 
 
@@ -193,11 +455,16 @@ class ToolArgumentError(Exception):
 # the session workspace, but not all of them re-check containment (the write
 # path does via file_ops; some read paths don't). Any argument that names a
 # file must stay inside the workspace, whatever the tool does with it.
-_FILE_ARG_KEYS = ("_file", "_files", "filename", "file_path")
+# Suffixes first, then exact names. ``_path`` is here because an argument that
+# says "path" is exactly as dangerous as one that says "file" — the spec adopter
+# took ``yaml_path`` and matched nothing, so it was the one file argument this
+# rule never saw.
+_FILE_ARG_SUFFIXES = ("_file", "_files", "_path")
+_FILE_ARG_NAMES = ("filename", "file_path")
 
 
 def _looks_like_file_arg(key: str) -> bool:
-    return key.endswith(_FILE_ARG_KEYS[0]) or key.endswith(_FILE_ARG_KEYS[1]) or key in _FILE_ARG_KEYS[2:]
+    return key.endswith(_FILE_ARG_SUFFIXES) or key in _FILE_ARG_NAMES
 
 
 def enforce_file_containment(workspace: str, arguments: Dict[str, Any]) -> None:
@@ -212,6 +479,21 @@ def enforce_file_containment(workspace: str, arguments: Dict[str, Any]) -> None:
                 raise ToolArgumentError(f"Path escapes the workspace: {v}")
 
 
+# Invariant 6: the UI is a viewer, not an actor. A tool may offer to BLOCK for
+# an agent's turn economy (get_synthesis_status' wait_sec is the only one), but
+# this path serves a browser: a request that sits on a worker for two minutes is
+# the UI acting, and the answer it would get is the answer it already has. Same
+# shape as the containment rule above — an argument-name rule applied on this
+# surface only, not a list of tool names kept here.
+_BLOCKING_ARG_KEYS = ("wait_sec",)
+
+
+def clamp_blocking_waits(arguments: Dict[str, Any]) -> None:
+    for key in _BLOCKING_ARG_KEYS:
+        if key in (arguments or {}):
+            arguments[key] = 0
+
+
 def validate_and_execute(name: str, workspace: str, arguments: Optional[Dict[str, Any]]) -> Any:
     """Validate ``arguments`` against the tool's own schema, then run the SAME
     function the agent runs. Must be called inside a bound session scope
@@ -223,6 +505,7 @@ def validate_and_execute(name: str, workspace: str, arguments: Optional[Dict[str
     tool = _load_tools()[name]
     args = dict(arguments or {})
     enforce_file_containment(workspace, args)
+    clamp_blocking_waits(args)
 
     if tool.args_schema is not None:
         try:

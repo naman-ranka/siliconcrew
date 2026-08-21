@@ -662,7 +662,9 @@ class CodexEngine:
         - MCP: register the SiliconCrew server (bound to this session) as the
           agent's tool source. Codex has no first-class SDK MCP-register call, so
           config is the standard path — expressed here as overrides.
-        - Tool policy: apply_patch_tool/shell_tool/web_search/view_image off,
+        - Tool policy: Codex's OWN built-in editing/exec tools off
+          (apply_patch_tool/shell_tool/web_search/view_image — these are Codex
+          config keys, not SiliconCrew tools),
           approval_policy=never (see the class docstring for why native exec is
           effectively blocked in this container).
         - Env: mcp_server.py is OUR OWN trusted server code, so it needs
@@ -697,13 +699,20 @@ class CodexEngine:
         token = turn.mcp_token or os.environ.get("CODEX_MCP_BEARER_TOKEN") or os.environ.get("SILICONCREW_MCP_TOKEN")
         if token:
             env["SILICONCREW_MCP_TOKEN"] = token
-        disabled = ["create_session_tool", "list_sessions_tool", "set_active_session", "delete_session_tool"]
+        # The tools a session-bound server refuses, read off the tools' own
+        # policy (``disabled_when_bound``) rather than typed here a second
+        # time: this list and mcp_server's refusal must name the same tools,
+        # and a hand-kept copy is how they stop doing that. Client-side
+        # disabling keeps Codex from even offering them; the server refuses
+        # them anyway.
+        from src.api.tool_catalog import DISABLED_WHEN_BOUND
+        disabled = sorted(DISABLED_WHEN_BOUND)
 
         # json.dumps yields TOML-valid literals for strings / arrays-of-strings.
         ov = [
             'cli_auth_credentials_store="file"',
             'approval_policy="never"',
-            "apply_patch_tool=false",
+            "apply_patch_tool=false",  # Codex's built-in patcher, not ours
             "shell_tool=false",
             "tools.web_search=false",
             "tools.view_image=false",

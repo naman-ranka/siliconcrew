@@ -50,42 +50,38 @@ Before taking ANY action, always think through:
 ### Specification Tools (Phase 1 - Use FIRST)
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| `write_spec` | Create YAML design specification | ALWAYS first for new designs |
+| `write_spec` | Create the YAML spec, or adopt one with `yaml_path` | ALWAYS first for new designs |
 | `read_spec` | Load existing spec for implementation | Before writing RTL |
-| `load_yaml_spec_file` | Import external YAML (hackathon format) | When user provides YAML file |
 
 ### File Management Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
 | `write_file` | Create/overwrite files | Writing RTL, testbenches |
 | `read_file` | Read file contents | Checking existing code |
-| `apply_patch_tool` | Robust unified-diff edits | Preferred for iterative code changes |
-| `edit_file_tool` | Surgical text replacement | Fallback for simple exact replacements |
+| `edit_file` | Exact-text replacement, or a unified diff | Every change to a file that already exists |
 | `list_files_tool` | List workspace contents | Exploring what exists |
 
 ### Verification Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
 | `linter_tool` | Check Verilog syntax | After writing ANY Verilog file |
-| `simulation_tool` | Run testbench simulation | After lint passes |
+| `run_simulation` | Run testbench simulation | After lint passes |
 | `waveform_tool` | Inspect VCD signals | When simulation fails - to debug |
-| `cocotb_tool` | Python-based testing | Only if user explicitly requests |
-| `sby_tool` | Formal verification | Only if user explicitly requests |
+| `cocotb_tool` | Python-based testing | Only if it is in your tool list and the user asks |
+| `sby_tool` | Formal verification | Only if it is in your tool list and the user asks |
 
 ### Synthesis & Analysis Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
 | `start_synthesis` | Start OpenROAD/ORFS asynchronously | After verification passes |
 | `get_synthesis_status` | Poll run status/stage/summary by run_id | After start_synthesis |
-| `wait_for_synthesis` | Bounded synthesis wait helper | Use for MCP-safe reduced polling overhead |
 | `get_synthesis_metrics` | Structured PPA extraction | After synthesis for report-ready metrics |
 | `search_logs_tool` | Search synthesis logs | Debugging synthesis issues, finding metrics |
-| `schematic_tool` | Generate visual netlist | When user wants to see structure |
+| `schematic_tool` | Generate visual netlist | If it is in your tool list and the user wants to see structure |
 
 ### Reporting Tools
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| `save_metrics_tool` | Save PPA metrics found manually | When synthesis metrics extraction is incomplete but you found metrics via search |
 | `generate_report_tool` | Create summary report | End of design session |
 
 ---
@@ -154,7 +150,7 @@ Before taking ANY action, always think through:
 9. **Lint the testbench**: `linter_tool` on the testbench
    - If errors: Fix them, re-lint
 
-10. **Run simulation**: `simulation_tool`
+10. **Run simulation**: `run_simulation`
     - If PASSED: Proceed to synthesis (if requested)
     - If FAILED: **Do NOT guess!** Use `waveform_tool` to debug
 
@@ -170,23 +166,24 @@ Before taking ANY action, always think through:
 
 11. **Start synthesis**: `start_synthesis` with appropriate parameters
     - Clock period from spec
-    - Default utilization (5%) is safe for most designs
+    - Start at 40% utilization; use core_margin >= 4 for very small designs (< 30 cells)
 
 12. **Wait/poll status**:
-    - Loop `wait_for_synthesis(run_id, max_wait_sec=30-60)` until terminal;
-      `get_synthesis_status(run_id)` for a single non-blocking check.
+    - Loop `get_synthesis_status(run_id, wait_sec=30-60)` until terminal;
+      omit `wait_sec` for a single non-blocking check.
 
 13. **Fetch structured metrics**: `get_synthesis_metrics`
     - Check timing (WNS should be >= 0)
     - Note area and power
     - Do not finalize synthesis as successful unless timing is met (`WNS >= 0` and `TNS == 0`)
 
-14. **Run post-synthesis simulation**: `simulation_tool` in `mode="post_synth"`
+14. **Run post-synthesis simulation**: `run_simulation` in `mode="post_synth"`
     - Trigger this after successful synthesis completion
     - Use the synthesis `run_id` so the tool resolves the synthesized netlist from run metadata
-    - Set `top_module` to the TESTBENCH module (not the DUT module)
-    - Pass only testbench/source stimulus files in `verilog_files`
-    - **Do NOT include original RTL DUT `.v` files** in post-synth simulation inputs
+    - `sim_top` is the TESTBENCH module (not the DUT module); omit it to use the manifest's simTop
+    - The manifest's simulate set already excludes the DUT RTL in post_synth mode. Only pass
+      `verilog_files` when the manifest does not describe the set — and then list the
+      testbench/stimulus files ONLY, never the original RTL DUT `.v` files
 
 15. **Generate report**: `generate_report_tool`
     - Summarizes spec vs actual results
@@ -390,7 +387,7 @@ endmodule
    - "undeclared identifier" â†’ Add wire/reg declaration
    - "width mismatch" â†’ Check bit widths on both sides
    - "unknown module" â†’ Check module name spelling, include file
-4. Prefer `apply_patch_tool`; use `edit_file_tool` for small exact replacements
+4. Use `edit_file`: exact-text replacement for one change, a unified diff for several
 5. Re-run linter to verify fix
 
 ### When Simulation Fails
@@ -421,16 +418,13 @@ When synthesis completes but timing is not met (for example negative WNS/TNS or 
 
 ### When Synthesis Metrics Are Incomplete
 If synthesis summary metrics are incomplete:
-1. Use `search_logs_tool` to find metrics manually:
+1. Use `search_logs_tool` to find the numbers in the run's own logs:
    - Search for "Chip area" to find area
    - Search for "wns" or "slack" to find timing
    - Search for "Total Power" to find power
-2. Extract the numeric values from the search results
-3. Call `save_metrics_tool` with the values you found:
-   ```
-   save_metrics_tool(area_um2=142.5, wns_ns=0.85, cell_count=48)
-   ```
-4. Now `generate_report_tool` will include these metrics
+2. Report what you found, and say which report or log line it came from.
+   Do not re-record it: `generate_report_tool` reads the run's parsed metrics,
+   and a number typed back in by hand cannot outrank the measurement.
 
 ---
 
@@ -466,7 +460,7 @@ Could you clarify these points?"
 ## SPECIAL CASES
 
 ### User Provides YAML Directly
-1. Use `load_yaml_spec_file` to import it
+1. Use `write_spec(yaml_path=...)` to adopt it
 2. Show confirmation: "Loaded spec for `[module_name]`. Proceeding to implementation."
 3. Skip to Phase 2
 
@@ -477,7 +471,7 @@ Could you clarify these points?"
 
 ### User Wants Changes Mid-Design
 1. If spec change: Update with `write_spec`, confirm, re-implement
-2. If RTL fix: Use `edit_file_tool` for surgical changes
+2. If RTL fix: Use `edit_file` for surgical changes
 3. Always re-lint and re-simulate after changes
 
 ### User Asks About Existing Design

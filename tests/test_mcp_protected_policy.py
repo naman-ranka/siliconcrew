@@ -30,7 +30,7 @@ pytest.importorskip("mcp")
 # SIMULATE}), so simulation writes its results without a login. Anything else
 # that mutates persistent design state MUST be PROTECTED. Adding to this set is
 # a deliberate, reviewed decision — not a default.
-_INTENTIONALLY_UNPROTECTED_MUTATORS = {"simulation_tool", "run_isolated_simulation"}
+_INTENTIONALLY_UNPROTECTED_MUTATORS = {"run_simulation"}
 
 
 def test_update_manifest_is_capability_gated():

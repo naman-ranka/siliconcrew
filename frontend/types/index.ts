@@ -347,7 +347,11 @@ export interface Slice<T> {
 export interface ActivityEvent {
   id: string;
   ts: string;
-  source: "agent" | "user" | "mcp";
+  // "subagent" is a delegated child's work. The backend has always been able
+  // to tell it apart; until this existed the dock rendered it as the human's.
+  source: "agent" | "user" | "mcp" | "subagent";
+  /** Which delegated role produced this row, when source is "subagent". */
+  role?: string | null;
   tool: string;
   args: Record<string, unknown>;
   status: "ok" | "error" | "running";
@@ -451,3 +455,40 @@ export type WSMessageType =
 
 // UI State types
 export type ArtifactTab = "spec" | "code" | "waveform" | "schematic" | "layout" | "report";
+
+
+// =============================================================================
+// Skills — two layers, four rules, and no priority language anywhere
+// =============================================================================
+
+/** Which layer answered for a name. The backend's words, not a second set. */
+export type SkillLayer = "builtin" | "user" | "user-replaces-builtin";
+
+export interface SkillSummary {
+  name: string;
+  layer: SkillLayer;
+  enabled: boolean;
+  description: string | null;
+  /** The one skill with no trigger: its failure mode is silence, so the page
+   *  marks it differently from every other row rather than forcing it on. */
+  always_load: boolean;
+  /** Only meaningful for a replacement. `null` = the question does not apply,
+   *  or nobody recorded which version it was forked from — absent, not "no". */
+  builtin_changed: boolean | null;
+  /** A file in the user's own folder that will not parse. Shown, not obeyed. */
+  error: string | null;
+}
+
+export interface SkillsIndex {
+  skills: SkillSummary[];
+  /** Choices that match nothing — a built-in renamed under a saved "off".
+   *  Surfaced so a skill someone switched off cannot come back unannounced. */
+  unmatched_disabled: string[];
+}
+
+export interface SkillDetail extends SkillSummary {
+  text: string | null;
+  /** The shipped text, when a built-in of this name exists: what a
+   *  replacement replaced, and what "reset" would restore. */
+  builtin_text: string | null;
+}

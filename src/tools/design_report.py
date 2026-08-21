@@ -4,6 +4,7 @@ Design Report Generator - Creates comprehensive reports comparing spec vs actual
 
 import os
 import json
+import math
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 from src.tools.spec_manager import load_yaml_file, DesignSpec
@@ -14,8 +15,9 @@ from src.tools.sim_manager import list_sim_runs
 # =============================================================================
 # METRICS PERSISTENCE
 # =============================================================================
-# The agent can save metrics from any source (ppa_tool, search_logs_tool, etc.)
-# The report generator reads from this file first, then falls back to parsing.
+# The agent can hand-save metrics it found by other means (e.g. search_logs_tool).
+# Those saved values rank strictly BELOW the structured parse of the run's own
+# reports: a hand-typed number never outranks a measured one (invariant #4).
 
 METRICS_FILENAME = "design_metrics.json"
 RUN_REPORT_FILENAME = "design_report.md"
@@ -64,20 +66,25 @@ def _files_by_role(workspace_path: str) -> Dict[str, list]:
 
 
 def _latest_lint_event(workspace_path: str) -> Optional[Dict[str, Any]]:
-    """The most recent ``linter_tool`` result from the session event log.
+    """The most recent lint result from the session event log.
 
     Every actor's lint lands in ``attempt_events.jsonl`` (invariant 3), so that
     log — not a guess — is the evidence for the report's lint cell. Appended in
     order, so the last match is the latest.
     """
     try:
-        from src.utils.attempt_logger import EVENTS_FILE, _read_events
+        from src.api.tool_catalog import tools_with_attempt_parser
+        from src.utils.attempt_logger import EVENTS_FILE, _read_events, attempt_lint
 
+        # Which tool produces a lint verdict is the registry's answer, not a
+        # name spelled here: a tool declares ``attempt_parser=attempt_lint`` in
+        # its @policy, which is the same declaration the attempt log reads.
+        lint_tools = tools_with_attempt_parser(attempt_lint)
         records = _read_events(os.path.join(workspace_path, EVENTS_FILE))
     except Exception:
         return None
     for rec in reversed(records):
-        if rec.get("event_type") == "tool_result" and rec.get("tool") == "linter_tool":
+        if rec.get("event_type") == "tool_result" and rec.get("tool") in lint_tools:
             return rec
     return None
 
@@ -221,49 +228,60 @@ def _resolve_run_clock_fields(run_meta: Dict[str, Any], spec: Optional[DesignSpe
     return requested_clock, None, None
 
 
-def save_metrics(workspace_path: str, metrics: Dict[str, Any], run_id: str = None) -> str:
+def _metric_values_agree(saved: Any, parsed: Any) -> bool:
+    """True when a saved value and a parsed value are the same measurement.
+
+    JSON round-trips and hand-typed decimals introduce representation noise, so
+    numbers compare with a tolerance; everything else compares exactly. Booleans
+    are compared as booleans (in Python ``True == 1.0``).
     """
-    Save PPA metrics to a JSON file in the workspace.
-    Called by the agent when it finds metrics through any means.
-    
-    Args:
-        workspace_path: Path to workspace
-        metrics: Dict with keys like area_um2, wns_ns, power_uw, cell_count
-        
-    Returns:
-        Path to saved file
-    """
-    target_dir, _ = _resolve_report_scope(workspace_path, run_id)
-    metrics_path = os.path.join(target_dir, METRICS_FILENAME)
-    
-    # Merge with existing metrics (don't overwrite if new value is None)
-    existing = {}
-    if os.path.exists(metrics_path):
-        try:
-            with open(metrics_path, 'r') as f:
-                existing = json.load(f)
-        except:
-            pass
-    
-    # Update with new metrics (only non-None values)
-    for key, value in metrics.items():
-        if value is not None:
-            existing[key] = value
-    
-    existing["updated_at"] = datetime.now().isoformat()
-    
-    with open(metrics_path, 'w') as f:
-        json.dump(existing, f, indent=2)
-    
-    return metrics_path
+    if isinstance(saved, bool) or isinstance(parsed, bool):
+        return saved is parsed
+    if isinstance(saved, (int, float)) and isinstance(parsed, (int, float)):
+        return math.isclose(saved, parsed, rel_tol=1e-9, abs_tol=1e-12)
+    return saved == parsed
+
+
+# What the parse can take from a run, split by what a value MEANS.
+#
+# MEASURED are numbers about this design, read out of the run's own reports —
+# the values the PPA table prints. DESCRIPTIVE label the run itself: the corner
+# ORFS ran at, and the disclosure that says WHY a run has no timing verdict.
+# Both are applied over the saved file, but only a MEASURED field is evidence
+# that a displayed number was measured here: a corner label parsed from
+# run_meta cannot make a hand-saved area into a parsed one.
+MEASURED_METRIC_FIELDS = (
+    "area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw",
+    # The honest timing set (Wave C): the real margin, the achieved frequency
+    # ORFS itself reported.
+    "worst_slack_ns", "clock_period_min_ns", "fmax_mhz", "timing_met",
+)
+DESCRIPTIVE_METRIC_FIELDS = ("timing_corner", "timing_note")
 
 
 def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
     """
-    Load metrics from the workspace, trying two sources in order:
-    1. design_metrics.json (saved by the agent, highest priority)
-    2. get_synthesis_metrics for the resolved run — the ONE structured parser
-       everything else uses.
+    Load metrics for a run. The MEASURED values win.
+
+    Ranking (invariant #4, honest state):
+    1. get_synthesis_metrics for the resolved run — the ONE structured parser
+       every other surface uses. Authoritative.
+    2. design_metrics.json, left by an older run (a hand-save tool used to
+       write it; it was deleted once the parse outranked it). Read for legacy
+       runs and for gap-filling ONLY; it can never override a parsed value.
+
+    When both sources carry a value for the same field and they disagree, the
+    parsed value is used and the conflict is reported under the
+    ``saved_metric_conflicts`` key (a list of
+    ``{"field", "saved", "parsed"}`` dicts) so the report can say so out loud
+    instead of silently dropping one of the two numbers.
+
+    Which tier a number actually came from travels WITH the numbers, under
+    ``parsed_metric_fields``: the names of the fields tier 1 measured and
+    applied, present only when there is at least one (so an empty result stays
+    falsy). Without it a caller cannot tell a measured 1234 from a typed one,
+    and a report that describes typed values as measured is invariant #4
+    inverted.
 
     A third tier used to parse *sta.log / *timing.rpt from the workspace root
     with its own crude regexes (src/tools/get_ppa.py). It never read
@@ -273,38 +291,48 @@ def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
     Returns:
         Dict with metrics or empty dict
     """
+    # Tier 2 (lowest): saved metrics file. Loaded first only so the parse can be
+    # laid OVER it — every non-None parsed value replaces what is here.
     metrics = {}
-    
-    # Source 1: Saved metrics file (highest priority - agent may have found these manually)
     target_dir, resolved_run_id = _resolve_report_scope(workspace_path, run_id)
     metrics_path = os.path.join(target_dir, METRICS_FILENAME)
     if os.path.exists(metrics_path):
         try:
             with open(metrics_path, 'r') as f:
-                metrics = json.load(f)
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                metrics = loaded
         except:
             pass
 
-    # Source 2: Structured parsing from the synthesis run
+    # Tier 1 (authoritative): structured parsing from the synthesis run.
+    conflicts = []
+    parsed_fields = []
     if resolved_run_id:
         try:
             parsed = get_synthesis_metrics(workspace_path, resolved_run_id)
             parsed_metrics = parsed.get("metrics", {}) if parsed.get("status") == "ok" else {}
-            for key in [
-                "area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw",
-                # The honest timing set (Wave C): the real margin, the achieved
-                # frequency ORFS itself reported, and the corner it ran at.
-                "worst_slack_ns", "clock_period_min_ns", "fmax_mhz",
-                "timing_met", "timing_corner",
-                # The disclosure travels with the numbers: without it the report
-                # cannot say WHY a run has no verdict.
-                "timing_note",
-            ]:
-                if key not in metrics or metrics.get(key) is None:
-                    if parsed_metrics.get(key) is not None:
-                        metrics[key] = parsed_metrics[key]
+            for key in MEASURED_METRIC_FIELDS + DESCRIPTIVE_METRIC_FIELDS:
+                parsed_value = parsed_metrics.get(key)
+                if parsed_value is None:
+                    # Nothing measured for this field — a saved value may fill
+                    # the gap, and stays exactly where it is.
+                    continue
+                saved_value = metrics.get(key)
+                if saved_value is not None and not _metric_values_agree(saved_value, parsed_value):
+                    conflicts.append(
+                        {"field": key, "saved": saved_value, "parsed": parsed_value}
+                    )
+                metrics[key] = parsed_value
+                if key in MEASURED_METRIC_FIELDS:
+                    parsed_fields.append(key)
         except:
             pass
+
+    if conflicts:
+        metrics["saved_metric_conflicts"] = conflicts
+    if parsed_fields:
+        metrics["parsed_metric_fields"] = parsed_fields
 
     return metrics
 
@@ -545,10 +573,45 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
             if timing_note:
                 report_lines.append(f"\n*{timing_note}*")
         
-        # Note the source of metrics
+        # Note the source of metrics. Values parsed from this run's reports
+        # always win; a saved design_metrics.json only fills what the parse
+        # could not measure. Where the two disagree the report says so — a
+        # silently dropped number is exactly the dishonest state invariant #4
+        # forbids.
+        #
+        # The note must describe THIS run, not the good case. A legacy or
+        # partially-preserved run resolves no synthesis reports to parse (or
+        # parses nothing out of them), so every number above was read from the
+        # saved file — some of them typed by hand. Claiming those were parsed
+        # from synthesis reports is the same dishonesty as a fake verdict, so
+        # the note follows what load_metrics actually applied.
+        conflicts = metrics.get("saved_metric_conflicts") or []
+        parsed_any = bool(metrics.get("parsed_metric_fields"))
         metrics_path = os.path.join(report_dir, METRICS_FILENAME)
         if os.path.exists(metrics_path):
-            report_lines.append("\n*Metrics loaded from saved data.*")
+            if parsed_any:
+                report_lines.append(
+                    "\n*Values above are parsed from this run's synthesis reports; "
+                    "saved metrics (`design_metrics.json`) fill only fields the parse "
+                    "did not measure.*"
+                )
+            else:
+                report_lines.append(
+                    "\n*Values above come from saved data (`design_metrics.json`), "
+                    "NOT from synthesis reports: no synthesis run's reports were "
+                    "parsed for this report, so these numbers were not measured here.*"
+                )
+        if conflicts:
+            report_lines.append(
+                "\n> ⚠️ **Saved metrics disagree with this run's reports.** "
+                "The parsed values are shown above; the saved values were NOT used."
+            )
+            report_lines.append("\n| Metric | Saved (`design_metrics.json`) | Parsed (used) |")
+            report_lines.append("|--------|------------------------------|---------------|")
+            for conflict in conflicts:
+                report_lines.append(
+                    f"| {conflict['field']} | {conflict['saved']} | {conflict['parsed']} |"
+                )
     else:
         report_lines.append("*Synthesis not run or metrics not available.*\n")
     

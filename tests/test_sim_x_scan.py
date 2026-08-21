@@ -252,6 +252,56 @@ def test_run_record_clean_vcd_reports_false():
         assert run["xScan"]["status"] == "scanned"
 
 
+# --- the warning the scan was always missing -------------------------------
+# The scan produced honest fields but nothing ever JOINED them to the verdict.
+# The rule that would have ("`x !== x` is FALSE, so guard checked outputs with
+# $isunknown") lived only in an embedded prompt that was deleted without ever
+# having been loaded, so it has never run. These pin the join.
+
+def test_a_pass_with_x_present_is_flagged_x_blind():
+    with tempfile.TemporaryDirectory() as ws:
+        _write(os.path.join(ws, "tb.v"), "module tb; endmodule")
+        run = sm.run_sim_isolated(ws, ["tb.v"], "tb", _runner=_fake_runner(VCD_WITH_X))
+        assert run["status"] == "passed"          # the verdict is untouched...
+        assert run["warnings"] == ["x-blind-pass"]  # ...and now it is qualified
+        # The run directory is the database: the flag survives the process.
+        assert sm.get_sim_run(ws, run["id"])["warnings"] == ["x-blind-pass"]
+
+
+def test_a_clean_pass_is_not_flagged():
+    with tempfile.TemporaryDirectory() as ws:
+        _write(os.path.join(ws, "tb.v"), "module tb; endmodule")
+        run = sm.run_sim_isolated(ws, ["tb.v"], "tb", _runner=_fake_runner(VCD_CLEAN))
+        assert run["status"] == "passed" and run["warnings"] == []
+
+
+def test_a_failing_run_with_x_is_not_flagged():
+    """The flag says "this PASS may be a lie". A failing run is already honest,
+    and flagging it would make the warning mean nothing."""
+    with tempfile.TemporaryDirectory() as ws:
+        _write(os.path.join(ws, "tb.v"), "module tb; endmodule")
+        run = sm.run_sim_isolated(
+            ws, ["tb.v"], "tb", _runner=_fake_runner(VCD_WITH_X, status="test_failed")
+        )
+        assert run["status"] == "failed" and run["warnings"] == []
+
+
+def test_a_pass_with_no_vcd_is_not_flagged():
+    """xDetected is None there — unknown, not clean and not dirty. Flagging an
+    unknown would be inventing evidence."""
+    with tempfile.TemporaryDirectory() as ws:
+        _write(os.path.join(ws, "tb.v"), "module tb; endmodule")
+        run = sm.run_sim_isolated(ws, ["tb.v"], "tb", _runner=_fake_runner(None))
+        assert run["xDetected"] is None and run["warnings"] == []
+
+
+def test_the_tool_description_tells_the_agent_what_the_flag_means():
+    """A field no description mentions is a field an agent never reads."""
+    from src.tools.wrappers import run_simulation
+
+    assert "x-blind-pass" in run_simulation.description
+
+
 def test_read_waveform_still_reads_after_header_extraction(tmp_path):
     """The shared header parser must not change read_waveform behavior."""
     vcd = _write(str(tmp_path / "dump.vcd"), VCD_WITH_X)

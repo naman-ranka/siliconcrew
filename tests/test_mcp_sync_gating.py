@@ -62,37 +62,52 @@ def test_mutating_call_syncs(tmp_path):
     assert provider.synced == ["sess_write"]  # uploaded once
 
 
-def test_mcp_sync_decision_matches_mutating_set():
-    """The MCP server's gate is exactly ``name in MUTATING_TOOLS`` — encode the
-    read/write classification so a future writer added without MUTATING
-    membership (→ silent data loss on hosted) trips this test.
+def test_sync_policy_covers_the_live_registry():
+    """The MCP server's gate is exactly ``name in MUTATING_TOOLS``, so the
+    policy has to stay in step with the registry.
+
+    This used to re-type 37 of the 39 tool names by hand — a hand-written list
+    guarding against hand-written lists, and it had already drifted (it never
+    learned about ``build_interactive_sim`` or ``run_python_analysis``, so a
+    writer could have been added with no MUTATING membership and the guard
+    would have said nothing). Derive it instead:
+
+      * every live tool is CLASSIFIED by the catalog, so a new tool cannot land
+        without someone deciding its category — and its sync behaviour with it;
+      * every name the policy mentions is a live tool, so a rename that misses
+        the catalog fails here instead of silently dropping a tool's policy.
+
+    Dead tool-name references anywhere else in the repo (docs, prompts,
+    frontend, MCP) are covered by ``tests/test_tool_name_drift.py``; that the
+    policy EXISTS at all, on the tool itself, is covered by
+    ``tests/test_tool_policy.py``.
     """
-    writers = {
-        "write_spec", "write_file", "apply_patch_tool", "edit_file_tool",
-        "load_yaml_spec_file", "update_manifest",
-        "simulation_tool", "run_isolated_simulation", "cocotb_tool", "sby_tool",
-        "start_synthesis", "retry_pd",
-        "save_metrics_tool", "generate_report_tool", "schematic_tool",
-        "run_xls_flow", "run_dslx_interpreter", "compile_dslx_to_ir",
-        "optimize_xls_ir", "codegen_xls", "benchmark_xls",
-        "experimental_compile_cpp_to_ir",
-    }
-    # Pure reads (or reads whose only writes persist via an INDEPENDENT durable
-    # channel — get_synthesis_status/wait_for_synthesis reconcile run_meta via
-    # _persist_run_meta_durable → the run store, not the workspace tarball).
-    readers = {
-        "read_spec", "read_file", "list_files_tool", "get_manifest",
-        "waveform_tool", "search_logs_tool", "linter_tool",
-        "get_synthesis_status", "wait_for_synthesis", "get_synthesis_metrics",
-        "read_stage_report", "get_route_drc_summary", "get_cts_summary",
-        "get_congestion_summary", "compare_pd_runs",
-    }
+    from src.tools.wrappers import ALL_TOOLS
+    from src.api.tool_catalog import (
+        ASYNC_TOOLS, EXCLUDED_FROM_UI, PROTECTED_TOOLS, TOOL_CATEGORIES,
+    )
 
-    missing = writers - MUTATING_TOOLS
-    assert not missing, f"writers missing from MUTATING_TOOLS (would lose writes): {missing}"
+    # The whole registry, not just the MCP surface: policy now covers every
+    # tool, including those a given surface does not advertise, so scoping this
+    # to mcp_tools would report them as dead names.
+    live = {t.name for t in ALL_TOOLS}
+    classified = {name for names in TOOL_CATEGORIES.values() for name in names}
 
-    misclassified = readers & MUTATING_TOOLS
-    assert not misclassified, f"readers wrongly in MUTATING_TOOLS (needless upload): {misclassified}"
+    unclassified = live - classified
+    assert not unclassified, (
+        "tools in the registry with no catalog category — nobody decided their "
+        f"policy (categories, sign-in, sync): {sorted(unclassified)}"
+    )
+
+    for label, policy in (
+        ("TOOL_CATEGORIES", classified),
+        ("MUTATING_TOOLS", set(MUTATING_TOOLS)),
+        ("PROTECTED_TOOLS", set(PROTECTED_TOOLS)),
+        ("ASYNC_TOOLS", set(ASYNC_TOOLS)),
+        ("EXCLUDED_FROM_UI", set(EXCLUDED_FROM_UI)),
+    ):
+        dead = policy - live
+        assert not dead, f"{label} names no live tool answers to: {sorted(dead)}"
 
 
 # --- 4B (hosted-latency plan): the bound Codex subprocess defers its per-tool

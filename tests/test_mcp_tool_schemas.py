@@ -1,16 +1,16 @@
 """X2M-2 disproof + schema drift guard.
 
-X2M-2 hypothesized that the five PD-summary tools (get_synthesis_metrics,
-read_stage_report, get_cts_summary, get_congestion_summary,
-get_route_drc_summary) returned JSON-RPC -32602 on hosted because their
-generated MCP inputSchema was something the SDK/connector validation rejects.
+X2M-2 hypothesized that the five PD-summary tools (get_synthesis_metrics plus
+the four stage readers, since merged into read_stage_report) returned JSON-RPC
+-32602 on hosted because their generated MCP inputSchema was something the
+SDK/connector validation rejects.
 
 That hypothesis is DISPROVEN here, empirically and durably:
   * every registered MCP tool's generated schema is a well-formed JSON Schema;
   * a canonical call payload validates against every one of them;
-  * the five failing tools' schemas are structurally identical (modulo
-    title/description) to tools that WORKED on hosted in the same minute
-    (generate_report_tool, get_synthesis_status) — see
+  * the run_id-only reader that survives the merge has a schema structurally
+    identical (modulo title/description) to a tool that WORKED on hosted in the
+    same minute (generate_report_tool) — see
     test_failing_pd_tools_schemas_match_a_working_tool.
 
 So identical schemas produced opposite outcomes → -32602 is not a schema-shape
@@ -39,6 +39,12 @@ def _schema(tool):
 
 
 def _dummy_for(prop_schema):
+    # An argument with a closed value set is only "well-formed" if the value is
+    # IN that set — a schema-shape test must not send 'x' to an enum field and
+    # then read the (correct) rejection as a schema defect.
+    enum = prop_schema.get("enum")
+    if enum:
+        return enum[0]
     t = prop_schema.get("type")
     if t == "string":
         return "x"
@@ -77,10 +83,15 @@ def test_every_mcp_tool_schema_is_wellformed_and_accepts_a_canonical_call(tool):
 
 
 def test_failing_pd_tools_schemas_match_a_working_tool():
-    """The load-bearing disproof: the run_id-only PD tools that returned -32602
-    have schemas structurally identical (modulo title/description) to
+    """The load-bearing disproof: the run_id-only PD reader that returned -32602
+    has a schema structurally identical (modulo title/description) to
     generate_report_tool, which WORKED on hosted. Identical schema, opposite
-    outcome ⇒ the schema is not the cause."""
+    outcome ⇒ the schema is not the cause.
+
+    The other four readers of that report are one tool now, and it takes a
+    stage — so it can no longer be compared shape-for-shape. The disproof does
+    not depend on it: one identical-schema pair with opposite outcomes is the
+    whole argument."""
     byname = {t.name: t for t in mcp_tools}
 
     def norm(tool):
@@ -92,11 +103,14 @@ def test_failing_pd_tools_schemas_match_a_working_tool():
         for v in s.get("properties", {}).values():
             if isinstance(v, dict):
                 v.pop("title", None)
+                # Per-argument prose is the "modulo description" this test's
+                # docstring already claims: the readers take the same run_id but
+                # word it for their own subject. Shape is what is under test.
+                v.pop("description", None)
         return json.dumps(s, sort_keys=True)
 
     control = norm(byname["generate_report_tool"])  # worked on hosted
-    for name in ("get_synthesis_metrics", "get_cts_summary",
-                 "get_congestion_summary", "get_route_drc_summary"):
+    for name in ("get_synthesis_metrics",):
         assert norm(byname[name]) == control, (
             f"{name} schema differs from generate_report_tool — if this ever "
             "becomes true it would be a real schema lead; today they are identical"

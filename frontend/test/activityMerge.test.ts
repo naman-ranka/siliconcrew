@@ -42,16 +42,16 @@ describe("activityMerge: upsertActivityEvent (live WS lifecycle)", () => {
 
 describe("activityMerge: mergeActivity dedup", () => {
   it("drops a local WS event when the server logs the same tool_call_id", () => {
-    const local = ev({ id: "ws:tc1", tool: "simulation_tool", status: "ok" });
-    const server = ev({ id: "tc1", tool: "simulation_tool", status: "ok", ts: "2026-07-01T11:00:00Z" });
+    const local = ev({ id: "ws:tc1", tool: "run_simulation", status: "ok" });
+    const server = ev({ id: "tc1", tool: "run_simulation", status: "ok", ts: "2026-07-01T11:00:00Z" });
     const merged = mergeActivity([server], [local]);
     expect(merged).toHaveLength(1);
     expect(merged[0].id).toBe("tc1");
   });
 
   it("drops a local optimistic event when a server event has the same tool + runId", () => {
-    const local = ev({ id: "local-1", tool: "simulation_tool", runId: "sim_0007", ts: "2026-07-01T10:00:01Z" });
-    const server = ev({ id: "srv-9", tool: "simulation_tool", runId: "sim_0007", ts: "2026-07-01T10:05:00Z" });
+    const local = ev({ id: "local-1", tool: "run_simulation", runId: "sim_0007", ts: "2026-07-01T10:00:01Z" });
+    const server = ev({ id: "srv-9", tool: "run_simulation", runId: "sim_0007", ts: "2026-07-01T10:05:00Z" });
     const merged = mergeActivity([server], [local]);
     expect(merged).toHaveLength(1);
     expect(merged[0].id).toBe("srv-9");

@@ -8,6 +8,7 @@ divided the clock TARGET, i.e. echoed the input back as an achievement.
 import importlib
 import json
 import os
+import shutil
 import tempfile
 
 import pytest
@@ -116,3 +117,134 @@ def test_the_dead_ppa_parsers_are_gone():
     with pytest.raises(ImportError):
         importlib.import_module("src.tools.get_ppa")
     assert not hasattr(sm, "_extract_summary_metrics")
+
+
+# --- P0: a hand-typed metric must never outrank a measured one ---------------
+#
+# load_metrics used to read design_metrics.json as its TOP tier, so a number the
+# agent typed by hand beat the number parsed from the run's own synthesis
+# reports. The parse wins now, the saved file fills gaps only, and the tool that
+# wrote such a file by hand has since been deleted for the same reason.
+
+
+def _save_metrics_file(workspace: str, payload: dict, run_id: str = "synth_0001") -> None:
+    _write_file(
+        os.path.join(workspace, "synth_runs", run_id, "design_metrics.json"),
+        json.dumps(payload),
+    )
+
+
+def test_parsed_metrics_outrank_hand_saved_ones():
+    """Pre-fix: the saved 999.0 / 42 / -7.5 were returned verbatim."""
+    with tempfile.TemporaryDirectory() as workspace:
+        _seed_run(workspace, MET_FINISH)
+        _save_metrics_file(
+            workspace,
+            {"area_um2": 999.0, "cell_count": 42, "worst_slack_ns": -7.5},
+        )
+
+        metrics = load_metrics(workspace, run_id="synth_0001")
+
+        # The measured values, straight from get_synthesis_metrics.
+        assert metrics["area_um2"] == pytest.approx(1234.0)
+        assert metrics["cell_count"] == 100
+        assert metrics["worst_slack_ns"] == pytest.approx(2.5)
+
+        # And the disagreement is recorded, not silently dropped.
+        conflicts = {c["field"]: c for c in metrics.get("saved_metric_conflicts", [])}
+        assert set(conflicts) == {"area_um2", "cell_count", "worst_slack_ns"}
+        assert conflicts["area_um2"]["saved"] == pytest.approx(999.0)
+        assert conflicts["area_um2"]["parsed"] == pytest.approx(1234.0)
+
+
+def test_saved_metrics_still_fill_gaps_the_parse_cannot_measure():
+    """Legacy runs keep working: with no synth_stat.txt there is nothing to
+    parse for area/cells, so the saved values stand — and that is NOT a
+    conflict."""
+    with tempfile.TemporaryDirectory() as workspace:
+        _seed_run(workspace, MET_FINISH)
+        os.remove(
+            os.path.join(
+                workspace, "synth_runs", "synth_0001", "orfs_reports",
+                "sky130hd", "demo", "base", "synth_stat.txt",
+            )
+        )
+        _save_metrics_file(workspace, {"area_um2": 999.0, "cell_count": 42})
+
+        metrics = load_metrics(workspace, run_id="synth_0001")
+
+        assert metrics["area_um2"] == pytest.approx(999.0)
+        assert metrics["cell_count"] == 42
+        assert metrics.get("saved_metric_conflicts") is None
+        # The parsed timing fields are untouched by the gap fill.
+        assert metrics["worst_slack_ns"] == pytest.approx(2.5)
+
+
+def test_report_shows_the_parsed_value_and_flags_the_disagreement():
+    """Pre-fix the report printed 999.00 µm² and said 'Metrics loaded from
+    saved data', with no hint that the run's own reports said 1234."""
+    with tempfile.TemporaryDirectory() as workspace:
+        _seed_run(workspace, MET_FINISH)
+        _save_metrics_file(workspace, {"area_um2": 999.0})
+
+        report = generate_design_report(workspace, run_id="synth_0001")
+
+        assert "1234.00" in report
+        area_rows = [ln for ln in report.splitlines() if ln.startswith("| Area ")]
+        assert area_rows and "999" not in area_rows[0], area_rows
+        # The dropped number is disclosed rather than hidden.
+        assert "Saved metrics disagree" in report
+        assert "999.0" in report
+
+
+# --- P2 (dev#91 F1): a number's provenance is part of the number -------------
+#
+# The parse outranking the saved file was the bigger half. This is the other:
+# the source note described the good case UNCONDITIONALLY, so a run whose every
+# displayed value was read from design_metrics.json — a legacy run, or one
+# whose reports no longer exist — still claimed those numbers were parsed from
+# its synthesis reports.
+
+
+def test_report_credits_saved_data_when_nothing_was_parsed():
+    """Pre-fix all three cases printed 'parsed from this run's synthesis
+    reports' over values that came out of design_metrics.json."""
+    # 1. Legacy workspace: no run at all, only a saved metrics file.
+    with tempfile.TemporaryDirectory() as workspace:
+        _write_file(
+            os.path.join(workspace, "design_metrics.json"),
+            json.dumps({"area_um2": 999.0, "cell_count": 42}),
+        )
+
+        report = generate_design_report(workspace)
+
+        assert "999.00" in report
+        assert "parsed from this run's synthesis reports" not in report
+        assert "come from saved data" in report
+
+    # 2. A resolved run whose reports are gone: still nothing measured here.
+    with tempfile.TemporaryDirectory() as workspace:
+        _seed_run(workspace, MET_FINISH)
+        shutil.rmtree(os.path.join(workspace, "synth_runs", "synth_0001", "orfs_reports"))
+        _save_metrics_file(workspace, {"area_um2": 999.0, "cell_count": 42})
+
+        metrics = load_metrics(workspace, run_id="synth_0001")
+        assert metrics.get("parsed_metric_fields") is None
+
+        report = generate_design_report(workspace, run_id="synth_0001")
+        assert "999.00" in report
+        assert "parsed from this run's synthesis reports" not in report
+        assert "come from saved data" in report
+
+    # 3. The good case is unchanged: a real parse still says so.
+    with tempfile.TemporaryDirectory() as workspace:
+        _seed_run(workspace, MET_FINISH)
+        _save_metrics_file(workspace, {"area_um2": 999.0})
+
+        metrics = load_metrics(workspace, run_id="synth_0001")
+        assert "area_um2" in metrics["parsed_metric_fields"]
+
+        report = generate_design_report(workspace, run_id="synth_0001")
+        assert "1234.00" in report
+        assert "parsed from this run's synthesis reports" in report
+        assert "come from saved data" not in report

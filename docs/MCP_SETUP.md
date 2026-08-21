@@ -11,7 +11,7 @@ Claude Desktop
     ↓ (loads prompt)
     ↓ "RTL Design Workflow" → SYSTEM_PROMPT injected
     ↓ (uses tools)
-    ↓ write_spec → linter_tool → simulation_tool → synthesis_tool
+    ↓ write_spec → linter_tool → run_simulation → start_synthesis
     ↓
 MCP Server (mcp_server.py)
     ↓
@@ -217,7 +217,8 @@ workspace/default/
 
 ## Available Tools
 
-Claude has access to all 23 tools:
+A default connection is advertised **24 tools**: the 19 design tools below plus
+the 5 session tools a client needs before any session exists.
 
 ### Session Management (5 tools)
 - `create_session_tool` - Create new isolated workspace
@@ -226,33 +227,44 @@ Claude has access to all 23 tools:
 - `get_current_session` - Get active session info
 - `delete_session_tool` - Delete session and files
 
-### Specification Tools (3 tools)
-- `write_spec` - Create YAML spec (ALWAYS first!)
+### Specification Tools (2 tools)
+- `write_spec` - Create the YAML spec (ALWAYS first!), or adopt one the user supplied with `yaml_path`
 - `read_spec` - Load existing spec
-- `load_yaml_spec_file` - Import external YAML
 
 ### File Management (4 tools)
 - `write_file` - Create files
 - `read_file` - Read files
-- `edit_file_tool` - Surgical edits
+- `edit_file` - Exact-text replacement or a unified diff
 - `list_files_tool` - List workspace
 
-### Verification Tools
-- `linter_tool` - Check syntax (iverilog)
-- `simulation_tool` - Run testbench
+### Design Manifest (2 tools)
+- `get_manifest` - Read the file roles, tops, platform and pass marker
+- `update_manifest` - Change them
+
+### Verification Tools (3 tools)
+- `linter_tool` - Check syntax (iverilog or verilator)
+- `run_simulation` - Run a testbench in its own `sim_runs/` dir
 - `waveform_tool` - Debug with VCD
-- `cocotb_tool` - Python testbenches (optional)
-- `sby_tool` - Formal verification (optional)
 
-### Synthesis Tools
-- `synthesis_tool` - OpenROAD flow
-- `ppa_tool` - Extract metrics
+### Synthesis Tools (6 tools)
+- `start_synthesis` - start the OpenROAD flow (async; poll with `get_synthesis_status`, which can also block briefly with `wait_sec`)
+- `get_synthesis_status` - status for a run, optionally waiting for it
+- `get_synthesis_metrics` - extract PPA metrics
+- `read_stage_report` - one physical-design stage: the parse, or the artifact
+- `retry_pd` / `compare_pd_runs` - retry with ORFS overrides, then diff parent vs child
 - `search_logs_tool` - Search synthesis logs
-- `schematic_tool` - Generate SVG
 
-### Reporting Tools
-- `save_metrics_tool` - Save manual metrics
+### Reporting (1 tool)
 - `generate_report_tool` - Create final report
+
+### Hidden by default (6 tools)
+`cocotb_tool` (Python testbenches), `sby_tool` (formal verification),
+`schematic_tool` (SVG netlist), `build_interactive_sim` (browser dashboard),
+`run_python_analysis` and `run_xls_flow` (DSLX HLS) are present but NOT
+advertised to a default connection: they are rare-flow or environment-dependent,
+and together they were about a third of the description bytes every client pays
+for on every turn. Nothing is deleted — they are always available in the web
+Command Surface, and a server started with `--codex-tools` advertises them too.
 
 ---
 
@@ -276,13 +288,13 @@ I'll design a 2-bit counter following the expert workflow.
 [Calls write_file for testbench with VCD dumping]
 [Calls linter_tool on RTL]
 [Calls linter_tool on testbench]
-[Calls simulation_tool]
+[Calls run_simulation]
 [If pass: calls synthesis_tool]
 [Calls generate_report_tool]
 ```
 
 All following the **exact best practices from SYSTEM_PROMPT**!
-23 tools | Same 23 tools |
+24 tools | Same 24 tools |
 | **Workflow** | Your Gemini agent | Claude + SYSTEM_PROMPT |
 | **Sessions** | REST API management | MCP tools + resources |
 | **UI** | Custom React tabs | Claude's chat UI |

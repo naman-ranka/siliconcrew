@@ -32,6 +32,14 @@ import { projectsApi, sessionsApi, threadsApi, modelsApi, chatApi, workspaceApi,
 import { generateId } from "./utils";
 import { makeArtifactKey, type ArtifactKey } from "./artifactKeys";
 import { isDuplicateOfServer, mergeActivity, upsertActivityEvent } from "./activityMerge";
+import {
+  SIM_TOOLS,
+  SYNTH_DISPATCH_TOOLS,
+  WORKSPACE_MUTATING_TOOLS,
+  dirsInvalidatedBy,
+  refreshesManifest,
+  refreshesRuns,
+} from "./toolNames";
 // UI-chrome store (react/zustand only - no import cycle): pruned on session delete.
 import { useWorkbenchUiStore } from "./workbenchUiStore";
 
@@ -192,18 +200,6 @@ const emptyActivity = (): ActivitySlice => ({
 // Local start clocks for WS tool calls → durationMs on the synthetic events.
 const _wsToolStart = new Map<string, number>();
 
-// Which dirCache prefixes a completed WS tool invalidates ("" = root only).
-const TOOL_DIR_INVALIDATION: Record<string, string[]> = {
-  write_spec: [""],
-  write_file: [""],
-  edit_file_tool: [""],
-  apply_patch_tool: [""],
-  generate_report_tool: [""],
-  simulation_tool: ["", "sim_runs"],
-  run_isolated_simulation: ["", "sim_runs"],
-  start_synthesis: ["", "synth_runs"],
-  retry_pd: ["", "synth_runs"],
-};
 
 // --- Run transition detector (Wave 9, Item 5) --------------------------------
 // The UI never polls run status; the runs slice is the truth it renders. So on
@@ -270,26 +266,12 @@ function scheduleActivityRefresh(get: () => AppState): void {
 }
 
 // X2A-4: the agent-shell artifact Index renders `manifest.files` and `runs` —
-// slices the dir-tree invalidation above does NOT touch — so during a live
-// agent turn its home panel stayed empty while the inline cards streamed the
-// same work. These schedulers reload those two slices off the SAME WS tool
-// frames the cards render from (debounced, one refetch per burst) — an
-// activity-event-driven update, never a poller (invariant 6). Which tools move
-// which slice mirrors TOOL_DIR_INVALIDATION.
-const MANIFEST_REFRESH_TOOLS = new Set([
-  "write_spec",
-  "write_file",
-  "edit_file_tool",
-  "apply_patch_tool",
-  "update_manifest",
-]);
-const RUNS_REFRESH_TOOLS = new Set(["simulation_tool", "start_synthesis", "retry_pd"]);
-
-// X2A-5: which trailing tool a dropped turn ended on decides the reconnect
-// hint. Only synthesis dispatches leave a durable Runs record; agent sims are
-// ephemeral (/tmp, no run row) and report inline only.
-const SYNTH_DISPATCH_TOOLS = new Set(["start_synthesis", "retry_pd", "wait_for_synthesis"]);
-const SIM_TOOLS = new Set(["simulation_tool", "run_isolated_simulation"]);
+// slices the dir-tree invalidation does NOT touch — so during a live agent turn
+// its home panel stayed empty while the inline cards streamed the same work.
+// These schedulers reload those two slices off the SAME WS tool frames the
+// cards render from (debounced, one refetch per burst) — an activity-event-
+// driven update, never a poller (invariant 6). Which tools move which slice is
+// decided in lib/toolNames.ts, against the backend's own policy flags.
 
 let _manifestRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleManifestRefresh(get: () => AppState): void {
@@ -1220,7 +1202,7 @@ export const useStore = create<AppState>((set, get) => ({
           });
           // Refresh workspace when file-writing tools complete to show artifacts immediately
           const toolCall = msg.tool_calls?.find((tc) => tc.id === data.tool_call_id);
-          if (toolCall && ["write_spec", "write_file", "edit_file_tool", "generate_report_tool"].includes(toolCall.name)) {
+          if (toolCall && WORKSPACE_MUTATING_TOOLS.has(toolCall.name)) {
             get().refreshWorkspace();
           }
           // Live activity: upgrade the synthetic running event to ok/error with
@@ -1247,12 +1229,12 @@ export const useStore = create<AppState>((set, get) => ({
           // burst of tool frames) and refetch the dirs this tool may have changed.
           scheduleActivityRefresh(get);
           if (toolCall) {
-            const dirPrefixes = TOOL_DIR_INVALIDATION[toolCall.name];
-            if (dirPrefixes) get().invalidateDirs(dirPrefixes);
+            const dirPrefixes = dirsInvalidatedBy(toolCall.name);
+            if (dirPrefixes.length > 0) get().invalidateDirs(dirPrefixes);
             // Keep the agent-shell Index (manifest.files + runs) live with the
             // inline cards — refresh those slices off this same tool frame.
-            if (MANIFEST_REFRESH_TOOLS.has(toolCall.name)) scheduleManifestRefresh(get);
-            if (RUNS_REFRESH_TOOLS.has(toolCall.name)) scheduleRunsRefresh(get);
+            if (refreshesManifest(toolCall.name)) scheduleManifestRefresh(get);
+            if (refreshesRuns(toolCall.name)) scheduleRunsRefresh(get);
           }
           break;
         }

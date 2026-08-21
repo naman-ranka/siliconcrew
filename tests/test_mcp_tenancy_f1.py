@@ -13,7 +13,7 @@ plans/overnight-20260706/reports/F1-tenancy.md):
    ``owns_session`` gate now rejects a workspace flipped out from under you.
 
 These drive ``call_tool`` directly against an in-memory sqlite-backed
-SessionManager with ``_hosted`` forced on and ``_scoped_user_id`` stubbed per
+SessionManager with ``_hosted`` forced on and ``scoped_user_id`` stubbed per
 actor — no live Postgres, no SDK. Each asserts the POST-FIX behavior; every one
 FAILS on pre-fix code (list returns both tenants, delete destroys B, the flipped
 workspace dispatches).
@@ -50,7 +50,7 @@ def hosted_server(tmp_path, monkeypatch):
     bob_sid = mgr.create_session("bob_design", user_id="bob")
 
     actor = {"uid": "alice"}
-    server._scoped_user_id = lambda: actor["uid"]
+    server.scoped_user_id = lambda: actor["uid"]
 
     def set_actor(uid):
         actor["uid"] = uid

@@ -27,7 +27,15 @@ class ReversibleCipher:
         return key + b"||" + plaintext
 
     def decrypt(self, key: bytes, token: bytes) -> bytes:
-        k, _, pt = token.partition(b"||")
+        # Split at the key's KNOWN LENGTH, not at the first b"||". A DEK is 32
+        # random bytes (secrets.token_bytes(32)) and can contain b"||" itself —
+        # about one run in two thousand — which made partition() cut in the
+        # wrong place and trip the assert below. That was a flake in this
+        # double, never in the product, but it broke the repo's "any failure is
+        # a real failure" contract, which is worth more than the two lines it
+        # costs to be unambiguous.
+        k, sep, pt = token[: len(key)], token[len(key) : len(key) + 2], token[len(key) + 2 :]
+        assert sep == b"||", "framing mismatch on decrypt"
         assert k == key, "DEK mismatch on decrypt"
         return pt
 
@@ -191,3 +199,19 @@ def test_tier_limits_come_from_settings():
     provider = build_llm_key_provider(S(), _vault())
     assert provider.limiter._limits.tokens_per_day == 123
     assert provider.limiter._limits.global_cost_ceiling_usd == 7.5
+
+
+def test_a_dek_containing_the_separator_round_trips():
+    """The case that made this suite flake roughly once in two thousand runs.
+
+    A random 32-byte DEK can contain b"||". Framing that splits on the first
+    occurrence then recovers the wrong key and fails an assertion inside the
+    test double — a failure with nothing wrong in the product, which is the
+    worst kind to leave lying around in a repo whose rule is that any failure
+    is a real failure.
+    """
+    cipher = ReversibleCipher()
+    dek = b"A" * 8 + b"||" + b"B" * 22          # 32 bytes, separator inside
+    assert len(dek) == 32
+    token = cipher.encrypt(dek, b"secret-api-key")
+    assert cipher.decrypt(dek, token) == b"secret-api-key"

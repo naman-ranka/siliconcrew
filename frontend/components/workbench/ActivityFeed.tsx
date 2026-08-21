@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { selectActivity, useStore } from "@/lib/store";
 import { openArtifact } from "@/lib/openArtifact";
 import { commandForTool, runCommand } from "@/lib/commands";
+import { TOOL } from "@/lib/toolNames";
 import {
   filterActivity,
   toolKind,
@@ -113,7 +114,7 @@ export function ActivityFeed() {
   // Only the MOST RECENT lint event owns the structured lintResult (the store
   // keeps just the latest lint's diagnostics).
   const latestLintId = useMemo(
-    () => events.find((e) => e.tool === "linter_tool")?.id ?? null,
+    () => events.find((e) => e.tool === TOOL.linter)?.id ?? null,
     [events]
   );
 
@@ -215,9 +216,12 @@ export function ActivityFeed() {
             const isOpen = !!expanded[e.id];
             const cmd = commandForTool(e.tool);
             const run = e.runId ? runs.find((r) => r.id === e.runId) : undefined;
-            const isAgent = e.source === "agent" || e.source === "mcp";
+            // A delegated child is the agent working, not the human. Without
+            // "subagent" here its rows were attributed to "You".
+            const isAgent =
+              e.source === "agent" || e.source === "mcp" || e.source === "subagent";
             const showLintDiags =
-              isOpen && e.tool === "linter_tool" && !!lintResult && e.id === latestLintId;
+              isOpen && e.tool === TOOL.linter && !!lintResult && e.id === latestLintId;
             return (
               <div key={e.id} className="border-b border-border/50">
                 <div
@@ -258,8 +262,22 @@ export function ActivityFeed() {
                   </span>
                   <span className="flex shrink-0 items-center gap-2 text-[10px] text-muted-foreground">
                     {isAgent ? (
-                      <span title={e.source === "mcp" ? "MCP" : "Agent"}>
+                      <span
+                        className="flex items-center gap-1"
+                        title={
+                          e.source === "mcp"
+                            ? "MCP"
+                            : e.source === "subagent"
+                            ? `Subagent${e.role ? `: ${e.role}` : ""}`
+                            : "Agent"
+                        }
+                      >
                         <Bot className="h-3 w-3" />
+                        {/* Which child did this. Without it a pd-sweep row and
+                            a verify-tb row are the same generic agent icon. */}
+                        {e.source === "subagent" && e.role ? (
+                          <span className="font-mono text-[10px]">{e.role}</span>
+                        ) : null}
                       </span>
                     ) : (
                       <span title="You">

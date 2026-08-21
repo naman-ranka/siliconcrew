@@ -39,7 +39,7 @@ class FakeRunner(BaseRunner):
         _write_jsonl(events, [
             {"type": "thread.started", "thread_id": "fake-thread"},
             {"type": "item.completed", "item": {"type": "mcp_tool_call", "tool": "create_session_tool", "status": "completed"}},
-            {"type": "item.completed", "item": {"type": "mcp_tool_call", "tool": "simulation_tool", "status": "completed"}},
+            {"type": "item.completed", "item": {"type": "mcp_tool_call", "tool": "run_simulation", "status": "completed"}},
         ])
         last.write_text("FAKE RUN COMPLETE\nRTL sim: pass\n", encoding="utf-8", newline="\n")
         _write_fake_workspace(workspace)
@@ -553,8 +553,8 @@ def _write_fake_workspace(workspace: Path) -> None:
     _write_jsonl(workspace / "attempt_events.jsonl", [
         {"event_type": "tool_call", "tool": "write_file", "status": None, "arguments": {"filename": "demo.v"}},
         {"event_type": "tool_result", "tool": "write_file", "status": "success", "result": "ok"},
-        {"event_type": "tool_call", "tool": "simulation_tool", "arguments": {"mode": "rtl"}},
-        {"event_type": "tool_result", "tool": "simulation_tool", "status": "success", "result": "RTL_SIM_PASS"},
+        {"event_type": "tool_call", "tool": "run_simulation", "arguments": {"mode": "rtl"}},
+        {"event_type": "tool_result", "tool": "run_simulation", "status": "success", "result": "RTL_SIM_PASS"},
     ])
     (workspace / "attempt_log.json").write_text(json.dumps({"attempt_count": 1, "attempts": [{"rtl_sim": "pass", "synth_status": "completed"}]}, indent=2), encoding="utf-8")
     (workspace / "demo.v").write_text("module demo(input a, output y); assign y = a; endmodule\n", encoding="utf-8")

@@ -97,7 +97,7 @@ const CATALOG: ToolCatalogEntry[] = [
     } }),
   // Core twins — must be skipped in favor of the hand-defined Flow commands.
   entry({ name: "linter_tool", category: "essential" }),
-  entry({ name: "run_isolated_simulation", category: "essential", mutates: true }),
+  entry({ name: "run_simulation", category: "essential", mutates: true }),
   entry({ name: "update_manifest", category: "manifest", requiresSignIn: true, mutates: true,
     description: "Upserts manifest fields.",
     argsSchema: {
@@ -105,8 +105,8 @@ const CATALOG: ToolCatalogEntry[] = [
       properties: { updates_json: { type: "string" } },
       required: ["updates_json"],
     } }),
-  entry({ name: "start_synthesis", category: "synthesis", async: true }),
-  entry({ name: "retry_pd", category: "synthesis", async: true }),
+  entry({ name: "start_synthesis", category: "synthesis", async: true, requiresSignIn: true, mutates: true }),
+  entry({ name: "retry_pd", category: "synthesis", async: true, requiresSignIn: true, mutates: true }),
   entry({ name: "get_synthesis_metrics", category: "synthesis", requiresSignIn: true,
     description: "Returns structured synthesis metrics for a run.\nParses standard ORFS outputs and returns JSON.",
     argsSchema: {
@@ -172,18 +172,19 @@ describe("buildSurfaceCommands", () => {
       "Synthesis",
       "HLS",
     ]);
-    expect(groups[0].commands).toBe(CORE_SURFACE_COMMANDS);
     expect(groups[0].commands.map((c) => c.id)).toEqual(["lint", "sim", "synth", "pnr"]);
+    expect(groups[0].commands.map((c) => c.tool)).toEqual(
+      CORE_SURFACE_COMMANDS.map((c) => c.tool)
+    );
   });
 
-  it("skips catalog entries duplicating core twins", () => {
+  it("skips catalog entries duplicating a core command", () => {
     const { groups } = buildSurfaceCommands(CATALOG, CTX);
     const generated = groups.slice(1).flatMap((g) => g.commands.map((c) => c.tool));
     for (const twin of Array.from(CORE_TWIN_TOOLS)) {
       expect(generated).not.toContain(twin);
     }
-    // simulation_tool is also a twin even though this catalog doesn't carry it.
-    expect(CORE_TWIN_TOOLS.has("simulation_tool")).toBe(true);
+    expect(CORE_TWIN_TOOLS.has("run_simulation")).toBe(true);
   });
 
   it("generates commands with prettified labels, short descs, and policy flags", () => {
@@ -219,6 +220,20 @@ describe("buildSurfaceCommands", () => {
     const { groups } = buildSurfaceCommands([], CTX);
     expect(groups).toHaveLength(1);
     expect(groups[0].label).toBe("Flow");
+  });
+
+  it("takes the core four's sign-in gating and mutates from the catalog, not a literal", () => {
+    // The core commands used to hand-declare requiresSignIn/mutates alongside
+    // the backend's own policy for the same tool; the two could disagree.
+    const flow = buildSurfaceCommands(CATALOG, CTX).groups[0].commands;
+    const synth = flow.find((c) => c.id === "synth")!;
+    expect(synth.requiresSignIn).toBe(true);
+    expect(synth.mutates).toBe(true);
+    const lint = flow.find((c) => c.id === "lint")!;
+    expect(lint.requiresSignIn).toBe(false);
+    // Nothing to read from → the command still renders, ungated by a guess.
+    const offline = buildSurfaceCommands([], CTX).groups[0].commands;
+    expect(offline.find((c) => c.id === "synth")!.requiresSignIn).toBeUndefined();
   });
 
   it("the synth core command describes the run_id-only dispatch contract (no job_id)", () => {

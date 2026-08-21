@@ -379,7 +379,7 @@ I'll design this counter in session 'my_counter'. Let me start with the specific
 [Calls: linter_tool]
 ✅ Syntax OK
 
-[Calls: simulation_tool]
+[Calls: run_simulation]
 ✅ TEST PASSED
 
 [Calls: synthesis_tool]
@@ -471,7 +471,7 @@ Switch to counter_project and add a reset synchronizer
 ✅ Switched to counter_project
 
 [Calls: read_file("counter_4bit.v") to see existing code]
-[Calls: edit_file_tool to add synchronizer]
+[Calls: edit_file to add synchronizer]
 ✅ Updated counter_4bit.v with reset synchronizer
 ```
 

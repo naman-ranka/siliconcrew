@@ -22,9 +22,8 @@ import {
   COMMANDS,
   defaultValues,
   manifestFacts,
+  resolveParamOptions,
   runCommand,
-  synthRunChoices,
-  testbenchChoices,
   type CommandDef,
   type CommandId,
   type CommandParam,
@@ -275,11 +274,11 @@ function CommandForm({ id, def }: { id: CommandId; def: CommandDef }) {
   // Params whose options resolve from live state: the pnr runId ships with
   // empty options (populated from runs); the sim TB combo suggests the
   // manifest's derived testbench modules.
-  const optionsFor = (p: CommandParam): readonly string[] => {
-    if (p.key === "runId" && p.source === "run") return synthRunChoices(runs);
-    if (p.key === "simTop") return testbenchChoices(manifest);
-    return p.options ?? [];
-  };
+  // Params whose options resolve from live state (the pnr source run, the sim
+  // TB combo) declare their own resolver on the command — one definition, read
+  // identically by the modal and the Command Surface.
+  const optionsFor = (p: CommandParam): readonly string[] =>
+    resolveParamOptions(p, { manifest, runs });
 
   const missingRun =
     def.params.some((p) => p.source === "run") &&

@@ -212,7 +212,7 @@ def test_sim_dispatch_reply_leads_with_the_collision(tmp_path, monkeypatch):
     wrappers = _patch_workspace(monkeypatch, ws)
     monkeypatch.setattr(wrappers, "run_sim_isolated", _stub_sim_run)
 
-    payload = json.loads(wrappers.run_isolated_simulation.func())
+    payload = json.loads(wrappers.run_simulation.func())
     assert list(payload)[0] == "manifestWarnings"  # first thing the agent reads
     assert "gcn.v" in payload["manifestWarnings"][0]
     assert payload["id"] == "sim_0001"  # the run record is intact
@@ -225,7 +225,7 @@ def test_sim_dispatch_reply_is_clean_without_a_collision(tmp_path, monkeypatch):
     wrappers = _patch_workspace(monkeypatch, ws)
     monkeypatch.setattr(wrappers, "run_sim_isolated", _stub_sim_run)
 
-    payload = json.loads(wrappers.run_isolated_simulation.func())
+    payload = json.loads(wrappers.run_simulation.func())
     assert "manifestWarnings" not in payload
 
 

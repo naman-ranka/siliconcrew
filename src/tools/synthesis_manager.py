@@ -316,18 +316,42 @@ def _submit_with_quota_release(reservation, fn, *fn_args):
         provider = get_workspace_provider()
     except Exception:
         provider = None
+    # The dispatching request already resolved what is driving this turn
+    # (prompt, skills, tool set — A3-H4). Capture it here, in scope.
+    try:
+        from src.platform_engines.provenance import current_agent_provenance
+
+        agent_prov = current_agent_provenance()
+    except Exception:
+        agent_prov = None
 
     def runner():
-        # Rebind the dispatching request's session context inside the worker
-        # thread: the completion event (and hosted sync) need session identity,
-        # and contextvars do not cross thread submission on their own.
-        if ctx is not None:
-            try:
-                from src.utils.session_context import set_current_session
+        # Rebind the dispatching request's session context and provenance stamp
+        # inside the worker thread: the completion event (and hosted sync) need
+        # session identity, the run record must name the prompt and skills the
+        # DISPATCHER was running, and contextvars do not cross thread submission
+        # on their own.
+        #
+        # Both bind UNCONDITIONALLY and both reset in the finally below. This
+        # pool reuses threads, so a binding left in place outlives its job: the
+        # next job on that worker, if it carries nothing of its own, would read
+        # the previous job's session and stamp. Binding None is what makes
+        # "nothing of my own" read as nothing instead of as somebody else's —
+        # and once skills are populated, somebody else's is owner data.
+        session_token = None
+        prov_token = None
+        try:
+            from src.utils.session_context import set_current_session
 
-                set_current_session(ctx)
-            except Exception:
-                pass
+            session_token = set_current_session(ctx)
+        except Exception:
+            session_token = None
+        try:
+            from src.platform_engines.provenance import set_agent_provenance
+
+            prov_token = set_agent_provenance(agent_prov)
+        except Exception:
+            prov_token = None
         try:
             result = fn(*fn_args)
             # One announcement per terminal transition (both workers end by
@@ -346,6 +370,21 @@ def _submit_with_quota_release(reservation, fn, *fn_args):
                 _sync_current_session_workspace(ctx, provider)
             except Exception:
                 pass
+            # Unbind before this worker is handed to the next job.
+            if prov_token is not None:
+                try:
+                    from src.platform_engines.provenance import reset_agent_provenance
+
+                    reset_agent_provenance(prov_token)
+                except Exception:
+                    pass
+            if session_token is not None:
+                try:
+                    from src.utils.session_context import reset_current_session
+
+                    reset_current_session(session_token)
+                except Exception:
+                    pass
             if reservation is not None and _QUOTA_MANAGER is not None:
                 try:
                     _QUOTA_MANAGER.release_synth_run(reservation)
@@ -1217,6 +1256,11 @@ def _pd_parameters_from_run(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str,
                 continue
         return default
 
+    # READ-SIDE reconstruction — deliberately still 5, not the 40 that
+    # start_synthesis_job now defaults to. A parent run whose config.mk and
+    # run_meta carry no utilization is an OLD run, and old runs really did
+    # floorplan at 5; re-running one at 40 would silently change the
+    # experiment the retry is supposed to reproduce.
     utilization = _pick("utilization", 5, int)
     return {
         "utilization": max(1, min(100, utilization)),
@@ -2221,7 +2265,10 @@ def _job_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict[str,
         "constraints_note": constraints["note"],
         "stages": _init_stage_metadata(),
         # Reproducibility stamp: repo commit, pinned ORFS image digest, PDK,
-        # iverilog version, and the pinned NUM_CORES used for this run.
+        # iverilog version, the pinned NUM_CORES used for this run, plus what
+        # DROVE it — prompt version + content hash, skills, tool set (B9). The
+        # driving half is read from the request scope that dispatched this job,
+        # never recomposed here (A3-H4).
         "provenance": collect_provenance(
             pdk=platform, num_cores=_pinned_num_cores()
         ).as_dict(),
@@ -2446,7 +2493,7 @@ def start_synthesis_job(
     top_module: str,
     platform: str = "sky130hd",
     clock_period_ns: float = 10.0,
-    utilization: int = 5,
+    utilization: int = 40,
     aspect_ratio: float = 1.0,
     core_margin: float = 2.0,
     timeout: Optional[int] = None,
@@ -3406,16 +3453,18 @@ def _find_artifact_file(run_dir: str, subdir: str, name: str) -> Optional[str]:
     return None
 
 
+# ONE name per stage. There used to be three extra keys here — placement,
+# global_route, final — that the tool's own enum never offered, so they were a
+# second vocabulary no surface advertised and nothing tested end to end. A
+# caller who uses one now gets a refusal that lists the real names, which is
+# more useful than a synonym only the implementation knew about.
 _STAGE_REPORT_CANDIDATES: Dict[str, List[tuple[str, str]]] = {
     "floorplan": [("orfs_reports", "2_floorplan_final.rpt")],
     "place": [("orfs_logs", "3_3_place_gp.json")],
-    "placement": [("orfs_logs", "3_3_place_gp.json")],
     "cts": [("orfs_reports", "4_cts_final.rpt")],
     "grt": [("orfs_reports", "congestion.rpt")],
-    "global_route": [("orfs_reports", "congestion.rpt")],
     "route": [("orfs_reports", "5_route_drc.rpt")],
     "finish": [("orfs_reports", "6_finish.rpt")],
-    "final": [("orfs_reports", "6_finish.rpt")],
 }
 
 

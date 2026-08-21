@@ -13,7 +13,7 @@ def _repo_local_tempdir(test_name: str) -> str:
     return tempfile.mkdtemp(prefix=f"{test_name}_", dir=root)
 
 
-def test_wait_for_synthesis_bounded_loop(monkeypatch):
+def test_status_with_a_wait_polls_until_terminal(monkeypatch):
     with tempfile.TemporaryDirectory() as workspace:
         old = os.environ.get("RTL_WORKSPACE")
         os.environ["RTL_WORKSPACE"] = workspace
@@ -29,7 +29,8 @@ def test_wait_for_synthesis_bounded_loop(monkeypatch):
             monkeypatch.setattr(wrappers, "collect_synthesis_status", _fake_status)
             monkeypatch.setattr(wrappers.time, "sleep", lambda *_: None)
 
-            out = wrappers.wait_for_synthesis.invoke({"run_id": "synth_0001", "max_wait_sec": 10, "poll_interval_sec": 1})
+            out = wrappers.get_synthesis_status.invoke(
+                {"run_id": "synth_0001", "wait_sec": 10, "poll_interval_sec": 1})
             data = json.loads(out)
             assert data["status"] == "completed"
             assert data["run_id"] == "synth_0001"
@@ -42,8 +43,8 @@ def test_wait_for_synthesis_bounded_loop(monkeypatch):
                 os.environ["RTL_WORKSPACE"] = old
 
 
-def test_wait_for_synthesis_clamps_max_wait(monkeypatch):
-    """Bounded means bounded: max_wait_sec=999 is clamped server-side to
+def test_the_wait_is_clamped(monkeypatch):
+    """Bounded means bounded: wait_sec=999 is clamped server-side to
     WAIT_MAX_WAIT_SEC (120). Fake clock — no real sleeping, no flakiness."""
     with tempfile.TemporaryDirectory() as workspace:
         old = os.environ.get("RTL_WORKSPACE")
@@ -64,14 +65,14 @@ def test_wait_for_synthesis_clamps_max_wait(monkeypatch):
 
             monkeypatch.setattr(wrappers.time, "sleep", _fake_sleep)
 
-            out = wrappers.wait_for_synthesis.invoke({"run_id": "synth_0001", "max_wait_sec": 999})
+            out = wrappers.get_synthesis_status.invoke({"run_id": "synth_0001", "wait_sec": 999})
             data = json.loads(out)
             assert data["timed_out"] is True
             assert data["status"] == "running"
             # The loop stopped at the clamp, not at the requested 999s.
             assert data["waited_sec"] <= wrappers.WAIT_MAX_WAIT_SEC
             assert calls["n"] <= (wrappers.WAIT_MAX_WAIT_SEC // 10) + 1
-            assert "wait_for_synthesis" in data["next_action"] or "get_synthesis_status" in data["next_action"]
+            assert "get_synthesis_status" in data["next_action"]
         finally:
             if old is None:
                 os.environ.pop("RTL_WORKSPACE", None)
@@ -163,8 +164,8 @@ def test_read_stage_report_reads_place_log():
 
 def test_no_start_and_wait_combo_tool_exists():
     """run_synthesis_and_wait was REMOVED (Wave 9 locked constraint): one
-    async contract — dispatch, then bounded wait_for_synthesis loops."""
+    async contract — dispatch, then poll (with wait_sec to block once)."""
     assert not hasattr(wrappers, "run_synthesis_and_wait")
     names = {t.name for t in wrappers.mcp_tools}
     assert "run_synthesis_and_wait" not in names
-    assert "wait_for_synthesis" in names
+    assert "get_synthesis_status" in names

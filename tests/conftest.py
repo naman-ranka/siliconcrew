@@ -22,3 +22,27 @@ def _clear_synthesis_memory_state():
     _sm._JOBS.clear()
     _sm._POLL_CACHE.clear()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_user_skill_layer(tmp_path_factory):
+    """No test may see the developer's own skills.
+
+    The user layer is real local state (``~/.siliconcrew/skills`` by default),
+    so without this a machine where someone wrote or disabled a skill would run
+    a different suite than CI — and the failures would look like product bugs.
+    Every test gets an empty layer; a test about the layer fills its own.
+    """
+    try:
+        from src.platform_engines.user_skill_store import (
+            LocalUserSkillStore,
+            set_user_skill_store,
+        )
+    except Exception:
+        yield
+        return
+    set_user_skill_store(LocalUserSkillStore(tmp_path_factory.mktemp("user-skills")))
+    try:
+        yield
+    finally:
+        set_user_skill_store(None)

@@ -80,6 +80,7 @@ class PlatformSettings:
     # exists would take the gallery down on deploy. So: bucket set → gcs, else
     # local, overridable via TEMPLATES_ENGINE.
     templates_engine: str     # "local" | "gcs"
+    user_skills_engine: str   # "local" | "object"
     templates_bucket: str     # GCS bucket for the official gallery (gcs only)
 
     # Persistence
@@ -112,8 +113,19 @@ class PlatformSettings:
     orfs_timeout_synth_sec: int
     orfs_timeout_full_sec: int
 
-    # Chat agent step budget per turn (LangGraph recursion_limit).
+    # Chat agent step budget per turn (LangGraph recursion_limit). This counts
+    # GRAPH STEPS, not model calls, so its real meaning depends on how many
+    # nodes the agent graph runs per round — see the default below.
     chat_recursion_limit: int
+
+    # Context compaction for the chat agent (P4). MODEL-VIEW ONLY: the trigger
+    # is an approximate token count over the messages the model would be sent,
+    # and crossing it replaces the CONTENT of older tool results with a
+    # placeholder in a copy. The checkpoint — which is also the user's chat
+    # transcript, since there is no messages table — is never written.
+    # `chat_context_edit_trigger = 0` turns compaction off entirely.
+    chat_context_edit_trigger: int
+    chat_context_edit_keep: int
 
     # Hosted free-tier guardrails (per-user daily tokens; global $ ceiling).
     hosted_tier_tokens_per_day: int
@@ -140,6 +152,30 @@ class PlatformSettings:
     # selects the LOCAL/self-host engine.
     python_engine: str = "docker"
     python_image: str = "siliconcrew/python-analysis:1"
+
+    # Subagents (P6) — the two built-in fan-out roles. NATIVE AGENT ONLY: a
+    # subagent needs a loop, and an MCP client is not one. Off on hosted no
+    # matter what this says, because a child's tokens are invisible to the
+    # hosted free-tier spend limiter (see src/agents/subagents.py).
+    subagents_enabled: bool = True
+    # A child's step budget. Same arithmetic as chat_recursion_limit: the child
+    # graph is model+tools with wrap-style middleware only, so two graph steps
+    # per round and 24 buys 12 model calls. A child does ONE bounded job —
+    # dispatch, poll, read a report, answer — and 12 calls is generous for
+    # that. The ceiling exists so a confused child cannot spend without end.
+    subagent_recursion_limit: int = 24
+    # How many children one delegation may run. Extra tasks are dropped, not
+    # queued: the parent asked for a fan-out it can read in one reply.
+    subagent_max_children: int = 6
+
+    # Read-only mode (L9): the agent is offered every tool that does NOT
+    # declare `mutates`, and nothing else. That is the whole mechanism — a
+    # filter over policy the tools already carry, not a mode system. It is
+    # FOCUS, never authority: a read-only agent is one whose tool list is
+    # shorter, not one the code refuses to let write. There is deliberately no
+    # "auto"/"ask" mode to go with it — that would be a switch for
+    # confirmations this product does not have.
+    agent_read_only: bool = False
 
     @property
     def workos_configured(self) -> bool:
@@ -218,6 +254,15 @@ def get_settings() -> PlatformSettings:
     templates_bucket = _env("TEMPLATES_BUCKET")
     templates_engine = _env("TEMPLATES_ENGINE") or ("gcs" if templates_bucket else "local")
 
+    # User skills follow the workspace, not the gallery: they are per-owner
+    # writable state, so hosted needs an object store and self-host must stay on
+    # a plain folder with no cloud dependency. Same explicit-config-wins shape as
+    # the two above — the store used to read this env var itself, which put a
+    # sixth engine decision outside the one place engine decisions live.
+    user_skills_engine = _env("USER_SKILLS_ENGINE") or (
+        "object" if (hosted and _env("WORKSPACE_BUCKET")) else "local"
+    )
+
     return PlatformSettings(
         hosted=hosted,
         orfs_engine=orfs_engine,
@@ -242,6 +287,7 @@ def get_settings() -> PlatformSettings:
         mcp_scopes_supported=mcp_scopes_supported,
         workspace_engine=workspace_engine,
         workspace_bucket=_env("WORKSPACE_BUCKET"),
+        user_skills_engine=user_skills_engine,
         workspace_scratch_dir=_env("WORKSPACE_SCRATCH_DIR", "/tmp/siliconcrew-scratch"),
         templates_engine=templates_engine,
         templates_bucket=templates_bucket,
@@ -264,7 +310,40 @@ def get_settings() -> PlatformSettings:
         num_cores=_int_env("ORFS_NUM_CORES", 4),
         orfs_timeout_synth_sec=_int_env("ORFS_TIMEOUT_SYNTH_SEC", 900),
         orfs_timeout_full_sec=_int_env("ORFS_TIMEOUT_FULL_SEC", 3600),
-        chat_recursion_limit=_int_env("CHAT_RECURSION_LIMIT", 80),
+        # 54, re-derived — NOT inherited from the old default of 80.
+        # The budget is spent on graph steps, and the number of steps per round
+        # changed when the agent moved to `create_agent`: the old graph ran
+        # three nodes per round (pre_model_hook, agent, tools), the new one runs
+        # two (model, tools) because the reasoning strip is now a wrap-style
+        # middleware, which costs no step. Measured on the shipped graphs:
+        # 80 gave 27 model calls before and would give 40 after — a silent 48%
+        # increase in how much work a turn does, i.e. longer turns, more spend
+        # and a later step-budget nudge, from a change that shipped no feature.
+        # 54 holds the real budget at the same 27 model calls. Raising it is a
+        # product decision; make it on purpose, and re-derive this again if a
+        # node-style middleware is ever added (each one costs a step per round).
+        # Pinned by test_the_step_budget_a_turn_actually_gets_is_unchanged.
+        chat_recursion_limit=_int_env("CHAT_RECURSION_LIMIT", 54),
+        # 100_000 approximate message tokens, the same default Anthropic uses
+        # for clear_tool_uses. The number has to leave room for everything the
+        # trigger does NOT count: the count covers the message list only, not
+        # the system prompt, not the schemas of the tools bound to the call,
+        # and not the reply the model still has to fit. It also runs on a
+        # chars/4 approximation, which UNDER-counts Verilog, logs and reports,
+        # so the real figure at the trigger is higher than the trigger. The
+        # smallest context window in the model catalog is 200k (Anthropic), so
+        # the budget is 100k counted with ~100k left for schemas, prompt and
+        # output. A trigger set near the window fires after the provider
+        # has already refused the request, which is the failure this exists to
+        # prevent. Pinned by
+        # test_the_shipped_trigger_leaves_room_under_the_smallest_context_window.
+        chat_context_edit_trigger=_int_env("CHAT_CONTEXT_EDIT_TRIGGER", 100_000),
+        # How many of the most recent tool results keep their real content. The
+        # recent ones are the ones the model is still reasoning about; the old
+        # ones describe a workspace state that has since moved, and every one of
+        # them is re-obtainable by calling the tool again — the workspace and
+        # the run directory are the sources of truth, not the transcript.
+        chat_context_edit_keep=_int_env("CHAT_CONTEXT_EDIT_KEEP", 3),
         hosted_tier_tokens_per_day=_int_env("HOSTED_TIER_TOKENS_PER_DAY", 2_000_000),
         hosted_tier_cost_ceiling_usd=float(_env("HOSTED_TIER_COST_CEILING_USD", "50.0")),
         dev_insecure_auth=_flag("SILICONCREW_DEV_INSECURE_AUTH", default=False),
@@ -274,6 +353,10 @@ def get_settings() -> PlatformSettings:
         # Docker-preferred locally (native fallback when docker is absent); hosted
         # never runs this tool. See src/tools/run_python.py.
         python_engine=_env("PYTHON_ENGINE", "native" if hosted else "docker"),
+        subagents_enabled=_flag("SILICONCREW_SUBAGENTS", default=True),
+        subagent_recursion_limit=_int_env("SUBAGENT_RECURSION_LIMIT", 24),
+        subagent_max_children=_int_env("SUBAGENT_MAX_CHILDREN", 6),
+        agent_read_only=_flag("SILICONCREW_AGENT_READ_ONLY", default=False),
         python_image=_env("PYTHON_ANALYSIS_IMAGE", "siliconcrew/python-analysis:1"),
     )
 

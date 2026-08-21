@@ -169,7 +169,7 @@ Only expose a subset of tools via MCP:
 
 ```python
 # Don't auto-discover - manually choose which tools
-safe_tools = ["write_spec", "read_spec", "linter_tool", "simulation_tool"]
+safe_tools = ["write_spec", "read_spec", "linter_tool", "run_simulation"]
 return [langchain_to_mcp(t) for t in architect_tools if t.name in safe_tools]
 ```
 
@@ -235,13 +235,21 @@ async def list_tools(self):
     mcp_tools = []
     
     # 1. Session tools - MCP-specific, manually defined
+> **SUPERSEDED.** The session tools shown below as hand-written `Tool(...)`
+> objects are ordinary registry tools now. They were the last six schemas
+> maintained by hand, which meant they were invisible to the tool catalog, the
+> policy decorator, the drift guard and the argument-schema tests that cover
+> every other tool. The example is kept because the mechanism it illustrates —
+> auto-discovery from the registry — is still how this works; only these six
+> stopped being the exception to it.
+
     mcp_tools.extend([
         Tool(name="create_session_tool", ...),
         Tool(name="list_sessions_tool", ...),
     ])
     
     # 2. Core workflow tools - auto-discovered
-    core_tools = ["write_spec", "read_spec", "linter_tool", "simulation_tool"]
+    core_tools = ["write_spec", "read_spec", "linter_tool", "run_simulation"]
     for tool in architect_tools:
         if tool.name in core_tools:
             mcp_tools.append(langchain_to_mcp_schema(tool))

@@ -32,6 +32,13 @@ RUN_META_FILENAME = "run_meta.json"
 SIM_LOG_FILENAME = "sim.log"
 
 _ALLOC_LOCK = threading.Lock()
+#: Guards the load-modify-save of ``sim_runs/index.json``, exactly as
+#: ``synthesis_manager._INDEX_LOCK`` guards its own. Simulations became
+#: concurrent when subagents arrived: two ``verify-tb`` children each run a
+#: testbench, both finish, both read the index, and the second write drops the
+#: first run — a completed simulation that exists on disk and is invisible to
+#: the runs API and the UI.
+_INDEX_LOCK = threading.Lock()
 _PROVENANCE_CACHE: Dict[str, Any] = {}
 
 
@@ -70,8 +77,16 @@ def _load_index(workspace: str) -> Dict[str, Any]:
 
 
 def _save_index(workspace: str, data: Dict[str, Any]) -> None:
-    with open(_index_path(workspace), "w", encoding="utf-8") as f:
+    # Written whole, then moved into place. A truncating write leaves a window
+    # where the file is half a JSON document, and ``_load_index`` answers a
+    # parse failure with ``{"runs": []}`` — so a reader landing in that window
+    # is told this workspace has no simulations at all. os.replace is atomic
+    # on the same filesystem, so a reader sees either the old index or the new.
+    path = _index_path(workspace)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp, path)
 
 
 def _next_run_id(workspace: str) -> str:
@@ -269,6 +284,7 @@ def _persist_resolution_failure(
         "vcdPath": "",
         "xDetected": None,  # nothing ran: no VCD, honestly unknown
         "xScan": None,
+        "warnings": [],  # nothing ran, so nothing to warn about
         "stagedDataFiles": [],  # nothing ran, so nothing was staged
         "passMarkerFound": False,
         "passMarker": "",
@@ -298,7 +314,14 @@ def run_sim_isolated(
     mode: str = "rtl",
     run_id: Optional[str] = None,
     netlist_file: Optional[str] = None,
+    # The manifest's platform: design INTENT. It labels provenance in rtl mode
+    # and is a last-resort fallback in post_synth — it never overrides the
+    # platform the synthesis run recorded (see the post_synth branch below).
     platform: Optional[str] = None,
+    # The caller PINNING the stdcell set, as opposed to ``platform`` above,
+    # which is only intent. Used by the escape hatch on the simulation tool:
+    # "link against this PDK's models whatever the run recorded".
+    platform_override: Optional[str] = None,
     sim_profile: str = "auto",
     # None/"" = resolve from the manifest's passMarker, then the default.
     # An explicit marker still wins (dev#44 precedence chain).
@@ -314,6 +337,11 @@ def run_sim_isolated(
     ``$dumpfile`` VCD and the compiled ``a.out`` land inside it and never
     collide with other runs. Returns a :class:`SimRun`-shaped dict (camelCase,
     per data-model.md) plus the raw simulation log fields.
+
+    In ``post_synth`` mode the netlist, top and **platform** come from the
+    synthesis run's sim contract — the record of what was actually built.
+    ``platform`` here is only the caller's intent (the manifest's field) and is
+    used solely when the run recorded no platform of its own.
     """
     _ensure_dir(workspace)
     sim_run_id, run_dir = _allocate_run_dir(workspace)
@@ -339,11 +367,20 @@ def run_sim_isolated(
     if mode == "post_synth":
         from src.tools.sim_contract import resolve_post_synth
 
+        # ``platform`` reaching here is the MANIFEST's platform (both callers —
+        # the run_simulation wrapper and the IDE's Simulate button — pass it as
+        # intent; a caller PINNING a PDK passes platform_override). The manifest is
+        # design intent, defaults to sky130hd, and synthesis never writes the
+        # real platform back to it; the run's sim contract is the record of what
+        # was actually synthesised. Linking an asap7 gate netlist against
+        # sky130 stdcell models is a hardware-correctness bug, so intent goes in
+        # as ``fallback_platform`` — used only if the run recorded none.
         resolution, res_err = resolve_post_synth(
             workspace=workspace,
             run_id=run_id,
             netlist_file=netlist_file,
-            platform=platform,
+            platform=platform_override,
+            fallback_platform=platform,
         )
         if res_err is not None:
             # Typed, semantic failure — a SimRun card, never a leaked traceback.
@@ -413,6 +450,20 @@ def run_sim_isolated(
             "timeNs": _extract_time_ns(sim_result.get("first_failure_line")),
         }
 
+    # The x-blind pass (rule R1). `x !== x` is FALSE in Verilog, so a testbench
+    # that compares a checked output against an undefined expected value counts
+    # the mismatch as a match and prints its pass marker. The rule telling an
+    # agent to guard those comparisons with `$isunknown` lived only in an
+    # embedded prompt that was never loaded, so it has never once run. Here it
+    # is a field instead: a run that PASSED while its own waveform carried x/z
+    # after t=0 is flagged, with the evidence already beside it (`xDetected`,
+    # `xScan`). It is a warning, never a verdict — the status stays exactly what
+    # the testbench said (invariant 4), and a run with no VCD or a skipped scan
+    # is not flagged, because unknown is not the same as clean.
+    warnings: List[str] = []
+    if status == "passed" and x_detected is True:
+        warnings.append("x-blind-pass")
+
     sim_run: Dict[str, Any] = {
         "id": sim_run_id,
         "kind": "sim",
@@ -428,6 +479,8 @@ def run_sim_isolated(
         # None = no VCD (or scan skipped) — honestly unknown, never false.
         "xDetected": x_detected,
         "xScan": x_scan,
+        # Empty list = looked and found nothing to warn about, never absent.
+        "warnings": warnings,
         # Evidence: exactly which data files this run could see, and where.
         "stagedDataFiles": staged_data,
         # run_simulation reports the marker it actually grepped (post manifest/
@@ -510,10 +563,13 @@ def _index_entry(sim_run: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _append_to_index(workspace: str, sim_run: Dict[str, Any]) -> None:
-    index = _load_index(workspace)
-    index["runs"] = [r for r in index.get("runs", []) if r.get("run_id") != sim_run["id"]]
-    index["runs"].append(_index_entry(sim_run))
-    _save_index(workspace, index)
+    # Read and write under one lock: two concurrent children that both read
+    # before either writes would each save a list missing the other's run.
+    with _INDEX_LOCK:
+        index = _load_index(workspace)
+        index["runs"] = [r for r in index.get("runs", []) if r.get("run_id") != sim_run["id"]]
+        index["runs"].append(_index_entry(sim_run))
+        _save_index(workspace, index)
 
 
 def get_sim_run_dir(workspace: str, run_id: Optional[str]) -> Optional[str]:

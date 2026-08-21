@@ -20,6 +20,7 @@ from starlette.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 import api
+from src.agents.architect import MODEL_NODE
 from src.platform_engines.llm_keys import LlmKey
 
 
@@ -47,9 +48,9 @@ class _SlowAgent:
 
     async def astream(self, inputs, config, stream_mode=None):
         await asyncio.sleep(0.35)
-        yield ("messages", (_Chunk("hel"), {"langgraph_node": "agent"}))
-        yield ("messages", (_Chunk("lo"), {"langgraph_node": "agent"}))
-        yield ("updates", {"agent": {"messages": [_Msg()]}})
+        yield ("messages", (_Chunk("hel"), {"langgraph_node": MODEL_NODE}))
+        yield ("messages", (_Chunk("lo"), {"langgraph_node": MODEL_NODE}))
+        yield ("updates", {MODEL_NODE: {"messages": [_Msg()]}})
 
 
 class _HangingAgent:
@@ -59,9 +60,9 @@ class _HangingAgent:
         return _State()
 
     async def astream(self, inputs, config, stream_mode=None):
-        yield ("updates", {"agent": {"messages": [_Msg()]}})
+        yield ("updates", {MODEL_NODE: {"messages": [_Msg()]}})
         await asyncio.sleep(30)
-        yield ("updates", {"agent": {"messages": [_Msg()]}})
+        yield ("updates", {MODEL_NODE: {"messages": [_Msg()]}})
 
 
 def _patch_common(monkeypatch, make_agent):
@@ -175,7 +176,7 @@ class _CancellableHang:
         return _State()
 
     async def astream(self, inputs, config, stream_mode=None):
-        yield ("updates", {"agent": {"messages": [_Msg()]}})
+        yield ("updates", {MODEL_NODE: {"messages": [_Msg()]}})
         try:
             await asyncio.sleep(30)
         except asyncio.CancelledError:
@@ -215,7 +216,7 @@ class _ToolHangAgent:
     def __init__(self):
         self.updates = []
         self._tool_msg = AIMessage(
-            content="", tool_calls=[{"name": "wait_for_synthesis", "args": {}, "id": "tc1"}]
+            content="", tool_calls=[{"name": "get_synthesis_status", "args": {"wait_sec": 30}, "id": "tc1"}]
         )
 
     async def aget_state(self, config):
@@ -224,7 +225,7 @@ class _ToolHangAgent:
         return st
 
     async def astream(self, inputs, config, stream_mode=None):
-        yield ("updates", {"agent": {"messages": [self._tool_msg]}})
+        yield ("updates", {MODEL_NODE: {"messages": [self._tool_msg]}})
         await asyncio.sleep(30)
 
     async def aupdate_state(self, config, values):
@@ -273,7 +274,7 @@ def test_terminal_frame_does_not_wait_on_workspace_sync(monkeypatch):
             return _State()
 
         async def astream(self, inputs, config, stream_mode=None):
-            yield ("updates", {"agent": {"messages": [_Msg()]}})
+            yield ("updates", {MODEL_NODE: {"messages": [_Msg()]}})
 
     _patch_common(monkeypatch, _FastAgent)
     monkeypatch.setattr(api, "get_workspace_provider", lambda: _SlowSyncWs())

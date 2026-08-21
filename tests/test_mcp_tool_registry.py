@@ -1,7 +1,7 @@
 """Regression guard: every advertised MCP tool must be dispatchable.
 
 `list_tools()` advertises tools from ``mcp_tools`` while ``call_tool()`` used to
-dispatch through a hand-maintained map. The two drifted — run_isolated_simulation,
+dispatch through a hand-maintained map. The two drifted — the isolated sim tool,
 get_manifest and update_manifest were listed but raised "Unknown tool" when
 called. Dispatch is now derived from ``mcp_tools`` (single source of truth); this
 test fails loudly if that invariant is ever broken again.

@@ -1,13 +1,16 @@
 import { workbenchApi } from "@/lib/api";
 import {
+  COMMANDS,
+  RUN_ORDER,
+  resolveParamDef,
+  resolveParamOptions,
   runCommand,
-  testbenchChoices,
+  type CommandCtx,
+  type CommandDef,
   type CommandId,
-  LINT_ENGINES,
-  PD_STAGES,
-  PLATFORMS,
-  SYNTH_STAGES,
+  type CommandParam,
 } from "@/lib/commands";
+import { TOOL } from "@/lib/toolNames";
 import { buildFormModel, shortDescription } from "@/lib/schemaForm";
 import { useStore } from "@/lib/store";
 import type { ActivityEvent, DesignManifest, RunSummary, ToolCatalogEntry } from "@/types";
@@ -25,9 +28,7 @@ import type { ActivityEvent, DesignManifest, RunSummary, ToolCatalogEntry } from
 
 export type SurfaceParamSource = "manifest" | "choice" | "run" | "default" | "text";
 
-export interface SurfaceCtx {
-  manifest: DesignManifest | null;
-  runs: RunSummary[];
+export interface SurfaceCtx extends CommandCtx {
   /** Workspace-root file names (from the dir cache) — file-picking conventions. */
   rootFiles: string[];
 }
@@ -51,14 +52,6 @@ export interface SurfaceParam {
   when?: (vals: Record<string, unknown>) => boolean;
 }
 
-export interface SurfaceAutoArg {
-  key: string;
-  /** Human-readable resolution shown in the "Supplied by manifest" box. */
-  describe: (ctx: SurfaceCtx) => string;
-  /** Included in the displayed/sent payload when the tool expects it client-side. */
-  value?: (ctx: SurfaceCtx) => unknown;
-}
-
 export interface SurfaceCommand {
   id: string;
   label: string;
@@ -70,102 +63,80 @@ export interface SurfaceCommand {
   mutates?: boolean;
   /** Delegate execution to the core command engine (polling, unread, toasts). */
   core?: CommandId;
-  autoArgs?: SurfaceAutoArg[];
+  /** "Supplied by manifest" rows — resolved from lib/commands' one definition. */
+  facts?: (ctx: SurfaceCtx) => { label: string; value: string }[];
   params: SurfaceParam[];
 }
 
-const filesByRoles = (m: DesignManifest | null, roles: string[]) =>
-  (m?.files ?? []).filter((f) => roles.includes(f.role)).map((f) => f.name);
+// ---- the core four: ONE definition, adapted ------------------------------------
+//
+// The flow commands live in lib/commands.ts (they mirror REST request bodies
+// and dispatch through runCommand). This file used to restate all four —
+// tool names, params, options, units, defaults — and the two copies drifted.
+// It now adapts that single registry into the surface's own param shape.
 
-const synthRunIds = (ctx: SurfaceCtx) => ctx.runs.filter((r) => r.kind === "synth").map((r) => r.id);
-const rtlFiles = (ctx: SurfaceCtx) => filesByRoles(ctx.manifest, ["rtl"]);
+const EDITOR_BY_TYPE: Record<CommandParam["type"], SurfaceParam["editor"]> = {
+  enum: "enum",
+  number: "number",
+  boolean: "bool",
+  text: "text",
+  combo: "combo",
+};
 
-// ---- the core four (hand-defined; REST semantics + job polling) ----------------
+function toSurfaceParam(p: CommandParam): SurfaceParam {
+  return {
+    key: p.key,
+    label: p.label,
+    editor: EDITOR_BY_TYPE[p.type],
+    source: p.source,
+    options: (ctx: SurfaceCtx) => resolveParamOptions(p, ctx),
+    def: (ctx: SurfaceCtx) => resolveParamDef(p, ctx),
+    unit: p.unit,
+    step: p.step,
+    min: p.min,
+    max: p.max,
+    adv: p.advanced,
+    optional: p.optional,
+    hint: p.hint,
+  };
+}
 
-export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = [
-  {
-    id: "lint", label: "Lint", group: "Flow", tool: "linter_tool", core: "lint",
-    desc: "Lint/syntax check (iverilog or verilator). Manifest supplies rtl + include files.",
-    autoArgs: [{ key: "verilog_files", describe: (c: SurfaceCtx) => filesByRoles(c.manifest, ["rtl", "include"]).join(", ") || "—" }],
-    params: [
-      { key: "engine", label: "engine", editor: "enum", options: LINT_ENGINES, def: "auto", source: "choice" },
-    ],
-  },
-  {
-    id: "sim", label: "Simulate", group: "Flow", tool: "run_isolated_simulation", core: "sim", mutates: true,
-    desc: "Manifest-driven sim in its own sim_runs/sim_NNNN/ dir — own VCD + provenance.",
-    autoArgs: [
-      { key: "reads (files)", describe: (c: SurfaceCtx) => filesByRoles(c.manifest, ["rtl", "tb", "include"]).join(", ") || "—" },
-    ],
-    params: [
-      { key: "mode", label: "mode", editor: "enum", options: ["rtl", "post_synth"], def: "rtl", source: "choice" },
-      {
-        key: "simTop", label: "sim_top", editor: "combo", source: "manifest",
-        options: (c: SurfaceCtx) => testbenchChoices(c.manifest),
-        def: (c: SurfaceCtx) => c.manifest?.simTop ?? "",
-        optional: true, // empty → backend falls back to the manifest default
-        hint: "which testbench to run",
-      },
-    ],
-  },
-  {
-    id: "synth", label: "Synthesize", group: "Flow", tool: "start_synthesis", core: "synth", async: true, requiresSignIn: true, mutates: true,
-    desc: "Async ORFS job → { run_id } immediately; completion arrives via activity events / Refresh (no client polling).",
-    autoArgs: [
-      { key: "verilog_files", describe: (c: SurfaceCtx) => rtlFiles(c).join(", ") || "—" },
-      { key: "top_module", describe: (c: SurfaceCtx) => c.manifest?.synthTop ?? "—" },
-    ],
-    params: [
-      { key: "platform", label: "platform", editor: "enum", options: PLATFORMS, def: (c: SurfaceCtx) => c.manifest?.platform ?? "sky130hd", source: "manifest" },
-      { key: "maxStage", label: "max_stage", editor: "enum", options: SYNTH_STAGES, def: "finish", source: "choice", hint: "“synth” = fast synthesis-only estimate" },
-      { key: "clockPeriodNs", label: "clock_period_ns", editor: "number", def: (c: SurfaceCtx) => c.manifest?.clockPeriodNs ?? 10, min: 0.1, step: 0.1, unit: "ns", source: "manifest" },
-      { key: "utilization", label: "utilization", editor: "number", def: 5, min: 1, max: 100, step: 1, unit: "%", source: "default", adv: true },
-      { key: "aspectRatio", label: "aspect_ratio", editor: "number", def: 1.0, min: 0.1, step: 0.1, source: "default", adv: true },
-      { key: "coreMargin", label: "core_margin", editor: "number", def: 2.0, min: 0, step: 0.5, unit: "µm", source: "default", adv: true },
-      { key: "runEquiv", label: "run_equiv", editor: "bool", def: false, source: "default", adv: true },
-    ],
-  },
-  {
-    id: "pnr", label: "Place & Route", group: "Flow", tool: "retry_pd", core: "pnr", async: true, requiresSignIn: true, mutates: true,
-    desc: "Branches a child PD run from an existing run and reruns downstream ORFS stages — first-class lineage.",
-    params: [
-      {
-        key: "runId", label: "run_id", editor: "enum", source: "run",
-        options: (ctx: SurfaceCtx) => synthRunIds(ctx),
-        def: (ctx: SurfaceCtx) => synthRunIds(ctx)[0] ?? "",
-        hint: "parent run to branch from",
-      },
-      { key: "fromStage", label: "start_stage", editor: "enum", options: PD_STAGES, def: "floorplan", source: "choice" },
-      { key: "maxStage", label: "max_stage", editor: "enum", options: PD_STAGES, def: "finish", source: "choice" },
-    ],
-  },
-];
+function toSurfaceCommand(def: CommandDef): SurfaceCommand {
+  return {
+    id: def.id,
+    label: def.label,
+    group: "Flow",
+    tool: def.tool,
+    desc: def.description,
+    async: def.async,
+    core: def.id,
+    facts: def.facts,
+    params: def.params.map(toSurfaceParam),
+  };
+}
 
-// Catalog entries duplicating a core twin are skipped — the core versions
-// carry the REST dispatch semantics the plain /invoke path lacks.
-export const CORE_TWIN_TOOLS = new Set([
-  "linter_tool",
-  "run_isolated_simulation",
-  "simulation_tool",
-  "start_synthesis",
-  "retry_pd",
-]);
+export const CORE_SURFACE_COMMANDS: SurfaceCommand[] = RUN_ORDER.map((id) =>
+  toSurfaceCommand(COMMANDS[id])
+);
+
+// Catalog entries duplicating a core command are skipped — the core versions
+// carry the REST dispatch semantics the plain /invoke path lacks. Read off the
+// same registry, so a renamed tool cannot leave a stale entry behind.
+export const CORE_TWIN_TOOLS = new Set<string>(RUN_ORDER.map((id) => COMMANDS[id].tool));
 
 // ---- schema-driven catalog → surface commands -----------------------------------
 
-const CATEGORY_LABELS: Record<string, string> = {
-  essential: "Essential",
-  manifest: "Manifest",
-  verification: "Verification",
-  synthesis: "Synthesis",
-  editing: "Editing",
-  reporting: "Reporting",
+// The catalog's categories ARE the grouping — this only fixes the casing of
+// the ones title-casing gets wrong. Every other category (essential, manifest,
+// verification, synthesis, editing, reporting, analysis, …) capitalizes
+// correctly and needs no entry, so a new backend category groups itself.
+const CATEGORY_LABEL_OVERRIDES: Record<string, string> = {
   hls: "HLS",
 };
 
-function categoryLabel(category: string): string {
+export function categoryLabel(category: string): string {
   return (
-    CATEGORY_LABELS[category] ??
+    CATEGORY_LABEL_OVERRIDES[category] ??
     (category ? category.charAt(0).toUpperCase() + category.slice(1) : "Other")
   );
 }
@@ -206,8 +177,20 @@ export function buildSurfaceCommands(
   catalog: ToolCatalogEntry[],
   ctx: SurfaceCtx
 ): SurfaceGroups {
+  // Sign-in gating and mutates are POLICY: read them off the catalog entry for
+  // the core command's own tool rather than restating them here. `async` stays
+  // declared in lib/commands because it describes the REST dispatch contract
+  // (POST /synthesize returns a run id immediately) and must hold even when
+  // the catalog fetch failed; the coverage test binds it to the tool's flag.
+  const byName = new Map(catalog.map((e) => [e.name, e]));
+  const core = CORE_SURFACE_COMMANDS.map((cmd) => {
+    const entry = byName.get(cmd.tool);
+    return entry
+      ? { ...cmd, requiresSignIn: entry.requiresSignIn, mutates: entry.mutates }
+      : cmd;
+  });
   const groups: { label: string; commands: SurfaceCommand[] }[] = [
-    { label: "Flow", commands: CORE_SURFACE_COMMANDS },
+    { label: "Flow", commands: core },
   ];
   const byLabel = new Map<string, SurfaceCommand[]>();
   for (const entry of catalog) {
@@ -256,9 +239,6 @@ export function buildSurfacePayload(
     if (v === undefined) return;
     if (p.editor === "number" && v !== "") v = Number(v);
     args[p.key] = v;
-  });
-  cmd.autoArgs?.forEach((a) => {
-    if (a.value) args[a.key] = a.value(ctx);
   });
   return { tool: cmd.tool, arguments: args };
 }
@@ -356,7 +336,7 @@ export async function runSurfaceCommand(
 
   const { tool, arguments: args } = buildSurfacePayload(cmd, vals, ctx);
 
-  if (cmd.tool === "update_manifest") {
+  if (cmd.tool === TOOL.updateManifest) {
     // Manifest edits use the dedicated PUT (same write path as the agent tool).
     // The introspected tool takes a single `updates_json` string — parse it to
     // the updates object PUT /manifest expects; other keys pass through as-is.

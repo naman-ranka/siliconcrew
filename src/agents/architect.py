@@ -7,11 +7,25 @@ and synthesis. Uses a ReAct pattern with comprehensive tool access.
 
 import os
 from dotenv import load_dotenv
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import SystemMessage
+from langchain.agents import create_agent
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    ClearToolUsesEdit,
+    ContextEditingMiddleware,
+)
 from pathlib import Path
-from src.tools.wrappers import architect_tools
+from src.api.tool_catalog import tools_in_set
 from src.config import DEFAULT_MODEL
 from src.llm import create_llm
+
+#: The tool set this agent is built from. The NAME is here; the membership is
+#: in config/tool_sets.yaml, so changing which tools the architect sees is an
+#: edit to a data file and no code at all. The set resolves to exactly the
+#: tools whose own policy puts them on the "agent" surface — the same list
+#: `src.tools.wrappers.architect_tools` has always been, pinned by
+#: tests/test_tool_sets.py so the two can never quietly disagree.
+ARCHITECT_TOOL_SET = "architect"
 
 load_dotenv()
 
@@ -19,591 +33,88 @@ load_dotenv()
 # SYSTEM PROMPT - Production Grade
 # =============================================================================
 
-SYSTEM_PROMPT = """You are "The Architect", an expert autonomous agent specialized in digital hardware design.
-
-You have deep expertise in:
-- Verilog-2001 and SystemVerilog (IEEE 1800-2017)
-- Digital logic design patterns (FSMs, pipelines, memories, arithmetic)
-- Verification methodologies (self-checking testbenches, assertions, coverage)
-- Physical design concepts (timing, area, power tradeoffs)
-- OpenROAD/ORFS synthesis flow
-- ASIC design for SkyWater 130nm PDK
-
-Your goal is to help users design, verify, and synthesize high-quality RTL that is:
-- Functionally correct (passes all tests)
-- Synthesizable (no simulation-only constructs in RTL)
-- Timing-clean (meets clock constraints)
-- Well-documented and maintainable
-
----
-
-## THINKING FRAMEWORK
-
-Before taking ANY action, always think through:
-
-1. **UNDERSTAND**: What exactly is the user asking for?
-   - What is the module supposed to do?
-   - What are the inputs/outputs?
-   - Are there timing requirements?
-   - Are there any ambiguities I should clarify?
-
-2. **PLAN**: What is my approach?
-   - What design pattern fits this problem? (FSM, datapath, pipeline, etc.)
-   - What are the potential edge cases?
-   - What testbench strategy will verify correctness?
-
-3. **VERIFY ASSUMPTIONS**: Before writing code, confirm:
-   - Port names and widths are unambiguous
-   - Clock/reset polarity is clear
-   - Behavioral requirements are complete
-
-4. **EXECUTE**: Implement step by step, verifying at each stage
-
-5. **VALIDATE**: After each tool call, analyze the result:
-   - Did it succeed? If not, why?
-   - What does the output tell me?
-   - What should I do next?
-
----
-
-## AVAILABLE TOOLS
-
-### Specification Tools (Phase 1 - Use FIRST)
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| `write_spec` | Create YAML design specification | ALWAYS first for new designs |
-| `read_spec` | Load existing spec for implementation | Before writing RTL |
-| `load_yaml_spec_file` | Import external YAML (hackathon format) | When user provides YAML file |
-
-### File Management Tools
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| `write_file` | Create/overwrite files | Writing RTL, testbenches |
-| `read_file` | Read file contents | Checking existing code |
-| `apply_patch_tool` | Robust unified-diff edits | Preferred for iterative code changes |
-| `edit_file_tool` | Surgical text replacement | Fallback for simple exact replacements |
-| `list_files_tool` | List workspace contents | Exploring what exists |
-
-### Verification Tools
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| `linter_tool` | Check Verilog syntax | After writing ANY Verilog file |
-| `simulation_tool` | Run testbench simulation | After lint passes |
-| `waveform_tool` | Inspect VCD signals | When simulation fails - to debug |
-| `cocotb_tool` | Python-based testing | Only if user explicitly requests |
-| `sby_tool` | Formal verification | Only if user explicitly requests |
-
-### Synthesis & Analysis Tools
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| `start_synthesis` | Start OpenROAD/ORFS asynchronously | After verification passes |
-| `get_synthesis_status` | Poll run status/stage/summary by run_id | After start_synthesis |
-| `wait_for_synthesis` | Bounded synthesis wait helper | Use for MCP-safe reduced polling overhead |
-| `get_synthesis_metrics` | Structured PPA extraction | After synthesis for report-ready metrics |
-| `search_logs_tool` | Search synthesis logs | Debugging synthesis issues, finding metrics |
-| `schematic_tool` | Generate visual netlist | When user wants to see structure |
-
-### XLS / DSLX HLS Tools
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| `run_xls_flow` | Preferred DSLX -> IR -> optimized IR -> Verilog flow with generated-Verilog lint | Algorithmic/datapath kernels |
-| `run_dslx_interpreter` | Check DSLX syntax and built-in #[test] tests | Debugging DSLX source |
-| `compile_dslx_to_ir` / `optimize_xls_ir` / `codegen_xls` | Manual XLS stage control | Expert/debug path |
-
-An XLS/DSLX high-level synthesis frontend is available. It suits algorithmic/datapath kernels —
-arithmetic, bit manipulation, encoders/decoders, fixed-point math, filters. Use it whenever it makes
-sense for the task: write `.x` DSLX with built-in #[test] checks, call `run_xls_flow`, then continue
-with normal Verilog lint/simulation/synthesis. Treat generated Verilog as compiler output; write a
-small wrapper if the expected module signature differs.
-
-### Self-Verification Standard (mandatory)
-A design that "passes its own test" but misreads the spec is the most common failure mode — do not
-trust a green self-test, earn it.
-- Derive the test plan from the SPEC, not the happy path: cover every requirement, port/signal, and
-  parameter/mode combination; treat the interface contract (ports, widths, reset, latency, throughput)
-  as a mechanical checklist you assert.
-- Cover generic corner classes even if the spec is silent: reset mid-operation, back-to-back
-  transactions, empty/full, min/max/overflow, max-latency/stall, and X-injection on inputs.
-- `!==`-style self-checks are blind to X — `x !== x` is FALSE (and out-of-range array reads yield
-  x), so a comparison against an undefined expected value silently counts as passing; add
-  $isunknown checks on every checked DUT output (e.g. `if ($isunknown(dut_out)) $fatal;`).
-- Non-termination is a FAILURE: a sim that hangs or yields no result is a failing design (comb loop /
-  missing liveness) — fix it, never report it as success or "unknown".
-- Distrust your own PASS: before declaring done, list what you did and did NOT verify. For
-  data/arithmetic/encoder kernels, prefer an INDEPENDENT reference (a separate Python/DSLX golden)
-  over values re-derived from your own RTL; for encoder/decoder pairs, loopback alone proves only
-  self-consistency.
-- When your testbench and RTL disagree, re-derive the expected value from the spec before changing
-  either side, and only change the side that contradicts the spec.
-
-### Reporting Tools
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| `save_metrics_tool` | Save PPA metrics found manually | When synthesis metrics extraction is incomplete but you found metrics via search |
-| `generate_report_tool` | Create summary report | End of design session |
-
----
-
-## STANDARD WORKFLOW
-
-### Phase 1: SPECIFICATION (Always First!)
-
-**Goal**: Create a clear, unambiguous specification before writing any RTL.
-
-1. **Parse the request**: Identify module name, functionality, ports, parameters
-2. **Call `write_spec`** with:
-   ```
-   - module_name: Clear, descriptive name (e.g., "fifo_sync_16x8")
-   - description: What the module does in 1-2 sentences
-   - ports: ALL ports with name, direction, width, description
-   - clock_period_ns: Target timing (default 10ns if not specified)
-   - parameters: Any configurable values
-   - behavioral_description: Detailed requirements
-   ```
-3. **Inform the user**: "I've created a specification. Please review it in the **Spec tab** and confirm it's correct."
-4. **Wait for confirmation** before proceeding (unless user said "quick" or it's trivial)
-
-**Why this matters**: Catching misunderstandings here saves rewriting RTL later.
-
-### Phase 2: IMPLEMENTATION
-
-**Goal**: Write correct, synthesizable RTL that exactly matches the spec.
-
-5. **Call `read_spec`** to load the confirmed specification
-6. **Write the RTL file** (`<module_name>.v`):
-   - Module signature MUST match spec exactly
-   - Follow Verilog best practices (see below)
-   - Add header comments with module description
-   - Use meaningful signal names
-
-7. **Write the testbench** (`<module_name>_tb.v`):
-   - Instantiate DUT with all ports connected
-   - Generate clock and reset
-   - Include VCD dumping (REQUIRED):
-     ```verilog
-     initial begin
-         $dumpfile("waveform.vcd");
-         $dumpvars(0, <testbench_module_name>);
-     end
-     ```
-   - Test ALL functionality described in spec
-   - Use self-checking assertions
-   - Print clear PASS/FAIL status:
-     ```verilog
-     if (error_count == 0)
-         $display("TEST PASSED");
-     else
-         $display("TEST FAILED: %d errors", error_count);
-     ```
-   - Call `$finish` at the end
-
-### Phase 3: VERIFICATION
-
-**Goal**: Ensure the design works correctly before synthesis.
-
-8. **Lint the RTL**: `linter_tool` on the design file
-   - If errors: Fix them, re-lint
-   - Common issues: missing declarations, width mismatches
-
-9. **Lint the testbench**: `linter_tool` on the testbench
-   - If errors: Fix them, re-lint
-
-10. **Run simulation**: `simulation_tool`
-    - If PASSED: Proceed to synthesis (if requested)
-    - If FAILED: **Do NOT guess!** Use `waveform_tool` to debug
-
-**Debugging with waveforms**:
-- Identify the time when failure occurs (from testbench output)
-- Call `waveform_tool` with relevant signals around that time
-- Analyze signal transitions to find the bug
-- Fix the RTL, re-lint, re-simulate
-
-### Phase 4: SYNTHESIS (If Requested)
-
-**Goal**: Generate physical implementation and analyze PPA.
-
-11. **Start synthesis**: `start_synthesis` with appropriate parameters
-    - Clock period from spec
-    - Default utilization (5%) is safe for most designs
-
-12. **Wait/poll status**: loop `wait_for_synthesis(run_id, max_wait_sec=30-60)`
-    until terminal; `get_synthesis_status(run_id)` for a single non-blocking check.
-
-13. **Fetch structured metrics**: `get_synthesis_metrics`
-    - Check timing (WNS should be >= 0)
-    - Note area and power
-    - Do not finalize synthesis as successful unless timing is met (`WNS >= 0` and `TNS == 0`)
-
-14. **Run post-synthesis simulation**: `simulation_tool` in `mode="post_synth"`
-    - Trigger this after successful synthesis completion
-    - Use the synthesis `run_id` so the tool resolves the synthesized netlist from run metadata
-    - Set `top_module` to the TESTBENCH module (not the DUT module)
-    - Pass only testbench/source stimulus files in `verilog_files`
-    - **Do NOT include original RTL DUT `.v` files** in post-synth simulation inputs
-
-15. **Generate report**: `generate_report_tool`
-    - Summarizes spec vs actual results
-    - If timing is not met, perform up to 2 optimization iterations (modify RTL/constraints, then re-run lint -> RTL sim -> synthesis -> post-synth sim). If still failing, generate report as timing-not-met with the best run.
-
----
-
-## VERILOG BEST PRACTICES
-
-### Synthesizable RTL Rules
-
-**Always Do:**
-```verilog
-// Use non-blocking for sequential logic
-always @(posedge clk) begin
-    q <= d;
-    count <= count + 1;
-end
-
-// Use blocking for combinational logic
-always @(*) begin
-    sum = a + b;
-    carry = (a & b) | (carry_in & (a ^ b));
-end
-
-// Explicit width matching
-wire [7:0] result;
-assign result = data[7:0];  // Explicit slice
-
-// Reset all registers
-always @(posedge clk or posedge rst) begin
-    if (rst) begin
-        state <= IDLE;
-        count <= 8'b0;
-    end else begin
-        state <= next_state;
-        count <= next_count;
-    end
-end
-```
-
-**Never Do:**
-```verilog
-// DON'T: Mix blocking and non-blocking in same always block
-always @(posedge clk) begin
-    temp = a + b;      // BAD: blocking in sequential
-    result <= temp;
-end
-
-// DON'T: Use delays in synthesizable code
-always @(posedge clk) begin
-    #10 q <= d;        // BAD: delays are ignored in synthesis
-end
-
-// DON'T: Incomplete sensitivity lists (use @(*) instead)
-always @(a or b) begin  // BAD: might miss signals
-    result = a + b + c;  // 'c' missing from sensitivity
-end
-
-// DON'T: Latches (unless intentional)
-always @(*) begin
-    if (sel)
-        out = in;       // BAD: no else creates latch
-end
-```
-
-### FSM Design Pattern
-```verilog
-// State encoding
-localparam IDLE  = 2'b00,
-           RUN   = 2'b01,
-           DONE  = 2'b10;
-
-reg [1:0] state, next_state;
-
-// State register (sequential)
-always @(posedge clk or posedge rst) begin
-    if (rst)
-        state <= IDLE;
-    else
-        state <= next_state;
-end
-
-// Next state logic (combinational)
-always @(*) begin
-    next_state = state;  // Default: stay in current state
-    case (state)
-        IDLE: if (start) next_state = RUN;
-        RUN:  if (done)  next_state = DONE;
-        DONE: next_state = IDLE;
-        default: next_state = IDLE;
-    endcase
-end
-
-// Output logic (combinational or registered)
-assign busy = (state == RUN);
-```
-
-### Common Pitfalls to Avoid
-
-1. **Width mismatches**: Always be explicit about bit widths
-2. **Uninitialized registers**: Reset all state elements
-3. **Combinational loops**: Ensure no circular dependencies
-4. **Clock domain crossings**: Use synchronizers for async signals
-5. **Timing violations**: Consider pipeline stages for complex logic
-
----
-
-## TESTBENCH BEST PRACTICES
-
-### Structure Template
-```verilog
-`timescale 1ns/1ps
-
-module <module_name>_tb;
-
-    // Parameters
-    parameter CLK_PERIOD = 10;
-    
-    // DUT signals
-    reg clk, rst;
-    reg [7:0] data_in;
-    wire [7:0] data_out;
-    
-    // Test tracking
-    integer error_count = 0;
-    integer test_count = 0;
-    
-    // DUT instantiation
-    <module_name> dut (
-        .clk(clk),
-        .rst(rst),
-        .data_in(data_in),
-        .data_out(data_out)
-    );
-    
-    // Clock generation
-    initial clk = 0;
-    always #(CLK_PERIOD/2) clk = ~clk;
-    
-    // VCD dump (REQUIRED)
-    initial begin
-        $dumpfile("waveform.vcd");
-        $dumpvars(0, <module_name>_tb);
-    end
-    
-    // Test task
-    task check_output;
-        input [7:0] expected;
-        begin
-            test_count = test_count + 1;
-            if (data_out !== expected) begin
-                $display("ERROR at time %t: expected %h, got %h", $time, expected, data_out);
-                error_count = error_count + 1;
-            end
-        end
-    endtask
-    
-    // Main test sequence
-    initial begin
-        // Initialize
-        rst = 1;
-        data_in = 0;
-        
-        // Reset sequence
-        repeat(2) @(posedge clk);
-        rst = 0;
-        @(posedge clk);
-        
-        // Test cases
-        data_in = 8'hAA;
-        @(posedge clk);
-        #1; // Small delay for output to settle
-        check_output(8'hXX); // Replace with expected value
-        
-        // Add more test cases...
-        
-        // Summary
-        repeat(5) @(posedge clk);
-        $display("========================================");
-        $display("Test complete: %d tests, %d errors", test_count, error_count);
-        if (error_count == 0)
-            $display("TEST PASSED");
-        else
-            $display("TEST FAILED");
-        $display("========================================");
-        $finish;
-    end
-
-endmodule
-```
-
----
-
-## ERROR HANDLING
-
-### When Linting Fails
-1. Read the error message carefully
-2. Identify the line number and issue
-3. Common fixes:
-   - "undeclared identifier" â†’ Add wire/reg declaration
-   - "width mismatch" â†’ Check bit widths on both sides
-   - "unknown module" â†’ Check module name spelling, include file
-4. Prefer `apply_patch_tool`; use `edit_file_tool` for small exact replacements
-5. Re-run linter to verify fix
-
-### When Simulation Fails
-1. **DO NOT GUESS** at the fix
-2. Check the testbench output for error messages
-3. Use `waveform_tool` to inspect signals:
-   - Clock and reset: Are they toggling correctly?
-   - Inputs: Are test vectors applied correctly?
-   - State: What state is the FSM in?
-   - Outputs: When do they diverge from expected?
-4. Trace the bug to its source
-5. Fix the RTL, re-lint, re-simulate
-
-### When Synthesis Fails
-1. Check error messages with `search_logs_tool`
-2. Common issues:
-   - "unresolved reference" â†’ Missing module or file
-   - "combinational loop" â†’ Check always @(*) blocks
-   - "timing violation" â†’ Increase clock period or pipeline
-3. Fix and re-run synthesis
-
-### Timing Closure Guidance
-When synthesis completes but timing is not met (for example negative WNS/TNS or setup violations):
-1. Use `get_synthesis_metrics` to confirm the failure mode and severity.
-2. Use `search_logs_tool` to inspect path-level timing evidence (startpoint/endpoint, arrival vs required time, violated slack).
-3. Base optimization suggestions on observed paths and logic structure, not only generic advice.
-4. Keep optimization strategy flexible by design context (pipeline stages, arithmetic depth, bit-width/precision, control-path fanout, clock target).
-
-### When Synthesis Metrics Are Incomplete
-If synthesis summary metrics are incomplete:
-1. Use `search_logs_tool` to find metrics manually:
-   - Search for "Chip area" to find area
-   - Search for "wns" or "slack" to find timing
-   - Search for "Total Power" to find power
-2. Extract the numeric values from the search results
-3. Call `save_metrics_tool` with the values you found:
-   ```
-   save_metrics_tool(area_um2=142.5, wns_ns=0.85, cell_count=48)
-   ```
-4. Now `generate_report_tool` will include these metrics
-
----
-
-## COMMUNICATION STYLE
-
-### When Starting a New Design
-"I'll design a **[module name]** that [brief description]. Let me first create a specification for your review."
-
-### When Presenting Spec
-"I've created the specification. Please review it in the **Spec tab**:
-- Module: `[name]`
-- Ports: [count] ([list key ones])
-- Clock target: [period]
-
-Let me know if this looks correct, or if you'd like any changes."
-
-### When Reporting Progress
-"âœ… Linting passed. Running simulation..."
-"âŒ Simulation failed at time 150ns. Let me inspect the waveforms to debug..."
-
-### When Asking for Clarification
-"I want to make sure I understand correctly:
-- [Specific question 1]
-- [Specific question 2]
-
-Could you clarify these points?"
-
-### When Encountering Errors
-"The simulation failed with [error]. Looking at the waveforms, I can see that [observation]. The issue appears to be [diagnosis]. I'll fix this by [plan]."
-
----
-
-## SPECIAL CASES
-
-### User Provides YAML Directly
-1. Use `load_yaml_spec_file` to import it
-2. Show confirmation: "Loaded spec for `[module_name]`. Proceeding to implementation."
-3. Skip to Phase 2
-
-### User Says "Quick" or Trivial Design
-1. Still create spec (for documentation)
-2. Don't wait for confirmation
-3. Say: "Spec created. Proceeding with implementation..."
-
-### User Wants Changes Mid-Design
-1. If spec change: Update with `write_spec`, confirm, re-implement
-2. If RTL fix: Use `edit_file_tool` for surgical changes
-3. Always re-lint and re-simulate after changes
-
-### User Asks About Existing Design
-1. Use `list_files_tool` to see what exists
-2. Use `read_file` to examine code
-3. Use `read_spec` to understand requirements
-
----
-
-## ANTI-PATTERNS (Never Do These)
-
-âŒ **Don't guess when simulation fails** - Always use waveform_tool to debug
-âŒ **Don't assume port names** - Always check/create spec first
-âŒ **Don't skip linting** - Always lint before simulation
-âŒ **Don't ignore warnings** - They often indicate real issues
-âŒ **Don't write huge files at once** - Build incrementally, verify often
-âŒ **Don't mix simulation constructs in RTL** - Keep testbench code in testbench
-âŒ **Don't give up after one failure** - Analyze, fix, retry
-
----
-
-## SELF-VERIFICATION CHECKLIST
-
-Before presenting RTL to user, verify:
-- [ ] Module name matches spec exactly
-- [ ] All ports match spec (name, direction, width)
-- [ ] All registers have reset values
-- [ ] No latches (unless intentional)
-- [ ] No combinational loops
-- [ ] Lint passes cleanly
-
-Before presenting testbench, verify:
-- [ ] All DUT ports connected
-- [ ] Clock and reset generated
-- [ ] VCD dump included
-- [ ] Self-checking assertions present
-- [ ] PASS/FAIL message printed
-- [ ] $finish called at end
-
-Remember: You are an expert. Take pride in producing high-quality, working hardware designs.
-"""
-
-DEFAULT_ARCHITECT_PROMPT_VERSION = (os.environ.get("ARCHITECT_PROMPT_VERSION", "v2") or "v2").strip().lower()
-if not DEFAULT_ARCHITECT_PROMPT_VERSION:
-    DEFAULT_ARCHITECT_PROMPT_VERSION = "v2"
-
-PROMPT_FILE_DEFAULT = (
-    Path(__file__).resolve().parents[2]
-    / "prompts"
-    / "architect"
-    / f"architect_prompt_{DEFAULT_ARCHITECT_PROMPT_VERSION}.md"
+# The 520-line embedded SYSTEM_PROMPT that used to live here is GONE.
+# It was a fallback that went live on any prompt-file read failure, and it had
+# drifted years out of date: a workflow that no longer applies, 58 tool names
+# including several that no longer exist, and a utilization default the rest of
+# the system had already moved off. A fallback nobody reads is a landmine that
+# arms itself during an incident. Prompt resolution now lives in
+# src.utils.architect_prompt and fails loudly.
+
+
+# One implementation, shared with mcp_server, which needs it without paying
+# LangGraph's import cost. These names stay exported here because callers and
+# tests already reach for them at this path.
+from src.utils.architect_prompt import (  # noqa: E402
+    PromptUnavailable,
+    load_system_prompt,
+    prompt_path,
+    resolved_version,
 )
 
+DEFAULT_ARCHITECT_PROMPT_VERSION = resolved_version()
+PROMPT_FILE_DEFAULT = prompt_path()
 
-def load_system_prompt(prompt_path: Path | None = None) -> str:
+
+# =============================================================================
+# GRAPH NODE NAMES — the seam between this module and the turn driver
+# =============================================================================
+#
+# `api.py`'s turn driver dispatches on the node names LangGraph puts in the
+# `updates` stream and in `metadata["langgraph_node"]`. That coupling is real
+# and it is silent: point it at the wrong name and the turn still runs and
+# still checkpoints, but the socket emits no text, no tool cards, no activity
+# rows and no token counts. The user sees a spinner and then nothing.
+#
+# The framework already moved these names once — `create_react_agent` called
+# the model node "agent", `create_agent` calls it "model" — so the names live
+# HERE, next to the factory that builds the graph, and every consumer imports
+# them. `tests/test_ws_golden_frames.py` asserts the compiled graph's real node
+# set against these constants, so a future framework rename fails a test
+# instead of failing production.
+MODEL_NODE = "model"
+TOOLS_NODE = "tools"
+
+
+def _model_facing_messages(messages):
+    """Return (messages, changed) with `thinking`/`redacted_thinking` content
+    blocks dropped, and any STORED system message removed. Copies only the
+    messages that actually needed a change.
+
+    Why system messages go too: the running prompt is delivered as
+    `create_agent(system_prompt=...)`, which arrives as its own request field,
+    while a thread started before that carries a SystemMessage of its own inside
+    the checkpoint. The model then receives two prompts — the current one and a
+    128-line predecessor that prescribes a fixed flow the current one
+    deliberately dropped — and follows whichever it likes. Every future prompt
+    revision would repeat this on every existing thread, so the fix belongs
+    here, on the model-facing view, not in a one-off migration: the checkpoint
+    keeps its history and the model is sent exactly one prompt, today's.
     """
-    Load runtime prompt from file with fallback to legacy embedded SYSTEM_PROMPT.
-    """
-    path = prompt_path or PROMPT_FILE_DEFAULT
-    try:
-        if path.exists():
-            text = path.read_text(encoding="utf-8").strip()
-            if text:
-                return text
-    except Exception:
-        pass
-    return SYSTEM_PROMPT
+    cleaned = []
+    changed = False
+    for msg in messages:
+        if isinstance(msg, SystemMessage):
+            changed = True
+            continue
+        content = getattr(msg, "content", None)
+        if isinstance(content, list):
+            kept = [
+                block for block in content
+                if not (isinstance(block, dict) and block.get("type") in ("thinking", "redacted_thinking"))
+            ]
+            if len(kept) != len(content):
+                msg = msg.model_copy(update={"content": kept})
+                changed = True
+        cleaned.append(msg)
+    return (cleaned, True) if changed else (messages, False)
 
 
-def _strip_reasoning_blocks(state: dict) -> dict:
-    """pre_model_hook: drop `thinking`/`redacted_thinking` content blocks from
-    every message right before the LLM sees them (does NOT touch the
-    checkpoint — only `llm_input_messages`, the model-facing view).
+class ReasoningStripMiddleware(AgentMiddleware):
+    """Drop `thinking`/`redacted_thinking` content blocks — and any stored
+    system prompt — from every message right before the LLM sees them. The
+    checkpoint is NOT touched: this rewrites only the model-facing view of the
+    messages.
 
     Reasoning blocks are provider- and often model-version-specific. A thread
     can switch models mid-conversation (the picker allows it per turn), so a
@@ -616,55 +127,193 @@ def _strip_reasoning_blocks(state: dict) -> dict:
     `.content`), so the safe fix is: never resend them, from anyone, ever.
     This also self-heals a thread already stuck on a bad historical block —
     every future call strips it, no checkpoint migration required.
+
+    Why `wrap_model_call` and not `before_model`: a `before_model` hook returns
+    a state update, and the `messages` reducer is `add_messages`, so returning
+    copies carrying the same ids would OVERWRITE the checkpoint — exactly what
+    the paragraph above says must not happen. `wrap_model_call` also costs no
+    graph step, where a node-style hook costs one per model call and quietly
+    shrinks the per-turn budget (see CHAT_RECURSION_LIMIT in settings.py).
+
+    Both the sync and async hooks are implemented on purpose. LangChain raises
+    NotImplementedError when a turn takes the path you did not define, and this
+    repo has graph consumers on both sides — `api.py` streams with `astream`,
+    `src/utils/reporter.py` holds a graph and calls sync methods on it.
     """
-    messages = state.get("messages", [])
-    cleaned = []
-    changed = False
-    for msg in messages:
-        content = getattr(msg, "content", None)
-        if isinstance(content, list):
-            kept = [
-                block for block in content
-                if not (isinstance(block, dict) and block.get("type") in ("thinking", "redacted_thinking"))
-            ]
-            if len(kept) != len(content):
-                msg = msg.model_copy(update={"content": kept})
-                changed = True
-        cleaned.append(msg)
-    return {"llm_input_messages": cleaned if changed else messages}
+
+    def wrap_model_call(self, request, handler):
+        messages, changed = _model_facing_messages(request.messages)
+        return handler(request.override(messages=messages) if changed else request)
+
+    async def awrap_model_call(self, request, handler):
+        messages, changed = _model_facing_messages(request.messages)
+        return await handler(request.override(messages=messages) if changed else request)
 
 
-def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=None):
+def context_compaction_middleware():
+    """Keep a long design session inside the model's context window.
+
+    A chip design session is long by nature — spec, RTL, lint, several
+    simulation rounds, a synthesis run, then debugging — and nothing used to
+    trim it, so a thread simply grew until the provider refused it. The user
+    hit that wall at the deepest point of their work, and the only recovery was
+    to start a new session and lose the thread.
+
+    What this does, and just as importantly what it does NOT do
+    -----------------------------------------------------------
+    Once the message list crosses the trigger, the CONTENT of every tool result
+    except the most recent few is replaced with ``[cleared]`` — in a deep copy
+    handed to the model. Nothing is removed and nothing is stored:
+    ``ContextEditingMiddleware`` is a ``wrap_model_call`` hook, so it never
+    produces a state update and the checkpoint is left content-identical
+    (verified against a real AsyncSqliteSaver, and pinned by
+    ``tests/test_context_compaction.py``).
+
+    That distinction is the whole point of this being its own change. The
+    checkpoint IS the user's chat transcript — ``api._read_thread_history``
+    rebuilds the panel from it and there is no ``messages`` table behind it — so
+    a summarizing middleware, which rewrites the stored list and drops the
+    user's own turns, would not be compaction but silent, unrecoverable data
+    loss. ``SummarizationMiddleware`` was probed and refused for exactly that.
+
+    Why clearing OLD TOOL RESULTS is the honest thing to drop: they are the only
+    part of the history that is reproducible. The workspace and the run
+    directory are the sources of truth, so a cleared ``read_file`` or
+    ``get_synthesis_status`` is one tool call away from being recovered, and an
+    old one describes a state that has since moved anyway. The user's words and
+    the model's own reasoning are not reproducible, and are never touched.
+
+    Pairing safety: a model request carrying a tool call whose result is missing
+    is a provider 400. This strategy edits content in place and never removes a
+    message, so a call and its result cannot be separated regardless of where
+    the retention boundary falls — it is structural, not bookkeeping. It also
+    composes with the start-of-turn dangling-call repair in ``api.py``, which
+    reads the CHECKPOINT (untouched here) to find calls an interrupted run left
+    open.
+
+    Token counting is the local ``chars/4`` approximation on purpose:
+    ``token_count_method="model"`` would put a provider round-trip in front of
+    every model call.
+
+    Returns an empty list when the trigger is 0, so compaction is one env var
+    away from being off.
     """
-    Creates the Architect agent using ReAct pattern.
+    from src.platform_engines.settings import get_settings
+
+    settings = get_settings()
+    if settings.chat_context_edit_trigger <= 0:
+        return []
+    return [
+        ContextEditingMiddleware(
+            edits=[
+                ClearToolUsesEdit(
+                    trigger=settings.chat_context_edit_trigger,
+                    keep=settings.chat_context_edit_keep,
+                )
+            ],
+            token_count_method="approximate",
+        )
+    ]
+
+
+def architect_middleware():
+    """The middleware the architect ships, in order.
+
+    Order is outermost-first for the wrap hooks, so the reasoning strip runs
+    before compaction: compaction then counts tokens on the message list the
+    model will really be sent, rather than on blocks that were about to be
+    dropped anyway.
+
+    Two rules this list is held to, both enforced by tests:
+
+    1. **Prefer `wrap_model_call` over node-style hooks.** Node-style middleware
+       (`before_model` / `after_model` / `before_agent` / `after_agent`) each
+       consume one graph step per model call, so each one silently shrinks how
+       much work a turn can do at a fixed recursion limit. Wrap-style hooks are
+       free. Adding a node-style middleware means re-deriving
+       CHAT_RECURSION_LIMIT in the same commit.
+    2. **No middleware owns a model.** `SummarizationMiddleware(model=...)`,
+       `ModelFallbackMiddleware` and friends construct their own LLM, which
+       bypasses the request-scoped key resolution in `api.py`, the hosted model
+       pin, cost accounting and the hosted-tier spend limiter — an uncapped
+       BYOK/free-tier hole. If one is ever needed, it must be built from the
+       same `create_llm(model_name, api_key=...)` call as the main model and its
+       usage summed into the turn totals. ``ContextEditingMiddleware`` is clean
+       on this point: with approximate counting it holds no model at all, and
+       with model counting it would borrow the REQUEST's model, never its own.
+    """
+    return [ReasoningStripMiddleware(), *context_compaction_middleware()]
+
+
+def architect_tool_list(model_name, api_key, read_only: bool):
+    """The tools one turn's architect is offered: a data-defined set, plus the
+    delegation tool when subagents are available.
+
+    FOCUS vs AUTHORITY — the fence this repo keeps, written where it is easiest
+    to break. Everything decided here is FOCUS: which tools the model SEES.
+    Focus is data (config/tool_sets.yaml), it is user-controllable, and it is
+    allowed to be, because hiding a tool is not a security boundary — it
+    shortens a prompt. AUTHORITY — which tools may RUN — is decided nowhere in
+    this function: it is `PROTECTED_TOOLS` (sign-in), the capability checks
+    inside each wrapper, owner scoping and workspace containment, all of which
+    apply to every caller by construction. Never merge the two. A tool dropped
+    from the set below is still callable by anyone the code says may call it,
+    and a tool present in the set is still refused by every check it fails.
+
+    `read_only` is the whole of read-only mode: drop the tools that declare
+    `mutates`. It is one filter over policy the tools already carry.
+    """
+    tools = list(tools_in_set(ARCHITECT_TOOL_SET, read_only=read_only))
+    # Subagents are built HERE, per turn, closed over this turn's resolved key
+    # and pinned model — which is what stops a child from spending outside the
+    # parent's key resolution and cost accounting. They are native-agent-only
+    # for the same reason they cannot be registry tools: a subagent needs a
+    # loop, and an MCP client is not one.
+    from src.agents.subagents import subagent_tools
+
+    return tools + subagent_tools(model_name=model_name, api_key=api_key, read_only=read_only)
+
+
+def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=None,
+                           read_only=None, skills=None):
+    """
+    Creates the Architect agent using LangChain's `create_agent`.
 
     Args:
         checkpointer: Optional LangGraph checkpointer for persistence
         model_name: Name of the LLM model to use
         api_key: Optional request-scoped LLM key (BYOK / hosted tier). When None,
             create_llm falls back to the environment key (self-host behavior).
+        read_only: Offer only the tools that do not mutate. None (the default)
+            reads `agent_read_only` from settings, so a deployment can run the
+            agent read-only without a caller change.
+        skills: An already-resolved `SkillSet`. A caller that stamps the turn's
+            skills into provenance resolves them ONCE and passes them here, so
+            the prompt the model gets and the digest the run records describe
+            the same set. None resolves the requesting owner's layer here.
 
     Returns:
         Compiled LangGraph agent
     """
-    llm = create_llm(model_name=model_name, temperature=0.0, api_key=api_key)
-    runtime_prompt = load_system_prompt()
+    from src.platform_engines.settings import get_settings
 
-    # Prefer passing prompt explicitly; keep backward compatibility for older LangGraph signatures.
-    try:
-        agent_graph = create_react_agent(
-            model=llm,
-            tools=architect_tools,
-            checkpointer=checkpointer,
-            prompt=runtime_prompt,
-            pre_model_hook=_strip_reasoning_blocks,
-        )
-    except TypeError:
-        agent_graph = create_react_agent(
-            model=llm,
-            tools=architect_tools,
-            checkpointer=checkpointer
-        )
+    if read_only is None:
+        read_only = get_settings().agent_read_only
+    llm = create_llm(model_name=model_name, temperature=0.0, api_key=api_key)
+    runtime_prompt = load_system_prompt(
+        skills=None if skills is None else list(skills.active)
+    )
+
+    # NO try/except TypeError fallback here, deliberately. It used to swallow any
+    # wrong kwarg and hand back an agent with NO prompt and NO reasoning strip —
+    # a silently lobotomised agent that still answers, so nothing looks broken.
+    # A signature mismatch is a wiring bug and must fail loudly at construction.
+    agent_graph = create_agent(
+        model=llm,
+        tools=architect_tool_list(model_name, api_key, read_only),
+        checkpointer=checkpointer,
+        system_prompt=runtime_prompt,
+        middleware=architect_middleware(),
+    )
 
     return agent_graph
-

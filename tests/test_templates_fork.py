@@ -292,7 +292,7 @@ def test_render_transcript_summarizes_turns_and_tool_calls():
     messages = [
         _Msg("system", "you are an agent"),
         _Msg("human", "Design a FIFO"),
-        _Msg("ai", "On it.", tool_calls=[{"id": "c1", "name": "run_isolated_simulation", "args": {"top_module": "fifo_tb"}}]),
+        _Msg("ai", "On it.", tool_calls=[{"id": "c1", "name": "run_simulation", "args": {"sim_top": "fifo_tb"}}]),
         _Msg("tool", '{"status": "passed"}', tool_call_id="c1"),
         _Msg("ai", "Simulation passed."),
     ]
@@ -301,8 +301,8 @@ def test_render_transcript_summarizes_turns_and_tool_calls():
     assert "Demo FIFO" in md
     assert "## User" in md and "Design a FIFO" in md
     assert "## Assistant" in md
-    assert "run_isolated_simulation" in md
-    assert "top_module=fifo_tb" in md
+    assert "run_simulation" in md
+    assert "sim_top=fifo_tb" in md
     assert "passed" in md  # tool result summarized under the call
     # System prompt is never rendered.
     assert "you are an agent" not in md

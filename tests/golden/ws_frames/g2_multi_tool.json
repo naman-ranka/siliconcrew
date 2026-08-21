@@ -1,0 +1,48 @@
+[
+  {
+    "type": "start"
+  },
+  {
+    "tool": {
+      "args": {
+        "text": "one"
+      },
+      "name": "echo_tool"
+    },
+    "type": "tool_call"
+  },
+  {
+    "content": "echoed: one",
+    "status": "success",
+    "type": "tool_result"
+  },
+  {
+    "tool": {
+      "args": {
+        "text": "two"
+      },
+      "name": "echo_tool"
+    },
+    "type": "tool_call"
+  },
+  {
+    "content": "echoed: two",
+    "status": "success",
+    "type": "tool_result"
+  },
+  {
+    "content": "both done",
+    "type": "text_delta"
+  },
+  {
+    "content": "both done",
+    "type": "text"
+  },
+  {
+    "tokens": {
+      "input": 10,
+      "output": 3
+    },
+    "type": "done"
+  }
+]

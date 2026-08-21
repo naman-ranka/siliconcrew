@@ -20,6 +20,8 @@ import type {
   ToolCatalogEntry,
   TemplateSummary,
   TemplateDetail,
+  SkillsIndex,
+  SkillDetail,
 } from "@/types";
 import { authHeader, getAuthToken, recoverAuthExpired } from "./authToken";
 
@@ -203,6 +205,38 @@ export const keysApi = {
     apiFetch<{ ok: true; provider: string; deleted: boolean }>(
       `/api/keys/${encodeURIComponent(provider)}`,
       { method: "DELETE" }
+    ),
+};
+
+/**
+ * Skills — the built-in pack and the caller's own layer over it.
+ *
+ * The backend owns the four merge rules; this is a transport, and it must stay
+ * one. Nothing here decides which layer wins, and nothing caches a list: a
+ * skill index is owner-scoped state, and a stale copy in the browser is the
+ * same class of lie as a stale copy on the server.
+ */
+export const skillsApi = {
+  list: () => apiFetch<SkillsIndex>("/api/skills"),
+
+  read: (name: string) => apiFetch<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`),
+
+  save: (name: string, text: string) =>
+    apiFetch<{ ok: true; name: string }>(`/api/skills/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify({ text }),
+    }),
+
+  /** Drop the caller's copy. Over a built-in that IS "reset to shipped". */
+  remove: (name: string) =>
+    apiFetch<{ ok: true; name: string }>(`/api/skills/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
+
+  setEnabled: (name: string, enabled: boolean) =>
+    apiFetch<{ ok: true; name: string; enabled: boolean }>(
+      `/api/skills/${encodeURIComponent(name)}/enabled`,
+      { method: "PUT", body: JSON.stringify({ enabled }) }
     ),
 };
 

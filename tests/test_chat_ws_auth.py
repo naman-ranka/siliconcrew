@@ -26,6 +26,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 import api
+from src.agents.architect import MODEL_NODE
 from src.platform_engines.identity import AuthError, Identity
 
 
@@ -50,7 +51,7 @@ class _FakeAgent:
         return _FakeState()
 
     async def astream(self, inputs, config, stream_mode=None):
-        yield ("updates", {"agent": {"messages": [_FakeMsg()]}})
+        yield ("updates", {MODEL_NODE: {"messages": [_FakeMsg()]}})
 
 
 class _FakeAuthEngine:
@@ -73,7 +74,7 @@ def harness(monkeypatch):
     fake_auth = _FakeAuthEngine()
     monkeypatch.setattr(api, "auth_engine", fake_auth)
 
-    def fake_create_agent(checkpointer=None, model_name=None, api_key=None):
+    def fake_create_agent(checkpointer=None, model_name=None, api_key=None, **kwargs):
         return _FakeAgent()
 
     @asynccontextmanager

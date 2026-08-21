@@ -26,7 +26,12 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, Tool
 # The checkpointer (sqlite self-host / pooled Postgres hosted) is engine-selected
 # in src/platform_engines/checkpointer.py; api.py imports open_checkpointer below.
 
-from src.agents.architect import create_architect_agent, load_system_prompt
+from src.agents.architect import (
+    MODEL_NODE,
+    TOOLS_NODE,
+    create_architect_agent,
+    load_system_prompt,
+)
 from src.agents import runtime_registry
 from src.model_catalog import (
     CODEX_DEFAULT_MODEL,
@@ -42,6 +47,11 @@ from src.utils.paths import is_within
 from src.platform_engines.workspace_provider import get_workspace_provider
 from src.platform_engines.workspace_flusher import get_workspace_flusher
 from src.platform_engines.identity import Action, AuthError, Identity
+from src.platform_engines.provenance import (
+    reset_agent_provenance,
+    resolve_agent_provenance,
+    set_agent_provenance,
+)
 from src.platform_engines import auth as auth_engine
 from src.platform_engines.llm_keys import (
     build_key_vault,
@@ -56,6 +66,7 @@ from src.tools.synthesis_manager import get_run_dir, list_synthesis_runs
 from src.tools import manifest as manifest_mod
 from src.api.actions import build_actions_router
 from src.api import workspace_fs
+from src.utils import skills as skills_mod
 from src.utils import templates as templates_mod
 from src.platform_engines import template_source as template_source_mod
 
@@ -1043,6 +1054,124 @@ async def delete_key(provider: str, identity: Identity = Depends(require_signed_
 
 
 # =============================================================================
+# SKILLS — the built-in pack, and the caller's own layer over it
+# =============================================================================
+# Two layers and four rules, all of them in src.utils.skills: a user skill with
+# the same name replaces the built-in, a name in a small list is off, an updated
+# built-in never overrides a replacement, and the two are never auto-merged.
+# These routes are a thin owner-scoped shell over that one implementation — they
+# add no rule of their own, and they can only ever name the caller's own layer:
+# the owner comes from the resolved identity, never from the path or the body.
+# There is deliberately no route that reads or imports another owner's skills.
+
+class SkillText(BaseModel):
+    text: str
+
+
+class SkillEnabled(BaseModel):
+    enabled: bool
+
+
+def _skill_entry_payload(entry) -> Dict[str, Any]:
+    skill = entry.skill
+    return {
+        "name": entry.name,
+        "layer": entry.layer,
+        "enabled": entry.enabled,
+        "description": skill.description if skill is not None else None,
+        # The one skill with no trigger. The UI marks it differently because its
+        # failure mode is silence — nothing ever says "your test was too easy" —
+        # and a user turning it off must be doing it on purpose, with the cost
+        # in front of them.
+        "always_load": bool(skill is not None and skill.always_load),
+        "builtin_changed": entry.builtin_changed,
+        "error": entry.error,
+    }
+
+
+@app.get("/api/skills")
+async def list_skills_layered(identity: Identity = Depends(get_identity)):
+    """Every skill in force for the caller, and which layer answered for it."""
+    resolved = skills_mod.resolve_skills(_uid(identity))
+    return {
+        "skills": [_skill_entry_payload(e) for e in resolved.entries],
+        # Names switched off that match nothing — a built-in renamed under a
+        # saved choice. Surfaced, never swallowed: silently dropping the entry
+        # would turn a skill the user switched off back on with no trace.
+        "unmatched_disabled": list(resolved.unmatched_disabled),
+    }
+
+
+@app.get("/api/skills/{name}")
+async def read_skill_layered(name: str, identity: Identity = Depends(get_identity)):
+    """One skill's full text, plus the shipped text when there is one.
+
+    Both are returned so the page can show what a replacement replaced and
+    offer a reset, without a second round trip or a second notion of "the
+    built-in version" living in the browser.
+    """
+    uid = _uid(identity)
+    entry = skills_mod.resolve_skills(uid).get(name)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"No skill named '{name}'.")
+    shipped = skills_mod.skills_by_name(skills_mod.SKILLS_ROOT).get(name)
+    payload = _skill_entry_payload(entry)
+    payload["text"] = entry.skill.raw if entry.skill is not None else None
+    payload["builtin_text"] = shipped.raw if shipped is not None else None
+    return payload
+
+
+@app.put("/api/skills/{name}/enabled")
+async def set_skill_enabled(
+    name: str, data: SkillEnabled, identity: Identity = Depends(require_signed_in)
+):
+    """On or off. That is the whole vocabulary — no conditions, no ordering."""
+    try:
+        skills_mod.set_skill_enabled(name, data.enabled, user_id=_uid(identity))
+    except skills_mod.SkillError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"ok": True, "name": name, "enabled": data.enabled}
+
+
+@app.put("/api/skills/{name}")
+async def put_skill(
+    name: str, data: SkillText, identity: Identity = Depends(require_signed_in)
+):
+    """Write (or replace) one of the caller's own skills.
+
+    Validated exactly as discovery validates the shipped pack — same parser,
+    same spec-only frontmatter rule — so a skill saved here is a skill any
+    other Agent Skills client could read.
+    """
+    try:
+        saved = skills_mod.validate_skill_text(data.text)
+    except skills_mod.SkillError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if saved.name != name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The skill names itself '{saved.name}' but was saved as '{name}'.",
+        )
+    try:
+        skills_mod.save_user_skill(data.text, user_id=_uid(identity))
+    except (skills_mod.SkillError, PermissionError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "name": name}
+
+
+@app.delete("/api/skills/{name}")
+async def delete_skill(name: str, identity: Identity = Depends(require_signed_in)):
+    """Drop the caller's copy. Over a built-in that is "reset to shipped"."""
+    try:
+        removed = skills_mod.delete_user_skill(name, user_id=_uid(identity))
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"You have no skill named '{name}'.")
+    return {"ok": True, "name": name}
+
+
+# =============================================================================
 # CODEX ACCOUNT AUTH (device-auth). Always present; degrade cleanly when the
 # Codex extension is off/absent (runtime_enabled=false, not connected).
 # =============================================================================
@@ -1430,11 +1559,19 @@ async def prewarm_thread_runtime(
         return {"state": "unavailable"}
     # Same workspace resolution as a real turn (hydrates in hosted; off-loop).
     workspace = await asyncio.to_thread(get_workspace_provider().workspace_for, session_id)
-    state = await fn(
-        session_id=session_id, thread_id=tid, user_id=uid, workspace=workspace,
-        tier=identity.tier, auth_token=auth_engine.parse_bearer(authorization),
-        thread_row=row,
-    )
+    # ...and the same OWNER binding as a real turn. The runtime's system prompt
+    # carries the caller's own skill layer, and the prompt is part of the warm
+    # worker's fingerprint: pre-warming outside the caller's context would
+    # compose the built-in pack alone, and the first real turn would throw away
+    # the worker it just paid to start.
+    with session_scope(SessionContext(
+        session_id=session_id, workspace=workspace, user_id=uid, tier=identity.tier,
+    )):
+        state = await fn(
+            session_id=session_id, thread_id=tid, user_id=uid, workspace=workspace,
+            tier=identity.tier, auth_token=auth_engine.parse_bearer(authorization),
+            thread_row=row,
+        )
     return {"state": state}
 
 
@@ -1818,6 +1955,11 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
         session_id=session_id, workspace=workspace, user_id=uid, tier=identity.tier,
     ))
 
+    # The provenance stamp bound for the turn currently in flight (see the
+    # native-turn binding below). Held on the connection so it can be released
+    # in LIFO order — before the next turn's, and in the finally below.
+    _turn_prov_token = None
+
     try:
         while True:
             # Receive message from client. A frame replayed from the legacy
@@ -1863,6 +2005,17 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 continue
             # Bump activity + auto-title an untitled thread from the first message.
             session_manager.touch_thread(thread_id, user_id=uid, auto_title_from=message)
+
+            # The previous turn's provenance stamp is released HERE, before the
+            # runtime dispatch below decides whose turn this is — never later.
+            # An extension turn resolves its own stamp inside
+            # ``session_request_scope``, and that scope deliberately does not
+            # re-resolve over one already bound ("the outermost turn's stamp
+            # wins"), so a native stamp left over from the previous message on
+            # this socket would be the stamp a Codex run recorded.
+            if _turn_prov_token is not None:
+                reset_agent_provenance(_turn_prov_token)
+                _turn_prov_token = None
 
             # --- Runtime dispatch seam (plans/codex-runtime-extension.md) ------
             # Extensions (e.g. Codex) register a handler + own a per-thread
@@ -1989,6 +2142,52 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 continue
             # --- native LangChain turn (unchanged) ----------------------------
 
+            # Bind "what is driving this turn" — the prompt identity and the
+            # skills in force — for the length of this turn.
+            #
+            # ``session_request_scope`` is the writer everywhere ELSE (REST
+            # actions, MCP calls); this connection never enters it. It binds
+            # its SessionContext once, at connect, and runs the agent inline —
+            # so the primary experiment path, the native chat turn, dispatched
+            # synthesis with NOTHING resolved and ``run_meta.json`` recorded
+            # skills_loaded / skills_sha / skills_disabled as ABSENT. Those are
+            # the fields that say which knowledge produced a number, and the
+            # runs people quote are these runs.
+            #
+            # Per TURN, not per connection: a user can edit or switch off a
+            # skill between two messages on one socket, and the second turn
+            # must stamp what the second turn actually ran on. Strict LIFO —
+            # the previous turn's token was released above, before this one is
+            # taken, and the last one in the WebSocket's `finally` — because
+            # contextvar tokens must be reset in the order they were set.
+            #
+            # Absent stays distinguishable from empty: this binds only what a
+            # resolver actually produced, and on failure binds nothing at all
+            # rather than an empty stamp that would read as "looked, found
+            # none". Provenance must never be the thing that fails a turn.
+            #
+            # Resolved ONCE and used twice: the same object is stamped here and
+            # composed into the system prompt at agent construction below. Two
+            # resolutions would be two reads of the skill store, and a skill
+            # edited between them would reach the model while the run recorded
+            # the digest of what it replaced — a stamp that disagrees with the
+            # prompt it claims to describe. On failure both fall back to None:
+            # the stamp binds nothing, and construction resolves for itself and
+            # raises there if the layer is genuinely unreadable, which is where
+            # that refusal belongs.
+            _turn_skills = None
+            try:
+                from src.utils.skills import resolve_skills
+
+                _turn_skills = resolve_skills(uid)
+                _turn_prov_token = set_agent_provenance(
+                    resolve_agent_provenance(user_id=uid, skills=_turn_skills)
+                )
+            except Exception as _prov_exc:
+                print(f"[WARN] could not resolve turn provenance: {_prov_exc}")
+                _turn_skills = None
+                _turn_prov_token = None
+
             # One live run per thread: a new message SUPERSEDES a run that is
             # still executing for this thread (left running headless after a
             # page refresh, or orphaned by a dropped socket). Two concurrent
@@ -2034,12 +2233,16 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     model_name = normalize_model_name(llm_key.model)
 
                 agent_graph = create_architect_agent(
-                    checkpointer=memory, model_name=model_name, api_key=llm_key.api_key
+                    checkpointer=memory, model_name=model_name, api_key=llm_key.api_key,
+                    skills=_turn_skills,
                 )
-                # Step budget per turn (E6): config, not hard-code. Raised to
-                # 80 by default — live FIFO showcase turns hit 50 in 3 of 4
-                # runs; graceful limit handling below is the real fix, the
-                # headroom just makes it rarer.
+                # Step budget per turn (E6): config, not hard-code. The
+                # default buys ~27 model calls — live FIFO showcase turns hit
+                # 50 graph steps in 3 of 4 runs; graceful limit handling below
+                # is the real fix, the headroom just makes it rarer. The number
+                # counts graph STEPS, so it depends on the agent's node count
+                # per round; the derivation lives with the default in
+                # src/platform_engines/settings.py.
                 config = {
                     "configurable": {"thread_id": thread_id},
                     "recursion_limit": get_settings().chat_recursion_limit,
@@ -2059,8 +2262,13 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             tool_call_id=tool_id,
                         ))
 
-                if not snapshot.values or not snapshot.values.get("messages"):
-                    input_messages.append(SystemMessage(content=load_system_prompt()))
+                # No system message is written into the thread. The prompt
+                # reaches the model as `create_agent(system_prompt=...)`, which
+                # is composed fresh every turn, so storing a copy in the
+                # checkpoint only pinned the version this thread STARTED on —
+                # and the model then received both. The middleware drops any
+                # stored one (threads created before this still carry theirs);
+                # not writing new ones is the other half of the same fix.
                 input_messages.append(("user", message))
 
                 # Stream the agent turn. A background task drains astream() into
@@ -2073,7 +2281,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 # generator itself: asyncio.wait_for cancels its awaitable on
                 # timeout, and cancelling astream.__anext__ threw CancelledError
                 # into the running graph — aborting the very long tool call
-                # (e.g. wait_for_synthesis) the ping was meant to protect
+                # (e.g. a bounded get_synthesis_status wait) the ping was meant to protect
                 # (plans/phase2/REVIEW_FINDINGS.md P0 #2).
                 total_input_tokens = 0
                 total_output_tokens = 0
@@ -2156,11 +2364,17 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                 segment_text = ""
                 segment_id = None
 
+                # Node names come from src.agents.architect, which builds the
+                # graph — never spelled as literals here. The framework has
+                # already renamed the model node once, and getting it wrong is
+                # SILENT: the turn runs and checkpoints while the socket goes
+                # completely quiet. One definition, asserted against the real
+                # compiled graph in tests/test_ws_golden_frames.py.
                 def _handle_updates(update: dict) -> List[dict]:
                     nonlocal total_input_tokens, total_output_tokens, segment_text, segment_id
                     frames: List[dict] = []
-                    if "agent" in update:
-                        msg = update["agent"]["messages"][-1]
+                    if MODEL_NODE in update:
+                        msg = update[MODEL_NODE]["messages"][-1]
                         text = get_clean_content(msg)
                         if text:
                             frames.append({"type": "text", "content": text})
@@ -2189,8 +2403,8 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             # the background incremental flush so a mid-turn
                             # instance drain can't lose the turn's files.
                             get_workspace_flusher().mark_dirty(session_id)
-                    elif "tools" in update:
-                        msg = update["tools"]["messages"][-1]
+                    elif TOOLS_NODE in update:
+                        msg = update[TOOLS_NODE]["messages"][-1]
                         result = format_tool_result_for_api(msg.content)
                         call_meta = pending_tool_calls.pop(msg.tool_call_id, {})
                         log_tool_result(
@@ -2262,7 +2476,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                             )
                         if mode == "messages":
                             chunk, meta = data
-                            if (meta or {}).get("langgraph_node") == "agent":
+                            if (meta or {}).get("langgraph_node") == MODEL_NODE:
                                 piece = get_clean_content(chunk)
                                 if piece:
                                     chunk_id = getattr(chunk, "id", None)
@@ -2417,6 +2631,16 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             await websocket.send_json({"type": "error", "error": str(e)})
         except:
             pass
+    finally:
+        # Bind, and unbind in finally — the discipline the job runner had to
+        # learn. This context dies with the connection's task, so nothing can
+        # read a leftover stamp; releasing it anyway is what keeps the rule one
+        # rule instead of a judgement call about which bindings are pooled.
+        if _turn_prov_token is not None:
+            try:
+                reset_agent_provenance(_turn_prov_token)
+            except Exception:
+                pass
 
 
 # =============================================================================

@@ -26,7 +26,7 @@ describe("reopen reconciliation of an interrupted trace (F4)", () => {
       {
         role: "assistant",
         content: "",
-        tool_calls: [{ id: "t1", name: "wait_for_synthesis", args: {} }],
+        tool_calls: [{ id: "t1", name: "get_synthesis_status", args: {} }],
         tool_results: [{ tool_call_id: "t1", status: "running", content: "running" }],
       },
     ]);
@@ -64,7 +64,7 @@ describe("reopen reconciliation of an interrupted trace (F4)", () => {
       {
         role: "assistant",
         content: "",
-        tool_calls: [{ id: "t1", name: "simulation_tool", args: {} }],
+        tool_calls: [{ id: "t1", name: "run_simulation", args: {} }],
         tool_results: [{ tool_call_id: "t1", status: "running", content: "running" }],
       },
     ]);
@@ -93,7 +93,7 @@ describe("reopen reconciliation of an interrupted trace (F4)", () => {
       {
         role: "assistant",
         content: "Built and verified the FIFO.",
-        tool_calls: [{ id: "t1", name: "simulation_tool", args: {} }],
+        tool_calls: [{ id: "t1", name: "run_simulation", args: {} }],
         tool_results: [{ tool_call_id: "t1", status: "success", content: "PASS" }],
       },
     ]);
@@ -111,11 +111,11 @@ describe("reopen reconciliation of an interrupted trace (F4)", () => {
       {
         role: "assistant",
         content: "Checking.Done.",
-        tool_calls: [{ id: "t1", name: "simulation_tool", args: {} }],
+        tool_calls: [{ id: "t1", name: "run_simulation", args: {} }],
         tool_results: [{ tool_call_id: "t1", status: "success", content: "PASS" }],
         blocks: [
           { type: "text", content: "Checking." },
-          { type: "tool", toolCall: { id: "t1", name: "simulation_tool", args: {} } },
+          { type: "tool", toolCall: { id: "t1", name: "run_simulation", args: {} } },
           { type: "text", content: "Done." },
         ],
       },

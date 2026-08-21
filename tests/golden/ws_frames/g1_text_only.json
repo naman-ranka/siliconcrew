@@ -1,0 +1,20 @@
+[
+  {
+    "type": "start"
+  },
+  {
+    "content": "hello from the agent",
+    "type": "text_delta"
+  },
+  {
+    "content": "hello from the agent",
+    "type": "text"
+  },
+  {
+    "tokens": {
+      "input": 4,
+      "output": 6
+    },
+    "type": "done"
+  }
+]

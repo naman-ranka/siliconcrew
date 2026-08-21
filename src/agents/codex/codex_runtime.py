@@ -27,8 +27,7 @@ _CODEX_TOOL_POLICY = """
 # Tool policy — STRICT (SiliconCrew)
 You are the SiliconCrew RTL agent. Use ONLY the SiliconCrew MCP tools (the
 `siliconcrew` server: get_manifest, list_files_tool, read_file, write_file,
-edit_file_tool, linter_tool, simulation_tool, run_isolated_simulation,
-cocotb_tool, sby_tool, schematic_tool, waveform_tool, start_synthesis, etc.)
+edit_file, linter_tool, run_simulation, waveform_tool, start_synthesis, etc.)
 for EVERYTHING — inspecting, reading, editing, linting, simulation, formal,
 and synthesis.
 
@@ -41,13 +40,13 @@ say so plainly — never fall back to the shell.
 Your Codex sandbox is configured read-only ON PURPOSE: it blocks YOUR OWN
 shell and filesystem access so that the SiliconCrew tools stay the single
 path through which anything happens. It says NOTHING about the workspace.
-The workspace is writable, and write_file / edit_file_tool are how you write
+The workspace is writable, and write_file / edit_file are how you write
 to it — they run server-side, outside your sandbox, and they work.
 
 So: NEVER refuse an edit because of the sandbox, and never tell the user the
 workspace is read-only, mounted read-only, or that you lack write permission
 — that is false, and it strands them. If asked to change a file, CALL
-write_file or edit_file_tool. If such a call actually fails, report THAT
+write_file or edit_file. If such a call actually fails, report THAT
 tool's real error verbatim. Only a failed tool call is evidence you cannot
 write; the sandbox setting is not.
 """
@@ -123,6 +122,14 @@ class CodexRuntimeHandler:
         # ONE composition used by run_turn AND prewarm — the worker fingerprint
         # includes the prompt, so the two must build it identically or the
         # first real turn would discard its own pre-warmed worker.
+        #
+        # Skills ride the loader (src.utils.architect_prompt.load_system_prompt),
+        # which appends the index AND the body of the always-loaded skill. That
+        # is deliberate and load-bearing: Codex has no middleware of ours, so a
+        # skill block composed only on the native side would leave this runtime
+        # — the one the stranger test measures — without the one skill whose
+        # absence produces no error anywhere (finding A3-H2). Do not "optimise"
+        # this to read the prompt file directly.
         policy_on = os.environ.get("CODEX_TOOL_POLICY", "1").lower() not in ("0", "false", "no")
         return self._load_system_prompt() + (_CODEX_TOOL_POLICY if policy_on else "")
 

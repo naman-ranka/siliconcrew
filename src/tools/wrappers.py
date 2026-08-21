@@ -1,11 +1,10 @@
 import os
 import json
 import time
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from src.tools.run_linter import run_linter
-from src.tools.run_simulation import run_simulation
 from src.tools.read_waveform import read_waveform
 from src.tools.run_cocotb import run_cocotb
 from src.tools.run_sby import run_sby
@@ -28,6 +27,144 @@ from src.tools.file_patch import apply_unified_patch
 # sites in this file resolve the workspace via get_workspace_path().
 from src.utils.workspace import get_workspace_path, resolve_in_workspace
 from src.utils.session_context import current_session_id
+
+
+# =============================================================================
+# Tool policy — declared AT the tool, read everywhere
+# =============================================================================
+# One rule: a tool's policy is written once, on the tool itself. Nothing else
+# in this repo may hand-maintain a list of tool names to classify them.
+#
+# Carrier: ``__tool_policy__`` on the undecorated function, which LangChain's
+# ``@tool`` keeps reachable as ``StructuredTool.func`` (already relied on by
+# ``tool_catalog.validate_and_execute``). ``BaseTool.metadata`` was the
+# alternative and was rejected on evidence: ``langchain_core.tools.tool()``
+# (1.6.0) takes no ``metadata`` argument, so it could only be assigned AFTER
+# the definition — a second site, i.e. exactly the drift this removes.
+#
+# Readers (there are no others; add one and add it here):
+#   category         -> tool_catalog.TOOL_CATEGORIES / category_of / build_catalog;
+#                       mcp_server picks Action.SYNTHESIZE vs Action.SAVE from it
+#   protected        -> tool_catalog.PROTECTED_TOOLS -> /invoke sign-in gate
+#                       (actions.py) and the MCP capability gate
+#   mutates          -> tool_catalog.MUTATING_TOOLS -> hosted workspace sync
+#                       (mcp_server, actions.run_scoped) and the catalog flag
+#   async_job        -> tool_catalog.ASYNC_TOOLS -> catalog flag; the UI renders
+#                       dispatch-then-poll instead of blocking
+#   surfaces         -> which registries a tool is in: "agent" (architect_tools),
+#                       "mcp" (mcp_tools), "ui" (Command Surface; absence is
+#                       tool_catalog.EXCLUDED_FROM_UI), "codex" (the extra tool
+#                       only a Codex-launched MCP server advertises, on top of
+#                       the mcp set)
+#   requires_session -> tool_catalog.requires_session() -> the MCP server's
+#                       session gate. False ONLY for the session tools below:
+#                       the gate fires before every call, so a tool a stranger
+#                       needs BEFORE a session exists must say so here. This is
+#                       what the gate reads instead of naming those tools.
+#   disabled_when_bound
+#                    -> mcp_server's bound-session refusal AND the codex
+#                       engine's disabled_tools. A server bound to ONE session
+#                       (Codex) cannot offer tools that create, list, switch or
+#                       delete sessions; the tools say so, the two consumers
+#                       read it.
+#   attempt_role     -> attempt_logger: which tool calls open a new attempt
+#                       (a change) and which close one (a checkpoint)
+#   attempt_parser   -> attempt_logger: how THIS tool's result fills the
+#                       attempt summary. Declared here so there is no
+#                       name-keyed dispatch chain in the logger.
+
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Callable
+
+from src.utils.attempt_logger import (
+    attempt_lint,
+    attempt_simulation,
+    attempt_synthesis_dispatch,
+    attempt_synthesis_metrics,
+)
+
+# Where a tool is offered. "agent" is the in-process architect's tool list;
+# "mcp" is what a default MCP connection is advertised; "ui" is the Command
+# Surface / REST /invoke; "codex" is served ONLY by a server started with
+# --codex-tools, in addition to the "mcp" set — that flag is how our own first
+# party clients start it (the Codex runtime and the benchmark harness), so it
+# means "this client asked for the extra tools", not "this client is Codex".
+SURFACE_NAMES = frozenset({"agent", "mcp", "ui", "codex"})
+ALL_SURFACES = ("agent", "mcp", "ui")
+
+# HIDDEN BY DEFAULT, and hidden from WHOM: a rare-flow or environment-dependent
+# tool that no longer costs an agent description bytes it will almost never use.
+# It is NOT deleted and NOT unreachable — a person can still run it from the
+# Command Surface, and a first-party client that started the server with
+# --codex-tools is still offered it. What it leaves is the two surfaces that pay
+# for every description on every turn: the architect's tool list, and the
+# default MCP advertisement a stranger's client caches.
+#
+# Formal verification and cocotb are differentiators; they are hidden because
+# they are rarely the next step, never because they are unimportant. Re-enabling
+# them for an agent is connect-time tool scoping, which P6 owns; there is
+# deliberately no runtime toggle (the last one leaked across tenants).
+HIDDEN_BY_DEFAULT = ("ui", "codex")
+
+# How a tool call moves the attempt log forward (see attempt_logger).
+ATTEMPT_ROLES = frozenset({"rtl_change", "synth_change", "checkpoint"})
+
+
+@dataclass(frozen=True)
+class ToolPolicy:
+    """Everything about a tool that is not derivable from its own schema.
+
+    Every field is required except ``disabled_when_bound`` and the two attempt
+    fields, whose honest defaults are "a session-bound server may run this" and
+    "this tool does not take part in attempt tracking". Omitting a required
+    field is a TypeError at import; omitting the whole policy is caught by
+    tests/test_tool_policy.py.
+    """
+
+    category: str
+    protected: bool
+    mutates: bool
+    async_job: bool
+    surfaces: frozenset
+    requires_session: bool
+    disabled_when_bound: bool = False
+    attempt_role: "str | None" = None
+    attempt_parser: "Callable | None" = None
+
+    def __post_init__(self):
+        if not self.category or not self.category.strip():
+            raise ValueError("ToolPolicy.category must be a non-empty category name")
+        surfaces = frozenset(self.surfaces)
+        unknown = surfaces - SURFACE_NAMES
+        if unknown:
+            raise ValueError(f"unknown surface(s) {sorted(unknown)}; known: {sorted(SURFACE_NAMES)}")
+        if not surfaces:
+            raise ValueError("a tool with no surface is unreachable — delete it instead")
+        object.__setattr__(self, "surfaces", surfaces)
+        if self.attempt_role is not None and self.attempt_role not in ATTEMPT_ROLES:
+            raise ValueError(f"unknown attempt_role {self.attempt_role!r}; known: {sorted(ATTEMPT_ROLES)}")
+
+
+def policy(**fields):
+    """Attach a :class:`ToolPolicy` to the function ``@tool`` will wrap.
+
+    Applied UNDER ``@tool`` so the attribute lands on the plain function that
+    survives as ``StructuredTool.func``::
+
+        @tool
+        @policy(category="essential", ...)
+        def read_file(filename: str) -> str: ...
+    """
+    p = ToolPolicy(**fields)
+
+    def attach(fn):
+        fn.__tool_policy__ = p
+        return fn
+
+    return attach
+
 
 
 def _normalize_verilog_files_arg(verilog_files: list[str] | str) -> list[str]:
@@ -78,6 +215,9 @@ class WriteFileArgs(BaseModel):
 
 
 @tool(args_schema=WriteFileArgs)
+@policy(category="essential", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="rtl_change")
 def write_file(filename: str, content: str | None = None) -> str:
     """
     Writes content to a file in the workspace.
@@ -119,15 +259,18 @@ _READ_FILE_SOURCE_EXTS = {".v", ".sv", ".vh", ".svh", ".sdc", ".yaml", ".yml", "
 _READ_FILE_SOURCE_MAX_BYTES = 1024 * 1024
 
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="essential", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def read_file(filename: str) -> str:
     """
     Reads content from a file in the workspace. Large files (over 64 KiB) are
     returned as head + tail with an explicit omission marker — for a systematic
     failure the first occurrences are the informative ones, and an unbounded
     read of a multi-MB sim log would swamp the model's context.
+
     Args:
-        filename: Name of the file to read.
+        filename: File to read, e.g. 'counter.v' or 'sim_runs/sim_0001/sim.log'.
     """
     workspace = get_workspace_path()
     try:
@@ -159,17 +302,27 @@ def read_file(filename: str) -> str:
         f"{tail}"
     )
 
-@tool
-def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
+@tool(parse_docstring=True)
+@policy(category="essential", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="checkpoint", attempt_parser=attempt_lint)
+def linter_tool(
+    verilog_files: list[str] | str,
+    engine: Literal["auto", "iverilog", "verilator"] = "auto",
+) -> str:
     """
     Lints Verilog files. Supports single-file or multi-file linting.
+
     Args:
-        verilog_files: Filename string or list of filenames (e.g., 'design.v' or ['design.v','tb.v']).
-        When linting a testbench, include all dependent RTL files in the same call
-        (for example ['seq_detector.v', 'seq_detector_tb.v']) so module references resolve.
-        engine: 'auto' (verilator if installed, else iverilog), 'iverilog'
-        (syntax/elaboration only), or 'verilator' (real lint: latches, width
-        mismatches, unsynthesizable constructs — lint RTL only, not testbenches).
+        verilog_files: Filename string or list of filenames (e.g. 'design.v' or
+            ['design.v', 'tb.v']). When linting a testbench, include all
+            dependent RTL files in the same call (for example
+            ['seq_detector.v', 'seq_detector_tb.v']) so module references
+            resolve.
+        engine: 'auto' picks verilator if installed, else iverilog. 'iverilog'
+            is syntax/elaboration only. 'verilator' is a real lint (latches,
+            width mismatches, unsynthesizable constructs) — lint RTL only with
+            it, not testbenches.
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
@@ -200,82 +353,51 @@ def linter_tool(verilog_files: list[str] | str, engine: str = "auto") -> str:
     lines = "\n".join(_fmt(d) for d in (errors + warnings)) or result["stderr"]
     return f"Lint FAILED — {len(errors)} error(s), {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
 
-@tool
-def simulation_tool(
-    verilog_files: list[str],
-    top_module: str,
-    mode: str = "rtl",
-    run_id: str = None,
-    netlist_file: str = None,
-    platform: str = None,
-    sim_profile: str = "auto",
-    pass_marker: str = "",
-) -> str:
-    """
-    Runs RTL or post-synthesis simulation with strict status contracts.
-    Args:
-        verilog_files: List of filenames to compile (usually includes testbench).
-        top_module: Name of the top-level module in the testbench.
-        mode: 'rtl' or 'post_synth'.
-        run_id: Optional synthesis run ID for post-synth mode.
-        netlist_file: Optional explicit netlist path.
-        platform: Optional platform override for post-synth mode.
-        sim_profile: 'auto' (default), 'pinned', or 'compat'. Auto selects 'compat' for ASAP7 post-synth.
-        pass_marker: stdout substring required for test_passed status. Leave empty
-            to use the manifest's passMarker field (set it with update_manifest so
-            it matches what your testbench $displays), else "TEST PASSED".
-    """
-    workspace = get_workspace_path()
-    verilog_files = _normalize_verilog_files_arg(verilog_files)
-    abs_files = []
-    for f in verilog_files or []:
-        abs_files.append(f if os.path.isabs(f) else os.path.join(workspace, f))
-
-    for f in abs_files:
-        if not os.path.exists(f):
-            return f"Error: File {f} does not exist."
-
-    abs_netlist = None
-    if netlist_file:
-        abs_netlist = netlist_file if os.path.isabs(netlist_file) else os.path.join(workspace, netlist_file)
-
-    result = run_simulation(
-        verilog_files=abs_files,
-        top_module=top_module,
-        cwd=workspace,
-        mode=mode,
-        run_id=run_id,
-        netlist_file=abs_netlist,
-        platform=platform,
-        sim_profile=sim_profile,
-        pass_marker=pass_marker,
-    )
-    return json.dumps(result, indent=2)
-
 from src.tools.search_logs import search_logs
 from src.tools import manifest as manifest_mod
 from src.tools.sim_manager import run_sim_isolated
 
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="manifest", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def get_manifest() -> str:
     """
-    Returns the design manifest (files + roles + synthTop/simTop + clock + platform).
-    The manifest is the single source of truth shared with the UI; auto-derived if absent.
+    Returns the design manifest: every design file with its role ({roles}),
+    synthTop, simTop, clockPeriodNs, platform, passMarker, the derived testbench
+    list, and warnings such as two files declaring the same module. Derived by
+    scanning the workspace when absent.
+    This is what decides which files each stage compiles, and where
+    run_simulation gets its file set, its simTop and its default pass marker.
     """
     workspace = get_workspace_path()
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
     return json.dumps(m.model_dump(), indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="manifest", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def update_manifest(updates_json: str) -> str:
     """
     Upserts manifest fields. Pass a JSON object with any of:
-    synthTop, simTop, clockPeriodNs, platform, passMarker (the stdout substring
-    your testbench prints on success — simulations use it as their default pass
-    marker), or files: [{name, role}] to override roles.
+      synthTop / simTop  - top module for synthesis / simulation
+      clockPeriodNs      - target clock period, nanoseconds
+      platform           - PDK used for synthesis and post-synth stdcell models
+      passMarker         - the stdout substring your testbench prints on
+                           success; every simulation uses it as its default
+                           pass criterion
+      ignore             - fnmatch globs (e.g. ["vendor/**"]) excluded from the
+                           file scan; newly ignored files drop out immediately
+      files              - [{"path": "rtl/counter.v", "role": "rtl"}] to
+                           override a file's role. Address files by path: a
+                           bare basename is honored only when it is unique, and
+                           is a silent no-op when it is not.
     Roles: {roles}. An unknown role is rejected and nothing is written.
+    testbenches and warnings are derived and cannot be set here.
+
+    Args:
+        updates_json: The object above, serialized as a JSON string.
     """
     workspace = get_workspace_path()
     try:
@@ -294,9 +416,19 @@ def update_manifest(updates_json: str) -> str:
 # The role list the agent and MCP clients see is GENERATED from the FileRole
 # Literal — a hand-copied list here is exactly how a tool description starts
 # advertising roles that no longer exist (or hiding ones that do).
-update_manifest.description = update_manifest.description.replace(
-    "{roles}", " | ".join(manifest_mod.ROLES)
-)
+for _t in (get_manifest, update_manifest):
+    _roles = " | ".join(manifest_mod.ROLES)
+    _t.description = _t.description.replace("{roles}", _roles)
+    # The description is not the only place a client reads. parse_docstring also
+    # copies the docstring onto the args schema, whose ROOT description MCP
+    # serves in inputSchema and the Command Surface renders — substituting only
+    # the tool description shipped a literal "{roles}" to every MCP client.
+    if _t.args_schema is not None:
+        _doc = getattr(_t.args_schema, "__doc__", None)
+        if _doc and "{roles}" in _doc:
+            _t.args_schema.__doc__ = _doc.replace("{roles}", _roles)
+del _roles
+del _t
 
 
 def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -> dict:
@@ -318,74 +450,161 @@ def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -
     return {"manifestWarnings": warnings, **result}
 
 
-@tool
-def run_isolated_simulation(
+@tool(parse_docstring=True)
+@policy(category="essential", protected=False, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        # Every simulation leaves the same attempt record. Declaring none made a
+        # passing run record as "not_run" — the honest-state invariant inverted.
+        attempt_role="checkpoint", attempt_parser=attempt_simulation)
+def run_simulation(
     sim_top: str = "",
-    mode: str = "rtl",
+    verilog_files: list[str] | str = None,
+    mode: Literal["rtl", "post_synth"] = "rtl",
     run_id: str = None,
-    sim_profile: str = "auto",
+    netlist_file: str = None,
+    platform: str = None,
+    sim_profile: Literal["auto", "pinned", "compat"] = "auto",
     pass_marker: str = "",
 ) -> str:
     """
-    Runs a manifest-driven simulation in an isolated sim_runs/sim_NNNN/ directory
-    (its own VCD, persisted run record + provenance). Prefer this over simulation_tool
-    so runs stay comparable and waveforms never collide.
+    Compiles and runs an iverilog simulation in its own sim_runs/sim_NNNN/
+    directory: its own VCD, its $readmem data files staged in beside it, a
+    persisted run record and provenance. Nothing overwrites the previous run.
+    By default it compiles what the MANIFEST says to simulate (roles rtl + tb +
+    include) — fix the roles with update_manifest rather than listing files by
+    hand. Pass verilog_files only to compile a set the manifest does not
+    describe.
+    Returns JSON. `status` is passed | failed; the finer verdict is `simStatus`
+    (compile_failed | sim_failed | test_failed | test_passed). A run whose
+    $readmem data never loaded is sim_failed even if it printed the pass marker.
+    Also `vcdPath` — the VCD to hand to waveform_tool — `xDetected` (x/z seen
+    after t=0; a warning surface, not a verdict), `stagedDataFiles`, and for
+    post_synth the run, netlist and stdcell set that were resolved. `warnings`
+    carries "x-blind-pass" when a run PASSED while x/z was present: `x !== x` is
+    false, so such a pass may be a comparison against an undefined value rather
+    than a working design. Treat it as unproven until the waveform says
+    otherwise.
+
     Args:
-        sim_top: testbench top module; defaults to the manifest's simTop.
-        mode: 'rtl' or 'post_synth'.
-        run_id: optional synthesis run id for post_synth mode (resolves the netlist).
-        sim_profile: 'auto' (default), 'pinned', or 'compat'.
-        pass_marker: stdout substring required for a passing status. Leave empty
-            to use the manifest's passMarker field (set it with update_manifest so
-            it matches what your testbench $displays), else "TEST PASSED".
+        sim_top: Testbench top module. Empty uses the manifest's simTop.
+        verilog_files: Explicit file list to compile, testbench included — the
+            escape hatch for a set the manifest does not describe. Omit it (the
+            normal case) to compile the manifest's simulate set.
+        mode: 'rtl' compiles the sources. 'post_synth' drops the design RTL,
+            substitutes the gate netlist from a synthesis run, and links
+            stdcell models.
+        run_id: post_synth only - which synthesis run's netlist to simulate.
+            Omit for the most recent run.
+        netlist_file: post_synth only - an explicit gate netlist, overriding the
+            one the run recorded.
+        platform: post_synth only - the PDK whose stdcell models get linked.
+            Omit to use the platform the run itself recorded; that is almost
+            always right, and a wrong value here produces unresolved cells.
+        sim_profile: 'pinned' links the vendor's real stdcell models. 'compat'
+            substitutes SiliconCrew's behavioral models, which exist for asap7
+            ONLY and are a no-op on every other platform. 'auto' picks compat
+            for asap7 and pinned elsewhere.
+        pass_marker: stdout substring that means PASS. Empty uses the manifest's
+            passMarker, then "TEST PASSED".
     """
     workspace = get_workspace_path()
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
+    files = _normalize_verilog_files_arg(verilog_files) if verilog_files else []
+    explicit = bool(files)
+
+    if explicit:
+        for f in files:
+            path = f if os.path.isabs(f) else os.path.join(workspace, f)
+            if not os.path.exists(path):
+                return f"Error: File {f} does not exist."
+    else:
+        files = manifest_mod.files_for_stage(m, "simulate")
+        if not files:
+            return ("Error: manifest has no rtl/tb files to simulate. Set the roles "
+                    "with update_manifest, or pass verilog_files.")
+
     top = sim_top or m.simTop
     if not top:
         return "Error: no simTop in manifest and none provided. Set it with update_manifest."
-    files = manifest_mod.files_for_stage(m, "simulate")
-    if not files:
-        return "Error: manifest has no rtl/tb files to simulate."
+
     result = run_sim_isolated(
         workspace=workspace,
         verilog_files=files,
         top_module=top,
         mode=mode,
         run_id=run_id,
+        netlist_file=netlist_file,
+        # The manifest's platform is design INTENT — a fallback consulted only
+        # when the synthesis run recorded none. An explicit argument is the
+        # caller pinning the stdcell set and wins outright.
         platform=m.platform,
+        platform_override=platform,
         sim_profile=sim_profile,
         pass_marker=pass_marker,
     )
     return json.dumps(_with_manifest_warnings(result, workspace, files), indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="synthesis", protected=True, mutates=True, async_job=True,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="synth_change", attempt_parser=attempt_synthesis_dispatch)
 def start_synthesis(
     verilog_files: list[str],
     top_module: str,
     platform: str = "sky130hd",
     clock_period_ns: float = 10.0,
-    utilization: int = 5,
+    utilization: int = 40,
     aspect_ratio: float = 1.0,
     core_margin: float = 2.0,
     run_equiv: bool = False,
-    constraints_mode: str = "auto",
-    max_stage: str = "finish",
+    constraints_mode: Literal["auto", "strict", "bypass"] = "auto",
+    max_stage: Literal[
+        "constraints", "synth", "floorplan", "place", "cts", "grt", "route", "finish"
+    ] = "finish",
 ) -> str:
     """
-    Starts synthesis asynchronously and returns quickly with the run_id —
-    the ONE durable handle for this run (poll it with get_synthesis_status).
-    By default (max_stage="finish") this runs the FULL RTL->GDS ORFS flow.
-    Set max_stage="synth" for a fast synthesis-only PPA estimate (area/cell
-    count without place-and-route timing/power), or stop after any stage:
-    constraints|synth|floorplan|place|cts|grt|route|finish. Stages after
-    max_stage are recorded as "skipped". Continue a partial run toward GDS
-    later with retry_pd starting from the next stage.
-    clock_period_ns is ALWAYS nanoseconds, on every platform — it is
-    converted internally to the platform's SDC time unit (e.g. ps on asap7),
-    and reported metrics (wns_ns/tns_ns/fmax_mhz/power_mw) are always in the
-    units their names say.
+    Starts an ORFS run and returns immediately with `run_id` — the one durable
+    handle for it. Poll get_synthesis_status until status is completed or failed
+    (a full flow is typically 8-40 minutes), then read get_synthesis_metrics.
+
+    Args:
+        verilog_files: RTL to synthesize. Do not include the testbench.
+        top_module: Top module to synthesize.
+        platform: ORFS PDK. Known good: sky130hd, sky130hs, asap7, nangate45,
+            ihp-sg13g2, gf180. Not a closed list — any platform your ORFS image
+            provides is passed through.
+        clock_period_ns: Target clock period, ALWAYS nanoseconds on every
+            platform (converted internally to the PDK's SDC time unit, e.g. ps
+            on asap7). Reported metrics are likewise in the units their names
+            carry: wns_ns, tns_ns, fmax_mhz, power_mw.
+        utilization: Percent of the core area filled with standard cells, 1-100
+            (clamped). 40 suits a standard design; raise it to shrink the die
+            once routing is comfortable. Lower it for a very small design, or
+            after a PDN-0185 failure (floorplan too small for the power grid).
+            Whether 40 trips PDN-0185 on a sub-30-cell design is UNMEASURED —
+            on a design that small, set core_margin >= 4 (below) and drop
+            utilization if the floorplan stage fails.
+        aspect_ratio: Core height divided by width. Raise it when
+            placement-driven congestion is what is costing timing.
+        core_margin: Empty core ring around the placeable area, in microns. Use
+            >= 4 for very small designs (under ~30 cells).
+        run_equiv: Run the post-synthesis logical-equivalence check. Skipped
+            automatically on a partial flow.
+        constraints_mode: How this run's SDC gets built. 'auto' uses the spec's
+            clock when the spec's module matches top_module, and otherwise falls
+            back to a default clock and says so in the run's constraints_note
+            and clock_source. 'strict' refuses to run rather than fall back: no
+            spec, a spec/module mismatch, or no clk/clock/clk_i input is an
+            error. 'bypass' ignores the spec entirely and constrains a port
+            literally named 'clk' at clock_period_ns; that port is NOT checked
+            against the netlist, so if this design's clock has another name the
+            run is UNCONSTRAINED and still reports "completed", with timing
+            numbers that mean nothing. Use bypass only to force a run through.
+        max_stage: Stop after this stage. 'finish' is the full RTL-to-GDS flow;
+            'synth' is a fast area/cell-count estimate with no place-and-route
+            timing or power. Later stages are recorded as "skipped"; continue a
+            partial run toward GDS with retry_pd.
     """
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
@@ -413,20 +632,39 @@ def start_synthesis(
     return json.dumps(_with_manifest_warnings(result, workspace, abs_files), indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="synthesis", protected=True, mutates=True, async_job=True,
+        surfaces=ALL_SURFACES, requires_session=True)
 def retry_pd(
     run_id: str,
-    start_stage: str,
-    max_stage: str = "finish",
+    start_stage: Literal["floorplan", "place", "cts", "grt", "route", "finish"],
+    max_stage: Literal["floorplan", "place", "cts", "grt", "route", "finish"] = "finish",
     orfs_overrides_json: str = "",
     timeout_sec: int = 0,
 ) -> str:
     """
-    Creates a child PD retry run from an existing synthesis run.
-    Validates the required checkpoint for start_stage, copies prerequisites into a new run,
-    and reruns only the requested downstream ORFS do-* stages.
-    timeout_sec=0 (default) uses the stage-aware ceiling for the run; pass a
-    positive value only to LOWER it (a larger request is capped at the ceiling).
+    Creates a CHILD run from an existing synthesis run and reruns only the
+    physical-design stages from start_stage onward, reusing the parent's
+    checkpoints. The parent is never modified. Async, like start_synthesis: it
+    returns a new run_id to poll.
+    Use it to try a physical knob without re-synthesizing. When the child is
+    terminal, call compare_pd_runs(child_run_id) for the parent-vs-child delta.
+
+    Args:
+        run_id: The parent run to branch from.
+        start_stage: First stage to rerun. The parent must have produced the
+            checkpoint that feeds it, so a partial parent limits how far back
+            you can start; the error names the stage you can resume from.
+        max_stage: Last stage to run. Must be at or after start_stage.
+        orfs_overrides_json: JSON object of ORFS make variables for this child,
+            e.g. {"PLACE_DENSITY": 0.15}. Keys must be UPPER_SNAKE_CASE, values
+            scalar. Validated in this repo: CORE_UTILIZATION with
+            start_stage='floorplan', PLACE_DENSITY with 'place',
+            CTS_BUF_DISTANCE with 'cts'. Anything else is passed to ORFS
+            unchecked.
+        timeout_sec: Seconds. 0 uses the stage-aware ceiling for this run. A
+            positive value only LOWERS it; a larger request is capped at the
+            ceiling.
     """
     workspace = get_workspace_path()
     result = retry_pd_job(
@@ -438,20 +676,6 @@ def retry_pd(
         timeout=timeout_sec,
     )
     return json.dumps(result, indent=2)
-
-@tool
-def get_synthesis_status(run_id: str) -> str:
-    """
-    Full status for a synthesis run by its run_id: status, current stage,
-    per-stage table + history, last log lines, artifacts found, best-effort
-    metrics, and poll_after_sec guidance. Self-healing: a run whose worker
-    died is reconciled from on-disk evidence (completed from artifacts, or
-    failed once past its timeout ceiling) instead of reading "running" forever.
-    """
-    workspace = get_workspace_path()
-    result = collect_synthesis_status(run_id, workspace=workspace)
-    return json.dumps(result, indent=2)
-
 
 # Bounded means bounded even for a creative caller (plan round-2 #6).
 WAIT_MAX_WAIT_SEC = 120
@@ -495,56 +719,100 @@ def _wait_for_synthesis_job(
     # timeout path returns latest known status with explicit timeout flag
     status["waited_sec"] = round(time.time() - start, 2)
     status["timed_out"] = True
-    status["next_action"] = "Call wait_for_synthesis again or poll with get_synthesis_status."
+    status["next_action"] = "Call get_synthesis_status again — with wait_sec to keep waiting."
     return status
 
 
-@tool
-def wait_for_synthesis(run_id: str, max_wait_sec: int = 30, poll_interval_sec: int = 2) -> str:
+@tool(parse_docstring=True)
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
+def get_synthesis_status(run_id: str, wait_sec: int = 0, poll_interval_sec: int = 2) -> str:
     """
-    MCP-safe bounded wait for synthesis completion — the ONE blocking
-    convenience, defined as a bounded poll loop over get_synthesis_status.
+    Full status for a synthesis run by its run_id: status, current stage,
+    per-stage table + history, last log lines, artifacts found, best-effort
+    metrics, and poll_after_sec guidance. Self-healing: a run whose worker died
+    is reconciled from on-disk evidence (completed from artifacts, or failed
+    once past its timeout ceiling) instead of reading "running" forever.
+    With wait_sec > 0 it becomes the one blocking call in the system: a bounded
+    poll that returns as soon as the run is completed or failed, or when the
+    wait runs out (`timed_out: true`, plus `waited_sec`). Waiting is turn
+    economy for an agent — one call instead of ten — not a different answer.
+
     Args:
-        run_id: Synthesis run id from start_synthesis / retry_pd.
-        max_wait_sec: Max seconds to block in this call (default 30, capped 120).
-        poll_interval_sec: Fallback poll interval when guidance is absent.
+        run_id: Run to report on, from start_synthesis or retry_pd. Required —
+            this reader has no "latest" fallback.
+        wait_sec: Seconds to block waiting for a terminal status. 0 (the
+            default) answers immediately with the current state. Capped at 120,
+            and forced to 0 on the web UI's own /invoke path, which never
+            blocks — call it again to keep waiting.
+        poll_interval_sec: Fallback poll interval while waiting, in seconds,
+            used only when the run itself offers no guidance. Ignored when
+            wait_sec is 0.
     """
     workspace = get_workspace_path()
-    result = _wait_for_synthesis_job(workspace, run_id, max_wait_sec, poll_interval_sec)
+    if wait_sec and int(wait_sec) > 0:
+        result = _wait_for_synthesis_job(workspace, run_id, wait_sec, poll_interval_sec)
+    else:
+        result = collect_synthesis_status(run_id, workspace=workspace)
     return json.dumps(result, indent=2)
 
 
-
-@tool
+@tool(parse_docstring=True)
+@policy(category="verification", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
                   end_time: Optional[int] = None) -> str:
     """
-    Reads a VCD waveform file to inspect signal values.
-    Use this when simulation fails to understand WHY.
+    Reads signal values out of a VCD. Use it when a simulation fails, to find
+    where the design diverges — x/z propagation, a shifted output cycle, reset
+    behaviour.
+    Returns a tab-separated Time / Signal / Value table, one row per value
+    change, first 2000 rows, with a footer saying how many were withheld.
+
     Args:
-        vcd_file: Name of the .vcd file (e.g., 'dump.vcd').
-        signals: List of signal names to inspect (e.g., ['clk', 'rst', 'count']).
-        start_time: Start time to view.
-        end_time: End time to view; omit to read to the end of the waveform.
+        vcd_file: The .vcd to read. run_simulation returns it as `vcdPath`
+            (sim_runs/sim_NNNN/...). An older run may have left one in the
+            workspace root, wherever the testbench's $dumpfile put it.
+        signals: Signal names. A full hierarchical path ('tb.dut.count') always
+            resolves; a bare leaf name resolves when exactly one scope has it,
+            and is an error listing the candidates when several do.
+        start_time: Start of the window, in the VCD's OWN time units — the
+            integers after '#' in the file, NOT nanoseconds.
+        end_time: End of the window, same units. Omit to read to the end.
     """
     workspace = get_workspace_path()
     abs_file = os.path.join(workspace, vcd_file)
     return read_waveform(abs_file, signals, start_time, end_time)
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def search_logs_tool(query: str, run_id: str = None) -> str:
     """
-    Searches for a keyword in OpenROAD logs and reports.
-    Useful for finding specific errors, warnings, or metrics (e.g. "slack", "error", "area").
+    Case-insensitive SUBSTRING search (not regex) across a synthesis run's ORFS
+    logs, reports and results — *.log, *.rpt, *.txt, *.v, *.json, *.mk. Returns
+    at most 50 matching lines as "File: <path> | Line <n>: <text>", cut off
+    silently past that, so narrow the query rather than paging.
+    Reach for it only for evidence the structured readers do not surface: PDN
+    errors, path-level detail, ORFS-specific warnings. PPA and timing numbers
+    come from get_synthesis_metrics — do not grep for them.
+
     Args:
-        query: The string to search for.
-        run_id: Optional run ID for deterministic lookup.
+        query: Substring to look for, e.g. 'PDN-0185'.
+        run_id: Synthesis run to search. WITHOUT it this does NOT fall back to
+            the latest run the way the other run readers do: it searches the
+            workspace's legacy orfs_reports/orfs_logs/orfs_results directories
+            and the whole synth_runs/ tree, so hits can come from any run. Pass
+            one.
     """
     workspace = get_workspace_path()
     return search_logs(query, workspace, run_id=run_id)
 
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="checkpoint", attempt_parser=attempt_synthesis_metrics)
 def get_synthesis_metrics(run_id: str = None) -> str:
     """
     Returns structured synthesis metrics for a run.
@@ -554,61 +822,92 @@ def get_synthesis_metrics(run_id: str = None) -> str:
     so it reads 0.00 for any design that met timing. fmax_mhz is the achieved
     frequency at timing_corner (null when the run carries no slack data — never
     the clock target); parse_notes says when it was derived rather than read.
+
+    Args:
+        run_id: Synthesis run. Omit for the most recent run.
     """
     workspace = get_workspace_path()
     result = collect_synthesis_metrics(workspace=workspace, run_id=run_id)
     return json.dumps(result, indent=2)
 
 
-@tool
-def read_stage_report(stage: str, run_id: str = None) -> str:
+# The stages that have a STRUCTURED reader, and the one that reads it. The other
+# three stages have only their ORFS artifact — asking for a summary there gets
+# the artifact back, with the reply saying so rather than pretending.
+_STAGE_SUMMARIES = {
+    "cts": collect_cts_summary,
+    "grt": collect_congestion_summary,
+    "route": collect_route_drc_summary,
+}
+
+
+@tool(parse_docstring=True)
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
+def read_stage_report(
+    stage: Literal["floorplan", "place", "cts", "grt", "route", "finish"],
+    run_id: str = None,
+    view: Literal["summary", "raw"] = "summary",
+) -> str:
     """
-    Reads the main ORFS artifact for a physical-design stage.
-    Supported stages currently include floorplan, place, cts, grt, route, and finish.
+    Reads one physical-design stage of a synthesis run. Three stages parse into
+    a structured summary; every stage can return its raw ORFS artifact.
+      cts   - wns_ns, tns_ns, worst_slack_ns, clock_fmax_mhz, setup_skew_ns and
+              max_slew / max_fanout violation counts (4_cts_final.rpt). Read
+              this first when a run misses timing.
+      grt   - per-layer resource, demand, usage_pct and overflow, plus totals
+              (congestion.rpt / 5_1_grt.log). Read it when timing degrades
+              between placement and routing: that points at wire delay rather
+              than logic depth.
+      route - `clean`, violation_count, unique_violation_count,
+              sample_violations and route_stage_status (5_route_drc.rpt). An
+              empty report counts as clean ONLY when the route stage completed;
+              an empty report from an unfinished route is reported as not-clean,
+              with a note saying so.
+    The reply always carries the `view` you actually got.
+
+    Args:
+        stage: floorplan (2_floorplan_final.rpt), place (3_3_place_gp.json),
+            cts (4_cts_final.rpt), grt (congestion.rpt), route
+            (5_route_drc.rpt) or finish (6_finish.rpt).
+        run_id: Synthesis run. Omit for the most recent run.
+        view: 'summary' parses the stage when a parser exists — the default,
+            and far smaller than the artifact. 'raw' returns the artifact text
+            (first 12000 chars) plus its path; use it when the summary does not
+            carry the detail you need. floorplan, place and finish have no
+            parser, so they answer 'raw' either way and say so.
     """
     workspace = get_workspace_path()
+    summarize = _STAGE_SUMMARIES.get(stage) if view == "summary" else None
+    if summarize is not None:
+        result = summarize(workspace=workspace, run_id=run_id)
+        result["view"] = "summary"
+        return json.dumps(result, indent=2)
+
     result = collect_stage_report(workspace=workspace, stage=stage, run_id=run_id)
+    result["view"] = "raw"
+    if view == "summary":
+        result["note"] = (
+            f"No structured summary exists for stage '{stage}' — this is the raw "
+            "report artifact."
+        )
     return json.dumps(result, indent=2)
 
 
-@tool
-def get_route_drc_summary(run_id: str = None) -> str:
-    """
-    Summarizes the final route DRC report from ORFS.
-    Treats an empty 5_route_drc.rpt as a clean final route result.
-    """
-    workspace = get_workspace_path()
-    result = collect_route_drc_summary(workspace=workspace, run_id=run_id)
-    return json.dumps(result, indent=2)
-
-
-@tool
-def get_cts_summary(run_id: str = None) -> str:
-    """
-    Summarizes the ORFS CTS final report.
-    Extracts timing, skew, violation counts, and critical-path summary fields.
-    """
-    workspace = get_workspace_path()
-    result = collect_cts_summary(workspace=workspace, run_id=run_id)
-    return json.dumps(result, indent=2)
-
-
-@tool
-def get_congestion_summary(run_id: str = None) -> str:
-    """
-    Summarizes ORFS global-routing congestion from congestion.rpt or 5_1_grt.log.
-    Extracts per-layer resource, demand, usage, and overflow totals.
-    """
-    workspace = get_workspace_path()
-    result = collect_congestion_summary(workspace=workspace, run_id=run_id)
-    return json.dumps(result, indent=2)
-
-
-@tool
+@tool(parse_docstring=True)
+@policy(category="synthesis", protected=True, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def compare_pd_runs(child_run_id: str, parent_run_id: str = None) -> str:
     """
-    Compares a PD retry child run against its parent.
-    If parent_run_id is omitted, uses the child run lineage metadata when available.
+    Metric delta between a retry_pd child run and its parent — the honest answer
+    to "did that knob help". Compares wns_ns, worst_slack_ns, tns_ns, area_um2,
+    cell_count and power_uw with the direction that counts as better for each,
+    plus the routing-DRC status of both runs.
+
+    Args:
+        child_run_id: The retry child run.
+        parent_run_id: Run to compare against. Omit to use the parent recorded
+            in the child's lineage; it is required when the child records none.
     """
     workspace = get_workspace_path()
     result = collect_pd_run_comparison(
@@ -619,85 +918,170 @@ def compare_pd_runs(child_run_id: str, parent_run_id: str = None) -> str:
     return json.dumps(result, indent=2)
 
 
+from src.tools import file_ops
 from src.tools.edit_file import replace_in_file
 
-@tool
-def apply_patch_tool(unified_diff: str) -> str:
-    """
-    Applies a unified-diff patch inside the active workspace.
-    Prefer this for robust code edits over exact-text replacement.
-    """
-    workspace = get_workspace_path()
-    result = apply_unified_patch(workspace=workspace, unified_diff=unified_diff)
-    return json.dumps(result, indent=2)
 
-
-@tool
-def edit_file_tool(filename: str, target_text: str, replacement_text: str) -> str:
+@tool(parse_docstring=True)
+@policy(category="editing", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="rtl_change")
+def edit_file(
+    filename: str = "",
+    target_text: str = "",
+    replacement_text: str = "",
+    unified_diff: str = "",
+) -> str:
     """
-    Surgically replaces a block of text in a file.
-    Use this for small fixes (e.g. changing a parameter, fixing a typo) to avoid rewriting the whole file.
+    Changes files that already exist. Two forms, one of which must be used:
+
+    EXACT REPLACEMENT (filename + target_text): replaces one literal block of
+    text in one file, whitespace and indentation included. Two hard errors, both
+    of which write nothing: the target was not found, or it was found more than
+    once (extend the block with surrounding lines until it is unique). The most
+    reliable form for a single edit.
+
+    UNIFIED DIFF (unified_diff): applies a patch with `git apply` --recount, so
+    hunk line COUNTS may be wrong but CONTEXT LINES MUST MATCH THE FILE EXACTLY.
+    Nothing is written unless the whole patch applies — it is checked first, and
+    a failure returns git's own stderr with no partial write. Use it to change
+    several files, or several places in one file, in one call; a generated diff
+    whose context drifted by a line is the usual failure here.
+
+    Returns JSON: `success`, `message`, `files_changed`, and for the replacement
+    form a short `diff` of what moved. To create a new file use write_file.
+
     Args:
-        filename: Name of the file (e.g., 'design.v').
-        target_text: The EXACT text block to find and replace (must match whitespace).
-        replacement_text: The new text to insert.
+        filename: File to edit, e.g. 'counter.v'. Replacement form only.
+        target_text: The exact text to find, copied verbatim from read_file.
+            Replacement form only.
+        replacement_text: What to put in its place. An empty string deletes the
+            block. Replacement form only.
+        unified_diff: A complete unified diff. Every file needs `---`/`+++`
+            headers, and a patch touching MORE THAN ONE file needs a
+            `diff --git a/x b/x` line before each one — without it --recount
+            reads the next file's `---` header as a deleted line and refuses the
+            whole patch. `a/` and `b/` prefixes are stripped; an absolute path,
+            or one that climbs out of the workspace, is rejected before git
+            runs; `--- /dev/null` creates a new file. Diff form only.
     """
     workspace = get_workspace_path()
+    wants_diff = bool(unified_diff and unified_diff.strip())
+    wants_replace = bool(filename or target_text or replacement_text)
+
+    if wants_diff and wants_replace:
+        return json.dumps({
+            "success": False,
+            "message": (
+                "Pass either unified_diff, or filename + target_text — not both. "
+                "One call edits one way."
+            ),
+        }, indent=2)
+    if wants_diff:
+        result = apply_unified_patch(workspace=workspace, unified_diff=unified_diff)
+        if result.get("success"):
+            file_ops.reconcile_roles(workspace, result.get("files_changed") or [])
+        return json.dumps(result, indent=2)
+
+    if not filename:
+        return json.dumps({
+            "success": False,
+            "message": (
+                "Nothing to edit: pass filename + target_text for a single "
+                "replacement, or unified_diff for a patch."
+            ),
+        }, indent=2)
+
     try:
         abs_file = resolve_in_workspace(filename, workspace=workspace)
     except ValueError as exc:
-        return f"Error: {exc}"
+        return json.dumps({"success": False, "message": str(exc)}, indent=2)
 
     result = replace_in_file(abs_file, target_text, replacement_text)
-    
-    if result["success"]:
-        return f"Success: {result['message']}\nDiff:\n{result.get('diff', '')}"
-    else:
-        return f"Error: {result['message']}"
+    if result.get("success"):
+        # The write path every other writer uses, so a role/top change reaches
+        # the manifest instead of waiting to surprise the next stage.
+        rel = os.path.relpath(abs_file, workspace)
+        file_ops.reconcile_roles(workspace, [rel])
+        result["files_changed"] = [rel]
+    return json.dumps(result, indent=2)
+
 
 from src.tools.build_interactive_sim import build_websim_netlist
 from src.tools.generate_schematic import generate_schematic
-from src.tools.design_report import generate_design_report, save_design_report, save_metrics
+from src.tools.design_report import generate_design_report, save_design_report
 from src.tools.spec_manager import (
-    DesignSpec, PortSpec, parse_yaml_spec, validate_spec, 
-    spec_to_prompt, save_yaml_file, load_yaml_file, create_spec_from_dict
+    validate_spec, spec_to_prompt, save_yaml_file, load_yaml_file,
+    create_spec_from_dict,
 )
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="essential", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="rtl_change")
 def write_spec(
-    module_name: str,
-    description: str,
-    ports: list[dict],
+    module_name: str = "",
+    description: str = "",
+    ports: list[dict] = None,
     clock_period_ns: float = 10.0,
     tech_node: str = "SkyWater 130HD",
     parameters: dict = None,
     module_signature: str = "",
-    behavioral_description: str = ""
+    behavioral_description: str = "",
+    yaml_path: str = "",
 ) -> str:
     """
-    Creates a YAML design specification file. Call this FIRST before writing any RTL.
-    The spec defines the module interface and requirements that the RTL must follow.
-    
+    Creates the design spec `<module_name>_spec.yaml` AND writes (overwriting)
+    `constraints.sdc` from clock_period_ns. Call it before writing RTL:
+    synthesis reads this spec to build each run's real timing constraints.
+    When the user SUPPLIED a spec file, pass yaml_path instead of authoring the
+    fields: the file is adopted as this design's spec — re-saved under the
+    module name it declares, with constraints.sdc regenerated from it — and the
+    reply carries the spec as design instructions.
+
     Args:
-        module_name: Name of the Verilog module (e.g., 'counter_8bit')
-        description: What the module does (e.g., '8-bit synchronous counter with enable')
-        ports: List of port definitions, each with keys: name, direction ('input'/'output'), 
-               optional: type ('logic'), width (int), description (str)
-               Example: [{"name": "clk", "direction": "input"}, 
-                        {"name": "count", "direction": "output", "width": 8}]
-        clock_period_ns: Target clock period in nanoseconds (default: 10.0)
-        tech_node: Target technology node (default: 'SkyWater 130HD')
-        parameters: Optional dict of Verilog parameters (e.g., {"WIDTH": 8, "DEPTH": 16})
-        module_signature: Optional exact Verilog module signature to enforce
-        behavioral_description: Optional detailed behavioral requirements
-        
-    Returns:
-        Confirmation message with the spec filename
+        module_name: Verilog module name, e.g. 'counter_8bit'. Names the spec
+            file. Required unless yaml_path is given.
+        description: One line on what the module does.
+        ports: Port list. Each entry {name, direction} plus optional type,
+            width, description. direction is 'input', 'output' or 'inout';
+            width is an int (8) or a parameterized string ('WIDTH-1:0'); omit it
+            for 1 bit. Example:
+                [{"name": "clk", "direction": "input"},
+                 {"name": "count", "direction": "output", "width": 8}]
+            Name the clock input clk, clock or clk_i — the generated SDC
+            constrains that port, and a differently-named clock leaves the
+            design unconstrained rather than failing loudly.
+        clock_period_ns: Target clock period in nanoseconds; becomes the SDC
+            create_clock period.
+        tech_node: Free-text label recorded in the spec and the design report.
+            It does NOT select a PDK — start_synthesis's `platform` does that.
+        parameters: Verilog parameters, e.g. {"WIDTH": 8, "DEPTH": 16}.
+        module_signature: Exact module signature to enforce. Generated from
+            ports when omitted.
+        behavioral_description: Detailed behavioral requirements, free text.
+        yaml_path: An existing YAML spec file INSIDE the workspace to adopt,
+            e.g. 'problem_spec.yaml'. Mutually exclusive with the authoring
+            fields above.
     """
     workspace = get_workspace_path()
     if not os.path.exists(workspace):
         os.makedirs(workspace)
-    
+
+    if yaml_path:
+        authored = [module_name, description, ports, module_signature,
+                    behavioral_description]
+        if any(authored):
+            return ("Error: pass yaml_path to adopt a spec file, or the spec "
+                    "fields to author one — not both.")
+        return _adopt_yaml_spec(workspace, yaml_path)
+
+    if not module_name or not description or not ports:
+        return ("Error: write_spec needs module_name, description and ports to "
+                "author a spec — or yaml_path to adopt one the user supplied.")
+
+    ports = list(ports)
+
     # Create DesignSpec from arguments
     spec = create_spec_from_dict({
         "module_name": module_name,
@@ -761,18 +1145,17 @@ The user can now review the spec in the **Spec tab**.
 Once confirmed, proceed to write the RTL following this specification exactly."""
 
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="essential", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def read_spec(spec_filename: str = None) -> str:
     """
     Reads a design specification from a YAML file.
     Use this to understand requirements before writing RTL.
-    
+
     Args:
-        spec_filename: Name of the spec file (e.g., 'counter_spec.yaml'). 
-                      If not provided, reads the most recent *_spec.yaml file.
-    
-    Returns:
-        The spec contents formatted for RTL implementation
+        spec_filename: Spec file to read, e.g. 'counter_spec.yaml'. Omit to
+            read the most recently modified *_spec.yaml in the workspace.
     """
     workspace = get_workspace_path()
     
@@ -804,49 +1187,35 @@ Use this specification to write the RTL. The module signature MUST match exactly
         return f"Error parsing spec file: {str(e)}"
 
 
-@tool
-def load_yaml_spec_file(yaml_path: str) -> str:
+def _adopt_yaml_spec(workspace: str, yaml_path: str) -> str:
+    """Adopt a YAML spec file the user supplied as this design's spec.
+
+    The path is resolved INSIDE the workspace and nowhere else. This used to
+    accept an absolute path, and to fall back to the REPO ROOT when the name did
+    not resolve in the workspace — an arbitrary-file read on every surface,
+    because the argument's name matched none of the containment key patterns
+    ``/invoke`` checks. The confinement now lives in the tool, so the agent, MCP
+    and REST are all covered by construction.
     """
-    Loads an external YAML specification file (e.g., from hackathon problems).
-    Copies it to workspace and returns the parsed spec.
-    
-    Args:
-        yaml_path: Path to the YAML file (relative to workspace or absolute)
-    
-    Returns:
-        Parsed specification ready for implementation
-    """
-    workspace = get_workspace_path()
-    
-    # Handle relative paths
-    if not os.path.isabs(yaml_path):
-        # Try workspace first
-        check_path = os.path.join(workspace, yaml_path)
-        if not os.path.exists(check_path):
-            # Try project root
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            check_path = os.path.join(project_root, yaml_path)
-        yaml_path = check_path
-    
-    if not os.path.exists(yaml_path):
-        return f"Error: YAML file not found at {yaml_path}"
-    
     try:
-        spec = load_yaml_file(yaml_path)
-        
-        # Copy to workspace as the active spec
+        resolved = resolve_in_workspace(yaml_path, workspace=workspace)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    if not os.path.exists(resolved):
+        return (f"Error: YAML file not found in the workspace at {yaml_path}. "
+                "Write it into the workspace first (write_file), then adopt it.")
+
+    try:
+        spec = load_yaml_file(resolved)
+
         spec_filename = f"{spec.module_name}_spec.yaml"
-        spec_filepath = os.path.join(workspace, spec_filename)
-        save_yaml_file(spec, spec_filepath)
-        
-        # Generate SDC
+        save_yaml_file(spec, os.path.join(workspace, spec_filename))
+
         sdc_content = spec.generate_sdc()
-        sdc_filepath = os.path.join(workspace, "constraints.sdc")
-        with open(sdc_filepath, "w") as f:
+        with open(os.path.join(workspace, "constraints.sdc"), "w") as f:
             f.write(sdc_content)
-        
+
         prompt = spec_to_prompt(spec)
-        
         return f"""**Loaded External Spec: {spec.module_name}**
 
 {prompt}
@@ -860,13 +1229,18 @@ Proceed to implement the RTL following this specification."""
         return f"Error loading YAML spec: {str(e)}"
 
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="synthesis", protected=True, mutates=True, async_job=False,
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def schematic_tool(verilog_file: str, top_module: str) -> str:
     """
-    Generates a visual schematic (SVG) from a Verilog file.
+    Renders an SVG schematic of one Verilog module with Yosys + netlistsvg, for
+    the workbench's Schematic tab. Self-host only: it needs a local
+    Yosys/Docker toolchain and refuses on the hosted platform.
+
     Args:
-        verilog_file: Name of the Verilog file (e.g., 'design.v').
-        top_module: Name of the top-level module.
+        verilog_file: Verilog source, e.g. 'counter.v'.
+        top_module: Module to draw.
     """
     # Hosted has no local Docker, so the Yosys-schematic path can't run — return
     # an honest answer instead of leaking a raw docker-socket error to the
@@ -893,7 +1267,9 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
     else:
         return f"Failed to generate schematic: {result['error']}"
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="verification", protected=True, mutates=True, async_job=False,
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def build_interactive_sim(
     verilog_files: list[str] | str,
     top_module: str,
@@ -905,7 +1281,6 @@ def build_interactive_sim(
     simulation in the user's browser. Follow up by writing
     `<top>.dashboard.html` with write_file: a self-contained HTML/CSS/JS page
     (no external scripts/styles — everything inline) that
-
       * declares its netlist via
         `<meta name="siliconcrew-sim" content="<top>.websim.json">`, and
       * drives the design ONLY through the injected `window.simBridge` API:
@@ -923,20 +1298,19 @@ def build_interactive_sim(
                                            declare it with a second meta tag:
                                            <meta name="siliconcrew-sim-clock"
                                            content="<port>">.
-
     NEVER re-implement or approximate the design's behavior in dashboard JS —
     every displayed state must come from onUpdate. If this tool fails, say so;
     do not ship a mock. Only offer dashboards for designs with human-shaped
     I/O (buttons, LEDs, displays, games, controllers); for datapath/protocol
-    blocks (FIFOs, bus bridges, ALU pipelines) recommend simulation_tool +
+    blocks (FIFOs, bus bridges, ALU pipelines) recommend run_simulation +
     waveform_tool instead of building a junk switch panel.
-
     The browser engine sustains roughly 1-10k cycles/sec, so RTL whose time
     constants assume a real clock (debounce counters, ms tick dividers) will
     feel frozen. When the design exposes them as top-module parameters (the
     CLK_FREQ / TICKS_PER_MILLI idiom), pass integer overrides via
     `parameters` to re-elaborate at browser speed — the override is recorded
     in the artifact and shown to the user, never hidden.
+    Returns the design's port list so you can wire dashboard widgets to real pins.
 
     Args:
         verilog_files: RTL file name(s), e.g. 'counter.v' or ['simon.v', 'simon_game.v'].
@@ -945,7 +1319,6 @@ def build_interactive_sim(
             e.g. {'TICKS_PER_MILLI': 1}. Timing constants only — do not use
             it to change design behavior.
 
-    Returns the design's port list so you can wire dashboard widgets to real pins.
     """
     workspace = get_workspace_path()
     files = _normalize_verilog_files_arg(verilog_files)
@@ -967,70 +1340,20 @@ def build_interactive_sim(
     )
 
 
-@tool
-def save_metrics_tool(
-    area_um2: float = None,
-    cell_count: int = None,
-    wns_ns: float = None,
-    tns_ns: float = None,
-    power_uw: float = None,
-    run_id: str = None
-) -> str:
-    """
-    Saves PPA metrics that you found (e.g., via search_logs_tool) for the design report.
-    Use this when ppa_tool fails but you found metrics manually through log searching.
-    
-    Args:
-        area_um2: Chip area in square micrometers (e.g., 142.5)
-        cell_count: Number of standard cells (e.g., 48)
-        wns_ns: Worst Negative Slack in nanoseconds (e.g., 0.85 or -0.12)
-        tns_ns: Total Negative Slack in nanoseconds (e.g., 0.0 or -1.5)
-        power_uw: Total power in microwatts (e.g., 12.34)
-        
-    Returns:
-        Confirmation of saved metrics
-    """
-    workspace = get_workspace_path()
-    
-    metrics = {}
-    if area_um2 is not None:
-        metrics["area_um2"] = area_um2
-    if cell_count is not None:
-        metrics["cell_count"] = cell_count
-    if wns_ns is not None:
-        metrics["wns_ns"] = wns_ns
-    if tns_ns is not None:
-        metrics["tns_ns"] = tns_ns
-    if power_uw is not None:
-        metrics["power_uw"] = power_uw
-    
-    if not metrics:
-        return "Error: No metrics provided. Please specify at least one metric."
-    
-    try:
-        save_metrics(workspace, metrics, run_id=run_id)
-        
-        saved_str = ", ".join([f"{k}={v}" for k, v in metrics.items()])
-        return f"""Metrics saved successfully! 📊
-
-**Saved**: {saved_str}
-
-These will be included in the design report when you call `generate_report_tool`."""
-    except Exception as e:
-        return f"Error saving metrics: {str(e)}"
-
-
-@tool
+@tool(parse_docstring=True)
+@policy(category="reporting", protected=True, mutates=True, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True,
+        attempt_role="checkpoint")
 def generate_report_tool(run_id: str = None) -> str:
     """
-    Generates a comprehensive design report comparing the specification vs actual results.
-    Call this at the end of a design session to summarize verification and synthesis outcomes.
-    
-    Note: If ppa_tool failed but you found metrics via search_logs_tool, use save_metrics_tool 
-    first to persist those values, then call this.
-    
-    Returns:
-        The generated report content and the path where it was saved
+    Writes a Markdown design report comparing the spec against measured results
+    — lint and simulation outcomes, synthesis metrics, timing verdict — and
+    returns its content. Saved as synth_runs/<run_id>/design_report.md, or
+    <module>_report.md at the workspace root when there is no run. Call it at
+    the end of a design session.
+
+    Args:
+        run_id: Run to report on. Omit for the most recent run.
     """
     workspace = get_workspace_path()
     
@@ -1062,17 +1385,19 @@ class RunPythonAnalysisArgs(BaseModel):
 
 
 @tool(args_schema=RunPythonAnalysisArgs)
+@policy(category="analysis", protected=True, mutates=True, async_job=False,
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def run_python_analysis(script_file: str, args: list[str] = None) -> str:
     """
-    Run a workspace Python script for small engineering-support analysis —
-    generating golden/expected vectors, .mem/.hex/.csv files, fixed-point/CRC/DSP
-    checks, or plotting simulation outputs. Write the script with write_file
-    first (it is recorded as exactly what ran); this tool executes a FILE, not
-    inline code. Isolated subprocess: 30s timeout, workspace-only cwd, scrubbed
-    env (no backend secrets), pinned libs (stdlib + numpy + matplotlib + pyyaml +
-    vcdvcd) — no pip, no network in docker mode. NOT a cocotb replacement, REPL,
-    or general shell. Returns JSON with exit_code, output tails, and the files
-    the run produced (open them as artifacts).
+    Run a workspace Python script for engineering-support analysis: golden/
+    expected vectors, .mem/.hex/.csv generation, fixed-point/CRC/DSP checks,
+    plotting simulation output. SELF-HOST ONLY — off on the hosted platform.
+    Write the script with write_file first: this runs a FILE, not inline code,
+    and the file is the record of exactly what ran. Isolated subprocess: 30 s
+    wall timeout, workspace-only cwd, scrubbed env (no backend secrets), pinned
+    libraries (stdlib + numpy + matplotlib + pyyaml + vcdvcd), no pip and no
+    network in docker mode. Not a cocotb replacement, a REPL, or a shell.
+    Returns JSON with exit_code, output tails, and the files the run produced.
     """
     # Load-bearing hosted gate (PA3/PA4): the tool runs local toolchains and is
     # OFF on the hosted platform. Placed at the wrapper entry so EVERY path
@@ -1096,7 +1421,9 @@ def run_python_analysis(script_file: str, args: list[str] = None) -> str:
     return json.dumps(result, indent=2)
 
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="verification", protected=True, mutates=True, async_job=False,
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
     """
     Run a cocotb (Python) testbench against your RTL in a pinned simulator container.
@@ -1125,7 +1452,7 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
     # JSON, not prose: raw simulator output legitimately contains words like
     # "Error", and the API-side substring heuristic would classify a passing
     # run as an error from its own tail. A structured status keeps the verdict
-    # out of the tail's hands (same contract as simulation_tool).
+    # out of the tail's hands (same contract as run_simulation).
     if status == "PASS":
         payload = {
             "status": "test_passed",
@@ -1156,18 +1483,18 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
         }
     return json.dumps(payload, indent=2)
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="verification", protected=True, mutates=True, async_job=False,
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def sby_tool(sby_file: str) -> str:
     """
     Run formal verification with SymbiYosys (SBY).
-
     Proves or disproves assertions/properties about a design by exploring reachable states
     (bounded or unbounded), rather than running specific input vectors. Well suited to checking
     invariants that should hold for all inputs: state-machine legality (one-hot, no illegal states),
     value and occupancy bounds (a counter or FIFO level stays in range), protocol/handshake
     properties (request held until acknowledge, no overflow/underflow), and absence of deadlock or
     combinational loops.
-
     HOW TO WRITE A WORKING SETUP (these are the common mistakes):
       * Clocks and resets are NORMAL input ports of your design. NEVER drive a clock with $anyseq.
         Use $anyseq / $anyconst only for free DATA inputs you want the solver to range over.
@@ -1176,7 +1503,6 @@ def sby_tool(sby_file: str) -> str:
       * Engine: use `smtbmc z3` (z3 is the installed solver). boolector/yices are NOT available.
       * `[files]` paths are resolved from the workspace root — list them workspace-relative
         (e.g. `rtl/dut.sv`, `verif/dut_formal.sv`). (The tool also auto-resolves/normalizes these.)
-
     Minimal example — dut_formal.sby:
         [options]
         mode bmc
@@ -1226,11 +1552,14 @@ def sby_tool(sby_file: str) -> str:
                 f"and retry.\nOutput:\n{tail}")
     return f"SBY Run finished. Status: {status} ⚠️\nOutput:\n{tail}"
 
-@tool
+@tool(parse_docstring=True)
+@policy(category="essential", protected=False, mutates=False, async_job=False,
+        surfaces=ALL_SURFACES, requires_session=True)
 def list_files_tool() -> str:
     """
-    Lists all files in the current workspace.
-    Use this to explore the project structure or verify generated files.
+    Lists every file in the workspace, recursively. Includes generated run
+    artifacts (synth_runs/, sim_runs/, orfs_*), so on a worked-on design this is
+    long. Use it to discover what exists; get_manifest is the design-file list.
     """
     workspace = get_workspace_path()
     if not os.path.exists(workspace):
@@ -1247,153 +1576,68 @@ def list_files_tool() -> str:
         
     return "Files in workspace:\n" + "\n".join(sorted(files))
 
-@tool
-def sleep_tool(seconds: int) -> str:
-    """
-    Blocks briefly before the next action.
-    Use this to honor synthesis polling guidance from get_synthesis_status.
-    Args:
-        seconds: Requested sleep time (clamped to 1..30 seconds).
-    """
-    wait_s = max(1, min(int(seconds), 30))
-    time.sleep(wait_s)
-    return f"Slept for {wait_s} second(s)."
-
-# New Google XLS / DSLX HLS tools
-@tool
-def run_dslx_interpreter(filename: str) -> str:
-    """
-    Runs the DSLX interpreter on a .x file in the active workspace to check syntax
-    and execute built-in unit tests (#[test] blocks).
-    Args:
-        filename: Name of the DSLX file (e.g. 'saturating_add.x').
-    """
-    from src.tools.run_xls import run_dslx_interpreter as run_interpreter
-    workspace = get_workspace_path()
-    result = run_interpreter(filename, cwd=workspace)
-    return json.dumps(result, indent=2)
-
-@tool
-def compile_dslx_to_ir(filename: str, top_module: str) -> str:
-    """
-    Translates a DSLX (.x) design into XLS Intermediate Representation (IR).
-    Args:
-        filename: Name of the DSLX file.
-        top_module: Name of the top-level function or proc to compile.
-    """
-    from src.tools.run_xls import compile_dslx_to_ir as compile_to_ir
-    workspace = get_workspace_path()
-    result = compile_to_ir(filename, top_module, cwd=workspace)
-    return json.dumps(result, indent=2)
-
-@tool
-def experimental_compile_cpp_to_ir(filename: str, top_name: str, block_from_class: bool = False) -> str:
-    """
-    Translates C++ hardware description code into XLS IR via xlscc (experimental).
-    Args:
-        filename: Name of the C++ file (e.g., 'design.cc').
-        top_name: Name of the top-level function or class.
-        block_from_class: True if compiling a class-based block/stateful system.
-    """
-    from src.tools.run_xls import experimental_compile_cpp_to_ir as compile_cpp
-    workspace = get_workspace_path()
-    result = compile_cpp(filename, top_name, block_from_class, cwd=workspace)
-    return json.dumps(result, indent=2)
-
-@tool
-def optimize_xls_ir(ir_filename: str) -> str:
-    """
-    Optimizes XLS IR using logic and dataflow optimizations.
-    Args:
-        ir_filename: Name of the XLS IR file (e.g. 'saturating_add.ir').
-    """
-    from src.tools.run_xls import optimize_xls_ir as optimize_ir
-    workspace = get_workspace_path()
-    result = optimize_ir(ir_filename, cwd=workspace)
-    return json.dumps(result, indent=2)
-
-@tool
-def codegen_xls(
-    opt_ir_filename: str,
-    generator: str = "combinational",
-    pipeline_stages: int = 0,
-    clock_period_ps: int = 0,
-    delay_model: str = "sky130",
-    module_name: str = None,
-    use_system_verilog: bool = False,
-) -> str:
-    """
-    Schedules optimized XLS IR and generates synthesizable Verilog.
-    Args:
-        opt_ir_filename: Name of the optimized IR file.
-        generator: 'combinational' or 'pipeline'.
-        pipeline_stages: Number of pipeline stages for pipelined designs.
-        clock_period_ps: Target clock period in picoseconds.
-        delay_model: Delay model (e.g., 'sky130', 'asap7').
-        module_name: Optional custom name for the generated Verilog module.
-        use_system_verilog: If True, emit SystemVerilog (default is False to ensure Yosys synthesis compatibility).
-    """
-    from src.tools.run_xls import codegen_xls as run_codegen
-    workspace = get_workspace_path()
-    result = run_codegen(
-        opt_ir_filename=opt_ir_filename,
-        generator=generator,
-        pipeline_stages=pipeline_stages,
-        clock_period_ps=clock_period_ps,
-        delay_model=delay_model,
-        module_name=module_name,
-        use_system_verilog=use_system_verilog,
-        cwd=workspace
-    )
-    return json.dumps(result, indent=2)
-
-@tool
-def benchmark_xls(opt_ir_filename: str, delay_model: str = "sky130") -> str:
-    """
-    Evaluates XLS IR for performance, area complexity, and estimated critical path delay.
-    Args:
-        opt_ir_filename: Name of the optimized IR file.
-        delay_model: Delay model (e.g., 'sky130', 'asap7').
-    """
-    from src.tools.run_xls import benchmark_xls as run_benchmark
-    workspace = get_workspace_path()
-    result = run_benchmark(opt_ir_filename, delay_model=delay_model, cwd=workspace)
-    return json.dumps(result, indent=2)
-
-@tool
+# Google XLS / DSLX HLS
+@tool(parse_docstring=True)
+@policy(category="hls", protected=True, mutates=True, async_job=False,
+        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
 def run_xls_flow(
-    dslx_file: str,
-    top_module: str,
-    generator: str = "combinational",
+    dslx_file: str = "",
+    top_module: str = "",
+    generator: Literal["combinational", "pipeline"] = "combinational",
     pipeline_stages: int = 0,
     clock_period_ps: int = 0,
-    delay_model: str = "sky130",
+    delay_model: Literal["sky130", "asap7", "unit", ""] = "sky130",
     module_name: str = None,
     keep_intermediates: bool = True,
     run_lint: bool = True,
     use_system_verilog: bool = False,
+    stop_after: Literal["interpret", "ir", "opt", "codegen", "lint"] = "lint",
+    from_ir: str = "",
 ) -> str:
     """
-    Executes the entire high-level XLS synthesis flow:
-    DSLX Interpreter -> IR Conversion -> Optimization -> Codegen.
-    This is the preferred agent path for compiling DSLX code to Verilog.
+    Compiles DSLX to synthesizable Verilog end to end: interpreter and #[test]
+    checks -> IR -> optimization -> codegen -> optional lint. Every stage's
+    result comes back under `stage_results`, plus the artifacts, the generated
+    module name, and an area / critical-path-delay estimate for the optimized IR
+    (`benchmark`) — a fast way to compare two DSLX formulations without running
+    synthesis.
+    Suits algorithmic and datapath kernels — arithmetic, bit manipulation,
+    encoders/decoders, fixed-point math, filters. Treat the result as compiler
+    output: wrap it in a small adapter module rather than hand-editing it, then
+    verify it through the normal linter_tool / run_simulation flow.
+    Debugging one stage is two arguments, not four tools: `stop_after` ends the
+    run early, and `from_ir` starts it partway.
+
     Args:
-        dslx_file: Name of the DSLX file (e.g. 'saturating_add.x').
-        top_module: Name of the top-level function or proc.
-        generator: 'combinational' or 'pipeline'.
-        pipeline_stages: Number of pipeline stages for pipelined designs.
-        clock_period_ps: Target clock period in picoseconds.
-        delay_model: Delay model (e.g., 'sky130', 'asap7').
-        module_name: Optional custom name for the generated Verilog module.
-        keep_intermediates: Preserve .ir and .opt.ir artifacts for debugging/provenance.
-        run_lint: Run Icarus Verilog syntax lint on generated Verilog before returning success.
-        use_system_verilog: If True, emit SystemVerilog (default is False to ensure Yosys synthesis compatibility).
+        dslx_file: DSLX source, e.g. 'saturating_add.x'. Required unless
+            from_ir is given.
+        top_module: Top-level DSLX function or proc. Required with dslx_file;
+            it also names the IR file.
+        generator: 'combinational' emits one cycle of pure logic; 'pipeline'
+            inserts registers to meet a timing target.
+        pipeline_stages: Pipeline depth. IGNORED unless generator='pipeline'.
+        clock_period_ps: Target period in PICOseconds, not nanoseconds. IGNORED
+            unless generator='pipeline'.
+        delay_model: Timing model for scheduling AND for the area/delay
+            estimate: 'sky130', 'asap7', 'unit', or '' for the tool default.
+        module_name: Name for the generated module; defaults to top_module.
+        keep_intermediates: Keep the .ir and .opt.ir artifacts for provenance.
+        run_lint: Lint the generated Verilog before returning success.
+        use_system_verilog: Emit SystemVerilog. Leave False — the Yosys
+            synthesis path downstream expects Verilog.
+        stop_after: Stage to stop after: 'interpret' (type-check and run the
+            #[test] blocks only — the fastest way to find out whether DSLX is
+            valid), 'ir', 'opt' (includes the area/delay estimate), 'codegen'
+            or 'lint' (the default: the whole flow).
+        from_ir: Enter the flow at an existing IR file instead of compiling
+            DSLX. An '.opt.ir' — this flow's own optimized artifact — enters at
+            codegen; any other IR is optimized first.
     """
     from src.tools.run_xls import run_xls_flow as run_flow
     workspace = get_workspace_path()
     result = run_flow(
-        dslx_file=dslx_file,
-        top_module=top_module,
+        dslx_file=dslx_file or None,
+        top_module=top_module or None,
         generator=generator,
         pipeline_stages=pipeline_stages,
         clock_period_ps=clock_period_ps,
@@ -1402,29 +1646,354 @@ def run_xls_flow(
         keep_intermediates=keep_intermediates,
         run_lint=run_lint,
         use_system_verilog=use_system_verilog,
-        cwd=workspace
+        stop_after=stop_after,
+        from_ir=from_ir or None,
+        cwd=workspace,
     )
     return json.dumps(result, indent=2)
 
-# Tools exposed over MCP (no blocking wait tool).
-mcp_tools = [
+
+# =============================================================================
+# Session tools — the bootstrap of the MCP surface
+# =============================================================================
+# These six were hand-written ``Tool(name=..., inputSchema={...})`` objects in
+# mcp_server.py: advertised to every MCP client, but invisible to
+# build_catalog(), to @policy, to the drift guard and to the schema tests that
+# cover every other tool. Their schemas were maintained by hand, which is the
+# one thing this repo does not do. They are ordinary registry tools now.
+#
+# The only thing that makes them special is WHEN they run: a session tool is
+# what a stranger calls BEFORE any session exists. So they declare
+# ``requires_session=False``, and the MCP server's session gate reads that
+# field rather than a list of names it keeps itself.
+#
+# They also need something no other tool needs — the host that owns the
+# active-session pointer: its SessionManager, the caller's scoped identity, its
+# workspace resolver (logical on self-host, hydrated on hosted) and the
+# architect prompt. That host binds itself for the duration of a call through
+# ``session_host()`` below. A ContextVar, not a module global, because the
+# hosted server multiplexes tenants: two concurrent calls must never see each
+# other's host.
+#
+# The host contract, in full (mcp_server.RTLDesignMCPServer is the only
+# implementation):
+#   session_manager               -> SessionManager
+#   current_session               -> the active session id, readable AND writable
+#   scoped_user_id()              -> the caller's tenant id (None on self-host)
+#   workspace_path(session_id)    -> that session's workspace path
+#   architect_prompt()            -> (prompt_text, source_label, version)
+
+_SESSION_HOST: ContextVar = ContextVar("siliconcrew_session_host", default=None)
+
+
+@contextmanager
+def session_host(host):
+    """Bind ``host`` as the owner of the active session for the calls inside."""
+    token = _SESSION_HOST.set(host)
+    try:
+        yield host
+    finally:
+        _SESSION_HOST.reset(token)
+
+
+def visible_session(host) -> Optional[str]:
+    """The active session id THIS caller is entitled to see, or ``None``.
+
+    ``host.current_session`` is a PROCESS-GLOBAL pointer, and on hosted the
+    streamable-HTTP transport multiplexes many tenants through one process. A
+    sessionless tool that reads it directly therefore reports whatever the most
+    recent tenant selected — their session id, their workspace path, their
+    metadata — to whoever asks next. The regular tool path re-verifies ownership
+    before acting, but sessionless tools dispatch *before* that check, which is
+    the whole point of them, so they have to do it themselves.
+
+    ``owns_session`` covers both modes by design: a ``None`` user id is
+    self-host, where any existing session belongs to the single local user.
+
+    Fails CLOSED. If ownership cannot be established for any reason, the caller
+    sees no active session rather than someone else's.
+    """
+    sid = getattr(host, "current_session", None)
+    if not sid:
+        return None
+    try:
+        if host.session_manager.owns_session(sid, host.scoped_user_id()):
+            return sid
+    except Exception:
+        return None
+    return None
+
+
+def _host():
+    host = _SESSION_HOST.get()
+    if host is None:
+        raise RuntimeError(
+            "no session host is bound: the session tools run only where something "
+            "owns the active-session pointer (mcp_server binds itself with "
+            "session_host())"
+        )
+    return host
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("mcp",), requires_session=False, disabled_when_bound=True)
+def create_session_tool(session_name: str, model_name: Optional[str] = "claude-via-mcp",
+                        project_id: Optional[str] = "") -> str:
+    """Create a new isolated session workspace for a design project.
+
+    Args:
+        session_name: Name for the design, such as 'counter_design'. One session
+            holds one design block.
+        model_name: Label for the model driving the session, recorded with it
+            for usage tracking.
+        project_id: Optional id of an existing project to group this session
+            under. The project must already exist; leave empty for none.
+    """
+    host = _host()
+    try:
+        session_id = host.session_manager.create_session(
+            # A client sending JSON null for an optional field means "no value",
+            # not "the literal None" — coerce rather than reject. This is the
+            # FIRST call the server's own instructions tell a stranger to make.
+            tag=session_name, model_name=model_name or "claude-via-mcp",
+            project_id=project_id or None,
+            user_id=host.scoped_user_id(),
+        )
+        host.current_session = session_id
+        workspace = host.workspace_path(session_id)
+        project_line = f"\nProject: {project_id}" if project_id else ""
+        return (
+            f"✅ Created session '{session_id}'\nWorkspace: {workspace}{project_line}\n"
+            "This session is now active."
+        )
+    except FileExistsError:
+        return f"❌ Session '{session_name}' already exists. Use set_active_session to switch to it."
+    except Exception as e:
+        return f"❌ Error creating session: {str(e)}"
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("mcp",), requires_session=False, disabled_when_bound=True)
+def list_sessions_tool() -> str:
+    """List all available sessions with metadata."""
+    host = _host()
+    # Tenant scope (F1): pass the caller's scoped uid so hosted users see
+    # ONLY their own sessions. Self-host uid is None → full list (parity
+    # with the resource path and set_active_session's ownership check).
+    uid = host.scoped_user_id()
+    sessions = host.session_manager.get_all_sessions(user_id=uid)
+    if not sessions:
+        return "No sessions found. Create one with create_session_tool."
+
+    session_list = []
+    for session_id in sessions:
+        meta = host.session_manager.get_session_metadata(session_id, user_id=uid)
+        is_current = "← ACTIVE" if session_id == host.current_session else ""
+        session_list.append({
+            "id": session_id,
+            "model": meta.get("model_name") if meta else "unknown",
+            "created": str(meta.get("created_at")) if meta else "unknown",
+            "tokens": meta.get("total_tokens", 0) if meta else 0,
+            "active": is_current,
+        })
+    return json.dumps(session_list, indent=2)
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("mcp",), requires_session=False, disabled_when_bound=True)
+def set_active_session(session_id: str) -> str:
+    """Switch to a different session. All tools will use that session's workspace.
+
+    Args:
+        session_id: Id of the session to activate, as reported by
+            list_sessions_tool.
+    """
+    host = _host()
+    # Tenant check: only switch to a session the caller owns (self-host
+    # uid is None → any existing session).
+    if not host.session_manager.owns_session(session_id, host.scoped_user_id()):
+        return f"❌ Session '{session_id}' not found."
+    workspace = host.workspace_path(session_id)
+
+    host.current_session = session_id
+    return (
+        f"✅ Switched to session '{session_id}'\nWorkspace: {workspace}\n"
+        "All tools will now use this workspace."
+    )
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("mcp",), requires_session=False)
+def get_current_session() -> str:
+    """Get the currently active session ID and workspace path."""
+    host = _host()
+    sid = visible_session(host)
+    if not sid:
+        return "No active session. Load a prompt or call create_session_tool."
+
+    info = {
+        "session_id": sid,
+        "workspace": host.workspace_path(sid),
+        "metadata": host.session_manager.get_session_metadata(sid),
+    }
+    return json.dumps(info, indent=2, default=str)
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("mcp",), requires_session=False, disabled_when_bound=True)
+def delete_session_tool(session_id: str) -> str:
+    """Delete a session and all its workspace files.
+
+    Args:
+        session_id: Id of the session to delete. It must not be the active one;
+            switch away first with set_active_session.
+    """
+    host = _host()
+    if session_id == host.current_session:
+        return "❌ Cannot delete active session. Switch to another session first."
+
+    try:
+        # Tenant scope (F1): pass the caller's scoped uid so the ownership guard
+        # in delete_session fires. Without it a hosted user could rmtree ANY
+        # tenant's workspace/chats/checkpoints by id.
+        host.session_manager.delete_session(session_id, user_id=host.scoped_user_id())
+        return f"✅ Deleted session '{session_id}' and all its files."
+    except PermissionError:
+        # Do not leak the existence of another tenant's session.
+        return f"❌ Session '{session_id}' not found."
+    except Exception as e:
+        return f"❌ Error deleting session: {str(e)}"
+
+
+@tool(parse_docstring=True)
+@policy(category="session", protected=False, mutates=False, async_job=False,
+        surfaces=("codex",), requires_session=False)
+def inject_architect_prompt(session_id: Optional[str] = "") -> str:
+    """Return the configured Architect prompt for Codex clients. Optional session_id also sets active session/workspace.
+
+    Args:
+        session_id: Existing session to activate before returning the prompt.
+            Leave empty to keep whichever session is already active.
+    """
+    host = _host()
+    workspace = None
+
+    if session_id:
+        if not host.session_manager.owns_session(session_id, host.scoped_user_id()):
+            return f"❌ Session '{session_id}' not found."
+        workspace = host.workspace_path(session_id)
+        host.current_session = session_id
+    else:
+        # No session named: fall back to the active one ONLY if this caller owns
+        # it. Reading the process-global pointer here is how tenant B learned
+        # tenant A's session id and workspace path.
+        session_id = visible_session(host)
+        if session_id:
+            workspace = host.workspace_path(session_id)
+
+    prompt_text, prompt_source, resolved_version = host.architect_prompt()
+    payload = f"{prompt_text}"
+    if session_id and workspace:
+        payload += (
+            "\n\n---\n"
+            f"CURRENT_SESSION: {session_id}\n"
+            f"WORKSPACE: {workspace}\n"
+            f"PROMPT_VERSION: {resolved_version}\n"
+            f"PROMPT_SOURCE: {prompt_source}\n"
+            "All tool calls should operate inside this workspace."
+        )
+    else:
+        payload += (
+            "\n\n---\n"
+            f"PROMPT_VERSION: {resolved_version}\n"
+            f"PROMPT_SOURCE: {prompt_source}\n"
+        )
+
+    return payload
+
+
+# =============================================================================
+# Skills
+# =============================================================================
+# The skill store is NOT in the session workspace — it ships with SiliconCrew
+# and is the same text for every session — so `read_file`, which is confined to
+# the workspace on every surface, cannot serve it. These two are the read route,
+# and being registry tools they reach the agent and every MCP client by
+# construction. Neither needs a session: a stranger's client asks what knowledge
+# exists before it has a design to apply it to.
+from src.utils import skills as skills_mod  # noqa: E402
+
+
+@tool(parse_docstring=True)
+@policy(category="skills", protected=False, mutates=False, async_job=False,
+        surfaces=("agent", "mcp"), requires_session=False)
+def list_skills() -> str:
+    """
+    Lists the available skills — name and one-line description each. A skill is
+    procedural knowledge for a situation the tools cannot decide for you: how to
+    diagnose a physical-design failure, how to earn a passing testbench, how to
+    sweep a design's PPA frontier. Read one with read_skill when its description
+    matches what you are doing. The index is already in the system prompt; call
+    this to re-read it.
+    """
+    skills = skills_mod.discover_skills()
+    if not skills:
+        return "No skills are installed."
+    return skills_mod.skill_index(skills)
+
+
+@tool(parse_docstring=True)
+@policy(category="skills", protected=False, mutates=False, async_job=False,
+        surfaces=("agent", "mcp"), requires_session=False)
+def read_skill(name: str, file: str = "") -> str:
+    """
+    Returns a skill's full text. Skills are markdown; a skill may point at
+    reference files beside it, which this same tool reads.
+
+    Args:
+        name: Skill name as list_skills reports it.
+        file: A reference file inside that skill, e.g.
+            'references/pd_knob_catalog.md'. Omit for the skill itself.
+    """
+    try:
+        return skills_mod.read_skill_file(name, file)
+    except skills_mod.SkillError as exc:
+        return f"❌ {exc}"
+
+
+# =============================================================================
+# The registry
+# =============================================================================
+# ONE list of the tools that exist, in the order clients see them. Which
+# surfaces each one reaches is NOT restated here — it is read off the tool's
+# own policy, so a tool can never be in a list its policy contradicts.
+ALL_TOOLS = [
+    # Session tools — a stranger's first call, so they lead the advertised list
+    create_session_tool,
+    list_sessions_tool,
+    set_active_session,
+    get_current_session,
+    delete_session_tool,
+    inject_architect_prompt,
     # Specification tools (use FIRST)
     write_spec,
     read_spec,
-    load_yaml_spec_file,
     # File management
     write_file,
     read_file,
-    apply_patch_tool,
-    edit_file_tool,
+    edit_file,
     list_files_tool,
     # Design manifest (shared source of truth with the UI)
     get_manifest,
     update_manifest,
     # Verification tools
     linter_tool,
-    simulation_tool,
-    run_isolated_simulation,
+    run_simulation,
     waveform_tool,
     cocotb_tool,
     sby_tool,
@@ -1432,32 +2001,49 @@ mcp_tools = [
     start_synthesis,
     retry_pd,
     get_synthesis_status,
-    wait_for_synthesis,
     get_synthesis_metrics,
     read_stage_report,
-    get_route_drc_summary,
-    get_cts_summary,
-    get_congestion_summary,
     compare_pd_runs,
     search_logs_tool,
     schematic_tool,
     build_interactive_sim,
     # Reporting & Metrics
-    save_metrics_tool,
     generate_report_tool,
     # Analysis (local-only Python analysis tool)
     run_python_analysis,
-    # Google XLS HLS tools
-    run_dslx_interpreter,
-    compile_dslx_to_ir,
-    experimental_compile_cpp_to_ir,
-    optimize_xls_ir,
-    codegen_xls,
-    benchmark_xls,
+    # Google XLS HLS
     run_xls_flow,
+    # Skills — knowledge, not action; no session needed to ask what exists
+    list_skills,
+    read_skill,
 ]
 
+
+def tool_policy(t) -> ToolPolicy:
+    """The policy declared on a registry tool. Raises for a tool without one —
+    there is no permissive default, by design."""
+    p = getattr(getattr(t, "func", None), "__tool_policy__", None)
+    if p is None:
+        raise ValueError(
+            f"tool '{getattr(t, 'name', t)}' declares no @policy — every tool must "
+            "(see ToolPolicy above)"
+        )
+    return p
+
+
+def tools_on_surface(surface: str) -> list:
+    """Registry order, filtered by the tools' own declared surfaces."""
+    if surface not in SURFACE_NAMES:
+        raise ValueError(f"unknown surface {surface!r}; known: {sorted(SURFACE_NAMES)}")
+    return [t for t in ALL_TOOLS if surface in tool_policy(t).surfaces]
+
+
+# Tools exposed over MCP (no blocking wait tool for the UI; see each policy).
+# Includes the session tools, which no other surface offers.
+mcp_tools = tools_on_surface("mcp")
+
 # Tools bound to the in-process architect agent.
-# One async contract everywhere: the architect polls with bounded
-# wait_for_synthesis loops — no start+wait combo tool (Wave 9).
-architect_tools = [*mcp_tools, sleep_tool]
+# One async contract everywhere: dispatch, then poll get_synthesis_status —
+# with wait_sec when the agent would rather block once than poll ten times.
+# There is no start+wait combo tool (Wave 9).
+architect_tools = tools_on_surface("agent")

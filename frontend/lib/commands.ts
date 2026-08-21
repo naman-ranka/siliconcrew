@@ -44,19 +44,36 @@ export function testbenchChoices(manifest: DesignManifest | null): string[] {
   return manifest?.simTop ? [manifest.simTop] : [];
 }
 
+/** Live state every default / option / manifest fact resolves against. */
+export interface CommandCtx {
+  manifest: DesignManifest | null;
+  runs: RunSummary[];
+}
+
 export interface CommandParam {
   key: string;
   label: string;
   /** "combo" = text input with filtered suggestions; free entry always allowed. */
   type: "enum" | "number" | "boolean" | "text" | "combo";
-  options?: readonly string[];
+  /** Fixed choices, or a resolver against live state (testbenches, runs). */
+  options?: readonly string[] | ((ctx: CommandCtx) => string[]);
+  /** The parameter's default — one declaration, read by BOTH surfaces. */
+  def: unknown | ((ctx: CommandCtx) => unknown);
   unit?: string;
   step?: number;
   min?: number;
+  max?: number;
   advanced?: boolean;
   hint?: string;
+  /** Empty value is dropped from the payload (backend falls back). */
+  optional?: boolean;
   /** Where the default comes from — drives the source badge in the modal. */
   source: "manifest" | "choice" | "run" | "default";
+}
+
+export interface ManifestFact {
+  label: string;
+  value: string;
 }
 
 export interface CommandDef {
@@ -69,63 +86,106 @@ export interface CommandDef {
   async: boolean;
   /** Display shortcut, rendered as ⌘/Ctrl + key. */
   shortcut: string;
+  /** "Supplied by manifest" — shown in both the param modal and the Command
+   *  Surface, so the two can never tell the user different stories. */
+  facts?: (ctx: CommandCtx) => ManifestFact[];
   params: CommandParam[];
 }
 
+const filesByRole = (m: DesignManifest | null, roles: string[]): string =>
+  (m?.files ?? []).filter((f) => roles.includes(f.role)).map((f) => f.name).join(", ") || "—";
+
+/**
+ * The four core flow commands — the ONE definition of them in the frontend.
+ * They stay hand-written (unlike every other tool, which the Command Surface
+ * renders straight from the catalog) because they mirror REST request bodies,
+ * which ARE their contract, and dispatch through runCommand below. The Command
+ * Surface derives its own view of these from here (lib/commandSurface.ts);
+ * there is no second copy to keep in sync.
+ *
+ * THE MANIFEST SUPPLIES FILES AND TARGETS; THE USER ONLY SUPPLIES CHOICES.
+ */
 export const COMMANDS: Record<CommandId, CommandDef> = {
   lint: {
     id: "lint",
     label: "Lint",
     tool: "linter_tool",
-    description: "Lint the design sources (rtl + includes from the manifest).",
+    description:
+      "Lint/syntax check (iverilog or verilator). The manifest supplies the rtl + include files.",
     async: false,
     shortcut: "L",
+    facts: (c: CommandCtx) => [{ label: "files", value: filesByRole(c.manifest, ["rtl", "include"]) }],
     params: [
-      { key: "engine", label: "Engine", type: "enum", options: LINT_ENGINES, source: "choice" },
+      { key: "engine", label: "Engine", type: "enum", options: LINT_ENGINES, def: "auto", source: "choice" },
     ],
   },
   sim: {
     id: "sim",
     label: "Simulate",
-    tool: "run_isolated_simulation",
-    description: "Run the testbench in an isolated run directory; captures a waveform.",
+    tool: "run_simulation",
+    description:
+      "Manifest-driven sim in its own sim_runs/sim_NNNN/ dir — own VCD + provenance.",
     async: false,
     shortcut: "R",
+    facts: (c: CommandCtx) => [
+      { label: "default tb", value: c.manifest?.simTop || "—" },
+      { label: "testbenches", value: `${testbenchChoices(c.manifest).length} available` },
+      { label: "files", value: filesByRole(c.manifest, ["rtl", "tb", "include"]) },
+    ],
     params: [
-      { key: "mode", label: "Mode", type: "enum", options: ["rtl", "post_synth"], source: "choice" },
-      // Options resolve live from manifest.testbenches (see CommandModal's
-      // optionsFor) — free entry stays allowed for modules the scan missed.
-      { key: "simTop", label: "Testbench", type: "combo", source: "manifest", hint: "which testbench to run" },
+      { key: "mode", label: "Mode", type: "enum", options: ["rtl", "post_synth"], def: "rtl", source: "choice" },
+      // Options resolve live from manifest.testbenches — free entry stays
+      // allowed for modules the scan missed.
+      {
+        key: "simTop", label: "Testbench", type: "combo", source: "manifest",
+        options: (c) => testbenchChoices(c.manifest),
+        def: (c: CommandCtx) => c.manifest?.simTop ?? "",
+        optional: true, // empty → backend falls back to the manifest default
+        hint: "which testbench to run",
+      },
     ],
   },
   synth: {
     id: "synth",
     label: "Synthesize",
     tool: "start_synthesis",
-    description: "Dispatch an OpenROAD-flow synthesis + PD job for the synth top.",
+    description:
+      "Async ORFS job for the synth top → { run_id } immediately; completion arrives via activity events / Refresh (no client polling).",
     async: true,
     shortcut: "Y",
+    facts: (c: CommandCtx) => [
+      { label: "top module", value: c.manifest?.synthTop ?? "—" },
+      { label: "sources", value: filesByRole(c.manifest, ["rtl"]) },
+      { label: "constraints", value: (c.manifest?.files ?? []).some((f) => f.role === "sdc") ? filesByRole(c.manifest, ["sdc"]) : "auto" },
+    ],
     params: [
-      { key: "platform", label: "Platform", type: "enum", options: PLATFORMS, source: "manifest" },
-      { key: "maxStage", label: "Max stage", type: "enum", options: SYNTH_STAGES, source: "choice", hint: "“synth” = fast synthesis-only estimate" },
-      { key: "clockPeriodNs", label: "Clock period", type: "number", unit: "ns", step: 0.1, min: 0.1, source: "manifest" },
-      { key: "utilization", label: "Utilization", type: "number", unit: "%", step: 1, min: 1, advanced: true, source: "default" },
-      { key: "aspectRatio", label: "Aspect ratio", type: "number", step: 0.1, min: 0.1, advanced: true, source: "default" },
-      { key: "coreMargin", label: "Core margin", type: "number", unit: "µm", step: 0.5, min: 0, advanced: true, source: "default" },
-      { key: "runEquiv", label: "Equivalence check", type: "boolean", advanced: true, source: "default" },
+      { key: "platform", label: "Platform", type: "enum", options: PLATFORMS, def: (c: CommandCtx) => c.manifest?.platform ?? "sky130hd", source: "manifest" },
+      { key: "maxStage", label: "Max stage", type: "enum", options: SYNTH_STAGES, def: "finish", source: "choice", hint: "“synth” = fast synthesis-only estimate" },
+      { key: "clockPeriodNs", label: "Clock period", type: "number", unit: "ns", step: 0.1, min: 0.1, def: (c: CommandCtx) => c.manifest?.clockPeriodNs ?? 10, source: "manifest" },
+      { key: "utilization", label: "Utilization", type: "number", unit: "%", step: 1, min: 1, max: 100, def: 40, advanced: true, source: "default" },
+      { key: "aspectRatio", label: "Aspect ratio", type: "number", step: 0.1, min: 0.1, def: 1.0, advanced: true, source: "default" },
+      { key: "coreMargin", label: "Core margin", type: "number", unit: "µm", step: 0.5, min: 0, def: 2.0, advanced: true, source: "default" },
+      { key: "runEquiv", label: "Equivalence check", type: "boolean", def: false, advanced: true, source: "default" },
     ],
   },
   pnr: {
     id: "pnr",
     label: "Retry P&R",
     tool: "retry_pd",
-    description: "Re-run physical design from a chosen stage of an existing synth run.",
+    description:
+      "Branches a child PD run from an existing run and reruns downstream ORFS stages — first-class lineage.",
     async: true,
     shortcut: "E",
+    facts: () => [{ label: "reuses", value: "netlist + constraints of the source run" }],
     params: [
-      { key: "runId", label: "Source run", type: "enum", options: [], source: "run" },
-      { key: "fromStage", label: "From stage", type: "enum", options: PD_STAGES, source: "choice" },
-      { key: "maxStage", label: "To stage", type: "enum", options: PD_STAGES, source: "choice" },
+      {
+        key: "runId", label: "Source run", type: "enum", source: "run",
+        options: (c) => synthRunChoices(c.runs),
+        def: (c: CommandCtx) => synthRunChoices(c.runs)[0] ?? "",
+        hint: "parent run to branch from",
+      },
+      { key: "fromStage", label: "From stage", type: "enum", options: PD_STAGES, def: "floorplan", source: "choice" },
+      { key: "maxStage", label: "To stage", type: "enum", options: PD_STAGES, def: "finish", source: "choice" },
     ],
   },
 };
@@ -137,77 +197,29 @@ export function synthRunChoices(runs: RunSummary[]): string[] {
   return runs.filter((r) => r.kind === "synth").map((r) => r.id);
 }
 
+/** A param's default, resolved against live state. */
+export function resolveParamDef(p: CommandParam, ctx: CommandCtx): unknown {
+  return typeof p.def === "function" ? (p.def as (c: CommandCtx) => unknown)(ctx) : p.def;
+}
+
+/** A param's choices, resolved against live state. */
+export function resolveParamOptions(p: CommandParam, ctx: CommandCtx): string[] {
+  if (!p.options) return [];
+  return typeof p.options === "function" ? p.options(ctx) : [...p.options];
+}
+
 /** Per-command defaults, resolved from live state (manifest, runs). */
-export function defaultValues(
-  id: CommandId,
-  ctx: { manifest: DesignManifest | null; runs: RunSummary[] }
-): CommandValues {
-  switch (id) {
-    case "lint":
-      return { engine: "auto" };
-    case "sim":
-      return { mode: "rtl", simTop: ctx.manifest?.simTop ?? "" };
-    case "synth":
-      return {
-        platform: ctx.manifest?.platform ?? "sky130hd",
-        maxStage: "finish",
-        clockPeriodNs: ctx.manifest?.clockPeriodNs ?? 10,
-        utilization: 5,
-        aspectRatio: 1.0,
-        coreMargin: 2.0,
-        runEquiv: false,
-      };
-    case "pnr":
-      return {
-        runId: synthRunChoices(ctx.runs)[0] ?? "",
-        fromStage: "floorplan",
-        maxStage: "finish",
-      };
-  }
+export function defaultValues(id: CommandId, ctx: CommandCtx): CommandValues {
+  const out: CommandValues = {};
+  for (const p of COMMANDS[id].params) out[p.key] = resolveParamDef(p, ctx);
+  return out;
 }
 
-// Mirror of the backend's files_for_stage (src/tools/manifest.py) — used ONLY
-// for the modal's "Supplied by manifest" display; the backend re-resolves the
-// real set at execution time, so this can never drift into behavior.
-const STAGE_ROLES: Record<string, string[]> = {
-  lint: ["rtl", "include"],
-  sim: ["rtl", "tb", "include"],
-  synth: ["rtl", "sdc"],
-  pnr: [],
-};
-
-export interface ManifestFact {
-  label: string;
-  value: string;
-}
-
-/** The "Supplied by manifest" facts shown in the param modal. */
-export function manifestFacts(
-  id: CommandId,
-  ctx: { manifest: DesignManifest | null }
-): ManifestFact[] {
-  const m = ctx.manifest;
-  if (!m) return [];
-  const files = (roles: string[]) =>
-    m.files.filter((f) => roles.includes(f.role)).map((f) => f.name);
-  switch (id) {
-    case "lint":
-      return [{ label: "files", value: files(STAGE_ROLES.lint).join(", ") || "—" }];
-    case "sim":
-      return [
-        { label: "default tb", value: m.simTop || "—" },
-        { label: "testbenches", value: `${testbenchChoices(m).length} available` },
-        { label: "files", value: files(STAGE_ROLES.sim).join(", ") || "—" },
-      ];
-    case "synth":
-      return [
-        { label: "top module", value: m.synthTop ?? "—" },
-        { label: "sources", value: files(["rtl"]).join(", ") || "—" },
-        { label: "constraints", value: files(["sdc"]).join(", ") || "auto" },
-      ];
-    case "pnr":
-      return [{ label: "reuses", value: "netlist + constraints of the source run" }];
-  }
+/** The "Supplied by manifest" facts — the backend re-resolves the real file
+ *  set at execution time, so these can never drift into behavior. */
+export function manifestFacts(id: CommandId, ctx: { manifest: DesignManifest | null }): ManifestFact[] {
+  if (!ctx.manifest) return [];
+  return COMMANDS[id].facts?.({ manifest: ctx.manifest, runs: [] }) ?? [];
 }
 
 /**
@@ -233,21 +245,14 @@ export function commandValuesForFile(
   return {};
 }
 
-/** Map an activity-feed tool name back to its command (for "Re-run"). */
+/** Map an activity-feed tool name back to its command (for "Re-run") — read
+ *  off the registry above, so a renamed tool cannot leave a dead branch here. */
 export function commandForTool(tool: string): CommandId | null {
-  switch (tool) {
-    case "linter_tool":
-      return "lint";
-    case "run_isolated_simulation":
-    case "simulation_tool":
-      return "sim";
-    case "start_synthesis":
-      return "synth";
-    case "retry_pd":
-      return "pnr";
-    default:
-      return null;
+  for (const id of RUN_ORDER) {
+    const def = COMMANDS[id];
+    if (def.tool === tool) return id;
   }
+  return null;
 }
 
 // --- Execution ---------------------------------------------------------------

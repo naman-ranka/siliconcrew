@@ -235,9 +235,16 @@ def test_catalog_policy_flags():
 
 
 def test_registered_in_single_tool_registry():
-    from src.tools.wrappers import mcp_tools
+    """Hidden by default, never deleted: it is off the architect's list and off
+    a default MCP advertisement, and still reachable from the Command Surface
+    and from a server started with --codex-tools."""
+    from src.tools.wrappers import ALL_TOOLS, architect_tools, mcp_tools, tools_on_surface
 
-    assert "build_interactive_sim" in {t.name for t in mcp_tools}
+    assert "build_interactive_sim" in {t.name for t in ALL_TOOLS}
+    assert "build_interactive_sim" in {t.name for t in tools_on_surface("ui")}
+    assert "build_interactive_sim" in {t.name for t in tools_on_surface("codex")}
+    assert "build_interactive_sim" not in {t.name for t in mcp_tools}
+    assert "build_interactive_sim" not in {t.name for t in architect_tools}
 
 
 # --- Security hardening: the native yosys child is a bespoke gated subprocess ---

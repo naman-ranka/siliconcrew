@@ -22,32 +22,40 @@ function ev(overrides: Partial<ActivityEvent>): ActivityEvent {
 describe("toolKind", () => {
   it("maps each tool to its kind", () => {
     expect(toolKind("linter_tool")).toBe("lint");
-    expect(toolKind("simulation_tool")).toBe("sim");
-    expect(toolKind("run_isolated_simulation")).toBe("sim");
+    expect(toolKind("run_simulation")).toBe("sim");
     expect(toolKind("start_synthesis")).toBe("synth");
     expect(toolKind("retry_pd")).toBe("synth");
     expect(toolKind("write_spec")).toBe("writes");
     expect(toolKind("write_file")).toBe("writes");
-    expect(toolKind("edit_file_tool")).toBe("writes");
-    expect(toolKind("apply_patch_tool")).toBe("writes");
+    expect(toolKind("edit_file")).toBe("writes");
   });
 
-  it("maps get_synthesis_* (prefix) to synth", () => {
+  it("maps the synthesis read tools to synth", () => {
+    // Named, not prefix-matched: a `get_synthesis_` heuristic used to stand in
+    // for the backend's synthesis category and silently dropped every other
+    // synthesis tool out of the pill. toolRegistry.coverage.test.ts holds the
+    // map to that category now.
     expect(toolKind("get_synthesis_status")).toBe("synth");
-    expect(toolKind("get_synthesis_report")).toBe("synth");
+    expect(toolKind("get_synthesis_metrics")).toBe("synth");
+    expect(toolKind("read_stage_report")).toBe("synth");
+    expect(toolKind("compare_pd_runs")).toBe("synth");
   });
 
   it("unknown tools are 'other'", () => {
     expect(toolKind("generate_report_tool")).toBe("other");
     expect(toolKind("")).toBe("other");
-    expect(toolKind("get_synthesis")).toBe("other"); // no trailing underscore segment
+    // Deliberately fake names shaped like synthesis tools. The old prefix rule
+    // answered "synth" for ANY get_synthesis_* string, registered or not; the
+    // named map answers only for tools that exist.
+    expect(toolKind("get_synthesis")).toBe("other");
+    expect(toolKind("get_synthesis_report")).toBe("other");
   });
 });
 
 describe("filterActivity", () => {
   const events: ActivityEvent[] = [
     ev({ id: "1", tool: "linter_tool", source: "agent", status: "ok", resultSummary: "passed · 0 error(s)" }),
-    ev({ id: "2", tool: "run_isolated_simulation", source: "user", status: "error", runId: "sim_0003", resultSummary: "sim_0003 failed @ 120ns" }),
+    ev({ id: "2", tool: "run_simulation", source: "user", status: "error", runId: "sim_0003", resultSummary: "sim_0003 failed @ 120ns" }),
     ev({ id: "3", tool: "start_synthesis", source: "mcp", status: "running", runId: "synth_0001", resultSummary: "" }),
     ev({ id: "4", tool: "write_file", source: "agent", status: "ok", resultSummary: "wrote counter.v" }),
     ev({ id: "5", tool: "generate_report_tool", source: "user", status: "error", resultSummary: "boom" }),

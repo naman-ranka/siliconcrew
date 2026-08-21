@@ -214,7 +214,7 @@ def test_tool_call_turn_logs_timing_lines(wiring, capsys):
     tool call and the overall turn take (nothing else is logged/printed from
     run_turn today). This asserts the tag, tool name, and thread/turn id are
     present — loose on exact timing values, strict on presence/shape."""
-    tool_item = types.SimpleNamespace(type="mcptoolcall", id="c1", tool="get_cts_summary",
+    tool_item = types.SimpleNamespace(type="mcptoolcall", id="c1", tool="read_stage_report",
                                       arguments={})
     done_item = types.SimpleNamespace(type="mcptoolcall", id="c1",
                                       status="completed",
@@ -256,8 +256,8 @@ def test_tool_call_turn_logs_timing_lines(wiring, capsys):
     # the tool_call_start / tool_result pair for the actual tool, matched by
     # call_id, with a numeric elapsed duration on the result line.
     start_lines = [l for l in lines if "event=tool_call_start" in l]
-    assert start_lines and "tool=get_cts_summary" in start_lines[0] and "call_id=c1" in start_lines[0]
-    result_lines = [l for l in lines if "tool=get_cts_summary" in l and "call_id=c1" in l and "status=" in l]
+    assert start_lines and "tool=read_stage_report" in start_lines[0] and "call_id=c1" in start_lines[0]
+    result_lines = [l for l in lines if "tool=read_stage_report" in l and "call_id=c1" in l and "status=" in l]
     assert result_lines
     assert "elapsed=" in result_lines[0] and result_lines[0].rstrip().endswith("s")
 
@@ -381,7 +381,7 @@ def test_tool_policy_disambiguates_sandbox_from_workspace(wiring, monkeypatch):
     prompt = _handler(wiring, []) ._system_prompt()
 
     # The write tools are named as the sanctioned path.
-    assert "write_file" in prompt and "edit_file_tool" in prompt
+    assert "write_file" in prompt and "edit_file" in prompt
     # The sandbox/workspace distinction is stated, not left to inference.
     assert "The workspace is NOT" in prompt
     assert "outside your sandbox" in prompt
@@ -396,3 +396,47 @@ def test_tool_policy_still_opt_out_via_env(wiring, monkeypatch):
     prompt = _handler(wiring, [])._system_prompt()
     assert prompt == "system"
     assert "sandbox" not in prompt
+
+
+# --- the bound server's disabled tools are the tools' own declaration --------
+
+def test_disabled_tools_are_derived_from_policy(wiring):
+    """The Codex client is told to disable exactly the tools a session-bound
+    MCP server refuses.
+
+    Those four names used to be typed here AND in mcp_server.py's refusal, with
+    nothing keeping the two in step: disable one client-side and forget the
+    server-side refusal (or the reverse) and a bound Codex turn could mint or
+    delete sessions outside its own. Both now read ``disabled_when_bound`` off
+    the tools, so this asserts the wire config carries that set and nothing
+    else.
+    """
+    import json
+    import os
+
+    from src.api.tool_catalog import DISABLED_WHEN_BOUND
+    from src.agents.codex.codex_engine import CodexEngine, CodexTurn
+
+    # local_sqlite_dir is not optional in a test: without it the engine falls
+    # back to /app/codex-sqlite, a production container path. That exists in
+    # some dev images and not on a CI runner, so omitting it passes locally and
+    # fails in CI with a permission error.
+    engine = CodexEngine(enabled=True, state_dir=wiring.state_dir,
+                         mcp_data_dir=wiring.db, repo_root=os.getcwd(),
+                         local_sqlite_dir=wiring.state_dir)
+    turn = CodexTurn(session_id="s1", thread_id="th1", message="hi",
+                     workspace=wiring.workspace, user_id="alice",
+                     model_name="gpt-5.5", api_key="sk-test")
+
+    engine._prepare_paths(turn)
+    overrides = engine._config_overrides(turn)
+    line = [o for o in overrides if o.startswith("mcp_servers.siliconcrew.disabled_tools=")]
+    assert len(line) == 1, overrides
+    disabled = json.loads(line[0].split("=", 1)[1])
+
+    assert set(disabled) == set(DISABLED_WHEN_BOUND)
+    assert disabled  # a bound server that disables nothing is the pre-fix bug
+    # And the server it launches refuses the same set — same source, both ends.
+    args = [json.loads(o.split("=", 1)[1]) for o in overrides
+            if o.startswith("mcp_servers.siliconcrew.args=")]
+    assert len(args) == 1 and "--bound-session" in args[0]
