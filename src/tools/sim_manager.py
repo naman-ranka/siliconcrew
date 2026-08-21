@@ -32,6 +32,13 @@ RUN_META_FILENAME = "run_meta.json"
 SIM_LOG_FILENAME = "sim.log"
 
 _ALLOC_LOCK = threading.Lock()
+#: Guards the load-modify-save of ``sim_runs/index.json``, exactly as
+#: ``synthesis_manager._INDEX_LOCK`` guards its own. Simulations became
+#: concurrent when subagents arrived: two ``verify-tb`` children each run a
+#: testbench, both finish, both read the index, and the second write drops the
+#: first run — a completed simulation that exists on disk and is invisible to
+#: the runs API and the UI.
+_INDEX_LOCK = threading.Lock()
 _PROVENANCE_CACHE: Dict[str, Any] = {}
 
 
@@ -70,8 +77,16 @@ def _load_index(workspace: str) -> Dict[str, Any]:
 
 
 def _save_index(workspace: str, data: Dict[str, Any]) -> None:
-    with open(_index_path(workspace), "w", encoding="utf-8") as f:
+    # Written whole, then moved into place. A truncating write leaves a window
+    # where the file is half a JSON document, and ``_load_index`` answers a
+    # parse failure with ``{"runs": []}`` — so a reader landing in that window
+    # is told this workspace has no simulations at all. os.replace is atomic
+    # on the same filesystem, so a reader sees either the old index or the new.
+    path = _index_path(workspace)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp, path)
 
 
 def _next_run_id(workspace: str) -> str:
@@ -548,10 +563,13 @@ def _index_entry(sim_run: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _append_to_index(workspace: str, sim_run: Dict[str, Any]) -> None:
-    index = _load_index(workspace)
-    index["runs"] = [r for r in index.get("runs", []) if r.get("run_id") != sim_run["id"]]
-    index["runs"].append(_index_entry(sim_run))
-    _save_index(workspace, index)
+    # Read and write under one lock: two concurrent children that both read
+    # before either writes would each save a list missing the other's run.
+    with _INDEX_LOCK:
+        index = _load_index(workspace)
+        index["runs"] = [r for r in index.get("runs", []) if r.get("run_id") != sim_run["id"]]
+        index["runs"].append(_index_entry(sim_run))
+        _save_index(workspace, index)
 
 
 def get_sim_run_dir(workspace: str, run_id: Optional[str]) -> Optional[str]:

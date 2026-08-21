@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -41,6 +42,17 @@ def _ensure_workspace(workspace: str) -> bool:
     if not os.path.exists(workspace):
         return False
     return True
+
+
+#: Serialises the read-events-then-rebuild-summary cycle. The JSONL append is
+#: a single O_APPEND write and needs no help, but ``attempt_log.json`` is
+#: derived state: every logged call re-reads the whole event log and rewrites
+#: the summary from it. A subagent fan-out has several children logging into
+#: ONE workspace at once, so two rebuilds interleave and the one that read
+#: first can land last, publishing a summary that is missing the other child's
+#: completed work. Held across both the read and the write, because it is the
+#: pair that must not interleave.
+_SUMMARY_LOCK = threading.Lock()
 
 
 def _append_jsonl(path: str, obj: dict[str, Any]) -> None:
@@ -223,6 +235,11 @@ def attempt_synthesis_metrics(attempt: dict[str, Any], arguments: dict[str, Any]
 
 
 def _write_summary(workspace: str, session_id: str | None) -> None:
+    with _SUMMARY_LOCK:
+        _rebuild_summary(workspace, session_id)
+
+
+def _rebuild_summary(workspace: str, session_id: str | None) -> None:
     events_path = os.path.join(workspace, EVENTS_FILE)
     events = _read_events(events_path)
     attempts: list[dict[str, Any]] = []
@@ -336,8 +353,14 @@ def _write_summary(workspace: str, session_id: str | None) -> None:
         },
         "updated_at": _utc_now(),
     }
-    with open(os.path.join(workspace, SUMMARY_FILE), "w", encoding="utf-8", newline="\n") as f:
+    # Written whole, then moved into place: a truncating write leaves a window
+    # in which a reader gets half a JSON document, and every reader of this
+    # file treats a parse failure as "no attempts".
+    path = os.path.join(workspace, SUMMARY_FILE)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         json.dump(summary, f, indent=2)
+    os.replace(tmp, path)
 
 
 def log_tool_call(
