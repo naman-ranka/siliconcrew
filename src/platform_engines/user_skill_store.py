@@ -210,11 +210,11 @@ def default_local_base() -> Path:
 def get_user_skill_store():
     """The process-wide store, chosen ONCE from platform settings.
 
-    The selector belongs in ``src/platform_engines/settings.py`` beside
-    ``workspace_engine`` and ``templates_engine`` as a ``user_skills_engine``
-    field; it is read here from ``hosted`` + one env override only because that
-    file is owned by another change in flight. The shape is the same either
-    way: config chooses an engine once, call sites see one interface.
+    The selector lives in ``src/platform_engines/settings.py`` as
+    ``user_skills_engine``, beside ``workspace_engine`` and
+    ``templates_engine``, so every engine decision is made in the one file
+    that owns them: config chooses an engine once, call sites see one
+    interface.
     """
     global _STORE
     if _STORE is not None:
