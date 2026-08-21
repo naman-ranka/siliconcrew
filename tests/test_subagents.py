@@ -425,10 +425,23 @@ def test_a_childs_run_records_the_childs_identity_not_the_parents(monkeypatch, c
     )
     assert stamp["prompt_sha"] and stamp["prompt_sha"] != parent.prompt_sha
     assert stamp["tool_set"] == spec["tool_set"]
-    assert stamp["skills_loaded"] == sorted(spec["skills"])
-    assert stamp["skills_sha"] and stamp["skills_sha"] != parent.skills_sha
-    # A resolver looked: a child's set is fixed by its role, nothing is off.
-    assert stamp["skills_disabled"] == []
+    assert stamp["skills_sha"]
+    # ``skills_loaded`` names every skill the child could READ, not only the
+    # role bodies pasted into its prompt. Both child tool sets include the
+    # skills category — on purpose, since a role skill can point at a reference
+    # file ``read_skill`` serves — so a child can open an owner skill its role
+    # never named and act on it. A stamp listing only the role's own skills
+    # would claim that one did not drive the result. Which skills were pasted
+    # in full is already covered by ``prompt_sha``.
+    from src.utils.skills import resolve_skills
+
+    with session_scope(ctx):
+        resolved = resolve_skills()
+    assert set(spec["skills"]) <= set(stamp["skills_loaded"])
+    assert stamp["skills_loaded"] == sorted(s.name for s in resolved.active)
+    # The owner's real disabled list, for the same reason: a skill switched off
+    # is an absence in what the child could reach.
+    assert stamp["skills_disabled"] == list(resolved.disabled)
 
 
 def test_a_childs_stamp_does_not_outlive_it_on_a_pooled_thread(monkeypatch, ctx):
@@ -512,38 +525,47 @@ def test_the_prompt_and_the_stamp_come_from_one_read_of_the_store():
     """A skill edited mid-startup must not reach the model unrecorded.
 
     ``_role_skill_bodies`` says in its own docstring that the prompt and the
-    provenance stamp are built from the same mapping. They were not: the
-    prompt read the store a SECOND time, so a body edited between the two
-    reads went into the prompt while the stamp hashed the body it replaced —
-    a run recording a digest for instructions the child never saw.
+    provenance stamp are built from one resolution. They were not: the prompt
+    read the store a SECOND time, so a body edited between the two reads went
+    into the prompt while the stamp hashed the body it replaced — a run
+    recording a digest for instructions the child never saw.
     """
+    from dataclasses import replace as _replace
+
+    from src.platform_engines.provenance import skills_digest
     from src.utils import skills as sk
 
     role = "pd-sweep"
     spec = dict(tc.subagent_roles()[role])
     name = spec["skills"][0]
     reads = {"n": 0}
-    real = sk.skills_by_name
+    real = sk.resolve_skills
 
-    def counting_store(*args, **kwargs):
+    def counting_resolve(*args, **kwargs):
         reads["n"] += 1
-        store = dict(real(*args, **kwargs))
-        original = store[name]
+        resolved = real(*args, **kwargs)
         # Every read answers differently, so a second read is visible in the
         # bytes rather than only in the counter.
-        store[name] = replace(original, body=f"BODY-READ-{reads['n']}")
-        return store
+        entries = tuple(
+            _replace(e, skill=_replace(e.skill, body=f"BODY-READ-{reads['n']}"))
+            if e.name == name and e.skill is not None
+            else e
+            for e in resolved.entries
+        )
+        return _replace(resolved, entries=entries)
 
-    with mock.patch("src.utils.skills.skills_by_name", counting_store):
-        bodies = subagents._role_skill_bodies(list(spec["skills"]))
+    with mock.patch.object(sk, "resolve_skills", counting_resolve):
+        resolved = sk.resolve_skills()
+        bodies = subagents._role_skill_bodies(list(spec["skills"]), resolved)
         prompt = subagents.child_prompt(role, spec, "a task", bodies)
 
     assert reads["n"] == 1, "the store was read twice; the two reads can disagree"
     assert "BODY-READ-1" in prompt
     assert "BODY-READ-2" not in prompt
 
-    stamp = subagents._child_provenance(role, spec, prompt, bodies)
-    # The stamp describes exactly the bodies that are in the prompt.
-    from src.platform_engines.provenance import skills_digest
-
-    assert stamp.skills_sha == skills_digest(bodies)[1]
+    # The stamp describes the same resolution the prompt was built from.
+    stamp = subagents._child_provenance(role, spec, prompt, bodies, resolved)
+    assert stamp.skills_sha == skills_digest(
+        {one.name: one.body for one in resolved.active}
+    )[1]
+    assert set(bodies) <= set(stamp.skills_loaded)

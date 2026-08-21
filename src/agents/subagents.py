@@ -169,16 +169,18 @@ class SubagentActivityMiddleware(AgentMiddleware):
         return result
 
 
-def _role_skill_bodies(names: List[str]) -> Dict[str, str]:
-    """``{name: body}`` for a role's skills, straight out of the shipped store.
+def _role_skill_bodies(names: List[str], resolved=None) -> Dict[str, str]:
+    """``{name: body}`` for a role's skills, out of one resolution of the store.
 
-    The prompt and the provenance stamp are both built from THIS mapping, so
-    the skills a child was told to follow and the skills its run records can
-    never be two different answers to the same question.
+    ``resolved`` is the caller's already-resolved ``SkillSet``. The prompt, the
+    provenance stamp and this mapping all come from that ONE object, so the
+    skills a child was told to follow and the skills its run records can never
+    be two different answers to the same question.
     """
-    from src.utils.skills import skills_by_name
+    from src.utils.skills import resolve_skills
 
-    store = skills_by_name()
+    resolved = resolve_skills() if resolved is None else resolved
+    store = {skill.name: skill for skill in resolved.active}
     bodies: Dict[str, str] = {}
     for name in names:
         skill = store.get(name)
@@ -294,7 +296,8 @@ class UsageMeter(AgentMiddleware):
         return response
 
 
-def _child_provenance(role: str, spec: Dict[str, Any], prompt: str, bodies: Dict[str, str]):
+def _child_provenance(role: str, spec: Dict[str, Any], prompt: str, bodies: Dict[str, str],
+                      resolved):
     """What DROVE this child — its own prompt, its own skills, its own tools.
 
     Without this a child's ``start_synthesis`` records the MAIN architect's
@@ -311,13 +314,20 @@ def _child_provenance(role: str, spec: Dict[str, Any], prompt: str, bodies: Dict
     * ``prompt_sha`` hashes the composed prompt EXACTLY as the model saw it,
       task text included — because that text is part of the system prompt, and
       two children given different tasks did not run the same prompt.
-    * ``skills_loaded`` / ``skills_sha`` come from the same bodies that were
-      pasted into that prompt, so the pair cannot describe a different set than
-      the child read.
-    * ``skills_disabled`` is ``[]``, not ``None``: a resolver looked. A child's
-      skill set is fixed by its role and every one of them is in its prompt, so
-      "looked, none off" is the true answer (a disabled role skill fails the
-      build before any spend).
+    * ``skills_loaded`` / ``skills_sha`` describe every skill the child could
+      READ, not only the role bodies pasted into its prompt. Both child tool
+      sets include the ``skills`` category — deliberately, because a role skill
+      can point at a reference file that ``read_skill`` serves — so a child can
+      open an owner skill its role never named and act on it. A stamp naming
+      only the role's own bodies would then claim that skill did not drive the
+      result. This is the same meaning ``resolve_agent_provenance`` gives the
+      field for an architect turn: the pack the agent could read. Which of them
+      were pasted in full is already covered by ``prompt_sha``.
+    * ``skills_disabled`` is the owner's real disabled list. It used to be
+      hard-coded ``[]`` on the reasoning that a role's skills are fixed — but
+      the child can read the owner's whole layer, so a skill the owner switched
+      off is an absence in what the child could reach, exactly as it is for the
+      architect.
     * ``tool_set`` is the role's declared set — the first stamp in this repo
       that can fill that field with data, because subagents are the first thing
       that really has one.
@@ -327,13 +337,13 @@ def _child_provenance(role: str, spec: Dict[str, Any], prompt: str, bodies: Dict
     """
     from src.platform_engines.provenance import AgentProvenance, skills_digest
 
-    names, digest = skills_digest(bodies)
+    names, digest = skills_digest({s.name: s.body for s in resolved.active})
     return AgentProvenance(
         prompt_version=f"subagent:{role}",
         prompt_sha="sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         skills_loaded=names,
         skills_sha=digest,
-        skills_disabled=[],
+        skills_disabled=list(resolved.disabled),
         tool_set=spec["tool_set"],
         context_edit="off",
     )
@@ -386,17 +396,23 @@ def _run_one(role, spec, task, index, ctx, model_name, api_key, read_only) -> Di
     from src.llm import create_llm
     from src.platform_engines.provenance import agent_provenance_scope
     from src.platform_engines.settings import get_settings
+    from src.utils.skills import resolve_skills
 
     meter = UsageMeter()
     with session_scope(ctx):
         token = _depth.set(_depth.get() + 1)
         try:
-            bodies = _role_skill_bodies(list(spec.get("skills") or []))
+            # ONE resolution of the skill store per child: the bodies pasted
+            # into the prompt and the set the stamp describes are the same read.
+            resolved = resolve_skills()
+            bodies = _role_skill_bodies(list(spec.get("skills") or []), resolved)
             prompt = child_prompt(role, spec, task, bodies)
             # Bound around the invocation, released in the contextmanager's
             # finally: this runs on a POOLED thread, and a stamp left behind is
             # read by whatever job that worker is handed next.
-            with agent_provenance_scope(_child_provenance(role, spec, prompt, bodies)):
+            with agent_provenance_scope(
+                _child_provenance(role, spec, prompt, bodies, resolved)
+            ):
                 graph = create_agent(
                     model=create_llm(model_name=model_name, temperature=0.0, api_key=api_key),
                     tools=tools_in_set(spec["tool_set"], read_only=read_only),
