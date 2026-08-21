@@ -262,8 +262,22 @@ export function ActivityFeed() {
                   </span>
                   <span className="flex shrink-0 items-center gap-2 text-[10px] text-muted-foreground">
                     {isAgent ? (
-                      <span title={e.source === "mcp" ? "MCP" : "Agent"}>
+                      <span
+                        className="flex items-center gap-1"
+                        title={
+                          e.source === "mcp"
+                            ? "MCP"
+                            : e.source === "subagent"
+                            ? `Subagent${e.role ? `: ${e.role}` : ""}`
+                            : "Agent"
+                        }
+                      >
                         <Bot className="h-3 w-3" />
+                        {/* Which child did this. Without it a pd-sweep row and
+                            a verify-tb row are the same generic agent icon. */}
+                        {e.source === "subagent" && e.role ? (
+                          <span className="font-mono text-[10px]">{e.role}</span>
+                        ) : null}
                       </span>
                     ) : (
                       <span title="You">

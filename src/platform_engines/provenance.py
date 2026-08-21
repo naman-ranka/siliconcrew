@@ -381,19 +381,26 @@ def collect_provenance(
 ) -> Provenance:
     """Gather the full provenance stamp for a run (best-effort, never raises).
 
-    ``agent`` defaults to whatever the enclosing request scope resolved. With no
-    bound scope (a direct tool call, a worker that lost the context) the prompt
-    pair is still resolved here — the active prompt is process-wide config, not
-    owner state, so reading it carries no tenancy risk — while the owner-scoped
-    fields stay absent rather than being guessed.
+    ``agent`` defaults to whatever the enclosing request scope resolved. With
+    NOTHING bound, every agent field stays absent — including the prompt pair,
+    which this used to resolve from process config.
+
+    That fallback read as harmless (the active prompt is not owner state, so
+    there is no tenancy risk in reading it) and was still wrong, because the
+    unbound dispatches are not agent turns at all. A user clicking Synthesize
+    in the IDE reaches ``src/api/actions.py`` ``run_scoped``, which binds a
+    session and no provenance; stamping the configured architect prompt onto
+    that run makes a button press indistinguishable in the record from an
+    experiment that prompt actually drove. ``None`` means nobody looked, and
+    for a hand-dispatched run nobody did — that is the honest answer, not the
+    poorer one. Every path an agent really drives binds its own stamp: the
+    native turn, ``session_request_scope`` (REST actions router, MCP per-call),
+    and each subagent child.
     """
     if agent is None:
         agent = current_agent_provenance()
     if agent is None:
-        version, sha = prompt_identity()
-        agent = AgentProvenance(
-            prompt_version=version, prompt_sha=sha, context_edit=context_edit_identity()
-        )
+        agent = AgentProvenance()
     return Provenance(
         repo_commit=repo_commit(),
         orfs_image_digest=orfs_image_digest(orfs_image),

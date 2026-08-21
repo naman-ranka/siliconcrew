@@ -93,7 +93,10 @@ def test_provenance_records_the_active_prompt(monkeypatch):
     prov = _fresh_commit(monkeypatch)
     monkeypatch.delenv("ARCHITECT_PROMPT_VERSION", raising=False)
 
-    d = collect_provenance(pdk="sky130hd").as_dict()
+    # Through a bound stamp, because that is what an agent turn has. An
+    # unbound dispatch is somebody pressing a button — see the test below.
+    with prov.agent_provenance_scope(prov.resolve_agent_provenance()):
+        d = collect_provenance(pdk="sky130hd").as_dict()
     assert d["prompt_version"] == prov.active_prompt_version()
     assert d["prompt_sha"].startswith("sha256:") and len(d["prompt_sha"]) == 7 + 64
     # ...and it is the hash of the file load_system_prompt would actually read.
@@ -296,3 +299,32 @@ def test_shipped_prompt_carries_no_absolute_author_path():
     assert "PROMPT_SOURCE" not in text
     assert "C:\\Users" not in text
     assert "PROMPT_VERSION: v2" in text   # the version line stays
+
+
+def test_a_hand_dispatched_run_is_not_filed_under_the_architect_prompt(monkeypatch):
+    """A button press is not an experiment, and must not read as one.
+
+    ``src/api/actions.py`` ``run_scoped`` binds a session and no provenance, so
+    a run dispatched from the IDE's Synthesize button — or from ``/invoke``, or
+    a retry — reaches ``collect_provenance`` with nothing bound. That used to
+    resolve the configured architect prompt from process config and stamp it,
+    which made a hand-dispatched run indistinguishable in the record from one
+    that prompt actually drove.
+
+    ``None`` is the honest answer for every agent field here: nobody looked,
+    because there was no agent. Every path an agent really drives binds its own
+    stamp, and the test above covers that case.
+    """
+    prov = _fresh_commit(monkeypatch)
+    assert prov.current_agent_provenance() is None
+
+    d = collect_provenance(pdk="sky130hd").as_dict()
+
+    for field in ("prompt_version", "prompt_sha", "skills_loaded", "skills_sha",
+                  "skills_disabled", "tool_set", "context_edit"):
+        assert d[field] is None, (
+            f"{field} was invented for a run no agent dispatched: {d[field]!r}"
+        )
+    # The toolchain half is unaffected — that IS known for a hand-run.
+    assert d["repo_commit"] and d["pdk"] == "sky130hd"
+

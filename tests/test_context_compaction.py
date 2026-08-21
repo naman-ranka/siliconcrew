@@ -401,12 +401,16 @@ def test_provenance_records_the_compaction_settings(compaction, monkeypatch):
     monkeypatch.setenv("SILICONCREW_COMMIT", "deadbeef")
     prov.repo_commit.cache_clear()
 
+    # Through a bound stamp: an UNBOUND dispatch is a hand-run, not an agent
+    # turn, and records no agent fields at all (see collect_provenance).
     compaction(100_000, keep=3)
-    d = prov.collect_provenance(pdk="sky130hd").as_dict()
+    with prov.agent_provenance_scope(prov.resolve_agent_provenance()):
+        d = prov.collect_provenance(pdk="sky130hd").as_dict()
     assert d["context_edit"] == "clear_tool_uses:trigger=100000,keep=3"
 
     compaction(0)
-    assert prov.collect_provenance().as_dict()["context_edit"] == "off"
+    with prov.agent_provenance_scope(prov.resolve_agent_provenance()):
+        assert prov.collect_provenance().as_dict()["context_edit"] == "off"
     prov.repo_commit.cache_clear()
 
 

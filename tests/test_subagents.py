@@ -93,9 +93,9 @@ def test_a_childs_rows_are_distinguishable_from_its_parents(monkeypatch, ctx):
     events = build_activity_events(_read_events(os.path.join(ctx.workspace, EVENTS_FILE)))
     parent = [e for e in events if e["tool"] == "read_file"]
     children = [e for e in events if e["source"] == "subagent"]
-    assert parent and parent[0]["source"] == "agent" and parent[0]["subagent"] is None
+    assert parent and parent[0]["source"] == "agent" and parent[0]["role"] is None
     assert len(children) == 2, events
-    assert {e["subagent"] for e in children} == {"pd-sweep"}
+    assert {e["role"] for e in children} == {"pd-sweep"}
     # Two children, two separately identifiable rows -- ids cannot collide even
     # though both models generated the same tool_call_id.
     assert len({e["id"] for e in children}) == 2
