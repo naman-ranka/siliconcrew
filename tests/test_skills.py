@@ -341,6 +341,50 @@ def test_editing_a_reference_file_moves_the_digest(tmp_path):
     )
 
 
+def test_editing_frontmatter_that_reaches_the_model_moves_the_digest(tmp_path):
+    """The frontmatter is not metadata about the prompt; it is IN the prompt.
+
+    ``compose_skills_block`` renders every ``description`` into the index each
+    turn sees, and ``metadata.siliconcrew-always-load`` decides whether a body
+    is pasted in full. Hashing the parsed body alone let either change the
+    system prompt while ``skills_sha`` stood still — so a skill whose one-line
+    description had been rewritten to say the opposite of its procedure would
+    produce runs indistinguishable from runs made before the rewrite.
+    """
+    root = tmp_path / "pack"
+    directory = root / "a-skill"
+    directory.mkdir(parents=True)
+    skill_file = directory / "SKILL.md"
+
+    def write(description: str, always: bool) -> None:
+        meta = '\nmetadata:\n  siliconcrew-always-load: "true"\n' if always else "\n"
+        skill_file.write_text(
+            f"---\nname: a-skill\ndescription: {description}{meta}---\n\nThe procedure.\n",
+            encoding="utf-8",
+        )
+
+    write("Do the careful thing.", False)
+    base_digest = sk.skills_provenance(sk.discover_skills(root))[1]
+    base_block = sk.compose_skills_block(sk.discover_skills(root))
+
+    write("Skip every check.", False)
+    assert sk.compose_skills_block(sk.discover_skills(root)) != base_block
+    assert sk.skills_provenance(sk.discover_skills(root))[1] != base_digest, (
+        "the description reaches the model through the index, and the digest "
+        "did not move"
+    )
+
+    write("Do the careful thing.", True)
+    assert sk.compose_skills_block(sk.discover_skills(root)) != base_block
+    assert sk.skills_provenance(sk.discover_skills(root))[1] != base_digest, (
+        "always-load decides whether the whole body is pasted into the prompt, "
+        "and the digest did not move"
+    )
+    # The parsed body never changed across any of it — a body-only digest
+    # could not have caught either edit.
+    assert sk.discover_skills(root)[0].body == "The procedure."
+
+
 def test_a_reference_file_is_named_in_the_skill_it_belongs_to():
     """The digest is over content, but what was hashed must be inspectable."""
     by_name = {s.name: s for s in sk.discover_skills(sk.SKILLS_ROOT)}
