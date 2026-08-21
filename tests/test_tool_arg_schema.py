@@ -314,7 +314,14 @@ def test_no_tool_ships_an_unsubstituted_template():
             leaks.append(f"{t.name} description: {m}")
         if t.args_schema is None:
             continue
-        for arg, spec in t.args_schema.model_json_schema().get("properties", {}).items():
+        schema = t.args_schema.model_json_schema()
+        # The schema ROOT description is served in MCP's inputSchema and
+        # rendered by the Command Surface. An earlier version of this test
+        # checked the tool description and the per-argument ones but not this,
+        # and a literal "{roles}" shipped to every MCP client through the gap.
+        for m in placeholder.findall(schema.get("description", "") or ""):
+            leaks.append(f"{t.name} schema root: {m}")
+        for arg, spec in schema.get("properties", {}).items():
             for m in placeholder.findall(spec.get("description", "") or ""):
                 leaks.append(f"{t.name}.{arg} schema: {m}")
     assert not leaks, "unsubstituted templates reaching clients: " + "; ".join(leaks)

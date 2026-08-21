@@ -417,7 +417,17 @@ def update_manifest(updates_json: str) -> str:
 # Literal — a hand-copied list here is exactly how a tool description starts
 # advertising roles that no longer exist (or hiding ones that do).
 for _t in (get_manifest, update_manifest):
-    _t.description = _t.description.replace("{roles}", " | ".join(manifest_mod.ROLES))
+    _roles = " | ".join(manifest_mod.ROLES)
+    _t.description = _t.description.replace("{roles}", _roles)
+    # The description is not the only place a client reads. parse_docstring also
+    # copies the docstring onto the args schema, whose ROOT description MCP
+    # serves in inputSchema and the Command Surface renders — substituting only
+    # the tool description shipped a literal "{roles}" to every MCP client.
+    if _t.args_schema is not None:
+        _doc = getattr(_t.args_schema, "__doc__", None)
+        if _doc and "{roles}" in _doc:
+            _t.args_schema.__doc__ = _doc.replace("{roles}", _roles)
+del _roles
 del _t
 
 
