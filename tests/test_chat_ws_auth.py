@@ -74,7 +74,7 @@ def harness(monkeypatch):
     fake_auth = _FakeAuthEngine()
     monkeypatch.setattr(api, "auth_engine", fake_auth)
 
-    def fake_create_agent(checkpointer=None, model_name=None, api_key=None):
+    def fake_create_agent(checkpointer=None, model_name=None, api_key=None, **kwargs):
         return _FakeAgent()
 
     @asynccontextmanager

@@ -303,7 +303,7 @@ def agent_provenance_scope(agent: AgentProvenance) -> Iterator[AgentProvenance]:
         _AGENT_PROVENANCE.reset(token)
 
 
-def resolve_agent_provenance(user_id: Optional[str] = None) -> AgentProvenance:
+def resolve_agent_provenance(user_id: Optional[str] = None, skills=None) -> AgentProvenance:
     """Resolve, once per turn, what is driving this turn.
 
     ``user_id`` is the owner whose skill set / tool set would be composed. The
@@ -326,9 +326,14 @@ def resolve_agent_provenance(user_id: Optional[str] = None) -> AgentProvenance:
     ``tool_set`` stays ``None`` = absent: this resolves the stamp for an
     architect turn, which sees the whole registry rather than a declared set.
     A subagent child composes its own stamp, tool set included.
+
+    ``skills`` is an already-resolved ``SkillSet``. Pass it when the same set
+    is also going into the prompt the model will read: resolving here as well
+    would read the store twice, and a skill edited between the two reads makes
+    the stamp describe a set the model never saw.
     """
     version, sha = prompt_identity()
-    names, digest, disabled = _skills_identity(user_id)
+    names, digest, disabled = _skills_identity(user_id, skills)
     return AgentProvenance(
         prompt_version=version,
         prompt_sha=sha,
@@ -341,6 +346,7 @@ def resolve_agent_provenance(user_id: Optional[str] = None) -> AgentProvenance:
 
 def _skills_identity(
     user_id: Optional[str] = None,
+    skills=None,
 ) -> Tuple[Optional[List[str]], Optional[str], Optional[List[str]]]:
     """``(names, digest, disabled)`` for ``user_id``'s layer, or all ``None``.
 
@@ -351,8 +357,14 @@ def _skills_identity(
     Never raises; stamping a run must not be the thing that fails a run.
     """
     try:
-        from src.utils.skills import active_skills_provenance
+        from src.utils.skills import active_skills_provenance, skills_provenance
 
+        if skills is not None:
+            # The caller already resolved this set and is about to put it in
+            # front of the model. Describing THAT object is the only way the
+            # stamp and the prompt cannot disagree.
+            names, digest = skills_provenance(skills.active)
+            return names, digest, list(skills.disabled)
         # The owner is passed EXPLICITLY. Composing a user's layer anywhere the
         # owner is ambient is finding A3-C1's leak; this is the one call site
         # that knows who is asking.

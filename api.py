@@ -2165,12 +2165,27 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             # resolver actually produced, and on failure binds nothing at all
             # rather than an empty stamp that would read as "looked, found
             # none". Provenance must never be the thing that fails a turn.
+            #
+            # Resolved ONCE and used twice: the same object is stamped here and
+            # composed into the system prompt at agent construction below. Two
+            # resolutions would be two reads of the skill store, and a skill
+            # edited between them would reach the model while the run recorded
+            # the digest of what it replaced — a stamp that disagrees with the
+            # prompt it claims to describe. On failure both fall back to None:
+            # the stamp binds nothing, and construction resolves for itself and
+            # raises there if the layer is genuinely unreadable, which is where
+            # that refusal belongs.
+            _turn_skills = None
             try:
+                from src.utils.skills import resolve_skills
+
+                _turn_skills = resolve_skills(uid)
                 _turn_prov_token = set_agent_provenance(
-                    resolve_agent_provenance(user_id=uid)
+                    resolve_agent_provenance(user_id=uid, skills=_turn_skills)
                 )
             except Exception as _prov_exc:
                 print(f"[WARN] could not resolve turn provenance: {_prov_exc}")
+                _turn_skills = None
                 _turn_prov_token = None
 
             # One live run per thread: a new message SUPERSEDES a run that is
@@ -2218,7 +2233,8 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
                     model_name = normalize_model_name(llm_key.model)
 
                 agent_graph = create_architect_agent(
-                    checkpointer=memory, model_name=model_name, api_key=llm_key.api_key
+                    checkpointer=memory, model_name=model_name, api_key=llm_key.api_key,
+                    skills=_turn_skills,
                 )
                 # Step budget per turn (E6): config, not hard-code. The
                 # default buys ~27 model calls — live FIFO showcase turns hit

@@ -73,7 +73,7 @@ class _RecursionAgent:
 def harness(monkeypatch):
     calls = []
 
-    def fake_create_agent(checkpointer=None, model_name=None, api_key=None):
+    def fake_create_agent(checkpointer=None, model_name=None, api_key=None, **kwargs):
         calls.append({"model_name": model_name, "api_key": api_key})
         return _RecursionAgent()
 

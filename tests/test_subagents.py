@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
+from unittest import mock
 
 import pytest
 
@@ -149,7 +151,8 @@ def test_roles_are_skills_not_a_new_file_format():
         assert spec["skills"], role
         for skill in spec["skills"]:
             assert skill in store, (role, skill)
-        prompt = subagents.child_prompt(role, spec, "a task")
+        bodies = subagents._role_skill_bodies(list(spec["skills"]))
+        prompt = subagents.child_prompt(role, spec, "a task", bodies)
         for skill in spec["skills"]:
             assert store[skill].body in prompt
 
@@ -503,3 +506,44 @@ def test_a_failed_childs_spend_reaches_the_sessions_own_row(monkeypatch, tmp_pat
     assert meta["input_tokens"] == 90 * calls
     assert meta["output_tokens"] == 7 * calls
     assert meta["total_cost"] > 0
+
+
+def test_the_prompt_and_the_stamp_come_from_one_read_of_the_store():
+    """A skill edited mid-startup must not reach the model unrecorded.
+
+    ``_role_skill_bodies`` says in its own docstring that the prompt and the
+    provenance stamp are built from the same mapping. They were not: the
+    prompt read the store a SECOND time, so a body edited between the two
+    reads went into the prompt while the stamp hashed the body it replaced —
+    a run recording a digest for instructions the child never saw.
+    """
+    from src.utils import skills as sk
+
+    role = "pd-sweep"
+    spec = dict(tc.subagent_roles()[role])
+    name = spec["skills"][0]
+    reads = {"n": 0}
+    real = sk.skills_by_name
+
+    def counting_store(*args, **kwargs):
+        reads["n"] += 1
+        store = dict(real(*args, **kwargs))
+        original = store[name]
+        # Every read answers differently, so a second read is visible in the
+        # bytes rather than only in the counter.
+        store[name] = replace(original, body=f"BODY-READ-{reads['n']}")
+        return store
+
+    with mock.patch("src.utils.skills.skills_by_name", counting_store):
+        bodies = subagents._role_skill_bodies(list(spec["skills"]))
+        prompt = subagents.child_prompt(role, spec, "a task", bodies)
+
+    assert reads["n"] == 1, "the store was read twice; the two reads can disagree"
+    assert "BODY-READ-1" in prompt
+    assert "BODY-READ-2" not in prompt
+
+    stamp = subagents._child_provenance(role, spec, prompt, bodies)
+    # The stamp describes exactly the bodies that are in the prompt.
+    from src.platform_engines.provenance import skills_digest
+
+    assert stamp.skills_sha == skills_digest(bodies)[1]

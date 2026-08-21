@@ -275,7 +275,7 @@ def architect_tool_list(model_name, api_key, read_only: bool):
 
 
 def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=None,
-                           read_only=None):
+                           read_only=None, skills=None):
     """
     Creates the Architect agent using LangChain's `create_agent`.
 
@@ -287,6 +287,10 @@ def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=
         read_only: Offer only the tools that do not mutate. None (the default)
             reads `agent_read_only` from settings, so a deployment can run the
             agent read-only without a caller change.
+        skills: An already-resolved `SkillSet`. A caller that stamps the turn's
+            skills into provenance resolves them ONCE and passes them here, so
+            the prompt the model gets and the digest the run records describe
+            the same set. None resolves the requesting owner's layer here.
 
     Returns:
         Compiled LangGraph agent
@@ -296,7 +300,9 @@ def create_architect_agent(checkpointer=None, model_name=DEFAULT_MODEL, api_key=
     if read_only is None:
         read_only = get_settings().agent_read_only
     llm = create_llm(model_name=model_name, temperature=0.0, api_key=api_key)
-    runtime_prompt = load_system_prompt()
+    runtime_prompt = load_system_prompt(
+        skills=None if skills is None else list(skills.active)
+    )
 
     # NO try/except TypeError fallback here, deliberately. It used to swallow any
     # wrong kwarg and hand back an agent with NO prompt and NO reasoning strip —

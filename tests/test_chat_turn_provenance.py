@@ -42,8 +42,13 @@ class _Provider:
         return _Key()
 
 
-def _wire(monkeypatch, tmp_path, recorded, thread_row=lambda *a, **k: {}):
-    """The chat WS handler over a fake provider, key provider and manager."""
+def _wire(monkeypatch, tmp_path, recorded, thread_row=lambda *a, **k: {}, constructed=None):
+    """The chat WS handler over a fake provider, key provider and manager.
+
+    ``constructed`` collects the ``skills`` argument agent construction was
+    handed, so a test can compare what the model was given against what the
+    run recorded.
+    """
 
     @lc_tool
     def capture_stamp() -> str:
@@ -53,7 +58,9 @@ def _wire(monkeypatch, tmp_path, recorded, thread_row=lambda *a, **k: {}):
         recorded.append(collect_provenance().as_dict())
         return "captured"
 
-    def fake_create_agent(checkpointer=None, model_name=None, api_key=None):
+    def fake_create_agent(checkpointer=None, model_name=None, api_key=None, skills=None):
+        if constructed is not None:
+            constructed.append(skills)
         return build_real_graph([
             ai("", tool_calls=[{"id": "c1", "name": "capture_stamp", "args": {}}]),
             ai("done"),
@@ -203,3 +210,34 @@ def test_an_extension_turn_does_not_inherit_the_native_turns_stamp(monkeypatch, 
         "the extension turn started with the previous native turn's stamp still "
         "bound; session_request_scope would then never resolve its own"
     )
+
+
+def test_the_prompt_and_the_stamp_describe_one_resolution(monkeypatch, tmp_path):
+    """The set the model reads and the set the run records are one object.
+
+    The turn stamped the skills it resolved for the owner, then agent
+    construction called ``load_system_prompt`` -> ``compose_skills_block``,
+    which resolved the store a SECOND time. A skill replaced or switched off
+    between those two reads reached the model while the run recorded the digest
+    of what it replaced — a stamp that disagrees with the prompt it claims to
+    describe, which is the one thing a provenance field must never do.
+
+    So construction is handed the resolved set. Being handed nothing is the
+    failure: it means construction went and resolved for itself.
+    """
+    from src.platform_engines.provenance import skills_digest
+
+    recorded, constructed = [], []
+    _wire(monkeypatch, tmp_path, recorded, constructed=constructed)()
+
+    assert len(constructed) == 1
+    handed = constructed[0]
+    assert handed is not None, (
+        "agent construction resolved the skill store for itself; the turn's "
+        "stamp and the model's prompt can then describe different sets"
+    )
+    stamp = recorded[0]
+    _, digest = skills_digest({s.name: s.body for s in handed.active})
+    assert digest == stamp["skills_sha"], (digest, stamp["skills_sha"])
+    assert sorted(s.name for s in handed.active) == sorted(stamp["skills_loaded"])
+    assert list(handed.disabled) == stamp["skills_disabled"]

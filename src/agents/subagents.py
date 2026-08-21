@@ -191,17 +191,22 @@ def _role_skill_bodies(names: List[str]) -> Dict[str, str]:
     return bodies
 
 
-def _skill_bodies(names: List[str]) -> str:
-    """The role's procedure, straight out of the shipped skill store."""
-    bodies = _role_skill_bodies(names)
+def _format_bodies(bodies: Dict[str, str]) -> str:
+    """The role's procedure, as the child reads it."""
     return "\n\n".join(f"## {name}\n\n{body}" for name, body in bodies.items())
 
 
-def child_prompt(role: str, spec: Dict[str, Any], task: str) -> str:
+def child_prompt(role: str, spec: Dict[str, Any], task: str, bodies: Dict[str, str]) -> str:
     """The child's whole system prompt: who it is, the procedure, the contract.
 
     A child has no chat history, so there is nothing for progressive disclosure
     to disclose: the skill bodies are pasted in full.
+
+    ``bodies`` is passed in rather than read here, and that is the point: the
+    caller reads the store ONCE and hands the same mapping to this function and
+    to the provenance stamp. Reading it again here would let a skill edited
+    between the two reads reach the model while the run records the older
+    digest — a stamp that disagrees with the prompt it claims to describe.
     """
     return (
         f"You are a SiliconCrew {role} subagent, working inside a design session "
@@ -209,7 +214,7 @@ def child_prompt(role: str, spec: Dict[str, Any], task: str) -> str:
         "below with the tools you have, then answer once.\n\n"
         "You cannot delegate, and you cannot ask a question — there is nobody "
         "to answer it. If the task cannot be done, say so and say why.\n\n"
-        f"# Procedure\n\n{_skill_bodies(list(spec.get('skills') or []))}\n\n"
+        f"# Procedure\n\n{_format_bodies(bodies)}\n\n"
         f"# Your answer\n\n{(spec.get('output') or '').strip()}\n\n"
         f"# Your task\n\n{task}"
     )
@@ -387,7 +392,7 @@ def _run_one(role, spec, task, index, ctx, model_name, api_key, read_only) -> Di
         token = _depth.set(_depth.get() + 1)
         try:
             bodies = _role_skill_bodies(list(spec.get("skills") or []))
-            prompt = child_prompt(role, spec, task)
+            prompt = child_prompt(role, spec, task, bodies)
             # Bound around the invocation, released in the contextmanager's
             # finally: this runs on a POOLED thread, and a stamp left behind is
             # read by whatever job that worker is handed next.

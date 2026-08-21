@@ -93,7 +93,7 @@ def drive(monkeypatch, tmp_path):
     built = {}
 
     def _install(script, tools=None, recursion_limit=None):
-        def fake_create_agent(checkpointer=None, model_name=None, api_key=None):
+        def fake_create_agent(checkpointer=None, model_name=None, api_key=None, **kwargs):
             graph = build_real_graph(script, tools=tools)
             built["graph"] = graph
             return graph

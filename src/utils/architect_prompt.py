@@ -43,7 +43,8 @@ class PromptUnavailable(RuntimeError):
     """The runtime prompt file is missing, unreadable, or empty."""
 
 
-def load_system_prompt(path: Path | None = None, with_skills: bool = True) -> str:
+def load_system_prompt(path: Path | None = None, with_skills: bool = True,
+                      skills=None) -> str:
     """Return the prompt text plus the skill block, or raise
     :class:`PromptUnavailable`.
 
@@ -53,6 +54,12 @@ def load_system_prompt(path: Path | None = None, with_skills: bool = True) -> st
     ``with_skills=False`` returns the prompt FILE alone. It exists for the
     identity/provenance readers, which hash the file; everything that actually
     drives a model leaves it on.
+
+    ``skills`` is an already-resolved set. Pass it when the caller ALSO stamps
+    those skills into a provenance record: resolving here would be a second
+    read of the store, and a skill edited between the two reads would reach the
+    model while the run recorded the digest of what it replaced. Left None,
+    this resolves the caller's own layer as before.
     """
     path = path or prompt_path()
     try:
@@ -74,7 +81,7 @@ def load_system_prompt(path: Path | None = None, with_skills: bool = True) -> st
     # No try/except: a malformed shipped skill is a bad build, and an agent
     # quietly missing the knowledge it was supposed to have is the failure this
     # whole layer exists to prevent. An absent store composes to "" already.
-    return text + compose_skills_block()
+    return text + compose_skills_block(skills)
 
 
 def load_with_provenance() -> tuple[str, str, str]:
