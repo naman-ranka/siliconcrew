@@ -18,10 +18,12 @@ export default defineConfig({
     screenshot: "on",
     trace: "retain-on-failure",
     video: "retain-on-failure",
-    // Sandboxed agent environments reach the internet only through an egress
-    // proxy. Opt in with HTTPS_PROXY; plain CI leaves it unset and is
-    // untouched.
-    ...(process.env.HTTPS_PROXY ? { proxy: { server: process.env.HTTPS_PROXY } } : {}),
+    // NOTE: no `proxy` here. Behind a sandbox egress proxy, Playwright's
+    // context-level proxy makes Chromium tunnel only the pages it renders
+    // while the browser process itself still tries to reach the network
+    // directly — the WorkOS AuthKit redirect then hangs on a blank page.
+    // The proxy must be set at BROWSER LAUNCH instead; see the project's
+    // launchOptions below (`--proxy-server` via PW_ARGS).
   },
   projects: [
     {
@@ -35,7 +37,13 @@ export default defineConfig({
         ...(process.env.PW_CHANNEL ? { channel: process.env.PW_CHANNEL } : {}),
         launchOptions: {
           ...(process.env.PW_EXECUTABLE ? { executablePath: process.env.PW_EXECUTABLE } : {}),
-          args: process.env.PW_ARGS ? process.env.PW_ARGS.split(/\s+/) : [],
+          args: [
+            ...(process.env.PW_ARGS ? process.env.PW_ARGS.split(/\s+/) : []),
+            // Launch-level proxy: the whole browser process, not just the
+            // context, goes through the sandbox egress proxy. Plain CI leaves
+            // HTTPS_PROXY unset and is untouched.
+            ...(process.env.HTTPS_PROXY ? [`--proxy-server=${process.env.HTTPS_PROXY}`] : []),
+          ],
         },
       },
     },
