@@ -54,6 +54,7 @@ from src.tools.wrappers import (
     session_host,
     tools_on_surface,
 )
+from src.utils.session_context import SessionContext, session_scope
 from src.utils.session_manager import SessionManager
 from src.utils.attempt_logger import log_tool_call, log_tool_result
 from src.platform_engines.request_scope import resolve_workspace_path, run_in_session
@@ -280,6 +281,19 @@ class RTLDesignMCPServer:
 
     def scoped_user_id(self):
         return auth_engine.scoped_user_id(self._current_identity())
+
+    def _sessionless_context(self) -> SessionContext:
+        """Who is calling, for a call that has no session to act in.
+
+        Identity ONLY. ``session_id`` and ``workspace`` are empty on purpose:
+        every reader of those treats empty exactly as it treats an unbound
+        context (``current_session_id()`` returns ``""`` either way, and
+        ``get_workspace_path()`` skips a falsy context and falls through to its
+        env/default), so binding this changes nothing about WHERE a sessionless
+        tool acts. It changes only WHO it answers for — which is the one thing
+        these calls were missing.
+        """
+        return SessionContext(session_id="", workspace="", user_id=self.scoped_user_id())
 
     def architect_prompt(self) -> tuple[str, str, str]:
         """(prompt_text, source_label, version) — what inject_architect_prompt
@@ -656,8 +670,18 @@ Tools act on this session's workspace; files you create are stored there."""
         # is every tool whose policy says it needs no session. They need the
         # object that owns the active-session pointer, so this server binds
         # itself as their host for the duration of the call.
+        #
+        # "No session" never meant "no caller". ``list_skills`` and
+        # ``read_skill`` are sessionless too, and they resolve the owner whose
+        # skill layer they must serve through ``current_owner()`` — which reads
+        # the session context. With nothing bound they read ``None``, and
+        # ``None`` is self-host: an authenticated hosted caller who replaced a
+        # built-in skill was handed the built-in, and told nothing. That is the
+        # failure mode invariant 4 rules out — it does not fail, it answers
+        # wrongly. So the caller's identity is bound here even though their
+        # session is not.
         if name in TOOL_REGISTRY and not requires_session(name):
-            with session_host(self):
+            with session_host(self), session_scope(self._sessionless_context()):
                 return [TextContent(type="text", text=str(TOOL_REGISTRY[name].invoke(arguments)))]
 
         # A session must be active for regular tools (workspace is resolved
