@@ -28,8 +28,10 @@ benchmark number could ever be attributed to a prompt version (finding B9). The
 
 The skill pair is filled in: a run made with a different set of skills, or with
 one of them edited, is not the same experiment, and nothing else in the stamp
-would show it. ``tool_set`` is still present and ABSENT — nothing resolves one
-yet, and the later phase fills it with data rather than a new field.
+would show it. ``tool_set`` is filled in by the one caller that HAS one — a
+subagent child, whose tools come from a named set in ``config/tool_sets.yaml``.
+The architect's own turns still leave it absent, because "every tool" is not a
+set anyone declared.
 
 ``context_edit`` is filled in: once compaction is on, a long run reaches the
 model with older tool results replaced by a placeholder, so it is not the same
@@ -75,8 +77,10 @@ class AgentProvenance:
       nothing enabled — a choice was made. Only a resolver that really looked
       may write it.
 
-    ``tool_set`` is ``None`` on every run today, and that is the honest
-    reading: tool sets are not implemented yet.
+    ``tool_set`` is ``None`` unless the turn really ran on a declared set —
+    today that means a subagent child (``src.agents.subagents``). An architect
+    turn sees the whole registry, which is not a set that was chosen, so it
+    stays absent rather than being given an invented name.
     """
 
     prompt_version: Optional[str] = None
@@ -319,7 +323,9 @@ def resolve_agent_provenance(user_id: Optional[str] = None) -> AgentProvenance:
     unchanged name — the same reason ``prompt_sha`` rides beside
     ``prompt_version``.
 
-    ``tool_set`` stays ``None`` = absent: nothing resolves one yet.
+    ``tool_set`` stays ``None`` = absent: this resolves the stamp for an
+    architect turn, which sees the whole registry rather than a declared set.
+    A subagent child composes its own stamp, tool set included.
     """
     version, sha = prompt_identity()
     names, digest, disabled = _skills_identity(user_id)

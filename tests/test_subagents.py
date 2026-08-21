@@ -367,3 +367,139 @@ def test_the_delegation_tool_returns_json(monkeypatch, ctx):
     with session_scope(ctx):
         raw = tool.func(role="pd-sweep", tasks=["a"])
     assert json.loads(raw)["children"][0]["result"] == {"status": "ok"}
+
+
+# --- provenance: a child is its own experiment (F3) --------------------------
+
+def test_a_childs_run_records_the_childs_identity_not_the_parents(monkeypatch, ctx):
+    """A child stamps what drove IT — its prompt, its role skills, its tool set.
+
+    ``start_synthesis`` dispatched from inside a child reads the provenance
+    ContextVar to decide what ``run_meta.json`` says produced the numbers.
+    ``ThreadPoolExecutor`` carries no ContextVar into its workers, so with no
+    stamp bound in the child the read finds nothing and ``collect_provenance``
+    falls back to the MAIN architect prompt — filing a pd-sweep run under a
+    prompt the child never read, with none of the role skills that produced it.
+
+    What this asserts is the recorded stamp itself, through the same
+    ``collect_provenance`` call the synthesis worker makes, from inside a tool
+    the child really called.
+    """
+    from langchain_core.tools import tool as lc_tool
+
+    from src.platform_engines.provenance import (
+        agent_provenance_scope,
+        collect_provenance,
+        resolve_agent_provenance,
+    )
+
+    recorded = []
+
+    @lc_tool
+    def capture_stamp() -> str:
+        """Record what a run dispatched from this child would be stamped with."""
+        recorded.append(collect_provenance().as_dict())
+        return "captured"
+
+    monkeypatch.setattr(subagents, "tools_in_set", lambda *a, **k: [capture_stamp])
+    sink = []
+    _patch_model(monkeypatch, [
+        ai("", tool_calls=[{"id": "c1", "name": "capture_stamp", "args": {}}]),
+        ai("done"),
+    ], sink)
+
+    parent = resolve_agent_provenance(user_id="owner-1")
+    with session_scope(ctx), agent_provenance_scope(parent):
+        subagents.run_role("pd-sweep", ["measure clk=5ns"], model_name="m", api_key=None)
+
+    assert len(recorded) == 1
+    stamp = recorded[0]
+    spec = tc.subagent_roles()["pd-sweep"]
+    assert stamp["prompt_version"] == "subagent:pd-sweep", (
+        "a run dispatched by a pd-sweep child was stamped with "
+        f"{stamp['prompt_version']!r} — the identity of whatever ran it, not of "
+        "the child that actually did"
+    )
+    assert stamp["prompt_sha"] and stamp["prompt_sha"] != parent.prompt_sha
+    assert stamp["tool_set"] == spec["tool_set"]
+    assert stamp["skills_loaded"] == sorted(spec["skills"])
+    assert stamp["skills_sha"] and stamp["skills_sha"] != parent.skills_sha
+    # A resolver looked: a child's set is fixed by its role, nothing is off.
+    assert stamp["skills_disabled"] == []
+
+
+def test_a_childs_stamp_does_not_outlive_it_on_a_pooled_thread(monkeypatch, ctx):
+    """Bind, and unbind in ``finally`` — the discipline the job runner learned.
+
+    Children run on a pool, so a stamp left bound is read by whatever the next
+    job on that worker turns out to be.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from src.platform_engines.provenance import current_agent_provenance
+
+    sink = []
+    _patch_model(monkeypatch, [ai("done")], sink)
+    spec = tc.subagent_roles()["pd-sweep"]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        out = pool.submit(subagents._run_one, "pd-sweep", spec, "a", 0, ctx,
+                          "m", None, False).result()
+        assert "error" not in out, out
+        # The SAME worker, handed the next job: it must carry nothing over.
+        assert pool.submit(current_agent_provenance).result() is None
+
+
+# --- spend: a failed child still costs money (F4) ----------------------------
+
+def test_a_child_that_fails_still_reports_what_it_spent(monkeypatch, ctx):
+    """The default recursion-limit case makes twelve model calls and used to
+    record none of them. Session token and cost totals understated real usage by
+    a whole child. Money spent is not conditional on success."""
+    sink = []
+    _patch_model(monkeypatch, [
+        ai("", tool_calls=[{"id": "c", "name": "list_files_tool", "args": {}}],
+           usage={"input_tokens": 90, "output_tokens": 7}),
+    ], sink)
+    with session_scope(ctx):
+        out = subagents.run_role("pd-sweep", ["loop forever"], model_name="m", api_key=None)
+
+    child = out["children"][0]
+    assert "error" in child, "this child is meant to hit its ceiling"
+    calls = len(sink[0]["model"].calls)
+    assert calls >= 2, calls
+    assert child["tokens"] == {"input": 90 * calls, "output": 7 * calls}, (
+        f"the child made {calls} model calls and reported {child['tokens']}"
+    )
+    assert out["tokens"] == child["tokens"]
+
+
+def test_a_failed_childs_spend_reaches_the_sessions_own_row(monkeypatch, tmp_path):
+    """The aggregate handed to ``_charge`` must carry it, or the ledger is short."""
+    from src.utils.session_manager import SessionManager
+
+    monkeypatch.setenv("RTL_DATA_DIR", str(tmp_path / "data"))
+    os.makedirs(tmp_path / "data", exist_ok=True)
+    manager = SessionManager(base_dir=str(tmp_path / "ws"),
+                             db_path=str(tmp_path / "data" / "state.db"))
+    session = manager.create_session("failed-child-spend", user_id="owner-1")
+    sid = session["id"] if isinstance(session, dict) else session
+    ws = os.path.join(str(tmp_path / "ws"), sid)
+    os.makedirs(ws, exist_ok=True)
+
+    sink = []
+    _patch_model(monkeypatch, [
+        ai("", tool_calls=[{"id": "c", "name": "list_files_tool", "args": {}}],
+           usage={"input_tokens": 90, "output_tokens": 7}),
+    ], sink)
+    monkeypatch.setenv("RTL_WORKSPACE", str(tmp_path / "ws"))
+    ctx = SessionContext(session_id=sid, workspace=ws, user_id="owner-1")
+    with session_scope(ctx):
+        out = subagents.run_role("pd-sweep", ["loop forever"],
+                                 model_name="gemini-3.1-flash-lite", api_key=None)
+
+    assert "error" in out["children"][0]
+    meta = manager.get_session_metadata(sid, user_id="owner-1")
+    calls = len(sink[0]["model"].calls)
+    assert meta["input_tokens"] == 90 * calls
+    assert meta["output_tokens"] == 7 * calls
+    assert meta["total_cost"] > 0

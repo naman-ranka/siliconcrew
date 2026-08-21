@@ -54,6 +54,7 @@ A child spends the user's money. It therefore:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -168,12 +169,17 @@ class SubagentActivityMiddleware(AgentMiddleware):
         return result
 
 
-def _skill_bodies(names: List[str]) -> str:
-    """The role's procedure, straight out of the shipped skill store."""
+def _role_skill_bodies(names: List[str]) -> Dict[str, str]:
+    """``{name: body}`` for a role's skills, straight out of the shipped store.
+
+    The prompt and the provenance stamp are both built from THIS mapping, so
+    the skills a child was told to follow and the skills its run records can
+    never be two different answers to the same question.
+    """
     from src.utils.skills import skills_by_name
 
     store = skills_by_name()
-    parts = []
+    bodies: Dict[str, str] = {}
     for name in names:
         skill = store.get(name)
         if skill is None:
@@ -181,8 +187,14 @@ def _skill_bodies(names: List[str]) -> str:
                 f"subagent role names skill {name!r}, which the store does not have. "
                 f"Available: {', '.join(sorted(store)) or 'none'}"
             )
-        parts.append(f"## {skill.name}\n\n{skill.body}")
-    return "\n\n".join(parts)
+        bodies[skill.name] = skill.body
+    return bodies
+
+
+def _skill_bodies(names: List[str]) -> str:
+    """The role's procedure, straight out of the shipped skill store."""
+    bodies = _role_skill_bodies(names)
+    return "\n\n".join(f"## {name}\n\n{body}" for name, body in bodies.items())
 
 
 def child_prompt(role: str, spec: Dict[str, Any], task: str) -> str:
@@ -235,6 +247,93 @@ def _usage(messages) -> tuple:
     return tokens_in, tokens_out
 
 
+class UsageMeter(AgentMiddleware):
+    """Count a child's model spend AS IT HAPPENS, not from its final state.
+
+    A child that hits its step ceiling — or raises for any other reason —
+    leaves ``graph.invoke`` by exception, and the state it would have returned
+    goes with it. Every AIMessage and every ``usage_metadata`` on them is in
+    that state, so reading spend from the returned messages reads nothing at
+    all. The shipped ceiling buys twelve model calls, which makes the failure
+    that costs the MOST the one that was recorded as costing zero.
+
+    So the tally is kept here, incrementally, on the way past: whatever the
+    child managed to spend before it fell over is still known afterwards.
+    Money spent is not conditional on success.
+
+    ``wrap_model_call`` is wrap-style, so this costs no graph step and does not
+    shrink the child's budget (the same reason the activity hook is wrap-style;
+    ``test_a_child_has_a_step_ceiling_of_its_own`` is what holds that line).
+    Both the sync and async forms exist because LangChain raises
+    NotImplementedError on whichever one you did not define.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.tokens_in = 0
+        self.tokens_out = 0
+
+    def _count(self, response) -> None:
+        tokens_in, tokens_out = _usage(getattr(response, "result", None))
+        self.tokens_in += tokens_in
+        self.tokens_out += tokens_out
+
+    def wrap_model_call(self, request, handler):
+        response = handler(request)
+        self._count(response)
+        return response
+
+    async def awrap_model_call(self, request, handler):
+        response = await handler(request)
+        self._count(response)
+        return response
+
+
+def _child_provenance(role: str, spec: Dict[str, Any], prompt: str, bodies: Dict[str, str]):
+    """What DROVE this child — its own prompt, its own skills, its own tools.
+
+    Without this a child's ``start_synthesis`` records the MAIN architect's
+    identity: ``ThreadPoolExecutor`` does not carry the provenance ContextVar
+    into the worker, so the stamp falls back to whatever ``collect_provenance``
+    can resolve on its own, which is the architect prompt file. A pd-sweep run
+    would then be filed under a prompt the child never read, with none of the
+    role skills that actually produced the number.
+
+    Field by field, and why each is the honest value:
+
+    * ``prompt_version`` names the ROLE. There is no versioned file here: a
+      child's system prompt is composed per task.
+    * ``prompt_sha`` hashes the composed prompt EXACTLY as the model saw it,
+      task text included — because that text is part of the system prompt, and
+      two children given different tasks did not run the same prompt.
+    * ``skills_loaded`` / ``skills_sha`` come from the same bodies that were
+      pasted into that prompt, so the pair cannot describe a different set than
+      the child read.
+    * ``skills_disabled`` is ``[]``, not ``None``: a resolver looked. A child's
+      skill set is fixed by its role and every one of them is in its prompt, so
+      "looked, none off" is the true answer (a disabled role skill fails the
+      build before any spend).
+    * ``tool_set`` is the role's declared set — the first stamp in this repo
+      that can fill that field with data, because subagents are the first thing
+      that really has one.
+    * ``context_edit`` is ``"off"``: the child graph is built with the
+      reasoning strip, the activity hook and the usage meter, and no compaction
+      middleware. Nothing cleared a tool result out of this turn.
+    """
+    from src.platform_engines.provenance import AgentProvenance, skills_digest
+
+    names, digest = skills_digest(bodies)
+    return AgentProvenance(
+        prompt_version=f"subagent:{role}",
+        prompt_sha="sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        skills_loaded=names,
+        skills_sha=digest,
+        skills_disabled=[],
+        tool_set=spec["tool_set"],
+        context_edit="off",
+    )
+
+
 def _charge(ctx: SessionContext, model_name: str, tokens_in: int, tokens_out: int) -> None:
     """Add a fan-out's tokens to the session row the parent's turn also writes.
 
@@ -270,32 +369,53 @@ def _charge(ctx: SessionContext, model_name: str, tokens_in: int, tokens_out: in
 
 
 def _run_one(role, spec, task, index, ctx, model_name, api_key, read_only) -> Dict[str, Any]:
-    """One child, start to finish, inside the parent's session scope."""
+    """One child, start to finish, inside the parent's session scope.
+
+    A child that fails returns its failure — with the tokens it had already
+    spent — rather than raising it. The caller's ``except`` still stands for
+    whatever this cannot foresee, but a failure this function CAN see is one
+    whose spend it can also report, and that is the only place the meter's
+    tally exists.
+    """
     from src.agents.architect import ReasoningStripMiddleware
     from src.llm import create_llm
+    from src.platform_engines.provenance import agent_provenance_scope
     from src.platform_engines.settings import get_settings
 
+    meter = UsageMeter()
     with session_scope(ctx):
         token = _depth.set(_depth.get() + 1)
         try:
-            graph = create_agent(
-                model=create_llm(model_name=model_name, temperature=0.0, api_key=api_key),
-                tools=tools_in_set(spec["tool_set"], read_only=read_only),
-                system_prompt=child_prompt(role, spec, task),
-                middleware=[
-                    ReasoningStripMiddleware(),
-                    SubagentActivityMiddleware(role, index, ctx),
-                ],
-            )
-            state = graph.invoke(
-                {"messages": [("user", task)]},
-                {"recursion_limit": get_settings().subagent_recursion_limit},
-            )
+            bodies = _role_skill_bodies(list(spec.get("skills") or []))
+            prompt = child_prompt(role, spec, task)
+            # Bound around the invocation, released in the contextmanager's
+            # finally: this runs on a POOLED thread, and a stamp left behind is
+            # read by whatever job that worker is handed next.
+            with agent_provenance_scope(_child_provenance(role, spec, prompt, bodies)):
+                graph = create_agent(
+                    model=create_llm(model_name=model_name, temperature=0.0, api_key=api_key),
+                    tools=tools_in_set(spec["tool_set"], read_only=read_only),
+                    system_prompt=prompt,
+                    middleware=[
+                        ReasoningStripMiddleware(),
+                        meter,
+                        SubagentActivityMiddleware(role, index, ctx),
+                    ],
+                )
+                state = graph.invoke(
+                    {"messages": [("user", task)]},
+                    {"recursion_limit": get_settings().subagent_recursion_limit},
+                )
+        except Exception as exc:  # one child failing is data, not a turn failure
+            return {"task": task, "result": None, "error": str(exc)[:500],
+                    "tokens": {"input": meter.tokens_in, "output": meter.tokens_out}}
         finally:
             _depth.reset(token)
 
     messages = state.get("messages") or []
     text = str(getattr(messages[-1], "content", "") if messages else "")
+    # The returned state is the record when there IS one; the meter answers only
+    # for the run whose state was lost with the exception.
     tokens_in, tokens_out = _usage(messages)
     return {
         "task": task,
@@ -342,7 +462,11 @@ def run_role(role: str, tasks: List[str], *, model_name: str, api_key, read_only
         for i, future in enumerate(futures):
             try:
                 results.append(future.result())
-            except Exception as exc:  # one child failing is data, not a turn failure
+            except Exception as exc:
+                # Belt to _run_one's braces. It reports its own failures WITH
+                # the tokens they cost, so anything that reaches here escaped
+                # the worker itself and left no tally to report — zero is the
+                # honest reading, not a rounding-down of known spend.
                 results.append({"task": tasks[i], "result": None, "error": str(exc)[:500],
                                 "tokens": {"input": 0, "output": 0}})
 
