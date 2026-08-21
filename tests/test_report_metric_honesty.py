@@ -8,6 +8,7 @@ divided the clock TARGET, i.e. echoed the input back as an achievement.
 import importlib
 import json
 import os
+import shutil
 import tempfile
 
 import pytest
@@ -194,3 +195,56 @@ def test_report_shows_the_parsed_value_and_flags_the_disagreement():
         # The dropped number is disclosed rather than hidden.
         assert "Saved metrics disagree" in report
         assert "999.0" in report
+
+
+# --- P2 (dev#91 F1): a number's provenance is part of the number -------------
+#
+# The parse outranking the saved file was the bigger half. This is the other:
+# the source note described the good case UNCONDITIONALLY, so a run whose every
+# displayed value was read from design_metrics.json — a legacy run, or one
+# whose reports no longer exist — still claimed those numbers were parsed from
+# its synthesis reports.
+
+
+def test_report_credits_saved_data_when_nothing_was_parsed():
+    """Pre-fix all three cases printed 'parsed from this run's synthesis
+    reports' over values that came out of design_metrics.json."""
+    # 1. Legacy workspace: no run at all, only a saved metrics file.
+    with tempfile.TemporaryDirectory() as workspace:
+        _write_file(
+            os.path.join(workspace, "design_metrics.json"),
+            json.dumps({"area_um2": 999.0, "cell_count": 42}),
+        )
+
+        report = generate_design_report(workspace)
+
+        assert "999.00" in report
+        assert "parsed from this run's synthesis reports" not in report
+        assert "come from saved data" in report
+
+    # 2. A resolved run whose reports are gone: still nothing measured here.
+    with tempfile.TemporaryDirectory() as workspace:
+        _seed_run(workspace, MET_FINISH)
+        shutil.rmtree(os.path.join(workspace, "synth_runs", "synth_0001", "orfs_reports"))
+        _save_metrics_file(workspace, {"area_um2": 999.0, "cell_count": 42})
+
+        metrics = load_metrics(workspace, run_id="synth_0001")
+        assert metrics.get("parsed_metric_fields") is None
+
+        report = generate_design_report(workspace, run_id="synth_0001")
+        assert "999.00" in report
+        assert "parsed from this run's synthesis reports" not in report
+        assert "come from saved data" in report
+
+    # 3. The good case is unchanged: a real parse still says so.
+    with tempfile.TemporaryDirectory() as workspace:
+        _seed_run(workspace, MET_FINISH)
+        _save_metrics_file(workspace, {"area_um2": 999.0})
+
+        metrics = load_metrics(workspace, run_id="synth_0001")
+        assert "area_um2" in metrics["parsed_metric_fields"]
+
+        report = generate_design_report(workspace, run_id="synth_0001")
+        assert "1234.00" in report
+        assert "parsed from this run's synthesis reports" in report
+        assert "come from saved data" not in report

@@ -242,6 +242,23 @@ def _metric_values_agree(saved: Any, parsed: Any) -> bool:
     return saved == parsed
 
 
+# What the parse can take from a run, split by what a value MEANS.
+#
+# MEASURED are numbers about this design, read out of the run's own reports —
+# the values the PPA table prints. DESCRIPTIVE label the run itself: the corner
+# ORFS ran at, and the disclosure that says WHY a run has no timing verdict.
+# Both are applied over the saved file, but only a MEASURED field is evidence
+# that a displayed number was measured here: a corner label parsed from
+# run_meta cannot make a hand-saved area into a parsed one.
+MEASURED_METRIC_FIELDS = (
+    "area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw",
+    # The honest timing set (Wave C): the real margin, the achieved frequency
+    # ORFS itself reported.
+    "worst_slack_ns", "clock_period_min_ns", "fmax_mhz", "timing_met",
+)
+DESCRIPTIVE_METRIC_FIELDS = ("timing_corner", "timing_note")
+
+
 def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
     """
     Load metrics for a run. The MEASURED values win.
@@ -258,6 +275,13 @@ def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
     ``saved_metric_conflicts`` key (a list of
     ``{"field", "saved", "parsed"}`` dicts) so the report can say so out loud
     instead of silently dropping one of the two numbers.
+
+    Which tier a number actually came from travels WITH the numbers, under
+    ``parsed_metric_fields``: the names of the fields tier 1 measured and
+    applied, present only when there is at least one (so an empty result stays
+    falsy). Without it a caller cannot tell a measured 1234 from a typed one,
+    and a report that describes typed values as measured is invariant #4
+    inverted.
 
     A third tier used to parse *sta.log / *timing.rpt from the workspace root
     with its own crude regexes (src/tools/get_ppa.py). It never read
@@ -283,20 +307,12 @@ def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
 
     # Tier 1 (authoritative): structured parsing from the synthesis run.
     conflicts = []
+    parsed_fields = []
     if resolved_run_id:
         try:
             parsed = get_synthesis_metrics(workspace_path, resolved_run_id)
             parsed_metrics = parsed.get("metrics", {}) if parsed.get("status") == "ok" else {}
-            for key in [
-                "area_um2", "cell_count", "wns_ns", "tns_ns", "power_uw",
-                # The honest timing set (Wave C): the real margin, the achieved
-                # frequency ORFS itself reported, and the corner it ran at.
-                "worst_slack_ns", "clock_period_min_ns", "fmax_mhz",
-                "timing_met", "timing_corner",
-                # The disclosure travels with the numbers: without it the report
-                # cannot say WHY a run has no verdict.
-                "timing_note",
-            ]:
+            for key in MEASURED_METRIC_FIELDS + DESCRIPTIVE_METRIC_FIELDS:
                 parsed_value = parsed_metrics.get(key)
                 if parsed_value is None:
                     # Nothing measured for this field — a saved value may fill
@@ -308,11 +324,15 @@ def load_metrics(workspace_path: str, run_id: str = None) -> Dict[str, Any]:
                         {"field": key, "saved": saved_value, "parsed": parsed_value}
                     )
                 metrics[key] = parsed_value
+                if key in MEASURED_METRIC_FIELDS:
+                    parsed_fields.append(key)
         except:
             pass
 
     if conflicts:
         metrics["saved_metric_conflicts"] = conflicts
+    if parsed_fields:
+        metrics["parsed_metric_fields"] = parsed_fields
 
     return metrics
 
@@ -558,14 +578,29 @@ def generate_design_report(workspace_path: str, spec_filename: str = None, run_i
         # could not measure. Where the two disagree the report says so — a
         # silently dropped number is exactly the dishonest state invariant #4
         # forbids.
+        #
+        # The note must describe THIS run, not the good case. A legacy or
+        # partially-preserved run resolves no synthesis reports to parse (or
+        # parses nothing out of them), so every number above was read from the
+        # saved file — some of them typed by hand. Claiming those were parsed
+        # from synthesis reports is the same dishonesty as a fake verdict, so
+        # the note follows what load_metrics actually applied.
         conflicts = metrics.get("saved_metric_conflicts") or []
+        parsed_any = bool(metrics.get("parsed_metric_fields"))
         metrics_path = os.path.join(report_dir, METRICS_FILENAME)
         if os.path.exists(metrics_path):
-            report_lines.append(
-                "\n*Values above are parsed from this run's synthesis reports; "
-                "saved metrics (`design_metrics.json`) fill only fields the parse "
-                "did not measure.*"
-            )
+            if parsed_any:
+                report_lines.append(
+                    "\n*Values above are parsed from this run's synthesis reports; "
+                    "saved metrics (`design_metrics.json`) fill only fields the parse "
+                    "did not measure.*"
+                )
+            else:
+                report_lines.append(
+                    "\n*Values above come from saved data (`design_metrics.json`), "
+                    "NOT from synthesis reports: no synthesis run's reports were "
+                    "parsed for this report, so these numbers were not measured here.*"
+                )
         if conflicts:
             report_lines.append(
                 "\n> ⚠️ **Saved metrics disagree with this run's reports.** "
