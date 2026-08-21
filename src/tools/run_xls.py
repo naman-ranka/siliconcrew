@@ -338,6 +338,10 @@ def run_xls_flow(
     to be four separate tools. ``from_ir`` enters partway: an IR file skips
     interpret and ir, and an ``.opt.ir`` (this flow's own optimized artifact)
     skips the optimizer too and goes straight to codegen.
+
+    A successful reply's ``stopped_after`` is the stage that actually RAN last,
+    not the stage requested — ``run_lint=False`` stops after codegen even with
+    ``stop_after='lint'``.
     """
     try:
         workspace = _ensure_workspace(cwd)
@@ -362,12 +366,20 @@ def run_xls_flow(
         "verilog_file": None,
     }
 
-    def done(extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """A run that stopped where it was asked to stop is a SUCCESS."""
+    def done(completed: str, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """A run that stopped where it was asked to stop is a SUCCESS.
+
+        ``stopped_after`` names the stage this run actually COMPLETED, which is
+        not always the stage it was asked to stop after: ``run_lint=False`` with
+        the default ``stop_after='lint'`` never lints, and reporting "lint" over
+        a null ``stage_results.verilog_lint`` reads as generated RTL that WAS
+        linted. Each call site passes the stage it just finished, so the field
+        cannot drift from what ran.
+        """
         result = {
             "success": True,
             "stage": "completed",
-            "stopped_after": stop_after,
+            "stopped_after": completed,
             "artifacts": artifacts,
             "stage_results": stage_results,
         }
@@ -401,7 +413,7 @@ def run_xls_flow(
                 "next_action": "Fix DSLX syntax or failing #[test] blocks, then rerun run_xls_flow.",
             }
         if stop_after == "interpret":
-            return done()
+            return done("interpret")
 
         ir_comp = compile_dslx_to_ir(dslx_file, top_module, cwd=workspace)
         artifacts["ir_file"] = ir_comp.get("ir_filename")
@@ -415,7 +427,7 @@ def run_xls_flow(
                 "next_action": "Fix the top function name or DSLX constructs unsupported by IR conversion.",
             }
         if stop_after == "ir":
-            return done()
+            return done("ir")
 
     if not artifacts["opt_ir_file"]:
         opt = optimize_xls_ir(artifacts["ir_file"], cwd=workspace)
@@ -440,7 +452,7 @@ def run_xls_flow(
     estimate = {"benchmark": _benchmark_fields(bench)}
 
     if stop_after == "opt":
-        return done(estimate)
+        return done("opt", estimate)
 
     codegen = codegen_xls(
         opt_ir_filename=artifacts["opt_ir_file"],
@@ -489,8 +501,11 @@ def run_xls_flow(
     }
 
     if stop_after == "codegen" or not bool(run_lint):
+        # run_lint=False is a supported way to skip lint while stop_after keeps
+        # its default: the stage this run finished is codegen, whatever it was
+        # asked to stop after.
         stage_results["verilog_lint"] = None
-        return done({**estimate, **generated})
+        return done("codegen", {**estimate, **generated})
 
     lint_result = _lint_generated_verilog(workspace, codegen["verilog_filename"])
     stage_results["verilog_lint"] = lint_result
@@ -509,7 +524,7 @@ def run_xls_flow(
             "next_action": "Inspect generated Verilog lint failure; use a wrapper or adjust XLS codegen options.",
         }
 
-    return done({**estimate, **generated})
+    return done("lint", {**estimate, **generated})
 
 
 _BENCHMARK_LINE = re.compile(

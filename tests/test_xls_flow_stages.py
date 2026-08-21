@@ -220,3 +220,23 @@ def test_a_failed_optimizer_does_not_delete_the_supplied_ir(stages, monkeypatch)
     res = _flow(from_ir="handwritten.ir", keep_intermediates=False)
     assert res["success"] is False and res["stage"] == "optimization"
     assert removed == []
+
+
+# --- stopped_after names the stage that RAN, not the one requested ------------
+
+def test_skipping_lint_reports_codegen_as_the_stage_reached(stages):
+    """dev#91 F2: run_lint=False is a supported way to skip lint, and the
+    default stop_after is 'lint'. Pre-fix the reply echoed the REQUEST —
+    stopped_after='lint' over a null stage_results.verilog_lint — so a consumer
+    reading it treated never-linted RTL as linted."""
+    res = _flow(dslx_file="adder.x", top_module="adder", run_lint=False)
+
+    assert res["success"] is True
+    assert "lint" not in _ran(stages)
+    assert res["stage_results"]["verilog_lint"] is None
+    assert res["stopped_after"] == "codegen"
+
+    # The stage that DID run still reports itself, so the field stays useful.
+    linted = _flow(dslx_file="adder.x", top_module="adder")
+    assert linted["stopped_after"] == "lint"
+    assert linted["stage_results"]["verilog_lint"]["success"] is True
