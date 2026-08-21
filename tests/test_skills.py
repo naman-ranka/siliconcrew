@@ -305,3 +305,51 @@ def test_a_turn_stamps_the_skills_it_ran_under():
     stamp = prov.resolve_agent_provenance(user_id="owner_a")
     assert stamp.skills_loaded == [s.name for s in _shipped()]
     assert stamp.skills_sha == sk.skills_provenance()[1]
+
+
+def test_editing_a_reference_file_moves_the_digest(tmp_path):
+    """A skill can be a pointer, and the thing it points at drives the run.
+
+    ``pd-diagnosis`` is a procedure whose knob table lives in
+    ``references/pd_knob_catalog.md``, and a sweep child follows the pointer
+    with ``read_skill``. Hashing only ``SKILL.md`` bodies left an edit to that
+    table invisible: two runs tuned by different instructions recorded the same
+    ``skills_sha``, which is the one thing that field exists to prevent.
+    """
+    root = tmp_path / "pack"
+    directory = root / "pointing-skill"
+    (directory / "references").mkdir(parents=True)
+    (directory / "SKILL.md").write_text(
+        "---\nname: pointing-skill\ndescription: Follow the catalogue.\n---\n\n"
+        "Read references/catalogue.md and do what it says.\n",
+        encoding="utf-8",
+    )
+    catalogue = directory / "references" / "catalogue.md"
+    catalogue.write_text("Set utilisation to 60%.\n", encoding="utf-8")
+
+    before = sk.skills_provenance(sk.discover_skills(root))[1]
+    catalogue.write_text("Set utilisation to 5%.\n", encoding="utf-8")
+    after = sk.skills_provenance(sk.discover_skills(root))[1]
+
+    assert before != after, (
+        "the reference file changed what the agent would do and the digest did "
+        "not move: two runs under different instructions are indistinguishable"
+    )
+    # The body alone is unchanged — so a body-only digest could not have moved.
+    assert sk.discover_skills(root)[0].body == (
+        "Read references/catalogue.md and do what it says."
+    )
+
+
+def test_a_reference_file_is_named_in_the_skill_it_belongs_to():
+    """The digest is over content, but what was hashed must be inspectable."""
+    by_name = {s.name: s for s in sk.discover_skills(sk.SKILLS_ROOT)}
+    withref = [s for s in by_name.values() if s.files]
+    assert withref, "the shipped pack has a skill with a reference file"
+    for skill in withref:
+        for relative, digest in skill.files:
+            assert not relative.startswith("/") and ".." not in relative
+            assert len(digest) == 64
+            # Every hashed path is one read_skill can actually serve.
+            assert sk.read_skill_file(skill.name, relative, root=sk.SKILLS_ROOT)
+

@@ -225,8 +225,6 @@ def test_the_prompt_and_the_stamp_describe_one_resolution(monkeypatch, tmp_path)
     So construction is handed the resolved set. Being handed nothing is the
     failure: it means construction went and resolved for itself.
     """
-    from src.platform_engines.provenance import skills_digest
-
     recorded, constructed = [], []
     _wire(monkeypatch, tmp_path, recorded, constructed=constructed)()
 
@@ -237,7 +235,9 @@ def test_the_prompt_and_the_stamp_describe_one_resolution(monkeypatch, tmp_path)
         "stamp and the model's prompt can then describe different sets"
     )
     stamp = recorded[0]
-    _, digest = skills_digest({s.name: s.body for s in handed.active})
+    # Through the one recipe, never a copy of it here: the digest covers a
+    # skill's reference files as well as its body.
+    _, digest = sk.skills_provenance(handed.active)
     assert digest == stamp["skills_sha"], (digest, stamp["skills_sha"])
     assert sorted(s.name for s in handed.active) == sorted(stamp["skills_loaded"])
     assert list(handed.disabled) == stamp["skills_disabled"]

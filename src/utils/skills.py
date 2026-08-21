@@ -106,10 +106,44 @@ class Skill:
     #: a user's layer may be staged from remote storage and gone by the time
     #: anyone asks to read or edit it — the bytes travel with the skill.
     raw: str = ""
+    #: ``((relative path, sha256), ...)`` for every OTHER file under this
+    #: skill's directory — the reference files, scripts and assets that
+    #: ``read_skill`` will serve on request. Hashed at parse time, while the
+    #: directory is still in hand: a user's layer may be staged from storage
+    #: that is gone by the time anyone asks for a digest. Provenance needs
+    #: these because a skill's body can be one line pointing at a catalogue,
+    #: and an edit to the catalogue changes what the agent does.
+    files: tuple = ()
 
     @property
     def directory(self) -> Path:
         return self.path.parent
+
+
+def _sidecar_digests(directory: Path, skill_file: Path) -> tuple:
+    """``((relative path, sha256), ...)`` for the files beside a ``SKILL.md``.
+
+    Everything ``read_skill`` can serve, because everything it can serve can
+    drive a run. Read in chunks rather than whole: an asset beside a skill has
+    no size ceiling of its own, and this runs on every resolution.
+
+    Symlinks are skipped, not followed: ``_read_reference`` resolves and
+    containment-checks before serving, so a link out of the directory is not
+    readable through the tool and must not be hashed as though it were.
+    """
+    out = []
+    for entry in sorted(Path(directory).rglob("*")):
+        if entry.is_symlink() or not entry.is_file() or entry == skill_file:
+            continue
+        digest = hashlib.sha256()
+        try:
+            with entry.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(65536), b""):
+                    digest.update(chunk)
+        except OSError as exc:
+            raise SkillError(f"{entry}: could not be read: {exc}") from exc
+        out.append((entry.relative_to(directory).as_posix(), digest.hexdigest()))
+    return tuple(out)
 
 
 def _split_frontmatter(text: str, path: Path) -> tuple[dict, str]:
@@ -182,6 +216,7 @@ def parse_skill_file(path: Path) -> Skill:
         always_load=always,
         sha256=hashlib.sha256(raw).hexdigest(),
         raw=text,
+        files=_sidecar_digests(path.parent, path),
     )
 
 
@@ -439,7 +474,23 @@ def skills_provenance(skills: Optional[Sequence[Skill]] = None) -> tuple[List[st
     from src.platform_engines.provenance import skills_digest
 
     skills = discover_skills() if skills is None else list(skills)
-    return skills_digest({s.name: s.body for s in skills})
+    return skills_digest({s.name: _hashable_content(s) for s in skills})
+
+
+def _hashable_content(skill: Skill) -> str:
+    """Everything about one skill that can change what an agent does.
+
+    The body is not the whole of it. ``pd-diagnosis`` is a procedure that
+    points at ``references/pd_knob_catalog.md``, and a child follows the
+    pointer with ``read_skill``. Hashing only the body left an edit to that
+    catalogue invisible: two runs tuned by different instructions produced the
+    same ``skills_sha``, which is the one thing the field exists to prevent.
+    The digest RECIPE is still the one in ``skills_digest`` — this only widens
+    what is fed to it.
+    """
+    if not skill.files:
+        return skill.body
+    return skill.body + "".join(f"\0{rel}\0{sha}" for rel, sha in skill.files)
 
 
 def active_skills_provenance(user_id=_UNSET) -> tuple[List[str], str, List[str]]:

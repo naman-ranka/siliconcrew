@@ -532,7 +532,6 @@ def test_the_prompt_and_the_stamp_come_from_one_read_of_the_store():
     """
     from dataclasses import replace as _replace
 
-    from src.platform_engines.provenance import skills_digest
     from src.utils import skills as sk
 
     role = "pd-sweep"
@@ -565,7 +564,5 @@ def test_the_prompt_and_the_stamp_come_from_one_read_of_the_store():
 
     # The stamp describes the same resolution the prompt was built from.
     stamp = subagents._child_provenance(role, spec, prompt, bodies, resolved)
-    assert stamp.skills_sha == skills_digest(
-        {one.name: one.body for one in resolved.active}
-    )[1]
+    assert stamp.skills_sha == sk.skills_provenance(resolved.active)[1]
     assert set(bodies) <= set(stamp.skills_loaded)

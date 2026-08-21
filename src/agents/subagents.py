@@ -335,9 +335,13 @@ def _child_provenance(role: str, spec: Dict[str, Any], prompt: str, bodies: Dict
       reasoning strip, the activity hook and the usage meter, and no compaction
       middleware. Nothing cleared a tool result out of this turn.
     """
-    from src.platform_engines.provenance import AgentProvenance, skills_digest
+    from src.platform_engines.provenance import AgentProvenance
+    from src.utils.skills import skills_provenance
 
-    names, digest = skills_digest({s.name: s.body for s in resolved.active})
+    # Through the one recipe: it covers a skill's reference files as well as
+    # its body, and a child following the pd-diagnosis pointer into the knob
+    # catalogue is exactly the case that needs it.
+    names, digest = skills_provenance(resolved.active)
     return AgentProvenance(
         prompt_version=f"subagent:{role}",
         prompt_sha="sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
