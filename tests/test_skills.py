@@ -385,6 +385,56 @@ def test_editing_frontmatter_that_reaches_the_model_moves_the_digest(tmp_path):
     assert sk.discover_skills(root)[0].body == "The procedure."
 
 
+def test_repointing_a_readable_symlink_moves_the_digest(tmp_path):
+    """``read_skill`` serves a link that stays inside the skill directory.
+
+    The first version of this hash skipped every symlink, reasoning that a link
+    OUT of the directory is refused by ``_read_reference``. True, and it
+    quietly generalised to links that point back INSIDE — which are served. A
+    stable name like ``references/live.md`` could be repointed from one
+    catalogue to another, changing what the agent read, with nothing in the
+    record moving.
+    """
+    root = tmp_path / "pack"
+    references = root / "s" / "references"
+    references.mkdir(parents=True)
+    (root / "s" / "SKILL.md").write_text(
+        "---\nname: s\ndescription: d\n---\n\nRead references/live.md and obey it.\n",
+        encoding="utf-8",
+    )
+    (references / "careful.md").write_text("Set utilisation to 60%.\n", encoding="utf-8")
+    (references / "reckless.md").write_text("Set utilisation to 5%.\n", encoding="utf-8")
+    os.symlink("careful.md", references / "live.md")
+
+    before = sk.skills_provenance(sk.discover_skills(root))[1]
+    # What the tool serves through that name really does change.
+    assert "60%" in sk.read_skill_file("s", "references/live.md", root=root)
+
+    (references / "live.md").unlink()
+    os.symlink("reckless.md", references / "live.md")
+
+    assert "5%" in sk.read_skill_file("s", "references/live.md", root=root)
+    assert sk.skills_provenance(sk.discover_skills(root))[1] != before, (
+        "the link was repointed at different instructions and the digest did "
+        "not move"
+    )
+
+
+def test_a_symlinked_directory_does_not_hang_discovery(tmp_path):
+    """A link to its own ancestor is a loop; the walk must not follow it."""
+    root = tmp_path / "pack"
+    directory = root / "s"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text(
+        "---\nname: s\ndescription: d\n---\n\nBody.\n", encoding="utf-8"
+    )
+    os.symlink(directory, directory / "loop")
+
+    skills = sk.discover_skills(root)  # must terminate
+    assert [s.name for s in skills] == ["s"]
+    assert any(rel.startswith("loop") for rel, _ in skills[0].files)
+
+
 def test_a_reference_file_is_named_in_the_skill_it_belongs_to():
     """The digest is over content, but what was hashed must be inspectable."""
     by_name = {s.name: s for s in sk.discover_skills(sk.SKILLS_ROOT)}

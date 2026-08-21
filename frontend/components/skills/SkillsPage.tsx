@@ -105,6 +105,16 @@ function Toggle({
   );
 }
 
+/** A YAML scalar as written, minus one matching pair of surrounding quotes. */
+export function unquoteYamlScalar(raw: string): string {
+  const value = raw.trim();
+  const quote = value[0];
+  if ((quote === '"' || quote === "'") && value.length > 1 && value.endsWith(quote)) {
+    return value.slice(1, -1).trim();
+  }
+  return value;
+}
+
 export function SkillsPage() {
   const router = useRouter();
   // Who is asking is not known at first paint: the auth provider settles a
@@ -193,12 +203,17 @@ export function SkillsPage() {
 
   const saveDraft = async () => {
     if (draft === null) return;
-    const match = /^\s*---[\s\S]*?\bname:\s*([^\s#]+)/.exec(draft);
+    const match = /^\s*---[\s\S]*?\bname:\s*([^\n#]+)/.exec(draft);
     if (!match) {
       setError("A skill starts with YAML frontmatter carrying a 'name' and a 'description'.");
       return;
     }
-    const name = match[1].trim();
+    // A YAML scalar may be quoted, and `name: "my-skill"` is a perfectly valid
+    // skill. Sending the quotes in the URL made the path say "my-skill" with
+    // quotes while the document parsed to my-skill without them, and the
+    // backend rightly refuses a save whose path and content disagree — so the
+    // page could not save a file it had just told you was valid.
+    const name = unquoteYamlScalar(match[1]);
     const ok = await act("save", () => skillsApi.save(name, draft));
     if (ok) {
       setDraft(null);

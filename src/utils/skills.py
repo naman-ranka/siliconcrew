@@ -127,23 +127,42 @@ def _sidecar_digests(directory: Path, skill_file: Path) -> tuple:
     drive a run. Read in chunks rather than whole: an asset beside a skill has
     no size ceiling of its own, and this runs on every resolution.
 
-    Symlinks are skipped, not followed: ``_read_reference`` resolves and
-    containment-checks before serving, so a link out of the directory is not
-    readable through the tool and must not be hashed as though it were.
+    A symlink is hashed by where it POINTS, not by what it contains. Skipping
+    links entirely was wrong for the case that matters: ``_read_reference``
+    resolves and containment-checks, so a link whose target stays inside the
+    skill directory IS served, and repointing it under a stable name changed
+    what the agent read while the digest stood still. Hashing the link target
+    catches the repoint; the target's own bytes are already covered by its own
+    entry. A link out of the directory is unreadable through the tool, so its
+    content is irrelevant — but recording where it points costs nothing and
+    keeps one rule for every link.
+
+    Symlinked directories are recorded, never descended: a link can point at
+    its own ancestor, and a walk that followed it would not terminate.
     """
     out = []
-    for entry in sorted(Path(directory).rglob("*")):
-        if entry.is_symlink() or not entry.is_file() or entry == skill_file:
-            continue
-        digest = hashlib.sha256()
-        try:
-            with entry.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(65536), b""):
-                    digest.update(chunk)
-        except OSError as exc:
-            raise SkillError(f"{entry}: could not be read: {exc}") from exc
-        out.append((entry.relative_to(directory).as_posix(), digest.hexdigest()))
-    return tuple(out)
+    directory = Path(directory)
+    for parent, dirnames, filenames in os.walk(directory, followlinks=False):
+        for child in sorted(dirnames + filenames):
+            entry = Path(parent) / child
+            if entry == skill_file:
+                continue
+            relative = entry.relative_to(directory).as_posix()
+            if entry.is_symlink():
+                target = hashlib.sha256(os.readlink(entry).encode("utf-8")).hexdigest()
+                out.append((relative + " ->", target))
+                continue
+            if not entry.is_file():
+                continue
+            digest = hashlib.sha256()
+            try:
+                with entry.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(65536), b""):
+                        digest.update(chunk)
+            except OSError as exc:
+                raise SkillError(f"{entry}: could not be read: {exc}") from exc
+            out.append((relative, digest.hexdigest()))
+    return tuple(sorted(out))
 
 
 def _split_frontmatter(text: str, path: Path) -> tuple[dict, str]:

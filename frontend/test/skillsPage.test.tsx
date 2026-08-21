@@ -214,4 +214,21 @@ describe("the Skills page", () => {
     expect(await screen.findByText("shipped-thing")).toBeTruthy();
     expect(fake.listCalls.length).toBe(1);
   });
+
+  it("saves a skill whose name is quoted in the frontmatter", async () => {
+    // `name: "my-skill"` is valid YAML and a valid skill. Taking the name
+    // straight out of the text put the quotes in the URL, so the path said
+    // one thing and the document said another and the backend refused a file
+    // the page had just called valid.
+    render(<SkillsPage />);
+    fireEvent.click(await screen.findByText("New skill"));
+    fireEvent.change(screen.getByLabelText("Skill text"), {
+      target: { value: '---\nname: "my-own-thing"\ndescription: d\n---\n\nbody\n' },
+    });
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith("my-own-thing", expect.any(String))
+    );
+  });
 });
