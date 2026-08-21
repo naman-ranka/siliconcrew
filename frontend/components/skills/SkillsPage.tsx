@@ -12,6 +12,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { skillsApi } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import type { SkillDetail, SkillLayer, SkillSummary } from "@/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -106,6 +107,14 @@ function Toggle({
 
 export function SkillsPage() {
   const router = useRouter();
+  // Who is asking is not known at first paint: the auth provider settles a
+  // session asynchronously. Most endpoints answer an unidentified caller with
+  // 401, which the API layer recovers from — but /api/skills answers with 200
+  // and the built-in defaults, so a read fired too early returns somebody
+  // else's answer with no failure to notice. The page would then render that
+  // as your setup, and the first toggle would write it back over your own.
+  const { status: authStatus } = useAuth();
+  const authSettling = authStatus === "loading";
   const [skills, setSkills] = useState<SkillSummary[] | null>(null);
   const [unmatched, setUnmatched] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -131,11 +140,12 @@ export function SkillsPage() {
   }, []);
 
   useEffect(() => {
+    if (authSettling) return;
     void refresh();
-  }, [refresh]);
+  }, [refresh, authSettling]);
 
   useEffect(() => {
-    if (!selected) {
+    if (!selected || authSettling) {
       setDetail(null);
       return;
     }
@@ -155,7 +165,7 @@ export function SkillsPage() {
     return () => {
       cancelled = true;
     };
-  }, [selected]);
+  }, [selected, authSettling]);
 
   const act = useCallback(
     async (key: string, fn: () => Promise<unknown>) => {

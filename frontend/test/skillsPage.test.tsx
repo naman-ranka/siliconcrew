@@ -53,9 +53,24 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
+// Auth settles asynchronously. Default to a settled state so every other test
+// reads as it did before; the one test that cares drives this directly.
+const auth = vi.hoisted(() => ({ status: "anonymous" as string }));
+vi.mock("@/lib/auth", () => ({
+  useAuth: () => ({
+    enabled: false,
+    status: auth.status,
+    user: null,
+    token: null,
+    signIn: () => {},
+    signOut: () => {},
+  }),
+}));
+
 import { SkillsPage } from "@/components/skills/SkillsPage";
 
 beforeEach(() => {
+  auth.status = "anonymous";
   fake.listCalls.length = 0;
   setEnabled.mockClear();
   remove.mockClear();
@@ -180,5 +195,23 @@ describe("the Skills page", () => {
 
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing until it knows who is asking", async () => {
+    // /api/skills answers an unidentified caller with 200 and the built-in
+    // defaults — there is no 401 for the API layer to recover from. A read
+    // fired while auth is still settling therefore renders ANOTHER tenant's
+    // answer as yours, and the first toggle writes it back over your own.
+    auth.status = "loading";
+    const view = render(<SkillsPage />);
+
+    await waitFor(() => expect(screen.getByText("Loading…")).toBeTruthy());
+    expect(fake.listCalls.length).toBe(0);
+
+    auth.status = "signed_in";
+    view.rerender(<SkillsPage />);
+
+    expect(await screen.findByText("shipped-thing")).toBeTruthy();
+    expect(fake.listCalls.length).toBe(1);
   });
 });
