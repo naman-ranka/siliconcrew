@@ -11,6 +11,9 @@ vi.mock("@/lib/api", () => ({
   sessionsApi: {},
   chatApi: {},
   workspaceApi: { downloadRawFile: vi.fn() },
+  // Mirrors the real detection: by CODE, never by message (W4/A17).
+  isSignInRequired: (e: unknown) =>
+    (e as { code?: string } | null)?.code === "signin_required",
   workbenchApi: {
     lint: vi.fn(),
     simulate: vi.fn(),

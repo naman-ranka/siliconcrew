@@ -137,6 +137,13 @@ export function Launcher() {
           openSession(router, sessionId, { chat: null, view: "ide" });
         } else if (intent.kind === "createGroup") {
           await useStore.getState().createProject(intent.name);
+        } else if (intent.kind === "surfaceCommand") {
+          // W4/A18: the Command Surface's replay host lives in the workbench.
+          // take() already cleared the stash — hand the intent back (fresh
+          // timestamp) and route to the workspace; the Surface's kind-scoped
+          // take restores the form there.
+          stashAuthIntent(intent);
+          openSession(router, intent.sessionId, { chat: null, view: "ide" });
         }
       } catch (e) {
         // The replayed action failed for a real reason (quota, 409, network).

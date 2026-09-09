@@ -17,9 +17,9 @@ import {
   Gauge,
   GitCompare,
   Info,
-  KeyRound,
   ListTree,
   Loader2,
+  LogIn,
   MonitorPlay,
   Package,
   PenLine,
@@ -55,6 +55,8 @@ import {
 import { manifestSetPlaceholder } from "@/lib/schemaForm";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
+import { useAuth } from "@/lib/auth";
+import { stashAuthIntent, takeAuthIntent } from "@/lib/authIntent";
 import {
   ComboInput,
   MultiComboInput,
@@ -605,6 +607,7 @@ export function CommandSurface() {
   const [fieldErrs, setFieldErrs] = React.useState<Record<string, Record<string, string>>>({});
   const rightBodyRef = React.useRef<HTMLDivElement>(null);
   const centerRef = React.useRef<HTMLDivElement>(null);
+  const { status: authStatus, signIn } = useAuth();
 
   // Esc closes (window-level while open; no global shortcut registration).
   React.useEffect(() => {
@@ -618,6 +621,22 @@ export function CommandSurface() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, setOpen]);
+
+  // W4/A18: the Surface's auth-intent replay host. After the sign-in round
+  // trip (WorkOS full-page redirect via the Launcher re-stash, or Google/GIS
+  // in place), restore the exact command + form values the signed-out user
+  // had, and reopen the Surface. Kind-scoped take: other hosts' intents are
+  // left alone; a mismatched session drops the intent (cleared, never
+  // replayed against the wrong workspace).
+  React.useEffect(() => {
+    if (authStatus !== "signed_in" || !currentSession) return;
+    const intent = takeAuthIntent("surfaceCommand");
+    if (!intent || intent.kind !== "surfaceCommand") return;
+    if (intent.sessionId !== currentSession.id) return;
+    setSelectedId(intent.commandId);
+    setValues((prev) => ({ ...prev, [intent.commandId]: intent.values }));
+    setOpen(true);
+  }, [authStatus, currentSession, setOpen]);
 
   // The introspected catalog loads once per app lifetime (store-guarded);
   // the recursive path index loads per session on open (SWR-cached — a cheap
@@ -670,6 +689,18 @@ export function CommandSurface() {
     setResultOpen(true);
     if (rightBodyRef.current) rightBodyRef.current.scrollTop = 0;
     if (centerRef.current) centerRef.current.scrollTop = 0;
+  };
+
+  // W4/L2: the sign-in CTA — stash the exact command + form state, then start
+  // sign-in. The replay host above restores both when the round trip lands.
+  const signInToRun = () => {
+    stashAuthIntent({
+      kind: "surfaceCommand",
+      sessionId: currentSession.id,
+      commandId: cmd.id,
+      values: userVals,
+    });
+    signIn();
   };
 
   const setValue = (key: string, v: unknown) => {
@@ -842,14 +873,6 @@ export function CommandSurface() {
                         <span className="min-w-0 flex-1 truncate text-xs text-foreground">
                           {c.label}
                         </span>
-                        {c.requiresSignIn && (
-                          <span title="requires sign-in" className="shrink-0">
-                            <KeyRound
-                              className="h-3 w-3 text-muted-foreground/60"
-                              aria-hidden
-                            />
-                          </span>
-                        )}
                         {c.async && (
                           <span className="shrink-0 rounded border border-status-running/30 px-1 py-px font-mono text-[8px] uppercase text-status-running">
                             async
@@ -903,15 +926,6 @@ export function CommandSurface() {
                   <span className="inline-flex items-center gap-1 rounded border border-status-running/30 bg-status-running/10 px-1.5 py-px font-mono text-[10px] uppercase text-status-running">
                     <Cpu className="h-3 w-3" aria-hidden />
                     async
-                  </span>
-                )}
-                {cmd.requiresSignIn && (
-                  <span
-                    title="requires sign-in"
-                    className="inline-flex items-center gap-1 rounded border border-border bg-surface-2 px-1.5 py-px font-mono text-[10px] uppercase text-muted-foreground"
-                  >
-                    <KeyRound className="h-3 w-3" aria-hidden />
-                    sign-in
                   </span>
                 )}
               </div>
@@ -1030,7 +1044,26 @@ export function CommandSurface() {
                     open={resultOpen}
                     onToggle={() => setResultOpen((o) => !o)}
                   >
-                    {typeof result.result === "string" ? (
+                    {result.signinRequired ? (
+                      // W4/L2: the hosted-anonymous rejection renders as a
+                      // sign-in CTA, never a raw error string. The form state
+                      // survives the round trip (surfaceCommand auth intent).
+                      <div data-testid="command-surface-signin-cta" className="space-y-2">
+                        <p className="text-[11px] leading-relaxed text-muted-foreground">
+                          This command needs a signed-in account. Your filled-in
+                          form comes back after signing in.
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-7 gap-1.5 text-[11px]"
+                          onClick={signInToRun}
+                        >
+                          <LogIn className="h-3 w-3" aria-hidden />
+                          Sign in to run this
+                        </Button>
+                      </div>
+                    ) : typeof result.result === "string" ? (
                       <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground">
                         {result.result}
                       </pre>

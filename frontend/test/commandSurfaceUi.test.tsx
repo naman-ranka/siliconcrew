@@ -6,6 +6,10 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 // add the rail filter/Esc discipline, the sign-in CTA + replay host, the
 // async/sync affordances and the F1/F3 guards to this file.
 
+const signIn = vi.fn();
+let authState: Record<string, unknown>;
+
+vi.mock("@/lib/auth", () => ({ useAuth: () => authState }));
 vi.mock("@/lib/api", () => ({
   projectsApi: {},
   sessionsApi: {},
@@ -15,6 +19,9 @@ vi.mock("@/lib/api", () => ({
   workspaceApi: {
     getDirPaths: vi.fn().mockResolvedValue({ ok: true, paths: [], truncated: false }),
   },
+  // Mirrors the real detection: by CODE, never by message (W4/A17).
+  isSignInRequired: (e: unknown) =>
+    (e as { code?: string } | null)?.code === "signin_required",
   workbenchApi: {
     invokeTool: vi.fn(),
     updateManifest: vi.fn(),
@@ -57,8 +64,12 @@ const MANIFEST = {
   platform: "sky130hd",
 };
 
+const KEY = "sc-auth-intent";
+
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
+  authState = { enabled: true, status: "anonymous", signIn };
   useStore.setState({
     currentSession: SESSION as never,
     manifest: MANIFEST,
@@ -77,6 +88,95 @@ const railButton = (label: string) =>
     .find((b) => b.textContent === label || b.textContent === `${label}async`);
 
 const payloadText = () => screen.getByLabelText("tool call payload").textContent ?? "";
+
+describe("CommandSurface — no needs-login badge (L2/A19)", () => {
+  it("renders the four Flow commands and NO sign-in (KeyRound) badges", () => {
+    render(<CommandSurface />);
+    for (const label of ["Lint", "Simulate", "Synthesize", "Retry P&R"]) {
+      expect(railButton(label)).toBeTruthy();
+    }
+    // The badge render sites are deleted — nothing advertises sign-in.
+    expect(document.querySelector('[title="requires sign-in"]')).toBeNull();
+  });
+});
+
+describe("CommandSurface — sign-in CTA + form-state restore (W4/L2)", () => {
+  it("a signin_required dispatch renders the CTA; clicking stashes the form state and signs in", async () => {
+    vi.mocked(workbenchApi.synthesize).mockRejectedValue(
+      Object.assign(new Error("Sign in to run synthesis."), {
+        code: "signin_required",
+        status: 403,
+      })
+    );
+    render(<CommandSurface />);
+    // Fill something first so the stash carries real form state (synth's one
+    // basic number input is the clock period).
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "8" } });
+    fireEvent.click(screen.getByTestId("command-surface-invoke")); // synth is the default selection
+    const cta = await screen.findByTestId("command-surface-signin-cta");
+    // The CTA replaces the raw error string.
+    expect(cta).toHaveTextContent("Sign in to run this");
+    expect(screen.queryByText("Sign in to run synthesis.")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Sign in to run this/ }));
+    expect(signIn).toHaveBeenCalledTimes(1);
+    const stashed = JSON.parse(sessionStorage.getItem(KEY)!);
+    expect(stashed.intent).toEqual({
+      kind: "surfaceCommand",
+      sessionId: "s1",
+      commandId: "synth",
+      values: { clockPeriodNs: 8 },
+    });
+  });
+
+  it("ordinary failures keep the raw error — no CTA", async () => {
+    vi.mocked(workbenchApi.synthesize).mockRejectedValue(new Error("Quota exceeded."));
+    render(<CommandSurface />);
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    await screen.findByText("Quota exceeded.");
+    expect(screen.queryByTestId("command-surface-signin-cta")).toBeNull();
+  });
+
+  it("replay host: a stashed surfaceCommand intent reopens the Surface with the form restored", async () => {
+    authState = { enabled: true, status: "signed_in", signIn };
+    useWorkbenchUiStore.setState({ commandSurfaceOpen: false });
+    sessionStorage.setItem(
+      KEY,
+      JSON.stringify({
+        intent: {
+          kind: "surfaceCommand",
+          sessionId: "s1",
+          commandId: "lint",
+          values: { engine: "verilator" },
+        },
+        at: Date.now(),
+      })
+    );
+    render(<CommandSurface />);
+    await waitFor(() =>
+      expect(useWorkbenchUiStore.getState().commandSurfaceOpen).toBe(true)
+    );
+    expect(railButton("Lint")).toHaveAttribute("aria-current", "true");
+    // The restored value rides the live payload pane.
+    expect(payloadText()).toContain("verilator");
+    expect(sessionStorage.getItem(KEY)).toBeNull(); // consumed
+  });
+
+  it("replay host drops an intent for a DIFFERENT session (cleared, never misapplied)", async () => {
+    authState = { enabled: true, status: "signed_in", signIn };
+    useWorkbenchUiStore.setState({ commandSurfaceOpen: false });
+    sessionStorage.setItem(
+      KEY,
+      JSON.stringify({
+        intent: { kind: "surfaceCommand", sessionId: "OTHER", commandId: "lint", values: {} },
+        at: Date.now(),
+      })
+    );
+    render(<CommandSurface />);
+    await waitFor(() => expect(sessionStorage.getItem(KEY)).toBeNull());
+    expect(useWorkbenchUiStore.getState().commandSurfaceOpen).toBe(false);
+  });
+});
 
 describe("CommandSurface — file-override box (L1/FA1)", () => {
   it("collapsed by default: manifest chips + an Override… affordance, nothing in the payload", () => {

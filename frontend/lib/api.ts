@@ -81,6 +81,76 @@ export function extractErrorMessage(body: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * The machine-readable error CODE across every backend error shape — the
+ * exact twin of extractErrorMessage above (W4/A17, FA8):
+ *   - detail: { code, message }              (auth deps — core twins' 403)
+ *   - detail: { error: { code, message } }   (_err envelope-in-HTTPException —
+ *                                             /invoke's 401 signin_required)
+ *   - { error: { code } }                    (top-level { ok:false } envelope)
+ * Callers branch on THIS (e.g. "signin_required" → sign-in CTA), never on
+ * message strings.
+ */
+export function extractErrorCode(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const b = body as Record<string, unknown>;
+  const detail = b.detail;
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    const d = detail as { code?: unknown; error?: { code?: unknown } };
+    if (typeof d.code === "string" && d.code) return d.code;
+    if (typeof d.error?.code === "string" && d.error.code) return d.error.code;
+  }
+  const err = b.error;
+  if (err && typeof err === "object") {
+    const c = (err as { code?: unknown }).code;
+    if (typeof c === "string" && c) return c;
+  }
+  return undefined;
+}
+
+/** The `_err` envelope's structured `details` (e.g. `{ fields: [...] }` on a
+ *  400 invalid_arguments), from either the envelope-in-HTTPException or the
+ *  top-level shape; undefined when the body carries none. */
+export function extractErrorDetails(body: unknown): Record<string, unknown> | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const b = body as { detail?: unknown; error?: unknown };
+  const candidates = [
+    (b.detail as { error?: { details?: unknown } } | undefined)?.error?.details,
+    (b.error as { details?: unknown } | undefined)?.details,
+  ];
+  for (const d of candidates) {
+    if (d && typeof d === "object" && !Array.isArray(d)) return d as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+/** Errors thrown by apiFetch/actionFetch carry the HTTP status, the backend's
+ *  error code and its structured details when the body supplied them. */
+export type ApiError = Error & {
+  status?: number;
+  code?: string;
+  details?: Record<string, unknown>;
+};
+
+/** True iff the error is the hosted-anonymous "sign in to run this" rejection
+ *  (401 from /invoke's envelope, 403 from the core twins' auth dep) —
+ *  detected by CODE, never by message text. */
+export function isSignInRequired(e: unknown): boolean {
+  return (e as ApiError | null)?.code === "signin_required";
+}
+
+/** Build the thrown error for a failed response: message + status + code +
+ *  details, normalized at this ONE boundary for both fetchers. */
+function apiError(body: unknown, status: number, fallback: string): ApiError {
+  const err = new Error(extractErrorMessage(body, fallback)) as ApiError;
+  err.status = status;
+  const code = extractErrorCode(body);
+  if (code) err.code = code;
+  const details = extractErrorDetails(body);
+  if (details) err.details = details;
+  return err;
+}
+
 // Generic fetch wrapper with error handling
 async function apiFetch<T>(
   endpoint: string,
@@ -98,13 +168,10 @@ async function apiFetch<T>(
   if (!response.ok) {
     // Expired/invalid token → let the auth layer drop to anonymous + re-prompt.
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    // Attach the HTTP status so callers can branch on graceful states (e.g. BYOK:
-    // 400 self-host, 503 vault-off) without parsing the message string.
-    const err = new Error(
-      extractErrorMessage(error, "API request failed")
-    ) as Error & { status?: number };
-    err.status = response.status;
-    throw err;
+    // Attach the HTTP status + backend error code so callers can branch on
+    // graceful states (e.g. BYOK: 400 self-host, 503 vault-off; W4:
+    // signin_required → CTA) without parsing the message string.
+    throw apiError(error, response.status, "API request failed");
   }
 
   return response.json();
@@ -475,7 +542,11 @@ async function actionFetch<T>(endpoint: string, options?: RequestInit): Promise<
   }));
   const body = await response.json().catch(() => null);
   if (!response.ok || (body && body.ok === false)) {
-    throw new Error(extractErrorMessage(body, response.statusText || "Action failed"));
+    // Same status/code/details attachment as apiFetch (W4/A17, FA8): the
+    // Command Surface detects signin_required by CODE across the 403-detail
+    // (core twins) and 401-envelope (/invoke) shapes, and reads the
+    // invalid_arguments `details.fields` for field-level errors.
+    throw apiError(body, response.status, response.statusText || "Action failed");
   }
   return body as T;
 }

@@ -1,4 +1,4 @@
-import { workbenchApi } from "@/lib/api";
+import { isSignInRequired, workbenchApi } from "@/lib/api";
 import {
   COMMANDS,
   RUN_ORDER,
@@ -324,11 +324,14 @@ export interface SurfaceRunResult {
   result: unknown;
   /** Per-field messages from a 400 invalid_arguments response, when available. */
   fieldErrors?: SurfaceFieldError[];
+  /** Hosted-anonymous signin_required rejection (detected by CODE across the
+   *  /invoke 401 envelope and the core twins' 403 detail, W4/A17) — the
+   *  Surface renders a "Sign in to run this" CTA, never a raw error. */
+  signinRequired?: boolean;
 }
 
-// The api layer's actionFetch throws a plain Error carrying only the message
-// (it does not attach the envelope's details today) — read details defensively
-// so field-level errors light up if it ever starts attaching them.
+// actionFetch attaches the envelope's `details` (FA8) — read them defensively
+// (any thrown Error may still be message-only).
 function fieldErrorsFrom(e: unknown): SurfaceFieldError[] | undefined {
   const details = (e as { details?: { fields?: unknown } } | null)?.details;
   const fields = details?.fields;
@@ -378,7 +381,13 @@ export async function runSurfaceCommand(
     // (duplicate in-flight, no session) arrive as ok:false/ran:false and
     // render as an inline error, never as "Dispatched".
     const outcome = await runCommand(cmd.core, { ...surfaceDefaults(cmd, ctx), ...vals });
-    if (!outcome.ok) return { ok: false, result: outcome.summary };
+    if (!outcome.ok) {
+      return {
+        ok: false,
+        result: outcome.summary,
+        ...(outcome.signinRequired ? { signinRequired: true } : {}),
+      };
+    }
     // Async dispatches keep the "Dispatched — follow it in Activity/Runs"
     // note (now rendered only after the dispatch actually succeeded); sync
     // cores render their real completion summary inline.
@@ -417,7 +426,12 @@ export async function runSurfaceCommand(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       store.appendLocalActivity({ ...ev, status: "error", resultSummary: msg, durationMs: Date.now() - new Date(ev.ts).getTime() });
-      return { ok: false, result: msg, fieldErrors: fieldErrorsFrom(e) };
+      return {
+        ok: false,
+        result: msg,
+        fieldErrors: fieldErrorsFrom(e),
+        ...(isSignInRequired(e) ? { signinRequired: true } : {}),
+      };
     }
   }
 
@@ -439,6 +453,11 @@ export async function runSurfaceCommand(
       durationMs: Date.now() - new Date(ev.ts).getTime(),
     });
     void useStore.getState().loadActivity();
-    return { ok: false, result: msg, fieldErrors: fieldErrorsFrom(e) };
+    return {
+      ok: false,
+      result: msg,
+      fieldErrors: fieldErrorsFrom(e),
+      ...(isSignInRequired(e) ? { signinRequired: true } : {}),
+    };
   }
 }

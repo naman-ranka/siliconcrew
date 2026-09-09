@@ -1,4 +1,4 @@
-import { workbenchApi } from "@/lib/api";
+import { isSignInRequired, workbenchApi } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import type { ActivityEvent, DesignManifest, FileRole, RunSummary } from "@/types";
@@ -355,6 +355,9 @@ export interface CommandOutcome {
   /** False when nothing was executed at all (no session / duplicate in-flight)
    *  — no activity event, no toast, nothing to follow in Activity/Runs. */
   ran: boolean;
+  /** The failure was the hosted-anonymous signin_required rejection (by CODE,
+   *  W4/A17) — callers render a sign-in CTA instead of a raw error string. */
+  signinRequired?: boolean;
 }
 
 /**
@@ -531,6 +534,7 @@ export async function runCommand(
     }
   } catch (e) {
     done({ status: "error", resultSummary: errText(e) });
+    if (outcome && isSignInRequired(e)) (outcome as CommandOutcome).signinRequired = true;
     store.pushToast({ kind: "error", title: `${cmd.label} failed`, detail: errText(e) });
   } finally {
     inFlight.delete(id);
