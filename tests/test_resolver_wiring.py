@@ -226,6 +226,35 @@ def test_read_spec_missing_pins_does_not_exist(ws):
     assert out.startswith("Error:") and "does not exist" in out
 
 
+def test_read_spec_never_follows_a_manifest_entry_out_of_the_workspace(tmp_path, monkeypatch):
+    """Adversarial-review P1-1, end to end on the real wrapper: a tenant writes
+    ``manifest.json`` carrying ``path: ../secret_spec.yaml`` (write_file only
+    confines its TARGET and reconcile ignores .json), then asks for the spec by
+    basename. The resolver must treat the escaped hit as absent, so the file
+    outside the workspace is never opened, parsed, or echoed."""
+    import json
+
+    from src.tools.manifest import MANIFEST_FILENAME
+
+    ws = os.path.join(str(tmp_path), "ws")
+    os.makedirs(ws)
+    monkeypatch.setattr(wrappers, "get_workspace_path", lambda: ws)
+    monkeypatch.setattr(wrappers, "current_session_id", lambda: "s1")
+    _mk(str(tmp_path), "secret_spec.yaml", content="module_name: SECRET_MODULE\n")
+    with open(os.path.join(ws, MANIFEST_FILENAME), "w", encoding="utf-8") as f:
+        json.dump({"files": [{"name": "secret_spec.yaml", "path": "../secret_spec.yaml", "role": "rtl"}]}, f)
+
+    opened = []
+    real_load = wrappers.load_yaml_file
+    monkeypatch.setattr(wrappers, "load_yaml_file", lambda p: opened.append(p) or real_load(p))
+
+    for value in ("secret_spec.yaml", "secret_spec"):
+        out = wrappers.read_spec.func(spec_filename=value)
+        assert out.startswith("Error:") and "does not exist" in out, out
+        assert "SECRET_MODULE" not in out and "../secret_spec.yaml" not in out
+    assert opened == []
+
+
 # --- pre-resolution layering: run_python_analysis (R16) ----------------------
 
 def test_run_python_analysis_resolves_nested_basename(ws, monkeypatch):

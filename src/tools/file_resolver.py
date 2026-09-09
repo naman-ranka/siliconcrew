@@ -19,7 +19,9 @@ looks like. Now there is exactly one resolution contract:
   * ambiguous -> an error naming every candidate; missing -> an error naming
     what was searched (the message always contains "does not exist" — pinned
     by existing wrapper-level tests);
-  * containment is checked HERE with :func:`is_within`. Load-bearing: the
+  * containment is checked HERE with :func:`is_within`, on the typed value AND
+    on every index hit (a manifest entry or tree file that resolves outside
+    the workspace is treated as absent). Load-bearing: the
     agent and MCP paths run no containment at all, and some file-valued keys
     (``spec_filename``) never match ``/invoke``'s ``enforce_file_containment``
     heuristic — so the resolver cannot delegate the check to the caller. A
@@ -84,12 +86,24 @@ def _basename_matches(
 ) -> List[str]:
     """Files in ``index`` whose basename is ``value`` (or ``value`` + one of
     ``exts`` when nothing matched exactly), deduped, sorted, and filtered to
-    what is really on disk (the stored manifest can lag a delete)."""
+    what is really on disk (the stored manifest can lag a delete) AND inside
+    the workspace.
+
+    Containment applies to the ANSWER, not only to the typed value: the stored
+    manifest is tenant-writable (``write_file("manifest.json", ...)`` persists
+    ``path`` verbatim) and the tree walk lists symlinks whose targets can point
+    anywhere, so an index hit is exactly as untrusted as user input. A hit that
+    resolves outside the workspace is dropped here as if it did not exist —
+    the caller then reports "does not exist" without ever naming it.
+    """
     matches = [rel for rel in index if os.path.basename(rel) == value]
     if not matches and exts:
         wanted = {value + ext for ext in exts}
         matches = [rel for rel in index if os.path.basename(rel) in wanted]
-    return sorted({rel for rel in matches if os.path.isfile(os.path.join(workspace, rel))})
+    return sorted({
+        rel for rel in matches
+        if os.path.isfile(p := os.path.join(workspace, rel)) and is_within(workspace, p)
+    })
 
 
 def resolve_workspace_file(
