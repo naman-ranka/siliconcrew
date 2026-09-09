@@ -1298,6 +1298,16 @@ export function CommandSurface() {
                   any path can still be typed.
                 </p>
               )}
+              {pathIndex.status === "error" && (
+                // P3-4: a failed index fetch keeps the old paths (SWR) or
+                // leaves none on a first open — either way the second tier
+                // is not what the workspace holds, so say so (invariant 4).
+                <p data-testid="command-surface-pathindex-error" className="text-[10px] text-muted-foreground">
+                  Workspace file index could not be fetched
+                  {pathIndex.error ? ` (${pathIndex.error})` : ""} — suggestions may be
+                  stale or incomplete; any path can still be typed.
+                </p>
+              )}
               <Button
                 type="button"
                 data-testid="command-surface-invoke"

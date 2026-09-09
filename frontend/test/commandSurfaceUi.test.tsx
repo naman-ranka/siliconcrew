@@ -39,7 +39,7 @@ vi.mock("@/lib/api", () => ({
 import { CommandSurface } from "@/components/workbench/CommandSurface";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
-import { workbenchApi } from "@/lib/api";
+import { workbenchApi, workspaceApi } from "@/lib/api";
 
 const SESSION = {
   id: "s1",
@@ -596,6 +596,24 @@ describe("CommandSurface — the Dispatch button never silently re-arms (F1)", (
     expect(screen.getByTestId("command-surface-rearm")).toHaveTextContent(
       "A run of this kind is still running as far as this view knows."
     );
+  });
+});
+
+describe("CommandSurface — path-index fetch failure is said out loud (P3-4)", () => {
+  it("a first-open index fetch that fails renders the one-line notice (the truncation case's twin)", async () => {
+    // An unpopulated index is fetched on open; a failure used to leave every
+    // file combo with no second tier and nothing on screen saying why.
+    useStore.setState({ pathIndex: { status: "empty", paths: [], truncated: false, error: null } });
+    vi.mocked(workspaceApi.getDirPaths).mockRejectedValueOnce(new Error("HTTP 502"));
+    render(<CommandSurface />);
+    const note = await screen.findByTestId("command-surface-pathindex-error");
+    expect(note).toHaveTextContent("Workspace file index could not be fetched (HTTP 502)");
+    expect(note).toHaveTextContent("any path can still be typed");
+  });
+
+  it("no notice while the index is healthy", () => {
+    render(<CommandSurface />);
+    expect(screen.queryByTestId("command-surface-pathindex-error")).toBeNull();
   });
 });
 
