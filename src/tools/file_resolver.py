@@ -22,11 +22,11 @@ looks like. Now there is exactly one resolution contract:
   * containment is checked HERE with :func:`is_within`, on the typed value AND
     on every index hit (a manifest entry or tree file that resolves outside
     the workspace is treated as absent). Load-bearing: the
-    agent and MCP paths run no containment at all, and some file-valued keys
-    (``spec_filename``) never match ``/invoke``'s ``enforce_file_containment``
-    heuristic — so the resolver cannot delegate the check to the caller. A
-    contained absolute path is accepted (what the compile-set tools always
-    took) and returned as a workspace-relative path.
+    agent and MCP paths run no containment at all, and ``/invoke``'s
+    ``enforce_file_containment`` is an argument-NAME convention that checks
+    only what the caller typed — so the resolver cannot delegate the check to
+    the caller. A contained absolute path is accepted (what the compile-set
+    tools always took) and returned as a workspace-relative path.
 
 Layering: for tools with their own validation (``run_python_analysis``'s
 containment, ``build_interactive_sim``'s name checks) this is a PRE-resolution

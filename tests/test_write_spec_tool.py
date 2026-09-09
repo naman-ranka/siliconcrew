@@ -152,3 +152,17 @@ def test_the_containment_rule_now_recognises_a_path_argument(ws):
         tool_catalog.enforce_file_containment(str(ws), {"yaml_path": "../escape.yaml"})
     # ...and an ordinary workspace-relative name is still fine.
     tool_catalog.enforce_file_containment(str(ws), {"yaml_path": "problem_spec.yaml"})
+
+
+def test_the_containment_rule_recognises_spec_filename(ws):
+    """Adversarial-review P3-3: ``read_spec.spec_filename`` ends in ``filename``
+    (no ``_file`` suffix), so the name rule never saw it — the only file
+    argument on the /invoke surface that reached its tool uncontained (the
+    resolver still refused the escape; this is the surface's own defense in
+    depth, and the convention the UI mirrors for its file fields)."""
+    assert tool_catalog._looks_like_file_arg("spec_filename")
+    with pytest.raises(tool_catalog.ToolArgumentError):
+        tool_catalog.enforce_file_containment(str(ws), {"spec_filename": "../escape_spec.yaml"})
+    tool_catalog.enforce_file_containment(str(ws), {"spec_filename": "counter_spec.yaml"})
+    # Extension-less values (the resolver completes them) are contained too.
+    tool_catalog.enforce_file_containment(str(ws), {"spec_filename": "counter_spec"})

@@ -458,9 +458,13 @@ class ToolArgumentError(Exception):
 # Suffixes first, then exact names. ``_path`` is here because an argument that
 # says "path" is exactly as dangerous as one that says "file" — the spec adopter
 # took ``yaml_path`` and matched nothing, so it was the one file argument this
-# rule never saw.
+# rule never saw. ``spec_filename`` is the other exact name: it ends in
+# ``filename`` (not ``_file``), so the suffix rule never saw it either, and it
+# is a file the tool opens. This table is the convention the UI's file-field
+# rule mirrors (frontend/lib/schemaForm.ts ``isFileKey``): a key contained here
+# is a key the Command Surface treats as a file, and vice versa.
 _FILE_ARG_SUFFIXES = ("_file", "_files", "_path")
-_FILE_ARG_NAMES = ("filename", "file_path")
+_FILE_ARG_NAMES = ("filename", "file_path", "spec_filename")
 
 
 def _looks_like_file_arg(key: str) -> bool:
