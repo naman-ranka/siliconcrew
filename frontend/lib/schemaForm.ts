@@ -1,4 +1,4 @@
-import type { FileRole, SchemaProperty, ToolCatalogEntry } from "@/types";
+import type { DesignManifest, FileRole, SchemaProperty, ToolCatalogEntry } from "@/types";
 import type { SurfaceCtx, SurfaceParam, SurfaceParamSource } from "./commandSurface";
 
 // JSON-Schema → form-model mapping for the Command Surface. PURE and
@@ -211,24 +211,31 @@ export function valueKindFor(key: string): "module" | "file" | undefined {
 }
 
 /**
- * Per-value subtitles for a key's combo suggestions: a module shows its
- * defining file; a file path shows its manifest role. Display-only, keyed by
- * valueKind, not by key name.
+ * Per-value subtitles for combo suggestions of a value kind: a module shows
+ * its defining file; a file path shows its manifest role. Display-only. The
+ * ONE source for the catalog forms (by key convention) and the core
+ * registry's params (by declared valueKind).
  */
-export function suggestionSubtitles(key: string, ctx: SurfaceCtx): Record<string, string> {
+export function subtitlesByKind(
+  kind: "module" | "file" | undefined,
+  manifest: DesignManifest | null
+): Record<string, string> {
   const out: Record<string, string> = {};
-  const m = ctx.manifest;
-  const kind = valueKindFor(key);
   if (kind === "module") {
-    for (const t of m?.testbenches ?? []) {
+    for (const t of manifest?.testbenches ?? []) {
       if (t.module && !(t.module in out)) out[t.module] = t.file;
     }
   } else if (kind === "file") {
-    for (const f of m?.files ?? []) {
+    for (const f of manifest?.files ?? []) {
       if (f.path && !(f.path in out)) out[f.path] = f.role;
     }
   }
   return out;
+}
+
+/** Subtitles for a schema key — its valueKind, derived from the key. */
+export function suggestionSubtitles(key: string, ctx: SurfaceCtx): Record<string, string> {
+  return subtitlesByKind(valueKindFor(key), ctx.manifest);
 }
 
 /** Manifest value backing a conventional SCALAR key, if the manifest supplies

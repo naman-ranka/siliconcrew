@@ -518,7 +518,9 @@ export const workbenchApi = {
       { method: "PUT", body: JSON.stringify({ content }) }
     ),
 
-  lint: (sessionId: string, body?: { engine?: string }) =>
+  // `files` (L1): optional override of the manifest-resolved compile set —
+  // absent/empty keeps today's manifest-driven behavior exactly.
+  lint: (sessionId: string, body?: { engine?: string; files?: string[] }) =>
     actionFetch<LintResult & { ok: true }>(`${ws(sessionId)}/lint`, {
       method: "POST",
       // Body is optional on the backend too — omit it entirely for the
@@ -528,8 +530,12 @@ export const workbenchApi = {
 
   // Returns the run PLUS any duplicate-module collision warnings the backend
   // attached to the dispatch (sc#66: `manifestWarnings` — advisory only, they
-  // never alter the run result).
-  simulate: (sessionId: string, body: { simTop?: string; mode?: string; runId?: string } = {}) =>
+  // never alter the run result). `files` (L1): optional compile-set override;
+  // absent = files_for_stage(manifest) as today.
+  simulate: (
+    sessionId: string,
+    body: { simTop?: string; mode?: string; runId?: string; files?: string[] } = {}
+  ) =>
     actionFetch<{ ok: true; run: RunSummary; manifestWarnings?: string[] }>(
       `${ws(sessionId)}/simulate`,
       {

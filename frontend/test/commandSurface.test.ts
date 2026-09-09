@@ -403,6 +403,68 @@ describe("runSurfaceCommand", () => {
   });
 });
 
+// ---- L1 file-override params on the core commands (FA1) ---------------------------------
+
+describe("core file overrides (W3/A16, FA1)", () => {
+  it("lint/sim expose `files`, synth exposes `verilogFiles` — optional, manifest-suggested, override-rendered", () => {
+    const byId = Object.fromEntries(CORE_SURFACE_COMMANDS.map((c) => [c.id, c]));
+    const lintFiles = byId.lint.params.find((p) => p.key === "files")!;
+    expect(lintFiles).toMatchObject({
+      editor: "multi",
+      optional: true,
+      override: true,
+      source: "manifest",
+      valueKind: "file",
+    });
+    expect((lintFiles.options as (c: SurfaceCtx) => string[])(CTX)).toEqual(["alu.v"]); // rtl+include
+    expect(lintFiles.subtitles?.(CTX)).toEqual({ "alu.v": "rtl", "tb.v": "tb" });
+    const simFiles = byId.sim.params.find((p) => p.key === "files")!;
+    expect((simFiles.options as (c: SurfaceCtx) => string[])(CTX)).toEqual(["alu.v", "tb.v"]); // rtl+tb+include
+    const synthFiles = byId.synth.params.find((p) => p.key === "verilogFiles")!;
+    expect((synthFiles.options as (c: SurfaceCtx) => string[])(CTX)).toEqual(["alu.v"]); // rtl only
+    expect(byId.pnr.params.some((p) => p.override)).toBe(false);
+  });
+
+  it("empty override is OMITTED from the payload (manifest-driven, unchanged behavior)", () => {
+    const lint = CORE_SURFACE_COMMANDS.find((c) => c.id === "lint")!;
+    expect(buildSurfacePayload(lint, {}, CTX).arguments).toEqual({ engine: "auto" });
+    expect(buildSurfacePayload(lint, { files: ["tb.v"] }, CTX).arguments).toEqual({
+      engine: "auto",
+      files: ["tb.v"],
+    });
+  });
+
+  it("the override reaches the REST body through the core engine", async () => {
+    vi.mocked(workbenchApi.lint).mockResolvedValue({
+      ok: true,
+      status: "passed",
+      warnings: [],
+      errors: [],
+      byFile: {},
+      command: "verilator --lint-only tb.v",
+      files: ["tb.v"],
+      engine: "verilator",
+    } as never);
+    const lint = CORE_SURFACE_COMMANDS.find((c) => c.id === "lint")!;
+    await runSurfaceCommand(lint, { files: ["tb.v"] });
+    expect(workbenchApi.lint).toHaveBeenCalledWith("s1", { engine: "auto", files: ["tb.v"] });
+  });
+
+  it("REGRESSION: optional override params still OMIT the key when empty — never an injected set", () => {
+    // lint/sim/synth overrides are optional — empty must keep meaning "the
+    // backend resolves the manifest", never a fillFromManifest injection.
+    const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
+    expect(buildSurfacePayload(sim, {}, CTX).arguments).not.toHaveProperty("files");
+    const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
+    expect(buildSurfacePayload(synth, {}, CTX).arguments).not.toHaveProperty("verilogFiles");
+    const lint = CORE_SURFACE_COMMANDS.find((c) => c.id === "lint")!;
+    expect(surfaceDefaults(lint, CTX).files).toEqual([]);
+    for (const c of CORE_SURFACE_COMMANDS) {
+      for (const p of c.params.filter((x) => x.override)) expect(p.fillFromManifest).toBeUndefined();
+    }
+  });
+});
+
 // ---- plural file fields: empty form, manifest set at payload time -----------------------
 // Owner refinement (2026-08-14): the form must NOT pre-fill every manifest
 // file as chips. The field starts empty; for tools that REQUIRE the list the

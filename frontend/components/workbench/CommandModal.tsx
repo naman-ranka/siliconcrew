@@ -267,9 +267,19 @@ function CommandForm({ id, def }: { id: CommandId; def: CommandDef }) {
   const setValue = (key: string, v: unknown) => setValues((prev) => ({ ...prev, [key]: v }));
 
   const Icon = COMMAND_ICONS[id];
-  const facts = manifestFacts(id, { manifest });
-  const basic = def.params.filter((p) => !p.advanced);
-  const advanced = def.params.filter((p) => p.advanced);
+  // L3: the ⌘K modal is the fast path — `files` override params are never
+  // editable here (the Surface owns the override box). They still SHOW as
+  // read-only "supplied by manifest" facts, resolved by the same options
+  // resolver the Surface uses, so the modal never tells a different story.
+  const fileFacts = def.params
+    .filter((p) => p.type === "files")
+    .map((p) => ({
+      label: p.label,
+      value: resolveParamOptions(p, { manifest, runs }).join(", ") || "—",
+    }));
+  const facts = manifest ? [...manifestFacts(id, { manifest }), ...fileFacts] : [];
+  const basic = def.params.filter((p) => !p.advanced && p.type !== "files");
+  const advanced = def.params.filter((p) => p.advanced && p.type !== "files");
 
   // Params whose options resolve from live state: the pnr runId ships with
   // empty options (populated from runs); the sim TB combo suggests the

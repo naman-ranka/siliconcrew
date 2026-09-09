@@ -11,7 +11,7 @@ import {
   type CommandParam,
 } from "@/lib/commands";
 import { TOOL } from "@/lib/toolNames";
-import { buildFormModel, shortDescription } from "@/lib/schemaForm";
+import { buildFormModel, shortDescription, subtitlesByKind } from "@/lib/schemaForm";
 import { useStore } from "@/lib/store";
 import type { ActivityEvent, DesignManifest, RunSummary, ToolCatalogEntry } from "@/types";
 
@@ -54,6 +54,11 @@ export interface SurfaceParam {
   optional?: boolean;
   hint?: string;
   when?: (vals: Record<string, unknown>) => boolean;
+  /** L1: a file-set OVERRIDE param — rendered as the "Supplied by manifest"
+   *  box (manifest chips, collapsed) with an "Override…" affordance that
+   *  swaps in the multi-combo, not as a plain row. Empty value = the
+   *  backend's manifest resolution, exactly as before. */
+  override?: true;
   /** Module-valued vs file-valued — rendered as a tiny tag next to the source
    *  badge so the ".v here but not there" question answers itself. */
   valueKind?: "module" | "file";
@@ -104,9 +109,14 @@ const EDITOR_BY_TYPE: Record<CommandParam["type"], SurfaceParam["editor"]> = {
   boolean: "bool",
   text: "text",
   combo: "combo",
+  files: "multi",
 };
 
 function toSurfaceParam(p: CommandParam): SurfaceParam {
+  // A `files` registry param is file-valued by construction and renders as
+  // the override box; its suggestions/subtitles come from the same resolver
+  // the ⌘K modal reads (resolveParamOptions).
+  const valueKind = p.type === "files" ? "file" : p.valueKind;
   return {
     key: p.key,
     label: p.label,
@@ -121,6 +131,13 @@ function toSurfaceParam(p: CommandParam): SurfaceParam {
     adv: p.advanced,
     optional: p.optional,
     hint: p.hint,
+    ...(p.type === "files" ? { override: true as const } : {}),
+    ...(valueKind
+      ? {
+          valueKind,
+          subtitles: (ctx: SurfaceCtx) => subtitlesByKind(valueKind, ctx.manifest),
+        }
+      : {}),
   };
 }
 
