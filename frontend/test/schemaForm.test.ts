@@ -61,10 +61,17 @@ const CTX: SurfaceCtx = {
     simRun("sim_0001", "sim_runs/sim_0001/dump.vcd"),
     simRun("sim_0000"), // no vcd — must not appear in vcd options
   ],
-  rootFiles: ["alu.v", "tb.v", "check.sby", "adder.x", "spec.md"],
+  // The recursive path index (W2/A8).
+  wsPaths: ["alu.v", "tb.v", "check.sby", "adder.x", "spec.md"],
+  wsPathsTruncated: false,
 };
 
-const EMPTY_CTX: SurfaceCtx = { manifest: null, runs: [], rootFiles: [] };
+const EMPTY_CTX: SurfaceCtx = {
+  manifest: null,
+  runs: [],
+  wsPaths: [],
+  wsPathsTruncated: false,
+};
 
 const optionalString = (def: unknown = null): SchemaProperty => ({
   anyOf: [{ type: "string" }, { type: "null" }],
@@ -150,7 +157,7 @@ describe("conventionOptions", () => {
   });
   it("filename / file_path / spec_file / script_file → all root files (PA10)", () => {
     for (const key of ["filename", "file_path", "spec_file", "script_file"]) {
-      expect(conventionOptions(key, CTX)).toEqual(CTX.rootFiles);
+      expect(conventionOptions(key, CTX)).toEqual(CTX.wsPaths);
     }
   });
   it("sim_top / toplevel → the manifest's derived testbench modules", () => {

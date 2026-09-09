@@ -352,3 +352,83 @@ describe("activity: SWR iron rule + live merge", () => {
     expect(selectActivity(useStore.getState())).toBe(merged);
   });
 });
+
+// ---- pathIndex: the recursive file-path index slice (W2/A8) -------------------
+
+describe("pathIndex: loadPathIndex", () => {
+  beforeEach(() => {
+    useStore.setState({ pathIndex: { status: "empty", paths: [], truncated: false, error: null } });
+  });
+
+  it("loads paths + the honest truncated flag; a populated slice doesn't refetch", async () => {
+    (workspaceApi.getDirPaths as any).mockResolvedValue({
+      ok: true,
+      paths: ["alu.v", "rtl/nested.v"],
+      truncated: true,
+    });
+    await useStore.getState().loadPathIndex();
+    expect(useStore.getState().pathIndex).toEqual({
+      status: "ready",
+      paths: ["alu.v", "rtl/nested.v"],
+      truncated: true,
+      error: null,
+    });
+    await useStore.getState().loadPathIndex(); // no revalidate → cache hit
+    expect(workspaceApi.getDirPaths).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidate keeps old paths visible (SWR); a failed revalidate keeps them too", async () => {
+    useStore.setState({
+      pathIndex: { status: "ready", paths: ["alu.v"], truncated: false, error: null },
+    });
+    let reject!: (e: unknown) => void;
+    (workspaceApi.getDirPaths as any).mockReturnValue(new Promise((_, r) => (reject = r)));
+    const p = useStore.getState().loadPathIndex({ revalidate: true });
+    expect(useStore.getState().pathIndex.status).toBe("revalidating");
+    expect(useStore.getState().pathIndex.paths).toEqual(["alu.v"]); // still visible
+    reject(new Error("boom"));
+    await p;
+    expect(useStore.getState().pathIndex).toMatchObject({
+      status: "error",
+      paths: ["alu.v"],
+      error: "boom",
+    });
+  });
+
+  it("is single-flight: concurrent calls share one fetch", async () => {
+    let resolve!: (v: unknown) => void;
+    (workspaceApi.getDirPaths as any).mockReturnValue(new Promise((r) => (resolve = r)));
+    const a = useStore.getState().loadPathIndex();
+    const b = useStore.getState().loadPathIndex();
+    resolve({ ok: true, paths: [], truncated: false });
+    await Promise.all([a, b]);
+    expect(workspaceApi.getDirPaths).toHaveBeenCalledTimes(1);
+  });
+
+  it("stale-response guard: a session switch mid-flight drops the reply", async () => {
+    let resolve!: (v: unknown) => void;
+    (workspaceApi.getDirPaths as any).mockReturnValue(new Promise((r) => (resolve = r)));
+    const p = useStore.getState().loadPathIndex();
+    useStore.setState({ currentSession: { ...SESSION, id: "s2" } as any });
+    resolve({ ok: true, paths: ["stale.v"], truncated: false });
+    await p;
+    expect(useStore.getState().pathIndex.paths).toEqual([]); // never applied
+  });
+
+  it("invalidateDirs revalidates a POPULATED index; an empty one stays untouched", async () => {
+    (workspaceApi.getDir as any).mockResolvedValue({ ok: true, path: "", entries: [] });
+    (workspaceApi.getDirPaths as any).mockResolvedValue({ ok: true, paths: [], truncated: false });
+    // Empty slice: invalidation must NOT fetch (sessions that never opened
+    // quick-open/the Surface pay nothing).
+    useStore.getState().invalidateDirs([""]);
+    await Promise.resolve();
+    expect(workspaceApi.getDirPaths).not.toHaveBeenCalled();
+    // Populated slice: invalidation revalidates it.
+    useStore.setState({
+      pathIndex: { status: "ready", paths: ["alu.v"], truncated: false, error: null },
+    });
+    useStore.getState().invalidateDirs([""]);
+    await Promise.resolve();
+    expect(workspaceApi.getDirPaths).toHaveBeenCalledTimes(1);
+  });
+});

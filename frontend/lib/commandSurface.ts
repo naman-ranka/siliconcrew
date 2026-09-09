@@ -29,8 +29,12 @@ import type { ActivityEvent, DesignManifest, RunSummary, ToolCatalogEntry } from
 export type SurfaceParamSource = "manifest" | "choice" | "run" | "default" | "text";
 
 export interface SurfaceCtx extends CommandCtx {
-  /** Workspace-root file names (from the dir cache) — file-picking conventions. */
-  rootFiles: string[];
+  /** Recursive workspace file PATHS (the store's path-index slice) — every
+   *  file-picking convention suggests ws-relative paths, consistently. */
+  wsPaths: string[];
+  /** The backend truncated the path walk — suggestions may be incomplete;
+   *  surfaced in the UI, never hidden (invariant 4). */
+  wsPathsTruncated: boolean;
 }
 
 export interface SurfaceParam {
@@ -288,15 +292,14 @@ function fieldErrorsFrom(e: unknown): SurfaceFieldError[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-/** Live ctx for resolution — manifest, runs, and workspace-root file names. */
+/** Live ctx for resolution — manifest, runs, and the recursive path index. */
 function storeCtx(): SurfaceCtx {
   const store = useStore.getState();
   return {
     manifest: store.manifest,
     runs: store.runs,
-    rootFiles: (store.dirCache[""]?.entries ?? [])
-      .filter((e) => e.kind === "file")
-      .map((e) => e.name),
+    wsPaths: store.pathIndex.paths,
+    wsPathsTruncated: store.pathIndex.truncated,
   };
 }
 

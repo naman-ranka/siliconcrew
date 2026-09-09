@@ -526,7 +526,8 @@ export function CommandSurface() {
   const currentSession = useStore((s) => s.currentSession);
   const manifest = useStore((s) => s.manifest);
   const runs = useStore((s) => s.runs);
-  const rootDir = useStore((s) => s.dirCache[""]);
+  const pathIndex = useStore((s) => s.pathIndex);
+  const loadPathIndex = useStore((s) => s.loadPathIndex);
   const toolCatalog = useStore((s) => s.toolCatalog);
   const loadToolCatalog = useStore((s) => s.loadToolCatalog);
 
@@ -556,18 +557,23 @@ export function CommandSurface() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, setOpen]);
 
-  // The introspected catalog loads once per app lifetime (store-guarded).
+  // The introspected catalog loads once per app lifetime (store-guarded);
+  // the recursive path index loads per session on open (SWR-cached — a cheap
+  // no-op when already populated; invalidateDirs revalidates it).
   React.useEffect(() => {
-    if (open) void loadToolCatalog();
-  }, [open, loadToolCatalog]);
+    if (!open) return;
+    void loadToolCatalog();
+    void loadPathIndex();
+  }, [open, currentSession?.id, loadToolCatalog, loadPathIndex]);
 
   const ctx: SurfaceCtx = React.useMemo(
     () => ({
       manifest,
       runs,
-      rootFiles: (rootDir?.entries ?? []).filter((e) => e.kind === "file").map((e) => e.name),
+      wsPaths: pathIndex.paths,
+      wsPathsTruncated: pathIndex.truncated,
     }),
-    [manifest, runs, rootDir]
+    [manifest, runs, pathIndex]
   );
 
   // Flow (core four) + the schema-driven groups from the backend catalog.
@@ -947,6 +953,12 @@ export function CommandSurface() {
                   <SrcTag key={s} source={s} />
                 ))}
               </div>
+              {ctx.wsPathsTruncated && (
+                <p className="text-[10px] text-muted-foreground">
+                  Workspace file index truncated — suggestions may be incomplete;
+                  any path can still be typed.
+                </p>
+              )}
               <Button
                 type="button"
                 data-testid="command-surface-invoke"

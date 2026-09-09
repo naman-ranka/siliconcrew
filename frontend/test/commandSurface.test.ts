@@ -70,7 +70,8 @@ const synthRun = (id: string): RunSummary => ({
 const CTX: SurfaceCtx = {
   manifest: MANIFEST,
   runs: [synthRun("synth_0002"), synthRun("synth_0001")],
-  rootFiles: ["alu.v", "tb.v"],
+  wsPaths: ["alu.v", "tb.v"],
+  wsPathsTruncated: false,
 };
 
 const entry = (over: Partial<ToolCatalogEntry>): ToolCatalogEntry => ({
@@ -134,16 +135,8 @@ beforeEach(() => {
     currentSession: SESSION as never,
     manifest: MANIFEST,
     runs: CTX.runs,
-    dirCache: {
-      "": {
-        status: "ready",
-        entries: [
-          { name: "alu.v", path: "alu.v", kind: "file" },
-          { name: "sim_runs", path: "sim_runs", kind: "dir" },
-        ],
-        error: null,
-      },
-    },
+    // storeCtx() reads the recursive path-index slice (W2/A8), not dirCache.
+    pathIndex: { status: "ready", paths: ["alu.v", "tb.v"], truncated: false, error: null },
     activity: { serverEvents: [], localEvents: [], status: "empty", nextBefore: null, error: null },
     toolCatalog: { tools: [], status: "empty", error: null },
   });

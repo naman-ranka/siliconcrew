@@ -101,10 +101,10 @@ export function conventionOptions(key: string, ctx: SurfaceCtx): string[] | null
   if (key === "verilog_file") {
     return (ctx.manifest?.files ?? []).filter((f) => f.role === "rtl").map((f) => f.name);
   }
-  if (key === "sby_file") return ctx.rootFiles.filter((f) => f.endsWith(".sby"));
-  if (key === "dslx_file") return ctx.rootFiles.filter((f) => f.endsWith(".x"));
+  if (key === "sby_file") return ctx.wsPaths.filter((f) => f.endsWith(".sby"));
+  if (key === "dslx_file") return ctx.wsPaths.filter((f) => f.endsWith(".x"));
   if (FILE_KEYS.has(key)) {
-    return [...ctx.rootFiles];
+    return [...ctx.wsPaths];
   }
   if (key === "sim_top" || key === "toplevel") return testbenchModules(ctx);
   if (key === "top_module") {
