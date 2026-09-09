@@ -619,31 +619,34 @@ def build_actions_router(
             manifest = manifest_mod.read_manifest(workspace, session_id)
             manifest_files = manifest_mod.files_for_stage(manifest, "lint")
             notes: List[str] = []
+            scope_modules: set = set()
             if override:
                 try:
                     rel_files = resolve_workspace_files(workspace, override, exts=manifest_mod.RTL_EXTS)
                 except FileResolutionError as exc:
                     return {"badFiles": str(exc)}
+                dropped = manifest_mod.dropped_manifest_files(manifest_files, rel_files)
                 notes = manifest_mod.override_drop_notes("lint", manifest_files, rel_files)
+                # An override that leaves manifest lint files out (exactly the
+                # files the notes just named) is a FILE-SCOPED lint. The
+                # manifest already knows which modules each design file
+                # declares, so the linter is told precisely which unresolved
+                # names are the user's own choice: "Unknown module type:
+                # counter" is a scope note only when a DROPPED file defines
+                # `counter`; a typo'd `countr` or a module no file defines
+                # stays a FAILED verdict (invariant 4 — a note states a fact,
+                # never a policy of trust). Derived, not declared: a client
+                # cannot claim file-scoped for a whole-design lint, and an
+                # override that keeps the whole manifest set — or runs against
+                # an empty manifest set — is strict by construction.
+                scope_modules = manifest_mod.modules_defined_by(workspace, manifest, dropped)
             else:
                 rel_files = manifest_files
             if not rel_files:
                 return {"empty": True}
             call_id = _ui_log_call(workspace, session_id, "linter_tool", {"verilog_files": rel_files, "engine": engine})
             abs_files = [os.path.join(workspace, f) for f in rel_files]
-            # An override that leaves manifest lint files out (exactly what
-            # override_drop_notes just listed) is a FILE-SCOPED lint: modules
-            # the dropped files would have supplied are missing by the user's
-            # own choice, so "Unknown module type" is a scope note, not a
-            # FAILED verdict (invariant 4 — no false verdicts). An override
-            # that keeps the whole manifest set stays strict, and so does the
-            # manifest path itself. Derived, not declared: a client cannot
-            # claim file-scoped for a whole-design lint. Caveat: this relies on
-            # the manifest knowing the design's rtl set; an override against an
-            # EMPTY manifest lint set is strict lint by construction (a false
-            # "fail" on unresolved modules is possible only when the manifest
-            # tracks nothing — never a false "pass").
-            result = run_linter(abs_files, cwd=workspace, engine=engine, file_scoped=bool(notes))
+            result = run_linter(abs_files, cwd=workspace, engine=engine, scope_modules=scope_modules)
             notes = notes + list(result.get("notes") or [])
             warnings, errors, by_file = _split_lint_diagnostics(result.get("diagnostics") or [])
             passed = bool(result.get("success"))

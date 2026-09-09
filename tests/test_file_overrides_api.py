@@ -57,7 +57,7 @@ def test_lint_override_resolves_basenames_and_notes_dropped(client, monkeypatch)
 
     def fake_linter(files, cwd, engine="auto", **kw):
         seen["files"] = files
-        seen["file_scoped"] = kw.get("file_scoped")
+        seen["scope_modules"] = kw.get("scope_modules")
         return {"success": True, "engine": "iverilog", "stderr": "", "command": "iverilog", "diagnostics": []}
 
     monkeypatch.setattr(actions_mod, "run_linter", fake_linter)
@@ -92,22 +92,26 @@ def test_lint_override_that_drops_manifest_files_is_file_scoped(client, monkeypa
     """Adversarial-review F2 (R27-R30): 'lint THIS file' on hierarchical RTL used to come
     back FAILED ("Unknown module type") — a false verdict. An override that
     leaves manifest lint files out now runs file-scoped, and the engine's scope
-    note rides the same manifestWarnings channel."""
+    note rides the same manifestWarnings channel.
+
+    P2-1: "file-scoped" is not a flag but the SET of module names the dropped
+    manifest files define (the manifest's own scan) — the linter may excuse
+    exactly those, nothing else."""
     c, ws = client
     _seed_nested(ws)
     with open(os.path.join(ws, "rtl", "top.v"), "w") as f:
         f.write("module top(input clk); counter c(.clk(clk), .q()); endmodule\n")
     seen = {}
 
-    def fake_linter(files, cwd, engine="auto", file_scoped=False):
-        seen["file_scoped"] = file_scoped
+    def fake_linter(files, cwd, engine="auto", scope_modules=None):
+        seen["scope_modules"] = scope_modules
         return {"success": True, "engine": "iverilog", "stderr": "", "command": "",
                 "diagnostics": [], "notes": ["File-scoped lint: counter not in the linted file set."]}
 
     monkeypatch.setattr(actions_mod, "run_linter", fake_linter)
     r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["top.v"]})
     assert r.status_code == 200, r.text
-    assert seen["file_scoped"] is True
+    assert seen["scope_modules"] == {"counter"}   # what rtl/counter.v (dropped) defines
     body = r.json()
     assert body["status"] == "passed"
     notes = body["manifestWarnings"]
@@ -122,14 +126,69 @@ def test_lint_override_covering_the_manifest_set_stays_strict(client, monkeypatc
     _seed_nested(ws)
     seen = {}
 
-    def fake_linter(files, cwd, engine="auto", file_scoped=False):
-        seen["file_scoped"] = file_scoped
+    def fake_linter(files, cwd, engine="auto", scope_modules=None):
+        seen["scope_modules"] = scope_modules
         return {"success": True, "engine": "iverilog", "stderr": "", "command": "", "diagnostics": [], "notes": []}
 
     monkeypatch.setattr(actions_mod, "run_linter", fake_linter)
     r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["counter.v", "counter_tb.v"]})
     assert r.status_code == 200, r.text
-    assert seen["file_scoped"] is False
+    assert not seen["scope_modules"]
+
+
+def test_lint_override_scope_is_the_dropped_files_module_set_only(client, monkeypatch):
+    """P2-1 twin: with rtl/counter.v AND rtl/adder.v dropped, the linter is
+    told {counter, adder}; a module defined by a file that STAYS in the set is
+    not in the scope (its absence would be a real error, not a scoping one)."""
+    c, ws = client
+    _seed_nested(ws)
+    with open(os.path.join(ws, "rtl", "adder.v"), "w") as f:
+        f.write("module adder(input a, output b); assign b = a; endmodule\n")
+    with open(os.path.join(ws, "rtl", "top.v"), "w") as f:
+        f.write("module top(input clk); counter c(.clk(clk), .q()); adder a(.a(clk), .b()); endmodule\n")
+    seen = {}
+
+    def fake_linter(files, cwd, engine="auto", scope_modules=None):
+        seen["scope_modules"] = set(scope_modules or ())
+        return {"success": True, "engine": "iverilog", "stderr": "", "command": "", "diagnostics": [], "notes": []}
+
+    monkeypatch.setattr(actions_mod, "run_linter", fake_linter)
+    r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["top.v", "adder.v"]})
+    assert r.status_code == 200, r.text
+    assert seen["scope_modules"] == {"counter"}
+
+
+def test_lint_override_typo_module_still_fails_file_scoped(client, monkeypatch):
+    """The false-pass sequence from the review, end to end through the handler
+    with a fake ENGINE (the real run_linter filter runs): top.v instantiates
+    ``countr`` (typo) and drops rtl/counter.v → FAILED with the diagnostic kept;
+    the genuine ``counter`` case passes with a note naming the module."""
+    import src.tools.run_linter as rl
+
+    c, ws = client
+    _seed_nested(ws)
+    with open(os.path.join(ws, "rtl", "top.v"), "w") as f:
+        f.write("module top(input clk); countr c(.clk(clk), .q()); endmodule\n")
+    monkeypatch.setattr(rl.shutil, "which", lambda name: None if name == "verilator" else "/usr/bin/iverilog")
+    stderr = {"text": "rtl/top.v:1: error: Unknown module type: countr\n"}
+    monkeypatch.setattr(
+        rl, "_run",
+        lambda cmd, cwd, timeout: {"returncode": 1, "stdout": "", "stderr": stderr["text"], "command": " ".join(cmd)},
+    )
+
+    r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["top.v"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "failed"
+    assert any("countr" in e["message"] for e in body["errors"])
+    assert not any("File-scoped lint" in n for n in body["manifestWarnings"])
+
+    stderr["text"] = "rtl/top.v:1: error: Unknown module type: counter\n"
+    r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["top.v"]})
+    body = r.json()
+    assert body["status"] == "passed" and body["errors"] == []
+    assert any("File-scoped lint" in n and "counter" in n for n in body["manifestWarnings"])
+    assert any("rtl/counter.v" in n for n in body["manifestWarnings"])
 
 
 def test_lint_without_override_is_never_file_scoped(client, monkeypatch):
@@ -137,13 +196,13 @@ def test_lint_without_override_is_never_file_scoped(client, monkeypatch):
     _seed_nested(ws)
     seen = {}
 
-    def fake_linter(files, cwd, engine="auto", file_scoped=False):
-        seen["file_scoped"] = file_scoped
+    def fake_linter(files, cwd, engine="auto", scope_modules=None):
+        seen["scope_modules"] = scope_modules
         return {"success": True, "engine": "iverilog", "stderr": "", "command": "", "diagnostics": [], "notes": []}
 
     monkeypatch.setattr(actions_mod, "run_linter", fake_linter)
     assert c.post(f"/api/workspace/{SID}/lint").status_code == 200
-    assert seen["file_scoped"] is False
+    assert not seen["scope_modules"]
 
 
 def test_lint_override_unknown_file_is_400(client):
@@ -171,7 +230,7 @@ def test_lint_without_override_unchanged(client, monkeypatch):
 
     def fake_linter(files, cwd, engine="auto", **kw):
         seen["files"] = files
-        seen["file_scoped"] = kw.get("file_scoped")
+        seen["scope_modules"] = kw.get("scope_modules")
         return {"success": True, "engine": "iverilog", "stderr": "", "command": "", "diagnostics": []}
 
     monkeypatch.setattr(actions_mod, "run_linter", fake_linter)
