@@ -148,6 +148,14 @@ describe("editorFor", () => {
   it("array of non-strings → text (no chip editor for it)", () => {
     expect(editorFor("nums", { type: "array", items: { type: "integer" } })).toBe("text");
   });
+  it("dict and list[dict] → json textarea (W7/A24)", () => {
+    expect(editorFor("parameters", { type: "object" })).toBe("json");
+    expect(editorFor("ports", { type: "array", items: { type: "object" } })).toBe("json");
+    // Optional[dict] unwraps first.
+    expect(
+      editorFor("parameters", { anyOf: [{ type: "object" }, { type: "null" }], default: null })
+    ).toBe("json");
+  });
   it("plain string → text", () => {
     expect(editorFor("query", { type: "string" })).toBe("text");
   });
@@ -698,6 +706,27 @@ describe("buildFormModel", () => {
     expect(files.fillFromManifest).toBeUndefined();
     // The placeholder still tells the truth about what empty runs.
     expect(files.placeholder).toBe("manifest set (4 files) — type to override");
+  });
+
+  it("json params carry jsonKind and a STRING default (structured defaults pretty-print)", () => {
+    const entry: ToolCatalogEntry = {
+      ...METRICS_ENTRY,
+      name: "t_json",
+      argsSchema: {
+        type: "object",
+        properties: {
+          parameters: { anyOf: [{ type: "object" }, { type: "null" }], default: null },
+          ports: { type: "array", items: { type: "object" } },
+          preset: { type: "object", default: { WIDTH: 8 } },
+        },
+        required: ["ports"],
+      },
+    };
+    const byKey = Object.fromEntries(buildFormModel(entry, EMPTY_CTX).map((p) => [p.key, p]));
+    expect(byKey.parameters).toMatchObject({ editor: "json", jsonKind: "object", def: "" });
+    expect(byKey.ports).toMatchObject({ editor: "json", jsonKind: "array", def: "" });
+    // A structured schema default becomes editable JSON text.
+    expect(byKey.preset.def).toBe(JSON.stringify({ WIDTH: 8 }, null, 2));
   });
 
   it("HLS tools (catalog category): top_module is free text with an honest hint, dslx_file suggests *.x", () => {

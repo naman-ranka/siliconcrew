@@ -392,6 +392,25 @@ function ParamEditor({
           className="w-52"
         />
       );
+    case "json":
+      // W7/A24: dict / list[dict] params get a real JSON textarea (validated
+      // client-side by jsonParamErrors before anything is sent).
+      return (
+        <textarea
+          value={String(value ?? "")}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label={param.label}
+          rows={5}
+          spellCheck={false}
+          placeholder={
+            param.jsonKind === "array" ? '[{ "name": "clk", "dir": "input" }]' : '{ "WIDTH": 8 }'
+          }
+          className={cn(
+            "w-64 rounded-md border border-border bg-surface-1 p-2 font-mono text-[11px] leading-relaxed text-foreground",
+            "outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/60"
+          )}
+        />
+      );
     case "multi": {
       const arr = Array.isArray(value) ? (value as string[]) : [];
       // ONE selector everywhere (W2): chips + a suggesting combo to add

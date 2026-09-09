@@ -131,7 +131,20 @@ export function editorFor(key: string, prop: SchemaProperty): SurfaceParam["edit
   if (p.type === "boolean") return "bool";
   if (p.type === "integer" || p.type === "number") return "number";
   if (p.type === "array" && p.items?.type === "string") return "multi";
+  // W7/A24: dict (build_interactive_sim.parameters, write_spec.parameters)
+  // and list[dict] (write_spec.ports) get a validated JSON textarea — they
+  // were untypeable through the plain text input.
+  if (p.type === "object") return "json";
+  if (p.type === "array" && p.items?.type === "object") return "json";
   return "text";
+}
+
+/** The shape a json editor validates against (see SurfaceParam.jsonKind). */
+export function jsonKindFor(prop: SchemaProperty): "object" | "array" | undefined {
+  const p = unwrapOptional(prop).prop;
+  if (p.type === "object") return "object";
+  if (p.type === "array" && p.items?.type === "object") return "array";
+  return undefined;
 }
 
 /** Where the value comes from — drives the source badge next to the label.
@@ -388,6 +401,16 @@ export function buildFormModel(entry: ToolCatalogEntry, ctx: SurfaceCtx): Surfac
     // payload injection) WITHOUT pre-filling it with chips.
     const mSet = editor === "multi" ? manifestFileSet(key, ctx) : undefined;
     const valueKind = valueKindFor(key);
+    const jsonKind = editor === "json" ? jsonKindFor(prop) : undefined;
+    // json editors hold TEXT: a structured schema default renders as pretty
+    // JSON; empty/absent stays "" (omitted from the payload).
+    let def = defaultFor(key, raw ?? {}, ctx, required, category);
+    if (editor === "json" && typeof def !== "string") {
+      def =
+        def == null || (Array.isArray(def) && def.length === 0)
+          ? ""
+          : JSON.stringify(def, null, 2);
+    }
     const hlsHint = isHlsModuleKey(key, category) ? HLS_MODULE_HINT : undefined;
     return {
       key,
@@ -401,7 +424,8 @@ export function buildFormModel(entry: ToolCatalogEntry, ctx: SurfaceCtx): Surfac
         category
       ),
       ...(options ? { options } : {}),
-      def: defaultFor(key, raw ?? {}, ctx, required, category),
+      def,
+      ...(jsonKind ? { jsonKind } : {}),
       // Empty plural file field = the manifest set. Say so in the input, and
       // — when the tool REQUIRES the list — put the set in the payload so the
       // pane shows what is actually sent (invariant 4).

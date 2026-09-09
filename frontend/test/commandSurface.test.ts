@@ -31,6 +31,7 @@ import {
   CORE_TWIN_TOOLS,
   buildSurfaceCommands,
   buildSurfacePayload,
+  jsonParamErrors,
   prettifyToolName,
   runSurfaceCommand,
   surfaceDefaults,
@@ -548,6 +549,7 @@ const SIM_BUILD_ENTRY = entry({
     properties: {
       verilog_files: { type: "array", items: { type: "string" } },
       top_module: { type: "string" },
+      parameters: { anyOf: [{ type: "object" }, { type: "null" }], default: null },
     },
     required: ["verilog_files", "top_module"],
   },
@@ -613,6 +615,71 @@ describe("required plural file fields (owner refinement 2026-08-14)", () => {
       verilog_files: ["alu.v"],
       top_module: "alu",
     });
+  });
+});
+
+describe("json editor params (W7/A24)", () => {
+  it("buildSurfacePayload parses json text into a real dict; empty text is omitted", () => {
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    const p = cmd.params.find((x) => x.key === "parameters")!;
+    expect(p.editor).toBe("json");
+    expect(p.jsonKind).toBe("object");
+    const withParams = buildSurfacePayload(
+      cmd,
+      { top_module: "alu", parameters: '{ "WIDTH": 8 }' },
+      CTX
+    );
+    expect(withParams.arguments.parameters).toEqual({ WIDTH: 8 }); // dict, not text
+    const without = buildSurfacePayload(cmd, { top_module: "alu", parameters: "  " }, CTX);
+    expect(without.arguments).not.toHaveProperty("parameters");
+  });
+
+  it("jsonParamErrors: unparseable text and wrong shapes get field-level messages", () => {
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    expect(jsonParamErrors(cmd, { parameters: "{oops" })).toEqual([
+      { field: "parameters", message: "not valid JSON" },
+    ]);
+    expect(jsonParamErrors(cmd, { parameters: "[1, 2]" })).toEqual([
+      { field: "parameters", message: "must be a JSON object" },
+    ]);
+    expect(jsonParamErrors(cmd, { parameters: '{ "WIDTH": 8 }' })).toEqual([]);
+    expect(jsonParamErrors(cmd, { parameters: "" })).toEqual([]); // empty = omitted
+  });
+
+  it("an array-kind json param (write_spec.ports) requires a JSON array", () => {
+    const portsEntry = entry({
+      name: "write_spec",
+      category: "essential",
+      argsSchema: {
+        type: "object",
+        properties: {
+          module_name: { type: "string" },
+          ports: { type: "array", items: { type: "object" } },
+        },
+        required: ["module_name", "ports"],
+      },
+    });
+    const cmd = toolToSurfaceCommand(portsEntry, CTX);
+    const ports = cmd.params.find((x) => x.key === "ports")!;
+    expect(ports.editor).toBe("json");
+    expect(ports.jsonKind).toBe("array");
+    expect(jsonParamErrors(cmd, { ports: '{ "name": "clk" }' })).toEqual([
+      { field: "ports", message: "must be a JSON array" },
+    ]);
+    expect(
+      jsonParamErrors(cmd, { ports: '[{ "name": "clk", "dir": "input" }]' })
+    ).toEqual([]);
+  });
+
+  it("runSurfaceCommand blocks invalid JSON client-side — the backend is never called", async () => {
+    const cmd = toolToSurfaceCommand(SIM_BUILD_ENTRY, CTX);
+    const res = await runSurfaceCommand(cmd, {
+      top_module: "alu",
+      parameters: "{not json",
+    });
+    expect(res).toMatchObject({ ok: false });
+    expect(res.fieldErrors).toEqual([{ field: "parameters", message: "not valid JSON" }]);
+    expect(workbenchApi.invokeTool).not.toHaveBeenCalled();
   });
 });
 

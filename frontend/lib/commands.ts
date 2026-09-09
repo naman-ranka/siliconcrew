@@ -173,7 +173,11 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
       // Options resolve live from manifest.testbenches — free entry stays
       // allowed for modules the scan missed.
       {
-        key: "simTop", label: "Testbench", type: "combo", source: "manifest",
+        // Named for what it IS — a testbench MODULE (the Surface's subtitles
+        // show each module's defining file, so the ".v or not" question never
+        // comes up).
+        key: "simTop", label: "Testbench (module)", type: "combo", source: "manifest",
+        valueKind: "module",
         options: (c) => testbenchChoices(c.manifest),
         def: (c: CommandCtx) => c.manifest?.simTop ?? "",
         optional: true, // empty → backend falls back to the manifest default

@@ -41,8 +41,10 @@ export interface SurfaceParam {
   key: string;
   label: string;
   /** "combo" = text input with filtered suggestions (resolveOptions); free
-   *  entry always allowed — the "search ≻ suggest ≻ type anything" editor. */
-  editor: "enum" | "number" | "bool" | "text" | "multi" | "combo";
+   *  entry always allowed — the "search ≻ suggest ≻ type anything" editor.
+   *  "json" = a validated JSON textarea (W7/A24) for dict / list[dict]
+   *  params the plain editors can't type — parsed client-side before send. */
+  editor: "enum" | "number" | "bool" | "text" | "multi" | "combo" | "json";
   source: SurfaceParamSource;
   options?: readonly string[] | ((ctx: SurfaceCtx) => string[]);
   def: unknown | ((ctx: SurfaceCtx) => unknown);
@@ -62,6 +64,10 @@ export interface SurfaceParam {
   /** Module-valued vs file-valued — rendered as a tiny tag next to the source
    *  badge so the ".v here but not there" question answers itself. */
   valueKind?: "module" | "file";
+  /** json editors only: the shape the backend expects — "object" (a dict,
+   *  e.g. build_interactive_sim.parameters) or "array" (list[dict], e.g.
+   *  write_spec.ports). Drives client-side validation. */
+  jsonKind?: "object" | "array";
   /** Per-value subtitles for combo suggestions (module → its file;
    *  file → its manifest role). Display-only decoration. */
   subtitles?: (ctx: SurfaceCtx) => Record<string, string>;
@@ -279,6 +285,19 @@ export function buildSurfacePayload(
   cmd.params.forEach((p) => {
     if (p.when && !p.when(merged)) return;
     let v = merged[p.key];
+    if (p.editor === "json" && typeof v === "string") {
+      // W7/A24: the textarea holds TEXT; the backend needs the parsed value
+      // (`parameters` as dict, `ports` as list[dict]). Empty = omitted;
+      // unparseable text stays visible as-is (jsonParamErrors blocks the
+      // actual send with a field error, so this never reaches the wire).
+      const trimmed = v.trim();
+      if (!trimmed) return;
+      try {
+        v = JSON.parse(trimmed);
+      } catch {
+        /* keep the raw string for the live preview */
+      }
+    }
     // Owner refinement (2026-08-14): a REQUIRED plural file field left empty
     // means "the manifest set" — inject it here so the payload pane shows the
     // exact list that goes on the wire. Optional override params never take
@@ -297,6 +316,33 @@ export function buildSurfacePayload(
     args[p.key] = v;
   });
   return { tool: cmd.tool, arguments: args };
+}
+
+/** Client-side validation for json-editor fields (W7/A24): empty = omitted;
+ *  anything present must parse AND match the param's jsonKind. */
+export function jsonParamErrors(
+  cmd: SurfaceCommand,
+  vals: Record<string, unknown>
+): SurfaceFieldError[] {
+  const out: SurfaceFieldError[] = [];
+  for (const p of cmd.params) {
+    if (p.editor !== "json") continue;
+    const v = vals[p.key];
+    if (typeof v !== "string" || !v.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v.trim());
+    } catch {
+      out.push({ field: p.key, message: "not valid JSON" });
+      continue;
+    }
+    if (p.jsonKind === "object" && (parsed == null || typeof parsed !== "object" || Array.isArray(parsed))) {
+      out.push({ field: p.key, message: "must be a JSON object" });
+    } else if (p.jsonKind === "array" && !Array.isArray(parsed)) {
+      out.push({ field: p.key, message: "must be a JSON array" });
+    }
+  }
+  return out;
 }
 
 // --- execution ----------------------------------------------------------------
@@ -384,6 +430,14 @@ export async function runSurfaceCommand(
   // only ever render off an explicit dispatched:true result.
   if (!session) return { ok: false, result: "No active session" };
   const ctx = storeCtx();
+
+  // W7/A24: json-editor fields are validated CLIENT-SIDE before anything is
+  // sent — `parameters` must arrive as a dict, `ports` as a list[dict]; an
+  // unparseable field blocks the call with a field-level message.
+  const jsonErrs = jsonParamErrors(cmd, { ...surfaceDefaults(cmd, ctx), ...vals });
+  if (jsonErrs.length > 0) {
+    return { ok: false, result: "Invalid JSON in the highlighted field(s).", fieldErrors: jsonErrs };
+  }
 
   if (cmd.core) {
     // dev#51 (1): await the core engine so the Invoke spinner is truthful and

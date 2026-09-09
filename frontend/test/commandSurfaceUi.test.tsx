@@ -163,12 +163,72 @@ describe("CommandSurface — rail filter + keyboard (W6)", () => {
   it("a combo dropdown's consumed Esc no longer closes the Surface by accident either", () => {
     render(<CommandSurface />);
     fireEvent.click(railButton("Simulate")!);
-    const tb = screen.getByRole("combobox", { name: "Testbench" });
+    const tb = screen.getByRole("combobox", { name: "Testbench (module)" });
     fireEvent.focus(tb);
     expect(screen.getByRole("listbox")).toBeInTheDocument();
     fireEvent.keyDown(tb, { key: "Escape" });
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(useWorkbenchUiStore.getState().commandSurfaceOpen).toBe(true);
+  });
+});
+
+describe("CommandSurface — form clarity (W7)", () => {
+  it("sim's testbench field is labeled as a MODULE with a module tag and file subtitles (R70)", () => {
+    useStore.setState({
+      manifest: { ...MANIFEST, testbenches: [{ file: "tb.v", module: "tb" }] },
+    });
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Simulate")!);
+    const tb = screen.getByRole("combobox", { name: "Testbench (module)" });
+    fireEvent.focus(tb);
+    const row = screen.getByRole("option", { name: "tb" });
+    expect(row.textContent).toBe("tbtb.v"); // module + its defining file
+  });
+
+  it("dict / list[dict] catalog params render a JSON textarea; invalid JSON is blocked with a field error", async () => {
+    useStore.setState({
+      toolCatalog: {
+        status: "ready",
+        error: null,
+        tools: [
+          {
+            name: "write_spec",
+            description: "Writes a spec.",
+            category: "essential",
+            requiresSignIn: false,
+            async: false,
+            mutates: true,
+            argsSchema: {
+              type: "object",
+              properties: {
+                module_name: { type: "string" },
+                ports: { type: "array", items: { type: "object" } },
+                parameters: { anyOf: [{ type: "object" }, { type: "null" }], default: null },
+              },
+              required: ["module_name", "ports"],
+            },
+          },
+        ],
+      },
+    });
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Write Spec")!);
+    const ports = screen.getByRole("textbox", { name: "ports" });
+    expect(ports.tagName).toBe("TEXTAREA");
+    expect(ports).toHaveAttribute("placeholder", '[{ "name": "clk", "dir": "input" }]');
+    // Optional dict → advanced (collapsed); expand to see its object placeholder.
+    fireEvent.click(screen.getByRole("button", { name: /Advanced \(1\)/ }));
+    expect(screen.getByRole("textbox", { name: "parameters" })).toHaveAttribute(
+      "placeholder",
+      '{ "WIDTH": 8 }'
+    );
+    fireEvent.change(ports, { target: { value: "{not json" } });
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    await screen.findByText("not valid JSON");
+    expect(workbenchApi.invokeTool).not.toHaveBeenCalled();
+    // Valid text parses into the live payload as a real array.
+    fireEvent.change(ports, { target: { value: '[{ "name": "clk" }]' } });
+    expect(payloadText()).toContain('"name": "clk"');
   });
 });
 
