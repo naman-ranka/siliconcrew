@@ -199,6 +199,12 @@ async function closeSurface(page: Page) {
 
 async function selectRailCommand(page: Page, label: string) {
   const surface = surfaceOf(page);
+  // The rail filter is stateful for the life of the dialog (R67: the
+  // selection is never forced into the filtered set, but hidden rows cannot
+  // be clicked). Run 2 left "lint" in it from step 3 and waited 13 minutes
+  // for a Simulate row that was filtered away — clear it first.
+  const filter = page.getByTestId("command-surface-filter");
+  if ((await filter.inputValue().catch(() => "")) !== "") await filter.fill("");
   await surface.getByRole("button", { name: label, exact: true }).click();
   await expect(surface.getByRole("heading", { name: label, exact: true })).toBeVisible();
 }
@@ -278,6 +284,11 @@ test("surface port: nested design, overrides, file-scoped lint, sim, context men
   // bounded navigation timeout turns that wait into the tolerated no-op it
   // was written to be; explicit per-call timeouts elsewhere are unaffected.
   page.setDefaultNavigationTimeout(30_000);
+  // Likewise the ACTION timeout defaults to 0: a click on a row that never
+  // appears (run 2, a filtered-away rail entry) ate the entire test budget
+  // and turned every later step into cascade noise. Bound it so a wrong
+  // selector fails its own step in 30 s and the drive keeps reporting.
+  page.setDefaultTimeout(30_000);
 
   // ── 1. sign in + fresh session ──────────────────────────────────────────
   await step(page, "1 sign-in + new session", async () => {
