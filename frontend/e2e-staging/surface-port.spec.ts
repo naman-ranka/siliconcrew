@@ -270,6 +270,14 @@ test("surface port: nested design, overrides, file-scoped lint, sim, context men
 
   let sid = "";
 
+  // Playwright Test's default NAVIGATION timeout is 0 (unbounded). signIn's
+  // `waitForLoadState("networkidle").catch(...)` (helpers.ts) rides on that
+  // timeout, and AuthKit's password page never goes network-idle behind this
+  // sandbox proxy — the first run hung there for the full 15 minutes. A
+  // bounded navigation timeout turns that wait into the tolerated no-op it
+  // was written to be; explicit per-call timeouts elsewhere are unaffected.
+  page.setDefaultNavigationTimeout(30_000);
+
   // ── 1. sign in + fresh session ──────────────────────────────────────────
   await step(page, "1 sign-in + new session", async () => {
     await signIn(page);
