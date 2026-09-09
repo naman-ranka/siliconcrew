@@ -50,7 +50,11 @@ _IGNORED_DIRS = {
 # (relative to the workspace root) are never descended into.
 _MAX_SCAN_DEPTH = 6
 
-_RTL_EXTS = {".v", ".sv"}
+# The one definition of "a Verilog/SystemVerilog source" — every caller that
+# filters or resolves RTL by extension (the REST twins, the tool wrappers, the
+# file resolver) reads this tuple rather than retyping it.
+RTL_EXTS: tuple[str, ...] = (".v", ".sv")
+_RTL_EXTS = frozenset(RTL_EXTS)
 _INCLUDE_EXTS = {".vh", ".svh"}
 
 # One position-ordered alternation instead of two passes: precedence between
@@ -1099,3 +1103,24 @@ def files_for_stage(manifest: DesignManifest, stage: str) -> List[str]:
     else:
         roles = {"rtl", "tb", "include", "sdc"}
     return [f.path for f in manifest.files if f.role in roles]
+
+
+def override_drop_notes(
+    stage: str,
+    manifest_files: List[str],
+    override_files: List[str],
+) -> List[str]:
+    """One honest note per manifest-supplied file a user override leaves out.
+
+    The delta between :func:`files_for_stage`'s set and what actually ran.
+    Same delivery pattern as :func:`compile_set_collisions` (best-effort notes
+    in the reply, never a dispatch failure) — the override is legitimate; the
+    note just says out loud what it changed. Empty when the override covers
+    the whole manifest set.
+    """
+    override = set(override_files)
+    return [
+        f"Override omits manifest {stage} file '{rel}' — it is not part of this run."
+        for rel in manifest_files
+        if rel not in override
+    ]
