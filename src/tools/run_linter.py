@@ -49,10 +49,6 @@ from typing import Any, Collection, Dict, List, Optional
 
 ENGINES = ("auto", "iverilog", "verilator")
 
-# An extension no source file carries: given to verilator's +libext+ so module
-# auto-discovery finds nothing and the listed files are the whole compile set.
-_NO_LIBRARY_EXT = ".no-module-autodiscovery"
-
 # iverilog stderr: "file.v:12: warning: ..." / "file.v:12: syntax error"
 _IVERILOG_PAT = re.compile(
     r"^(?P<file>[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<sev>error|warning|syntax error)?:?\s*(?P<msg>.*)$"
@@ -243,19 +239,9 @@ def run_linter(
         include_args = [f"-I{d}" for d in include_dirs]
         # --timing: accept event/delay constructs (verilator 5+), so linting a
         # file set that includes a testbench doesn't die on NEEDTIMINGOPT.
-        #
-        # The file set IS the compile set. verilator treats every -I directory
-        # as a module library too and, by default (+libext+.v+.sv), pulls an
-        # unlisted `alu.v` in from beside a listed `top.v` — silently widening
-        # the run past the files it was given, so "lint this file" on
-        # verilator was never file-scoped and a "not part of this run" note
-        # could be false. Pointing the library extension at one no file has
-        # keeps `include` resolution (which -I is here for) and makes an
-        # unlisted module the same honest "Cannot find file containing module"
-        # diagnostic iverilog gives — one meaning of "files" on both engines.
         cmd = [
             "verilator", "--lint-only", "--timing", "-Wall", "-Wno-fatal",
-            "-Wno-EOFNEWLINE", "-Wno-DECLFILENAME", f"+libext+{_NO_LIBRARY_EXT}",
+            "-Wno-EOFNEWLINE", "-Wno-DECLFILENAME",
         ] + include_args + list(verilog_files)
         raw = _run(cmd, cwd, timeout)
         diagnostics = parse_verilator_diagnostics(raw["stderr"] + "\n" + raw["stdout"], cwd)
