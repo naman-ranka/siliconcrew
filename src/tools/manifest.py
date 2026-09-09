@@ -1105,6 +1105,13 @@ def files_for_stage(manifest: DesignManifest, stage: str) -> List[str]:
     return [f.path for f in manifest.files if f.role in roles]
 
 
+def dropped_manifest_files(manifest_files: List[str], override_files: List[str]) -> List[str]:
+    """Manifest-supplied files a user override leaves out, in manifest order —
+    the delta between :func:`files_for_stage`'s set and what actually ran."""
+    override = set(override_files)
+    return [rel for rel in manifest_files if rel not in override]
+
+
 def override_drop_notes(
     stage: str,
     manifest_files: List[str],
@@ -1112,15 +1119,45 @@ def override_drop_notes(
 ) -> List[str]:
     """One honest note per manifest-supplied file a user override leaves out.
 
-    The delta between :func:`files_for_stage`'s set and what actually ran.
     Same delivery pattern as :func:`compile_set_collisions` (best-effort notes
     in the reply, never a dispatch failure) — the override is legitimate; the
     note just says out loud what it changed. Empty when the override covers
     the whole manifest set.
     """
-    override = set(override_files)
     return [
         f"Override omits manifest {stage} file '{rel}' — it is not part of this run."
-        for rel in manifest_files
-        if rel not in override
+        for rel in dropped_manifest_files(manifest_files, override_files)
     ]
+
+
+def synthesis_sources(files: List[str]) -> "tuple[List[str], List[str]]":
+    """(the ``.v``/``.sv`` sources in ``files``, one note per file the filter dropped).
+
+    Synthesis compiles only RTL sources; constraints flow via constraintsMode,
+    not the file list. The manifest path applies this filter silently (its
+    ``sdc`` role never was a source), but an EXPLICIT file must never vanish
+    without a word — the REST twin and the agent/MCP wrapper both call this so
+    every actor narrates the same drop the same way (invariant 2).
+    """
+    src = [f for f in files if f.lower().endswith(RTL_EXTS)]
+    notes = [
+        f"Override file '{f}' was dropped — synthesis compiles only .v/.sv "
+        "sources (constraints flow via constraintsMode, not this list)."
+        for f in files if f not in src
+    ]
+    return src, notes
+
+
+def modules_defined_by(workspace: str, manifest: DesignManifest, paths: List[str]) -> set:
+    """Module names the given manifest design files DECLARE, from the ONE
+    cached module scan every reconcile already pays for (:func:`_scan_design_files`).
+
+    This is what makes a file-scoped lint a statement of fact rather than a
+    policy: an engine's "Unknown module type: X" is only a scoping artifact
+    when X is defined by a file the caller deliberately left out. Only rtl/tb
+    files are scanned (the manifest's own rule), so a dropped ``include`` file
+    contributes nothing — an unresolved name it happened to define stays an
+    error, which is the strict direction.
+    """
+    scans = _scan_design_files(workspace, manifest.files)
+    return {m for p in paths for m in (scans[p].modules if p in scans else ())}

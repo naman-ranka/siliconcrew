@@ -619,38 +619,49 @@ def build_actions_router(
             manifest = manifest_mod.read_manifest(workspace, session_id)
             manifest_files = manifest_mod.files_for_stage(manifest, "lint")
             notes: List[str] = []
+            dropped: List[str] = []
+            scope_modules: set = set()
             if override:
                 try:
                     rel_files = resolve_workspace_files(workspace, override, exts=manifest_mod.RTL_EXTS)
                 except FileResolutionError as exc:
                     return {"badFiles": str(exc)}
+                dropped = manifest_mod.dropped_manifest_files(manifest_files, rel_files)
                 notes = manifest_mod.override_drop_notes("lint", manifest_files, rel_files)
+                # An override that leaves manifest lint files out (exactly the
+                # files the notes just named) is a FILE-SCOPED lint. The
+                # manifest already knows which modules each design file
+                # declares, so the linter is told precisely which unresolved
+                # names are the user's own choice: "Unknown module type:
+                # counter" is a scope note only when a DROPPED file defines
+                # `counter`; a typo'd `countr` or a module no file defines
+                # stays a FAILED verdict (invariant 4 — a note states a fact,
+                # never a policy of trust). Derived, not declared: a client
+                # cannot claim file-scoped for a whole-design lint, and an
+                # override that keeps the whole manifest set — or runs against
+                # an empty manifest set — is strict by construction.
+                scope_modules = manifest_mod.modules_defined_by(workspace, manifest, dropped)
             else:
                 rel_files = manifest_files
             if not rel_files:
                 return {"empty": True}
-            call_id = _ui_log_call(workspace, session_id, "linter_tool", {"verilog_files": rel_files, "engine": engine})
+            # Invariant 3 — one event log, rendered everywhere: a file-scoped
+            # lint's verdict means something different from a whole-design
+            # lint's, so the durable event says so (scope in the call, notes
+            # in the result), not just the transient toast.
+            call_id = _ui_log_call(workspace, session_id, "linter_tool", {
+                "verilog_files": rel_files, "engine": engine,
+                "fileScoped": bool(dropped), "scopeModules": sorted(scope_modules),
+            })
             abs_files = [os.path.join(workspace, f) for f in rel_files]
-            # An override that leaves manifest lint files out (exactly what
-            # override_drop_notes just listed) is a FILE-SCOPED lint: modules
-            # the dropped files would have supplied are missing by the user's
-            # own choice, so "Unknown module type" is a scope note, not a
-            # FAILED verdict (invariant 4 — no false verdicts). An override
-            # that keeps the whole manifest set stays strict, and so does the
-            # manifest path itself. Derived, not declared: a client cannot
-            # claim file-scoped for a whole-design lint. Caveat: this relies on
-            # the manifest knowing the design's rtl set; an override against an
-            # EMPTY manifest lint set is strict lint by construction (a false
-            # "fail" on unresolved modules is possible only when the manifest
-            # tracks nothing — never a false "pass").
-            result = run_linter(abs_files, cwd=workspace, engine=engine, file_scoped=bool(notes))
+            result = run_linter(abs_files, cwd=workspace, engine=engine, scope_modules=scope_modules)
             notes = notes + list(result.get("notes") or [])
             warnings, errors, by_file = _split_lint_diagnostics(result.get("diagnostics") or [])
             passed = bool(result.get("success"))
             _ui_log_result(
                 workspace, session_id, "linter_tool", call_id,
                 {"status": "passed" if passed else "failed", "engine": result.get("engine"),
-                 "warnings": len(warnings), "errors": len(errors)},
+                 "warnings": len(warnings), "errors": len(errors), "notes": notes},
                 ok=passed,
             )
             return {
@@ -761,14 +772,9 @@ def build_actions_router(
                 except FileResolutionError as exc:
                     return {"error": "bad_files", "message": str(exc)}
                 # Same .v/.sv filter the manifest path applies — but an
-                # explicitly overridden file must never vanish silently: name
-                # each one the filter drops. Constraints flow via constraintsMode.
-                src_files = [f for f in resolved_files if f.lower().endswith(manifest_mod.RTL_EXTS)]
-                notes.extend(
-                    f"Override file '{f}' was dropped — synthesis compiles only .v/.sv "
-                    "sources (constraints flow via constraintsMode, not this list)."
-                    for f in resolved_files if f not in src_files
-                )
+                # explicitly overridden file must never vanish silently: the
+                # shared helper names each one it drops (the wrapper calls it too).
+                src_files, notes = manifest_mod.synthesis_sources(resolved_files)
                 notes.extend(manifest_mod.override_drop_notes("synthesize", manifest_src, src_files))
                 if not src_files:
                     return {"error": "no_override_sources"}

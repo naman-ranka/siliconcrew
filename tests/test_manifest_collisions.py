@@ -243,7 +243,10 @@ def test_synthesis_dispatch_reply_carries_the_collision(tmp_path, monkeypatch):
     assert payload["run_id"] == "synth_0001"
 
     clean = json.loads(wrappers.start_synthesis.func(verilog_files=["gcn.v"], top_module="gcn"))
-    assert "manifestWarnings" not in clean
+    # One copy in the set → no COLLISION. (The reply may still carry the
+    # override drop note for given/gcn_reference.v — the same note /synthesize
+    # emits; P3-2 parity — but never the collision line.)
+    assert not any("collide" in w for w in clean.get("manifestWarnings", []))
 
 
 DISTINCT_GUARD_A = """

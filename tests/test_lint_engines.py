@@ -114,9 +114,10 @@ def test_run_linter_iverilog_success_keeps_legacy_keys(monkeypatch, tmp_path):
 # "Lint this file" on a hierarchical design compiles ONE file: every module it
 # instantiates is missing, which both engines report as an error. That is a
 # true statement about the compile and a FALSE verdict about the file. With
-# file_scoped=True those specific errors become one honest note; everything
-# else still fails. No binaries here — this is the command-construction /
-# diagnostic-filter layer.
+# scope_modules = {modules the dropped manifest files define} exactly those
+# errors become one honest note; everything else — including an unresolved
+# module NO dropped file defines — still fails. No binaries here — this is the
+# command-construction / diagnostic-filter layer.
 
 IVERILOG_MISSING_MODULE = """tb.v:5: error: Unknown module type: alu
 2 error(s) during elaboration.
@@ -153,7 +154,7 @@ def test_split_unresolved_module_diagnostics_names_each_engine_signature():
 
 def test_file_scoped_lint_of_a_file_missing_its_submodules_passes_with_a_note(monkeypatch, tmp_path):
     _iverilog(monkeypatch, IVERILOG_MISSING_MODULE)
-    result = rl.run_linter(["tb.v"], cwd=str(tmp_path), engine="iverilog", file_scoped=True)
+    result = rl.run_linter(["tb.v"], cwd=str(tmp_path), engine="iverilog", scope_modules={"alu"})
     assert result["success"] is True  # the FILE is fine; its deps were not compiled
     assert not [d for d in result["diagnostics"] if d["severity"] == "error"]
     assert len(result["notes"]) == 1
@@ -162,7 +163,7 @@ def test_file_scoped_lint_of_a_file_missing_its_submodules_passes_with_a_note(mo
 
 def test_file_scoped_lint_still_fails_on_a_real_syntax_error(monkeypatch, tmp_path):
     _iverilog(monkeypatch, IVERILOG_MISSING_PLUS_SYNTAX)
-    result = rl.run_linter(["tb.v"], cwd=str(tmp_path), engine="iverilog", file_scoped=True)
+    result = rl.run_linter(["tb.v"], cwd=str(tmp_path), engine="iverilog", scope_modules={"alu"})
     assert result["success"] is False
     messages = [d["message"] for d in result["diagnostics"]]
     assert any("malformed statement" in m for m in messages)
@@ -176,7 +177,7 @@ def test_file_scoped_lint_of_a_clean_verilator_run_adds_no_note(monkeypatch, tmp
         rl, "_run",
         lambda cmd, cwd, timeout: {"returncode": 0, "stdout": "", "stderr": "", "command": " ".join(cmd)},
     )
-    result = rl.run_linter(["a.v"], cwd=str(tmp_path), engine="verilator", file_scoped=True)
+    result = rl.run_linter(["a.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
     assert result["success"] is True and result["notes"] == []
 
 
@@ -186,7 +187,7 @@ def test_file_scoped_verilator_missing_module_is_a_note_too(monkeypatch, tmp_pat
         rl, "_run",
         lambda cmd, cwd, timeout: {"returncode": 1, "stdout": "", "stderr": VERILATOR_MISSING_MODULE, "command": " ".join(cmd)},
     )
-    result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="verilator", file_scoped=True)
+    result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"missing_mod"})
     assert result["success"] is True
     assert "missing_mod" in result["notes"][0]
 
@@ -199,3 +200,56 @@ def test_whole_design_lint_keeps_unresolved_module_errors(monkeypatch, tmp_path)
     assert result["success"] is False
     assert any("Unknown module type" in d["message"] for d in result["diagnostics"])
     assert result["notes"] == []
+
+
+# --- adversarial-review P2-1: a note may only state what the manifest knows ---
+
+def test_file_scoped_lint_keeps_a_module_no_dropped_file_defines(monkeypatch, tmp_path):
+    """``countr`` (typo) is unresolved in EVERY file set; the dropped file
+    defines ``counter``. Pre-fix every unresolved name became a note and the
+    file PASSED — a false pass by construction."""
+    _iverilog(monkeypatch, "top.v:3: error: Unknown module type: countr\n")
+    result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="iverilog", scope_modules={"counter"})
+    assert result["success"] is False
+    assert any("Unknown module type: countr" in d["message"] for d in result["diagnostics"])
+    assert result["notes"] == []
+
+
+def test_file_scoped_lint_notes_only_the_dropped_modules_and_fails_on_the_rest(monkeypatch, tmp_path):
+    stderr = ("top.v:3: error: Unknown module type: counter\n"
+              "top.v:4: error: Unknown module type: countr\n")
+    _iverilog(monkeypatch, stderr)
+    result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="iverilog", scope_modules={"counter"})
+    assert result["success"] is False
+    messages = [d["message"] for d in result["diagnostics"]]
+    assert any("countr" in m for m in messages)
+    assert all("Unknown module type: counter" not in m for m in messages)
+    assert len(result["notes"]) == 1 and "counter" in result["notes"][0] and "countr" not in result["notes"][0]
+
+
+def test_file_scoped_verilator_keeps_a_module_no_dropped_file_defines(monkeypatch, tmp_path):
+    monkeypatch.setattr(rl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        rl, "_run",
+        lambda cmd, cwd, timeout: {"returncode": 1, "stdout": "", "stderr": VERILATOR_MISSING_MODULE, "command": " ".join(cmd)},
+    )
+    result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
+    assert result["success"] is False and result["notes"] == []
+
+
+def test_empty_scope_is_strict_lint(monkeypatch, tmp_path):
+    """An override that drops nothing yields an empty module set — identical
+    to the whole-design default."""
+    _iverilog(monkeypatch, IVERILOG_MISSING_MODULE)
+    for scope in (None, set(), frozenset()):
+        result = rl.run_linter(["tb.v"], cwd=str(tmp_path), engine="iverilog", scope_modules=scope)
+        assert result["success"] is False and result["notes"] == []
+
+
+def test_split_unresolved_module_diagnostics_honors_scope():
+    diags = rl.parse_iverilog_diagnostics(
+        "top.v:3: error: Unknown module type: counter\ntop.v:4: error: Unknown module type: countr\n"
+    )
+    kept, missing = rl.split_unresolved_module_diagnostics(diags, {"counter"})
+    assert missing == ["counter"]
+    assert [d["message"] for d in kept] == ["Unknown module type: countr"]

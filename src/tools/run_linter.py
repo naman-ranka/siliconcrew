@@ -23,25 +23,29 @@ added):
       "stdout": str, "stderr": str, "command": str,   # legacy
       "engine": "iverilog"|"verilator",               # what actually ran
       "diagnostics": [ {file, line, severity, message, code|None} ],
-      "notes": [str],             # honest scope notes (see file_scoped below)
+      "notes": [str],             # honest scope notes (see scope_modules below)
     }
 
-``file_scoped=True`` says out loud what the caller already knows: the file set
+``scope_modules`` says out loud what the caller already knows: the file set
 being linted deliberately leaves out design files the manifest would have
-supplied (the explorer's "lint THIS file" gesture). Both engines report a
-module that is instantiated but absent from the file set as an ERROR
-("Unknown module type" / "Cannot find file containing module") — a true
-statement about the compile, but a FALSE verdict about the file the user
-asked about. In that mode those specific diagnostics are removed and replaced
-by one note naming the modules that were not elaborated. Nothing else is
-softened: a syntax error in the linted file still fails, and any other error
-diagnostic still fails.
+supplied (the explorer's "lint THIS file" gesture), and THESE are the module
+names those left-out files define (:func:`manifest.modules_defined_by`). Both
+engines report a module that is instantiated but absent from the file set as
+an ERROR ("Unknown module type" / "Cannot find file containing module") — a
+true statement about the compile, but a FALSE verdict about the file the user
+asked about when the module lives in a file they chose not to lint. Exactly
+those diagnostics are removed and replaced by one note naming the modules
+that were not elaborated. Nothing else is softened: a syntax error in the
+linted file still fails, any other error diagnostic still fails, and an
+unresolved module NO left-out file defines (a typo'd instantiation, a module
+missing from the whole design) stays a failure — a note may only ever state
+a fact the manifest knows, never a policy of trust.
 """
 import os
 import re
 import shutil
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Collection, Dict, List, Optional
 
 ENGINES = ("auto", "iverilog", "verilator")
 
@@ -120,11 +124,17 @@ _UNRESOLVED_MODULE_PATS = (
 )
 
 
-def split_unresolved_module_diagnostics(diagnostics: List[Dict[str, Any]]):
+def split_unresolved_module_diagnostics(
+    diagnostics: List[Dict[str, Any]],
+    scope_modules: Optional[Collection[str]] = None,
+):
     """Split ``diagnostics`` into (kept, missing_module_names).
 
     Only ERROR diagnostics matching the unresolved-module signatures move to
-    the second list; warnings and every other error stay in ``kept``.
+    the second list, and — when ``scope_modules`` is given — only those naming
+    a module in that set. Warnings, every other error, and an unresolved
+    module outside the set stay in ``kept``. ``None`` means "any name" (the
+    parser-level split, no scope knowledge).
     """
     kept: List[Dict[str, Any]] = []
     missing: List[str] = []
@@ -137,7 +147,7 @@ def split_unresolved_module_diagnostics(diagnostics: List[Dict[str, Any]]):
                 if m:
                     name = m.group("mod").strip("'\"")
                     break
-        if name is None:
+        if name is None or (scope_modules is not None and name not in scope_modules):
             kept.append(d)
         elif name not in missing:
             missing.append(name)
@@ -183,14 +193,22 @@ def _run(cmd: List[str], cwd: str, timeout: int) -> Dict[str, Any]:
             proc.kill()
 
 
-def run_linter(verilog_files, cwd=None, timeout=30, engine="auto", file_scoped=False):
+def run_linter(
+    verilog_files,
+    cwd=None,
+    timeout=30,
+    engine="auto",
+    scope_modules: Optional[Collection[str]] = None,
+):
     """Lint ``verilog_files`` with the chosen engine.
 
-    ``file_scoped=True``: the caller knows this file set deliberately omits
-    design files (see the module docstring) — unresolved-module errors are
-    reported as a note instead of a failure. Off by default, so the agent /
-    MCP path (which chooses its own file set and is told to include the
-    dependencies) keeps today's behavior exactly.
+    ``scope_modules``: the module names defined by design files the caller
+    deliberately left out of this file set (see the module docstring). An
+    unresolved-module error naming one of them is reported as a note instead
+    of a failure; every other unresolved module remains an error. ``None`` or
+    empty = strict lint, the default — so the agent / MCP path (which chooses
+    its own file set and is told to include the dependencies) keeps today's
+    behavior exactly.
 
     Returns the structured contract documented in the module docstring. The
     legacy keys (success/stdout/stderr/command) are preserved so existing
@@ -239,8 +257,8 @@ def run_linter(verilog_files, cwd=None, timeout=30, engine="auto", file_scoped=F
         diagnostics = parse_iverilog_diagnostics(raw["stderr"], cwd)
 
     notes: List[str] = []
-    if file_scoped:
-        diagnostics, missing = split_unresolved_module_diagnostics(diagnostics)
+    if scope_modules:
+        diagnostics, missing = split_unresolved_module_diagnostics(diagnostics, frozenset(scope_modules))
         if missing:
             notes.append(
                 "File-scoped lint: "
