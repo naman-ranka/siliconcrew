@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import * as React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 
-import { ComboInput } from "@/components/workbench/ComboInput";
+import { ComboInput, MultiComboInput } from "@/components/workbench/ComboInput";
 
 // Controlled harness — mirrors how CommandModal/CommandSurface use it.
 function Harness({
@@ -91,9 +91,307 @@ describe("ComboInput", () => {
     expect(input()).toHaveValue("cpu");
   });
 
+  it("blur closes the dropdown and, without commitOnBlur, commits nothing", () => {
+    // The single combo's typed text IS the value (live via onChange), so there
+    // is no draft to rescue — blur must stay a pure close.
+    const commit = vi.fn();
+    render(
+      <ComboInput
+        value="cpu"
+        onChange={() => {}}
+        onCommit={commit}
+        suggestions={["cpu_tb"]}
+        ariaLabel="sim_top"
+      />
+    );
+    fireEvent.focus(input());
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    fireEvent.blur(input());
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(commit).not.toHaveBeenCalled();
+    expect(input()).toHaveValue("cpu");
+  });
+
   it("renders no dropdown when nothing matches", () => {
     render(<Harness suggestions={["cpu_tb"]} />);
     fireEvent.change(input(), { target: { value: "zzz" } });
     expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  // ---- W2/A10: richer suggestion rows (value + subtitle) ---------------------
+
+  it("renders subtitles while the accessible name stays the value alone", () => {
+    render(
+      <ComboInput
+        value=""
+        onChange={() => {}}
+        ariaLabel="sim_top"
+        suggestions={[
+          { value: "cpu_tb", subtitle: "tb/cpu_tb.v" },
+          { value: "alu_tb" }, // no subtitle — value only
+        ]}
+      />
+    );
+    fireEvent.focus(input());
+    // Name-based queries survive the subtitle (aria-label = value).
+    const row = screen.getByRole("option", { name: "cpu_tb" });
+    expect(row.textContent).toBe("cpu_tbtb/cpu_tb.v"); // value + trailing subtitle
+    expect(screen.getByRole("option", { name: "alu_tb" }).textContent).toBe("alu_tb");
+  });
+
+  // ---- owner refinement (2026-08-14): two-tier suggestions -------------------
+  // The dropdown shows what this field MEANS (the suggested tier) on focus;
+  // typing also reaches the rest of the workspace index, under a divider.
+
+  const TwoTier = ({ initial = "" }: { initial?: string }) => {
+    const [v, setV] = React.useState(initial);
+    return (
+      <ComboInput
+        value={v}
+        onChange={setV}
+        ariaLabel="sim_top"
+        suggestions={["alu.v", "top.v"]}
+        moreSuggestions={["alu.v", "old/legacy.v", "docs/notes.md"]}
+      />
+    );
+  };
+
+  it("focus with an empty query shows the SUGGESTED tier only — no index dump", () => {
+    render(<TwoTier />);
+    fireEvent.focus(input());
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([
+      "alu.v",
+      "top.v",
+    ]);
+    expect(screen.queryByTestId("combo-tier-divider")).toBeNull();
+  });
+
+  it("typing surfaces non-suggested workspace files under the 'other files' divider", () => {
+    render(<TwoTier />);
+    fireEvent.change(input(), { target: { value: "old" } });
+    // Suggested tier first (nothing matches "old" here), then the wider index.
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([
+      "old/legacy.v",
+    ]);
+    expect(screen.getByTestId("combo-tier-divider")).toHaveTextContent("other files");
+    fireEvent.click(screen.getByRole("option", { name: "old/legacy.v" }));
+    expect(input()).toHaveValue("old/legacy.v"); // free-index values are selectable
+  });
+
+  it("the suggested tier leads and never repeats in the second tier", () => {
+    render(<TwoTier />);
+    fireEvent.change(input(), { target: { value: ".v" } });
+    // alu.v is suggested — it appears ONCE, above the divider, and top.v with it.
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([
+      "alu.v",
+      "top.v",
+      "old/legacy.v",
+    ]);
+    expect(screen.getByTestId("combo-tier-divider")).toBeInTheDocument();
+  });
+
+  it("no second-tier match → no divider (the tier is never an empty header)", () => {
+    render(<TwoTier />);
+    fireEvent.change(input(), { target: { value: "top" } });
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([
+      "top.v",
+    ]);
+    expect(screen.queryByTestId("combo-tier-divider")).toBeNull();
+  });
+
+  it("↑/↓ walk both tiers as one list", () => {
+    render(<TwoTier />);
+    fireEvent.change(input(), { target: { value: ".v" } });
+    fireEvent.keyDown(input(), { key: "ArrowDown" }); // alu.v (suggested)
+    fireEvent.keyDown(input(), { key: "ArrowDown" }); // top.v (suggested)
+    fireEvent.keyDown(input(), { key: "ArrowDown" }); // old/legacy.v (other files)
+    expect(screen.getByRole("option", { name: "old/legacy.v" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+    fireEvent.keyDown(input(), { key: "Enter" });
+    expect(input()).toHaveValue("old/legacy.v");
+  });
+
+  it("selecting a rich suggestion yields the VALUE, never the subtitle", () => {
+    const spy = vi.fn();
+    render(
+      <ComboInput
+        value=""
+        onChange={spy}
+        ariaLabel="rich"
+        suggestions={[{ value: "cpu_tb", subtitle: "tb/cpu_tb.v" }]}
+      />
+    );
+    fireEvent.focus(screen.getByRole("combobox", { name: "rich" }));
+    fireEvent.click(screen.getByRole("option", { name: "cpu_tb" }));
+    expect(spy).toHaveBeenLastCalledWith("cpu_tb");
+  });
+});
+
+// ---- MultiComboInput (the W2 multi-combo: chips + suggesting input) -----------
+
+function MultiHarness({
+  suggestions,
+  moreSuggestions,
+  initial = [],
+  onChangeSpy,
+}: {
+  suggestions: (string | { value: string; subtitle?: string })[];
+  moreSuggestions?: (string | { value: string; subtitle?: string })[];
+  initial?: string[];
+  onChangeSpy?: (v: string[]) => void;
+}) {
+  const [values, setValues] = React.useState<string[]>(initial);
+  return (
+    <MultiComboInput
+      values={values}
+      onChange={(v) => {
+        setValues(v);
+        onChangeSpy?.(v);
+      }}
+      suggestions={suggestions}
+      moreSuggestions={moreSuggestions}
+      ariaLabel="Add files"
+    />
+  );
+}
+
+const multiInput = () => screen.getByRole("combobox", { name: "Add files" });
+
+describe("MultiComboInput", () => {
+  it("picking a suggestion adds a chip and clears the draft", () => {
+    const spy = vi.fn();
+    render(<MultiHarness suggestions={["alu.v", "tb.v"]} onChangeSpy={spy} />);
+    fireEvent.focus(multiInput());
+    fireEvent.click(screen.getByRole("option", { name: "alu.v" }));
+    expect(spy).toHaveBeenLastCalledWith(["alu.v"]);
+    expect(multiInput()).toHaveValue("");
+    expect(screen.getByLabelText("Remove alu.v")).toBeInTheDocument();
+  });
+
+  it("free entry: typed text + Enter becomes a chip (suggestions can miss files)", () => {
+    const spy = vi.fn();
+    render(<MultiHarness suggestions={["alu.v"]} onChangeSpy={spy} />);
+    fireEvent.change(multiInput(), { target: { value: "rtl/custom.v" } });
+    fireEvent.keyDown(multiInput(), { key: "Enter" });
+    expect(spy).toHaveBeenLastCalledWith(["rtl/custom.v"]);
+    expect(multiInput()).toHaveValue("");
+  });
+
+  it("already-chosen values disappear from the dropdown; chips are removable", () => {
+    render(<MultiHarness suggestions={["alu.v", "tb.v"]} initial={["alu.v"]} />);
+    fireEvent.focus(multiInput());
+    expect(screen.queryByRole("option", { name: "alu.v" })).toBeNull();
+    expect(screen.getByRole("option", { name: "tb.v" })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Remove alu.v"));
+    expect(screen.queryByLabelText("Remove alu.v")).toBeNull();
+  });
+
+  it("two tiers ride through the multi-combo, and chips are hidden from BOTH", () => {
+    render(
+      <MultiHarness
+        suggestions={["alu.v", "top.v"]}
+        moreSuggestions={["old/legacy.v", "docs/notes.md"]}
+        initial={["old/legacy.v"]}
+      />
+    );
+    // Focus: suggested tier only — the manifest set, not the whole workspace.
+    fireEvent.focus(multiInput());
+    expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([
+      "alu.v",
+      "top.v",
+    ]);
+    // Typing reaches the index — minus what is already a chip.
+    fireEvent.change(multiInput(), { target: { value: "o" } });
+    const labels = screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"));
+    expect(labels).toContain("docs/notes.md");
+    expect(labels).not.toContain("old/legacy.v"); // already chosen
+  });
+
+  // ---- PR #90 review: a typed-but-unentered draft must not vanish -----------
+  // The draft lives in MultiComboInput's local state, so a user who types an
+  // override and clicks straight through to "Dispatch job" (never pressing
+  // Enter) used to lose it — the paid run silently used the manifest default.
+
+  it("blurring with typed text commits it as a chip (no Enter required)", () => {
+    const spy = vi.fn();
+    render(
+      <>
+        <MultiHarness suggestions={["alu.v"]} onChangeSpy={spy} />
+        <button type="button">Dispatch job</button>
+      </>
+    );
+    fireEvent.change(multiInput(), { target: { value: "rtl/alu_v2.v" } });
+    // Focus genuinely leaves for another control — nothing has been committed yet.
+    expect(spy).not.toHaveBeenCalled();
+    fireEvent.blur(multiInput());
+    expect(spy).toHaveBeenLastCalledWith(["rtl/alu_v2.v"]);
+    expect(screen.getByLabelText("Remove rtl/alu_v2.v")).toBeInTheDocument();
+    expect(multiInput()).toHaveValue(""); // draft consumed, not left behind
+  });
+
+  it("a blank/whitespace draft blurs away without inventing a chip", () => {
+    const spy = vi.fn();
+    render(<MultiHarness suggestions={["alu.v"]} onChangeSpy={spy} />);
+    fireEvent.change(multiInput(), { target: { value: "   " } });
+    fireEvent.blur(multiInput());
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("picking a suggestion adds ONLY it — the row's mousedown is cancelled so the input never blurs", () => {
+    const spy = vi.fn();
+    render(<MultiHarness suggestions={["alu.v", "tb.v"]} onChangeSpy={spy} />);
+    fireEvent.change(multiInput(), { target: { value: "al" } }); // half-typed query
+    const option = screen.getByRole("option", { name: "alu.v" });
+    // fireEvent returns false when the event was defaultPrevented. The dropdown
+    // cancels mousedown, which cancels the browser's focus shift — so no blur
+    // fires before the click and the draft "al" never becomes a chip.
+    expect(fireEvent.mouseDown(option)).toBe(false);
+    fireEvent.click(option);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenLastCalledWith(["alu.v"]);
+    expect(screen.queryByLabelText("Remove al")).toBeNull(); // no draft chip
+    expect(multiInput()).toHaveValue(""); // draft cleared
+    // A later real blur (now empty) adds nothing.
+    fireEvent.blur(multiInput());
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("duplicates and empty drafts are ignored", () => {
+    const spy = vi.fn();
+    render(<MultiHarness suggestions={[]} initial={["alu.v"]} onChangeSpy={spy} />);
+    fireEvent.change(multiInput(), { target: { value: "alu.v" } });
+    fireEvent.keyDown(multiInput(), { key: "Enter" });
+    expect(spy).not.toHaveBeenCalled(); // duplicate — no change
+    fireEvent.change(multiInput(), { target: { value: "   " } });
+    fireEvent.keyDown(multiInput(), { key: "Enter" });
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("MultiComboInput manifest placeholder honesty", () => {
+  it("drops the manifest-set placeholder once chips exist (chips are what's sent)", () => {
+    function Harness() {
+      const [values, setValues] = React.useState<string[]>([]);
+      return (
+        <MultiComboInput
+          values={values}
+          onChange={setValues}
+          suggestions={["alu.v", "tb.v"]}
+          placeholder="manifest set (2 files) — type to override"
+          ariaLabel="Add files"
+        />
+      );
+    }
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "Add files" });
+    expect(input).toHaveAttribute(
+      "placeholder",
+      "manifest set (2 files) — type to override"
+    );
+    fireEvent.focus(input);
+    fireEvent.click(screen.getByRole("option", { name: "alu.v" }));
+    expect(input).toHaveAttribute("placeholder", "type or pick + Enter");
   });
 });

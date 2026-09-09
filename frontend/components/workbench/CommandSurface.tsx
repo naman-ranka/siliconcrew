@@ -54,7 +54,11 @@ import {
 } from "@/lib/commandSurface";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
-import { ComboInput } from "@/components/workbench/ComboInput";
+import {
+  ComboInput,
+  MultiComboInput,
+  type ComboSuggestion,
+} from "@/components/workbench/ComboInput";
 import { cn } from "@/lib/utils";
 
 // The v2 Command Surface — a three-pane command → tool-call explorer. Left: the
@@ -262,17 +266,34 @@ function JsonView({ value, ariaLabel }: { value: unknown; ariaLabel?: string }) 
 
 // ---- param editors (CommandModal idioms + the surface's "multi" chips) ----------
 
+/** Combo rows: the value, plus a display-only subtitle when one is known. */
+function withSubtitles(
+  values: string[] | undefined,
+  subtitles?: Record<string, string>
+): ComboSuggestion[] | undefined {
+  return values?.map((o) => (subtitles?.[o] ? { value: o, subtitle: subtitles[o] } : o));
+}
+
 function ParamEditor({
   param,
   options,
+  subtitles,
+  morePaths,
   value,
   onChange,
 }: {
   param: SurfaceParam;
   options: string[];
+  /** value → subtitle map for combo rows (module → file, file → role). */
+  subtitles?: Record<string, string>;
+  /** The wider workspace path index — the combo's SECOND tier, surfaced only
+   *  once the user types (owner refinement 2026-08-14). File fields only. */
+  morePaths?: string[];
   value: unknown;
   onChange: (v: unknown) => void;
 }) {
+  const suggestions = withSubtitles(options, subtitles) ?? [];
+  const more = withSubtitles(morePaths, subtitles);
   switch (param.editor) {
     case "enum": {
       // Short small sets → segmented buttons; long values or >4 options →
@@ -360,112 +381,45 @@ function ParamEditor({
         <ComboInput
           value={String(value ?? "")}
           onChange={(v) => onChange(v)}
-          suggestions={options}
+          suggestions={suggestions}
+          moreSuggestions={more}
           ariaLabel={param.label}
+          placeholder={param.placeholder}
           className="w-52"
         />
       );
     case "multi": {
       const arr = Array.isArray(value) ? (value as string[]) : [];
-      // No convention/enum options → freeform entry: type + Enter adds a chip.
-      if (options.length === 0) {
-        return <FreeformChips values={arr} label={param.label} onChange={onChange} />;
-      }
+      // ONE selector everywhere (W2): chips + a suggesting combo to add
+      // entries — free entry always allowed, suggestions when the workspace
+      // supplies them (empty pool = plain type-and-Enter).
       return (
-        <div className="flex max-w-[300px] flex-wrap justify-end gap-1">
-          {options.map((opt) => {
-            const on = arr.includes(opt);
-            return (
-              <button
-                key={opt}
-                type="button"
-                aria-pressed={on}
-                onClick={() =>
-                  onChange(on ? arr.filter((o) => o !== opt) : [...arr, opt])
-                }
-                className={cn(
-                  "rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors",
-                  on
-                    ? "border-primary/40 bg-primary/15 text-primary"
-                    : "border-border bg-transparent text-muted-foreground hover:bg-surface-2 hover:text-foreground"
-                )}
-              >
-                {opt}
-              </button>
-            );
-          })}
-        </div>
+        <MultiComboInput
+          values={arr}
+          onChange={onChange}
+          suggestions={suggestions}
+          moreSuggestions={more}
+          ariaLabel={`Add ${param.label}`}
+          placeholder={param.placeholder}
+        />
       );
     }
   }
 }
 
-// Freeform string-array editor: a text input (Enter adds) + removable chips.
-function FreeformChips({
-  values,
-  label,
-  onChange,
-}: {
-  values: string[];
-  label: string;
-  onChange: (v: unknown) => void;
-}) {
-  const [draft, setDraft] = React.useState("");
-  const add = () => {
-    const v = draft.trim();
-    if (!v) return;
-    if (!values.includes(v)) onChange([...values, v]);
-    setDraft("");
-  };
-  return (
-    <div className="flex max-w-[300px] flex-col items-end gap-1">
-      <Input
-        type="text"
-        value={draft}
-        aria-label={`Add ${label}`}
-        placeholder="type + Enter"
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            add();
-          }
-        }}
-        className="h-7 w-52 font-mono text-[11px]"
-      />
-      {values.length > 0 && (
-        <div className="flex flex-wrap justify-end gap-1">
-          {values.map((v) => (
-            <span
-              key={v}
-              className="inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] text-primary"
-            >
-              {v}
-              <button
-                type="button"
-                aria-label={`Remove ${v}`}
-                onClick={() => onChange(values.filter((o) => o !== v))}
-                className="text-primary/70 transition-colors hover:text-primary"
-              >
-                <X className="h-2.5 w-2.5" aria-hidden />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ParamRow({
   param,
   options,
+  subtitles,
+  morePaths,
   value,
   error,
   onChange,
 }: {
   param: SurfaceParam;
   options: string[];
+  subtitles?: Record<string, string>;
+  morePaths?: string[];
   value: unknown;
   /** Server-side field error (400 invalid_arguments) — shown until edited. */
   error?: string | null;
@@ -485,12 +439,24 @@ function ParamRow({
           {param.label}
         </span>
         <SrcTag source={param.source} />
+        {param.valueKind && (
+          <span className="inline-flex items-center rounded border border-border bg-surface-2 px-1 py-px font-mono text-[9px] leading-3 text-muted-foreground">
+            {param.valueKind}
+          </span>
+        )}
       </div>
       <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
         {noRuns ? (
           <span className="text-[11px] italic text-muted-foreground">No synth runs yet</span>
         ) : (
-          <ParamEditor param={param} options={options} value={value} onChange={onChange} />
+          <ParamEditor
+            param={param}
+            options={options}
+            subtitles={subtitles}
+            morePaths={morePaths}
+            value={value}
+            onChange={onChange}
+          />
         )}
         {error && (
           <span className="text-[10px] text-status-fail">{error}</span>
@@ -623,6 +589,14 @@ export function CommandSurface() {
       return { ...prev, [cmd.id]: rest };
     });
   };
+
+  // Owner refinement (2026-08-14): every FILE field's combo gets a second
+  // tier — the whole workspace path index — revealed only once the user
+  // types. The suggested tier still leads; nothing the workspace holds is
+  // unreachable. Module/run/enum fields are untouched (a run id is a closed
+  // set; a module is not a path).
+  const morePathsFor = (p: SurfaceParam): string[] | undefined =>
+    p.valueKind === "file" && ctx.wsPaths.length > 0 ? ctx.wsPaths : undefined;
 
   const visible = cmd.params.filter((p) => !p.when || p.when(merged));
   const basic = visible.filter((p) => !p.adv);
@@ -881,6 +855,8 @@ export function CommandSurface() {
                       key={p.key}
                       param={p}
                       options={resolveOptions(p, ctx)}
+                      subtitles={p.subtitles?.(ctx)}
+                      morePaths={morePathsFor(p)}
                       value={merged[p.key]}
                       error={fieldErrs[cmd.id]?.[p.key]}
                       onChange={(v) => setValue(p.key, v)}
@@ -901,6 +877,8 @@ export function CommandSurface() {
                         key={p.key}
                         param={p}
                         options={resolveOptions(p, ctx)}
+                        subtitles={p.subtitles?.(ctx)}
+                        morePaths={morePathsFor(p)}
                         value={merged[p.key]}
                         error={fieldErrs[cmd.id]?.[p.key]}
                         onChange={(v) => setValue(p.key, v)}
