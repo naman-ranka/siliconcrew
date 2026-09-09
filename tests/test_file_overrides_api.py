@@ -395,6 +395,95 @@ def test_run_simulation_wrapper_override_bad_file(tmp_path, monkeypatch):
     assert out.startswith("Error:") and "does not exist" in out
 
 
+# --- lint / synth wrappers narrate like their twins (adversarial-review P3-2) --
+
+def _wrap(tmp_path, monkeypatch):
+    wrappers = pytest.importorskip("src.tools.wrappers")
+    ws = str(tmp_path)
+    _seed_nested(ws)
+    monkeypatch.setattr(wrappers, "get_workspace_path", lambda: ws)
+    monkeypatch.setattr(wrappers, "current_session_id", lambda: "s1")
+    return wrappers, ws
+
+
+def test_linter_tool_wrapper_names_dropped_manifest_files_like_the_twin(tmp_path, monkeypatch):
+    wrappers, ws = _wrap(tmp_path, monkeypatch)
+    with open(os.path.join(ws, "rtl", "top.v"), "w") as f:
+        f.write("module top(input clk); counter c(.clk(clk), .q()); endmodule\n")
+    seen = {}
+
+    def fake_linter(files, cwd, engine="auto", **kw):
+        seen["files"] = files
+        seen["scope_modules"] = kw.get("scope_modules")
+        return {"success": True, "engine": "iverilog", "stderr": "", "command": "", "diagnostics": [], "notes": []}
+
+    monkeypatch.setattr(wrappers, "run_linter", fake_linter)
+    out = wrappers.linter_tool.func(verilog_files=["top.v"])
+    assert out.startswith("Syntax OK")
+    # The SAME note text the REST twin returns as manifestWarnings.
+    from src.tools.manifest import override_drop_notes
+    expected = override_drop_notes("lint", ["rtl/counter.v", "rtl/top.v"], ["rtl/top.v"])
+    assert expected and all(n in out for n in expected)
+    # Narration only: the agent path stays strict (no scope excuses).
+    assert not seen["scope_modules"]
+
+
+def test_linter_tool_wrapper_covering_the_manifest_set_has_no_notes(tmp_path, monkeypatch):
+    wrappers, ws = _wrap(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        wrappers, "run_linter",
+        lambda files, cwd, engine="auto", **kw: {"success": True, "engine": "iverilog", "stderr": "", "command": "", "diagnostics": [], "notes": []},
+    )
+    out = wrappers.linter_tool.func(verilog_files=["counter.v"])
+    assert out == "Syntax OK. (engine: iverilog)"
+
+
+def test_start_synthesis_wrapper_filters_non_sources_with_the_twin_note(tmp_path, monkeypatch):
+    wrappers, ws = _wrap(tmp_path, monkeypatch)
+    with open(os.path.join(ws, "constraints.sdc"), "w") as f:
+        f.write("create_clock -period 10 clk\n")
+    seen = {}
+
+    def fake_job(**kw):
+        seen.update(kw)
+        return {"run_id": "synth_0001", "status": "queued", "poll_after_sec": 5}
+
+    monkeypatch.setattr(wrappers, "start_synthesis_job", fake_job)
+    out = json.loads(wrappers.start_synthesis.func(
+        verilog_files=["counter.v", "constraints.sdc"], top_module="counter"
+    ))
+    assert out["run_id"] == "synth_0001"
+    # The .sdc never reaches yosys (the REST twin already filtered it)…
+    assert seen["verilog_files"] == [os.path.join(ws, "rtl/counter.v")]
+    # …and it is named, in the twin's words, in the same channel.
+    from src.tools.manifest import synthesis_sources
+    _, expected = synthesis_sources(["rtl/counter.v", "constraints.sdc"])
+    assert expected and all(n in out["manifestWarnings"] for n in expected)
+
+
+def test_start_synthesis_wrapper_names_dropped_manifest_rtl(tmp_path, monkeypatch):
+    wrappers, ws = _wrap(tmp_path, monkeypatch)
+    with open(os.path.join(ws, "rtl", "top.v"), "w") as f:
+        f.write("module top(input clk); counter c(.clk(clk), .q()); endmodule\n")
+    monkeypatch.setattr(
+        wrappers, "start_synthesis_job",
+        lambda **kw: {"run_id": "synth_0002", "status": "queued", "poll_after_sec": 5},
+    )
+    out = json.loads(wrappers.start_synthesis.func(verilog_files=["top.v"], top_module="top"))
+    assert any("rtl/counter.v" in n for n in out["manifestWarnings"])
+
+
+def test_start_synthesis_wrapper_with_no_sources_is_an_honest_error(tmp_path, monkeypatch):
+    wrappers, ws = _wrap(tmp_path, monkeypatch)
+    with open(os.path.join(ws, "constraints.sdc"), "w") as f:
+        f.write("create_clock -period 10 clk\n")
+    called = []
+    monkeypatch.setattr(wrappers, "start_synthesis_job", lambda **kw: called.append(kw) or {})
+    out = wrappers.start_synthesis.func(verilog_files=["constraints.sdc"], top_module="x")
+    assert out.startswith("Error:") and ".v/.sv" in out
+    assert called == []  # no run dispatched (the REST twin is a 400 here)
+
+
 def test_twins_and_wrappers_share_one_resolver():
     """Parity is the SAME helper object, not two lookalikes (R19)."""
     from src.tools import file_resolver, manifest
@@ -406,6 +495,9 @@ def test_twins_and_wrappers_share_one_resolver():
     # reach it through the one manifest module.
     assert actions_mod.manifest_mod.override_drop_notes is manifest.override_drop_notes
     assert wrappers.manifest_mod.override_drop_notes is manifest.override_drop_notes
+    # The synthesis .v/.sv filter + its note is one helper too (P3-2).
+    assert actions_mod.manifest_mod.synthesis_sources is manifest.synthesis_sources
+    assert wrappers.manifest_mod.synthesis_sources is manifest.synthesis_sources
     # And the extension set they hand the resolver is the one definition (B12).
     assert actions_mod.manifest_mod.RTL_EXTS is manifest.RTL_EXTS
     assert wrappers.RTL_EXTS is manifest.RTL_EXTS

@@ -772,14 +772,9 @@ def build_actions_router(
                 except FileResolutionError as exc:
                     return {"error": "bad_files", "message": str(exc)}
                 # Same .v/.sv filter the manifest path applies — but an
-                # explicitly overridden file must never vanish silently: name
-                # each one the filter drops. Constraints flow via constraintsMode.
-                src_files = [f for f in resolved_files if f.lower().endswith(manifest_mod.RTL_EXTS)]
-                notes.extend(
-                    f"Override file '{f}' was dropped — synthesis compiles only .v/.sv "
-                    "sources (constraints flow via constraintsMode, not this list)."
-                    for f in resolved_files if f not in src_files
-                )
+                # explicitly overridden file must never vanish silently: the
+                # shared helper names each one it drops (the wrapper calls it too).
+                src_files, notes = manifest_mod.synthesis_sources(resolved_files)
                 notes.extend(manifest_mod.override_drop_notes("synthesize", manifest_src, src_files))
                 if not src_files:
                     return {"error": "no_override_sources"}

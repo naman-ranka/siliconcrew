@@ -1130,6 +1130,24 @@ def override_drop_notes(
     ]
 
 
+def synthesis_sources(files: List[str]) -> "tuple[List[str], List[str]]":
+    """(the ``.v``/``.sv`` sources in ``files``, one note per file the filter dropped).
+
+    Synthesis compiles only RTL sources; constraints flow via constraintsMode,
+    not the file list. The manifest path applies this filter silently (its
+    ``sdc`` role never was a source), but an EXPLICIT file must never vanish
+    without a word — the REST twin and the agent/MCP wrapper both call this so
+    every actor narrates the same drop the same way (invariant 2).
+    """
+    src = [f for f in files if f.lower().endswith(RTL_EXTS)]
+    notes = [
+        f"Override file '{f}' was dropped — synthesis compiles only .v/.sv "
+        "sources (constraints flow via constraintsMode, not this list)."
+        for f in files if f not in src
+    ]
+    return src, notes
+
+
 def modules_defined_by(workspace: str, manifest: DesignManifest, paths: List[str]) -> set:
     """Module names the given manifest design files DECLARE, from the ONE
     cached module scan every reconcile already pays for (:func:`_scan_design_files`).

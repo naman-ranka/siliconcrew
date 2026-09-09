@@ -344,6 +344,15 @@ def linter_tool(
         return f"Error: {exc}"
     filepaths = [os.path.join(workspace, rel) for rel in rel_files]
 
+    # The same drop notes the REST twin (/lint) emits, from the same helper:
+    # which manifest lint files this explicit list leaves out. Narration only —
+    # the verdict stays strict (no scope_modules): the agent chose the set and
+    # is told to include the dependencies.
+    m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
+    notes = manifest_mod.override_drop_notes(
+        "lint", manifest_mod.files_for_stage(m, "lint"), rel_files
+    )
+
     result = run_linter(filepaths, cwd=workspace, engine=engine)
 
     diags = result.get("diagnostics") or []
@@ -355,13 +364,22 @@ def linter_tool(
         code = f" [{d['code']}]" if d.get("code") else ""
         return f"{loc}: {d['severity']}{code}: {d['message']}"
 
+    def _with_notes(text: str) -> str:
+        if not notes:
+            return text
+        return text + "\nNotes:\n" + "\n".join(f"  - {n}" for n in notes)
+
     if result["success"] and not warnings:
-        return f"Syntax OK. (engine: {result.get('engine')})"
+        return _with_notes(f"Syntax OK. (engine: {result.get('engine')})")
     if result["success"]:
         lines = "\n".join(_fmt(d) for d in warnings)
-        return f"Lint passed with {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
+        return _with_notes(
+            f"Lint passed with {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
+        )
     lines = "\n".join(_fmt(d) for d in (errors + warnings)) or result["stderr"]
-    return f"Lint FAILED — {len(errors)} error(s), {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
+    return _with_notes(
+        f"Lint FAILED — {len(errors)} error(s), {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
+    )
 
 from src.tools.search_logs import search_logs
 from src.tools import manifest as manifest_mod
@@ -638,7 +656,17 @@ def start_synthesis(
         rel_files = resolve_workspace_files(workspace, verilog_files, exts=RTL_EXTS)
     except FileResolutionError as exc:
         return f"Error: {exc}"
-    abs_files = [os.path.join(workspace, rel) for rel in rel_files]
+    # Same .v/.sv filter and the same notes the REST twin (/synthesize) emits,
+    # from the same helpers: a constraints file given here is named as dropped
+    # rather than handed to yosys, and manifest synthesis files this list
+    # leaves out are named too.
+    src_files, notes = manifest_mod.synthesis_sources(rel_files)
+    m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
+    manifest_src, _ = manifest_mod.synthesis_sources(manifest_mod.files_for_stage(m, "synthesize"))
+    notes.extend(manifest_mod.override_drop_notes("synthesize", manifest_src, src_files))
+    if not src_files:
+        return "Error: verilog_files contains no .v/.sv sources to synthesize."
+    abs_files = [os.path.join(workspace, rel) for rel in src_files]
 
     result = start_synthesis_job(
         workspace=workspace,
@@ -653,7 +681,9 @@ def start_synthesis(
         constraints_mode=constraints_mode,
         max_stage=max_stage,
     )
-    return json.dumps(_with_manifest_warnings(result, workspace, abs_files), indent=2)
+    return json.dumps(
+        _with_manifest_warnings(result, workspace, abs_files, extra_notes=notes), indent=2
+    )
 
 
 @tool(parse_docstring=True)
