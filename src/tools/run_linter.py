@@ -24,7 +24,30 @@ added):
       "engine": "iverilog"|"verilator",               # what actually ran
       "diagnostics": [ {file, line, severity, message, code|None} ],
       "notes": [str],             # honest scope notes (see scope_modules below)
+      "filesRead": [str],         # verilator only, and only when it completed
+                                  # elaboration (see below); absent = not measured
     }
+
+The file list IS the compile set; ``include_dirs`` are include directories.
+The two must not be conflated: verilator treats every ``-I`` directory as a
+module LIBRARY too (an unresolved ``alu`` is looked up as ``<dir>/alu.v``),
+so deriving ``-I`` from the directories of the source files — which this
+module once did — silently compiled unlisted files from beside listed ones
+and made "lint this file" a whole-design verdict on verilator. Now ``-I``
+names only the caller's include directories (the manifest's include-role
+files' directories, in practice), and `` `include`` resolves relative to the
+including file (``--relative-includes``) with no ``-I`` at all.
+
+Because verilator can still widen the compile through an include directory
+that also holds sources, it is asked to say what it read: ``-MMD --Mdir`` in
+a throwaway directory yields a make-style ``.d`` naming every file the run
+depended on — sources, includes, library hits, and verilator's own support
+files. That list is ``filesRead`` (workspace-relative for files under ``cwd``,
+absolute otherwise, deduped, sorted). verilator writes it only after a clean
+elaboration (measured on 5.020: any error, including one inside a library-
+found file, leaves no ``.d``), so ``filesRead`` is absent on a failed run and
+absent on iverilog, which is not asked (its ``-M`` option is unverified here).
+Absent means "not measured", never "read nothing".
 
 ``scope_modules`` says out loud what the caller already knows: the file set
 being linted deliberately leaves out design files the manifest would have
@@ -41,10 +64,12 @@ unresolved module NO left-out file defines (a typo'd instantiation, a module
 missing from the whole design) stays a failure — a note may only ever state
 a fact the manifest knows, never a policy of trust.
 """
+import glob
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 from typing import Any, Collection, Dict, List, Optional
 
 ENGINES = ("auto", "iverilog", "verilator")
@@ -123,6 +148,13 @@ _UNRESOLVED_MODULE_PATS = (
     re.compile(r"^Cannot find file containing module:\s*'?(?P<mod>[^'\s]+)'?"),
 )
 
+# verilator follows a not-found error with a second %Error at the SAME
+# file:line — "This may be because there's no search path specified with
+# -I<dir>." — a hint about the first, not a finding of its own. It travels
+# with the unresolved-module error it explains (and only that one: the same
+# hint after "Cannot find include file" stays, as that error stays).
+_SEARCH_PATH_HINT_PAT = re.compile(r"^This may be because there's no search path specified")
+
 
 def split_unresolved_module_diagnostics(
     diagnostics: List[Dict[str, Any]],
@@ -138,10 +170,13 @@ def split_unresolved_module_diagnostics(
     """
     kept: List[Dict[str, Any]] = []
     missing: List[str] = []
+    last_split = None  # (file, line) of the unresolved-module error just moved
     for d in diagnostics:
         name = None
+        message = (d.get("message") or "").strip()
         if d.get("severity") == "error":
-            message = (d.get("message") or "").strip()
+            if last_split == (d.get("file"), d.get("line")) and _SEARCH_PATH_HINT_PAT.match(message):
+                continue  # the hint attached to the error that just moved
             for pat in _UNRESOLVED_MODULE_PATS:
                 m = pat.match(message)
                 if m:
@@ -149,9 +184,63 @@ def split_unresolved_module_diagnostics(
                     break
         if name is None or (scope_modules is not None and name not in scope_modules):
             kept.append(d)
-        elif name not in missing:
-            missing.append(name)
+            last_split = None
+        else:
+            last_split = (d.get("file"), d.get("line"))
+            if name not in missing:
+                missing.append(name)
     return kept, missing
+
+
+def _rel_or_abs(path: str, cwd: str) -> str:
+    """Workspace-relative POSIX for a file under ``cwd``; absolute otherwise."""
+    absolute = os.path.abspath(os.path.join(cwd, path))
+    rel = os.path.relpath(absolute, cwd)
+    if rel == "." or rel.startswith(".."):
+        return absolute
+    return rel.replace(os.sep, "/")
+
+
+def parse_verilator_depfile(text: str, cwd: str) -> List[str]:
+    """The dependency list of a verilator ``-MMD`` file, normalized.
+
+    Format (verilator 5.020, measured): one rule, ``<targets> : <dep> <dep>
+    ...``, whitespace-separated, unescaped (a path containing a space would
+    split — verilator does not quote them, so neither can this), possibly
+    with ``\\``-newline continuations. Dependencies are whatever verilator
+    wrote: the sources given, every `` `include``d file, every module found
+    through a ``-I`` library search, and verilator's own support files and
+    binary. Nothing is filtered — a reader who wants "workspace files only"
+    keeps the relative entries.
+    """
+    body = text.replace("\\\n", " ")
+    _, sep, deps = body.partition(":")
+    if not sep:
+        return []
+    return sorted({_rel_or_abs(tok, cwd) for tok in deps.split() if tok})
+
+
+def _read_verilator_depfiles(mdir: str, cwd: str) -> Optional[List[str]]:
+    """``filesRead`` from a run's ``--Mdir``, or ``None`` when verilator wrote
+    no ``.d`` (it does so only after a clean elaboration)."""
+    paths = sorted(glob.glob(os.path.join(mdir, "*.d")))
+    if not paths:
+        return None
+    files: set = set()
+    for p in paths:
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            files.update(parse_verilator_depfile(fh.read(), cwd))
+    return sorted(files)
+
+
+def files_compiled(result: Dict[str, Any]) -> set:
+    """Files a lint result PROVES the engine read: ``filesRead`` when it was
+    measured, plus every file a diagnostic is attributed to (an engine cannot
+    report ``x.v:12`` without having read ``x.v`` — this is what still tells
+    the truth on a failed verilator run, where no ``.d`` is written)."""
+    files = set(result.get("filesRead") or ())
+    files.update(d["file"] for d in (result.get("diagnostics") or ()) if d.get("file"))
+    return files
 
 
 def resolve_engine(engine: str = "auto") -> Dict[str, Any]:
@@ -199,6 +288,7 @@ def run_linter(
     timeout=30,
     engine="auto",
     scope_modules: Optional[Collection[str]] = None,
+    include_dirs: Optional[Collection[str]] = None,
 ):
     """Lint ``verilog_files`` with the chosen engine.
 
@@ -210,12 +300,22 @@ def run_linter(
     its own file set and is told to include the dependencies) keeps today's
     behavior exactly.
 
+    ``include_dirs``: directories (relative to ``cwd`` or absolute) searched
+    for `` `include`` files that do not resolve relative to the including
+    file — the manifest's include-role directories, in practice. They are
+    passed to BOTH engines as ``-I`` (iverilog's ``-I`` is include-only, so
+    there it is pure parity). The source files' own directories are NOT added
+    (module docstring: on verilator that would turn the file list into a
+    whole-design compile).
+
     Returns the structured contract documented in the module docstring. The
     legacy keys (success/stdout/stderr/command) are preserved so existing
     consumers keep working unchanged.
     """
     if cwd is None:
         cwd = os.getcwd()
+    include_args = [f"-I{d}" for d in (include_dirs or ()) if d]
+    files_read: Optional[List[str]] = None
 
     resolved = resolve_engine(engine)
     if "error" in resolved:
@@ -235,15 +335,27 @@ def run_linter(
         # one pass instead of stopping at the first error class. EOFNEWLINE and
         # DECLFILENAME are pure style pedantry (trailing newline, file-must-
         # match-module-name) — noise, not design risk.
-        include_dirs = sorted({os.path.dirname(os.path.abspath(p)) for p in verilog_files if p})
-        include_args = [f"-I{d}" for d in include_dirs]
         # --timing: accept event/delay constructs (verilator 5+), so linting a
         # file set that includes a testbench doesn't die on NEEDTIMINGOPT.
-        cmd = [
-            "verilator", "--lint-only", "--timing", "-Wall", "-Wno-fatal",
-            "-Wno-EOFNEWLINE", "-Wno-DECLFILENAME",
-        ] + include_args + list(verilog_files)
-        raw = _run(cmd, cwd, timeout)
+        # --relative-includes: `include "x.vh" resolves beside the including
+        # file, so a design's own headers need no -I — and -I is reserved for
+        # the caller's include_dirs (module docstring: -I is also a module
+        # library on verilator, so it must never name a source directory).
+        # -MMD --Mdir <throwaway>: have verilator list every file it read
+        # (filesRead) instead of us guessing. The directory must pre-exist
+        # (verilator does not create it) and is searched as a library too,
+        # which is harmless because it is empty.
+        mdir = tempfile.mkdtemp(prefix="lint_deps_")
+        try:
+            cmd = [
+                "verilator", "--lint-only", "--timing", "-Wall", "-Wno-fatal",
+                "-Wno-EOFNEWLINE", "-Wno-DECLFILENAME", "--relative-includes",
+                "-MMD", "--Mdir", mdir,
+            ] + include_args + list(verilog_files)
+            raw = _run(cmd, cwd, timeout)
+            files_read = _read_verilator_depfiles(mdir, cwd)
+        finally:
+            shutil.rmtree(mdir, ignore_errors=True)
         diagnostics = parse_verilator_diagnostics(raw["stderr"] + "\n" + raw["stdout"], cwd)
     else:
         # -t null: no code generation, just check; -g2012 for SystemVerilog.
@@ -252,7 +364,9 @@ def run_linter(
         # not supported") — the file is fine, iverilog just can't elaborate that
         # construct. Same flag and same reasoning as the sim compile; immediate
         # assertions are unaffected either way (lint never runs them).
-        cmd = ["iverilog", "-t", "null", "-g2012", "-gsupported-assertions"] + list(verilog_files)
+        # -I<dir>: include search path only (iverilog's library search is -y,
+        # which is never passed) — the same include_dirs verilator gets.
+        cmd = ["iverilog", "-t", "null", "-g2012", "-gsupported-assertions"] + include_args + list(verilog_files)
         raw = _run(cmd, cwd, timeout)
         diagnostics = parse_iverilog_diagnostics(raw["stderr"], cwd)
 
@@ -271,7 +385,7 @@ def run_linter(
     # The engine's exit code counted the errors we just explained away, so a
     # file-scoped run that dropped some of them judges itself on what is LEFT.
     exit_ok = raw["returncode"] == 0 or bool(notes)
-    return {
+    out = {
         "success": exit_ok and not has_errors,
         "stdout": raw["stdout"],
         "stderr": raw["stderr"],
@@ -280,3 +394,6 @@ def run_linter(
         "diagnostics": diagnostics,
         "notes": notes,
     }
+    if files_read is not None:  # absent = not measured (module docstring)
+        out["filesRead"] = files_read
+    return out
