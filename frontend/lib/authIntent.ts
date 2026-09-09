@@ -9,7 +9,8 @@
 // replay must be driven by the auth status transition, never by page load.
 //
 // take() clears BEFORE returning: the replay runs at most once even if it
-// throws, so a failed replay can never loop.
+// throws, so a failed replay can never loop. peek() reads in place for a host
+// that only routes to the real replay host — it never re-stamps the clock.
 
 import type { ViewMode } from "@/lib/nav";
 
@@ -23,9 +24,11 @@ export type AuthIntent =
   | { kind: "createGroup"; name: string }
   /** Command Surface sign-in CTA (W4/A18): the signed-out user's command +
    *  form state survives the sign-in round trip. WorkOS redirects to `/`, so
-   *  the Launcher RE-STASHES this kind and routes to the workspace, where the
-   *  Surface's kind-scoped replay host restores the form. Google/GIS signs
-   *  in with no navigation — the same host fires on the status transition. */
+   *  the Launcher PEEKS this kind (left in place, original timestamp) and
+   *  routes to the workspace, where the Surface's kind-scoped replay host
+   *  takes it and restores the form — or the workbench drops it when that
+   *  session cannot be opened. Google/GIS signs in with no navigation — the
+   *  same host fires on the status transition. */
   | {
       kind: "surfaceCommand";
       sessionId: string;
@@ -51,11 +54,26 @@ export function stashAuthIntent(intent: AuthIntent): void {
 }
 
 /**
+ * Read the stashed intent WITHOUT clearing it, applying the same validity and
+ * expiry rules as take(): an invalid or expired envelope is removed either
+ * way. For a host that only ROUTES to the intent's real replay host (the
+ * Launcher, for "surfaceCommand") — reading in place keeps the original
+ * timestamp, so the abandonment clock is never restarted by a bounce.
+ */
+export function peekAuthIntent(kind?: AuthIntent["kind"]): AuthIntent | null {
+  return readAuthIntent(kind, false);
+}
+
+/**
  * Read-and-clear the stashed intent. With `kind`, only an intent of that kind
  * is taken — others are left in place for the replay host that owns them
  * (the create modal takes only "create"; the Launcher takes anything).
  */
 export function takeAuthIntent(kind?: AuthIntent["kind"]): AuthIntent | null {
+  return readAuthIntent(kind, true);
+}
+
+function readAuthIntent(kind: AuthIntent["kind"] | undefined, consume: boolean): AuthIntent | null {
   try {
     const raw = sessionStorage.getItem(KEY);
     if (!raw) return null;
@@ -77,7 +95,7 @@ export function takeAuthIntent(kind?: AuthIntent["kind"]): AuthIntent | null {
       return null;
     }
     if (kind && parsed.kind !== kind) return null; // not ours; leave it
-    sessionStorage.removeItem(KEY);
+    if (consume) sessionStorage.removeItem(KEY);
     return parsed;
   } catch {
     try { sessionStorage.removeItem(KEY); } catch { /* ignore */ }

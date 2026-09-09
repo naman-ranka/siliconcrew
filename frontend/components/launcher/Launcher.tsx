@@ -28,7 +28,7 @@ import { useAuth } from "@/lib/auth";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { sessionsApi, threadsApi } from "@/lib/api";
 import { openSession, type ViewMode } from "@/lib/nav";
-import { stashAuthIntent, takeAuthIntent } from "@/lib/authIntent";
+import { peekAuthIntent, stashAuthIntent, takeAuthIntent } from "@/lib/authIntent";
 import { performCreate } from "./createSessionAction";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -122,6 +122,17 @@ export function Launcher() {
   // once even if it fails.
   useEffect(() => {
     if (authStatus !== "signed_in") return;
+    // W4/A18: the Command Surface's replay host lives in the workbench. The
+    // Launcher only ROUTES this kind — peeked, left in place with its
+    // original timestamp (P2-3: a re-stash restarted the 15-min abandonment
+    // clock, so an intent for a session the signed-in user cannot open
+    // bounced `/` → "not found" → `/` forever). The Surface's kind-scoped
+    // take consumes it on arrival; the workbench drops it on "not found".
+    const surface = peekAuthIntent("surfaceCommand");
+    if (surface?.kind === "surfaceCommand") {
+      openSession(router, surface.sessionId, { chat: null, view: "ide" });
+      return;
+    }
     const intent = takeAuthIntent();
     if (!intent) return;
     void (async () => {
@@ -137,13 +148,6 @@ export function Launcher() {
           openSession(router, sessionId, { chat: null, view: "ide" });
         } else if (intent.kind === "createGroup") {
           await useStore.getState().createProject(intent.name);
-        } else if (intent.kind === "surfaceCommand") {
-          // W4/A18: the Command Surface's replay host lives in the workbench.
-          // take() already cleared the stash — hand the intent back (fresh
-          // timestamp) and route to the workspace; the Surface's kind-scoped
-          // take restores the form there.
-          stashAuthIntent(intent);
-          openSession(router, intent.sessionId, { chat: null, view: "ide" });
         }
       } catch (e) {
         // The replayed action failed for a real reason (quota, 409, network).
