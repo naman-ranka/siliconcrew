@@ -56,6 +56,7 @@ import { manifestSetPlaceholder } from "@/lib/schemaForm";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { useAuth } from "@/lib/auth";
+import { useElapsedSeconds } from "@/lib/useElapsed";
 import { stashAuthIntent, takeAuthIntent } from "@/lib/authIntent";
 import {
   ComboInput,
@@ -584,6 +585,9 @@ function endpointLabel(cmd: SurfaceCommand): string {
 
 // ---- the surface -----------------------------------------------------------------
 
+/** The rail's opening selection (also where a session switch returns to). */
+const DEFAULT_COMMAND_ID = "synth";
+
 export function CommandSurface() {
   const open = useWorkbenchUiStore((s) => s.commandSurfaceOpen);
   const setOpen = useWorkbenchUiStore((s) => s.setCommandSurfaceOpen);
@@ -595,19 +599,57 @@ export function CommandSurface() {
   const toolCatalog = useStore((s) => s.toolCatalog);
   const loadToolCatalog = useStore((s) => s.loadToolCatalog);
 
-  const [selectedId, setSelectedId] = React.useState("synth");
+  const [selectedId, setSelectedId] = React.useState(DEFAULT_COMMAND_ID);
   const [values, setValues] = React.useState<Record<string, Record<string, unknown>>>({});
   const [advOpen, setAdvOpen] = React.useState(false);
   const [resultOpen, setResultOpen] = React.useState(true);
   const [running, setRunning] = React.useState(false);
   const [results, setResults] = React.useState<Record<string, SurfaceRunResult>>({});
-  const [dispatched, setDispatched] = React.useState<Record<string, boolean>>({});
+  // Per-command last successful async dispatch (W5/A20): the run id feeds the
+  // dispatch note + "View in Runs". Absent = nothing dispatched.
+  const [dispatched, setDispatched] = React.useState<
+    Record<string, { runId: string | null } | undefined>
+  >({});
+  // F1: the explicit "yes, dispatch a SECOND job" acknowledgement. Never
+  // sticky — cleared on close, on a session switch, and on every dispatch.
+  const [rearmed, setRearmed] = React.useState<Record<string, boolean>>({});
   // Server-side field errors from the last invoke, keyed cmd.id → field →
   // message. A field's message clears as soon as the user edits it.
   const [fieldErrs, setFieldErrs] = React.useState<Record<string, Record<string, string>>>({});
   const rightBodyRef = React.useRef<HTMLDivElement>(null);
   const centerRef = React.useRef<HTMLDivElement>(null);
   const { status: authStatus, signIn } = useAuth();
+  // W5: client-side clock for the sync "Running — Ns" indicator (a clock,
+  // never a poller — invariant 6).
+  const elapsed = useElapsedSeconds(running);
+
+  // F1 (adversarial review): the Surface stays MOUNTED when it closes, so its
+  // state outlives the dialog. A "Dispatched — synth_0042" note from an
+  // earlier visit is stale on reopen (and the run it names may be long done),
+  // so the note and any re-arm acknowledgement die with the dialog. What
+  // survives is the honest live-run check below, which reads the runs slice.
+  React.useEffect(() => {
+    if (open) return;
+    setDispatched((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setRearmed((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+  }, [open]);
+
+  // F3 (adversarial review): reset per-session form state on a session switch
+  // — the documented sharp edge (run ids collide across sessions, and a
+  // half-filled form for another workspace is a wrong-design hazard). Defined
+  // BEFORE the auth-intent replay host so a restored intent always wins.
+  const sessionIdRef = React.useRef<string | null>(currentSession?.id ?? null);
+  React.useEffect(() => {
+    const sid = currentSession?.id ?? null;
+    if (sessionIdRef.current === sid) return;
+    sessionIdRef.current = sid;
+    setValues({});
+    setResults({});
+    setDispatched({});
+    setRearmed({});
+    setFieldErrs({});
+    setSelectedId(DEFAULT_COMMAND_ID);
+  }, [currentSession?.id]);
 
   // Esc closes (window-level while open; no global shortcut registration).
   React.useEffect(() => {
@@ -741,19 +783,42 @@ export function CommandSurface() {
   const result = results[cmd.id];
   const wasDispatched = dispatched[cmd.id];
 
+  // F1: a second click on Dispatch starts a second (paid, on hosted) job. An
+  // async command that produces a run row (registry `producesRun`, FA9) is
+  // disarmed — one explicit "Dispatch again?" re-arms it — whenever either
+  // honest read says a job of this kind may still be in flight:
+  //   * this Surface visit dispatched one and the runs slice has not yet
+  //     shown that run reaching a terminal state, or
+  //   * the runs slice carries a live run of the kind this command produces
+  //     (this is what survives close → reopen, where the note is cleared).
+  // Both are reads of already-loaded state; the Surface still never polls.
+  // The runs slice is scoped by runKindFilter, so "as far as this view knows"
+  // in the copy below is load-bearing, not decoration.
+  const guarded = Boolean(cmd.async && cmd.producesRun);
+  const dispatchedRun = wasDispatched?.runId
+    ? runs.find((r) => r.id === wasDispatched.runId)
+    : undefined;
+  const liveDispatch =
+    Boolean(wasDispatched) && (!dispatchedRun || dispatchedRun.status === "running");
+  const liveRun =
+    guarded && runs.some((r) => r.kind === cmd.producesRun && r.status === "running");
+  const needsRearm = guarded && (liveDispatch || liveRun) && !rearmed[cmd.id];
+
   const invoke = async () => {
-    if (running || missingRun) return;
+    if (running || missingRun || needsRearm) return;
     setRunning(true);
-    setDispatched((prev) => ({ ...prev, [cmd.id]: false }));
+    setDispatched((prev) => ({ ...prev, [cmd.id]: undefined }));
+    // Each dispatch consumes the acknowledgement — the NEXT one asks again.
+    setRearmed((prev) => (prev[cmd.id] ? { ...prev, [cmd.id]: false } : prev));
     try {
       // Pass only the user-touched values — runSurfaceCommand merges defaults.
       const res = await runSurfaceCommand(cmd, userVals);
-      if (res === null) {
-        // null now means exactly one thing: an async core dispatch succeeded
-        // (dev#51) — the note below is truthful by construction. Drop any
-        // stale result from a previous failed attempt so the pane doesn't
-        // contradict the dispatch note.
-        setDispatched((prev) => ({ ...prev, [cmd.id]: true }));
+      if (res.dispatched) {
+        // A successful async core dispatch (W5/A20 — explicit flag + run id,
+        // replacing the old null contract): the note below is truthful by
+        // construction. Drop any stale result from a previous failed attempt
+        // so the pane doesn't contradict the dispatch note.
+        setDispatched((prev) => ({ ...prev, [cmd.id]: { runId: res.runId ?? null } }));
         setResults((prev) => {
           if (!(cmd.id in prev)) return prev;
           const next = { ...prev };
@@ -773,6 +838,15 @@ export function CommandSurface() {
     } finally {
       setRunning(false);
     }
+  };
+
+  // W5/A22: an explicit user gesture — open the dock's Runs tab (expanding a
+  // collapsed dock) and close the Surface. Never automatic (invariant 4).
+  const viewInRuns = () => {
+    const ui = useWorkbenchUiStore.getState();
+    ui.setDockTab(currentSession.id, "runs");
+    ui.setDockCollapsed(currentSession.id, false);
+    setOpen(false);
   };
 
   return (
@@ -1036,6 +1110,15 @@ export function CommandSurface() {
             <div ref={rightBodyRef} className="flex-1 overflow-auto p-3">
               <JsonView value={payload} ariaLabel="tool call payload" />
 
+              {running && !cmd.async && (
+                <p
+                  data-testid="command-surface-elapsed"
+                  className="mt-3 border-t border-border pt-2 font-mono text-[11px] text-muted-foreground"
+                >
+                  Running — {elapsed}s
+                </p>
+              )}
+
               {result && (
                 <div className="mt-3 border-t border-border pt-2">
                   <Collapsible
@@ -1092,7 +1175,7 @@ export function CommandSurface() {
                 type="button"
                 data-testid="command-surface-invoke"
                 className="h-9 w-full gap-1.5 text-xs"
-                disabled={running || missingRun}
+                disabled={running || missingRun || needsRearm}
                 onClick={() => void invoke()}
               >
                 {running ? (
@@ -1104,10 +1187,41 @@ export function CommandSurface() {
                 )}
                 {cmd.async && cmd.core ? "Dispatch job" : "Invoke"}
               </Button>
+              {needsRearm && (
+                <div data-testid="command-surface-rearm" className="space-y-1.5">
+                  <p className="text-[10px] leading-relaxed text-muted-foreground">
+                    {liveDispatch && wasDispatched?.runId
+                      ? `${wasDispatched.runId} has not finished as far as this view knows.`
+                      : "A run of this kind is still running as far as this view knows."}{" "}
+                    Dispatching again starts a second job.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-6 w-full text-[11px]"
+                    onClick={() => setRearmed((prev) => ({ ...prev, [cmd.id]: true }))}
+                  >
+                    Dispatch again?
+                  </Button>
+                </div>
+              )}
               {wasDispatched && (
-                <p className="text-[10px] text-muted-foreground">
-                  Dispatched — follow it in Activity/Runs
-                </p>
+                <div data-testid="command-surface-dispatch-note" className="space-y-1.5">
+                  <p className="font-mono text-[10px] text-muted-foreground">
+                    Dispatched{wasDispatched.runId ? ` — ${wasDispatched.runId}` : ""} · follow
+                    it in Activity/Runs
+                  </p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-6 w-full gap-1 text-[11px]"
+                    onClick={viewInRuns}
+                  >
+                    View in Runs
+                  </Button>
+                </div>
               )}
             </div>
           </div>

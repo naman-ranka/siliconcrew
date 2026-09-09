@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
+import { useElapsedSeconds } from "@/lib/useElapsed";
 import { parseArtifactKey } from "@/lib/artifactKeys";
 import { openArtifact } from "@/lib/openArtifact";
 import { prettifyToolName } from "@/lib/commandSurface";
@@ -89,17 +90,8 @@ export function ToolCallCard({ toolCall, result, isRunning }: ToolCallCardProps)
 
   // Live elapsed while the tool runs, frozen once it returns — so a 60s synth
   // reads differently from a 0.2s lint. Times only from mount, so a reopened
-  // (already-complete) card shows no bogus duration.
-  const startedRef = useRef<number>(Date.now());
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    if (result) return; // freeze once the tool returns
-    const id = setInterval(
-      () => setElapsed(Math.round((Date.now() - startedRef.current) / 1000)),
-      500
-    );
-    return () => clearInterval(id);
-  }, [result]);
+  // (already-complete) card shows no bogus duration. (Shared clock — W5/A21.)
+  const elapsed = useElapsedSeconds(!result);
 
   // Derived from the tool's own name (the same prettifier the Command Surface
   // uses), not a hand-kept prose map: sixteen gerunds ("Running Simulation")

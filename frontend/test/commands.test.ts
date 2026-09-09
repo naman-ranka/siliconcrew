@@ -427,6 +427,34 @@ describe("runCommand surfaces manifestWarnings", () => {
     ).toBe(true);
   });
 
+  it("lint: the backend's notes reach the user (F5 — they were typed away and dropped)", async () => {
+    const SCOPE_NOTE =
+      "File-scoped lint: counter instantiated but not in the linted file set — " +
+      "external modules were not elaborated.";
+    vi.mocked(workbenchApi.lint).mockResolvedValue({
+      ok: true,
+      ...PASSING_LINT,
+      manifestWarnings: [SCOPE_NOTE],
+    });
+    await runCommand("lint", { files: ["top.v"] });
+    const toasts = useStore.getState().toasts;
+    expect(toasts.some((t) => t.title === "Manifest warning" && t.detail === SCOPE_NOTE)).toBe(true);
+    // The lint's own verdict is untouched — a note is a note (invariant 4).
+    expect(toasts.some((t) => t.title.startsWith("Lint passed"))).toBe(true);
+    const locals = useStore.getState().activity.localEvents;
+    expect(locals.some((e) => e.resultSummary?.endsWith("· 1 manifest warning"))).toBe(true);
+  });
+
+  it("lint: no notes → no toast, no suffix", async () => {
+    vi.mocked(workbenchApi.lint).mockResolvedValue({ ok: true, ...PASSING_LINT });
+    await runCommand("lint");
+    expect(useStore.getState().toasts.some((t) => t.title === "Manifest warning")).toBe(false);
+    const locals = useStore.getState().activity.localEvents;
+    expect(
+      locals.some((e) => e.resultSummary === "passed (verilator) · 0 error(s), 0 warning(s)")
+    ).toBe(true);
+  });
+
   it("no warnings → no warning toast, no suffix", async () => {
     vi.mocked(workbenchApi.simulate).mockResolvedValue({ run: SIM_RUN, manifestWarnings: [] });
     await runCommand("sim");

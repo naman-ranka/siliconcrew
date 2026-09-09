@@ -13,7 +13,7 @@ import {
 import { TOOL } from "@/lib/toolNames";
 import { buildFormModel, shortDescription, subtitlesByKind } from "@/lib/schemaForm";
 import { useStore } from "@/lib/store";
-import type { ActivityEvent, DesignManifest, RunSummary, ToolCatalogEntry } from "@/types";
+import type { ActivityEvent, DesignManifest, RunKind, RunSummary, ToolCatalogEntry } from "@/types";
 
 // The Command Surface: EVERY user-invocable tool as command → real tool call.
 // The catalog is NOT hand-written — it renders from the backend's introspected
@@ -89,6 +89,9 @@ export interface SurfaceCommand {
   async?: boolean;
   requiresSignIn?: boolean;
   mutates?: boolean;
+  /** The run kind an async core command produces (from the registry) — the
+   *  F1 re-arm guard asks the runs slice whether one is still live. */
+  producesRun?: RunKind;
   /** Delegate execution to the core command engine (polling, unread, toasts). */
   core?: CommandId;
   /** "Supplied by manifest" rows — resolved from lib/commands' one definition. */
@@ -149,6 +152,7 @@ function toSurfaceCommand(def: CommandDef): SurfaceCommand {
     tool: def.tool,
     desc: def.description,
     async: def.async,
+    producesRun: def.producesRun,
     core: def.id,
     facts: def.facts,
     params: def.params.map(toSurfaceParam),
@@ -328,6 +332,14 @@ export interface SurfaceRunResult {
    *  /invoke 401 envelope and the core twins' 403 detail, W4/A17) — the
    *  Surface renders a "Sign in to run this" CTA, never a raw error. */
   signinRequired?: boolean;
+  /** An ASYNC core dispatch succeeded (W5/A20, FA7) — nothing "completed";
+   *  the run id is what to follow. Replaces the old `null` return, which
+   *  carried no run id for the dispatch note. ABSENT on every nothing-ran
+   *  path, so the note can only ever render off an explicit dispatch. */
+  dispatched?: true;
+  /** The run the core engine produced (dispatched async job, or a finished
+   *  sync sim); null when the outcome had none. */
+  runId?: string | null;
 }
 
 // actionFetch attaches the envelope's `details` (FA8) — read them defensively
@@ -358,17 +370,18 @@ function storeCtx(): SurfaceCtx {
  * Execute a surface command. Core flow commands delegate to runCommand (which
  * owns unread/toasts) and are AWAITED so the caller's spinner and result pane
  * reflect what actually happened; the rest go through POST /invoke and return
- * their result for the inline result pane.
+ * their result for the inline result pane. Always resolves to ONE shape
+ * (FA7 — the old `null`-means-dispatched contract is gone): a successful
+ * async dispatch is `{ok:true, dispatched:true, runId}`.
  */
 export async function runSurfaceCommand(
   cmd: SurfaceCommand,
   vals: Record<string, unknown>
-): Promise<SurfaceRunResult | null> {
+): Promise<SurfaceRunResult> {
   const store = useStore.getState();
   const session = store.currentSession;
-  // Honest nothing-ran outcome — `null` from this function means exactly one
-  // thing (async core dispatch succeeded), so the Surface's "Dispatched" note
-  // can never appear when nothing was dispatched (dev#51 follow-up).
+  // Honest nothing-ran outcome (dev#51 follow-up): the "Dispatched" note can
+  // only ever render off an explicit dispatched:true result.
   if (!session) return { ok: false, result: "No active session" };
   const ctx = storeCtx();
 
@@ -388,10 +401,12 @@ export async function runSurfaceCommand(
         ...(outcome.signinRequired ? { signinRequired: true } : {}),
       };
     }
-    // Async dispatches keep the "Dispatched — follow it in Activity/Runs"
-    // note (now rendered only after the dispatch actually succeeded); sync
+    // Async dispatches return the run id for the dispatch note + "View in
+    // Runs" (rendered only after the dispatch actually succeeded); sync
     // cores render their real completion summary inline.
-    return cmd.async ? null : { ok: true, result: outcome.summary };
+    return cmd.async
+      ? { ok: true, dispatched: true, runId: outcome.runId, result: outcome.summary }
+      : { ok: true, result: outcome.summary, ...(outcome.runId ? { runId: outcome.runId } : {}) };
   }
 
   const { tool, arguments: args } = buildSurfacePayload(cmd, vals, ctx);

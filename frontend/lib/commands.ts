@@ -1,7 +1,7 @@
 import { isSignInRequired, workbenchApi } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
-import type { ActivityEvent, DesignManifest, FileRole, RunSummary } from "@/types";
+import type { ActivityEvent, DesignManifest, FileRole, RunKind, RunSummary } from "@/types";
 
 // The v2 invocation model: every tool run — palette (⌘K), file context menu,
 // activity "Re-run", param modal — goes through this registry. The guiding
@@ -96,6 +96,11 @@ export interface CommandDef {
   tool: string;
   description: string;
   async: boolean;
+  /** The kind of run row this command produces in the runs slice (sim →
+   *  sim_NNNN, synth/pnr → synth_NNNN). Declared where the command is, so the
+   *  Surface's "is a job of this kind still live?" guard (F1) reads the
+   *  registry, never a parallel map. */
+  producesRun?: RunKind;
   /** Display shortcut, rendered as ⌘/Ctrl + key. */
   shortcut: string;
   /** "Supplied by manifest" — shown in both the param modal and the Command
@@ -155,6 +160,7 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
     description:
       "Manifest-driven sim in its own sim_runs/sim_NNNN/ dir — own VCD + provenance.",
     async: false,
+    producesRun: "sim",
     shortcut: "R",
     facts: (c: CommandCtx) => [
       { label: "default tb", value: c.manifest?.simTop || "—" },
@@ -182,6 +188,7 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
     description:
       "Async ORFS job for the synth top → { run_id } immediately; completion arrives via activity events / Refresh (no client polling).",
     async: true,
+    producesRun: "synth",
     shortcut: "Y",
     facts: (c: CommandCtx) => [
       { label: "top module", value: c.manifest?.synthTop ?? "—" },
@@ -208,6 +215,7 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
     description:
       "Branches a child PD run from an existing run and reruns downstream ORFS stages — first-class lineage.",
     async: true,
+    producesRun: "synth",
     shortcut: "E",
     facts: () => [{ label: "reuses", value: "netlist + constraints of the source run" }],
     params: [
@@ -443,15 +451,23 @@ export async function runCommand(
         const nWarn = result.warnings.length;
         // Auto resolves server-side — name the engine that actually ran.
         const engineTag = result.engine ? ` (${result.engine})` : "";
+        // Lint carries manifestWarnings too (dropped manifest files, and the
+        // file-scoped-lint note) — surfaced exactly like sim's, never folded
+        // into the pass/fail narration (F5: they used to die at the type
+        // boundary — write-only durable state).
+        const manifestWarnings = result.manifestWarnings;
         done({
           status: result.status === "passed" ? "ok" : "error",
-          resultSummary: `${result.status}${engineTag} · ${nErr} error(s), ${nWarn} warning(s)`,
+          resultSummary:
+            `${result.status}${engineTag} · ${nErr} error(s), ${nWarn} warning(s)` +
+            warningsSuffix(manifestWarnings),
         });
         store.pushToast(
           result.status === "passed"
             ? { kind: nWarn ? "info" : "success", title: `Lint passed${engineTag}${nWarn ? ` · ${nWarn} warning(s)` : ""}` }
             : { kind: "error", title: `Lint failed${engineTag} · ${nErr} error(s)` }
         );
+        notifyManifestWarnings(store, manifestWarnings);
         // Keep the structured diagnostics available to the feed/editor.
         useStore.setState({ lintResult: result });
         break;

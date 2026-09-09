@@ -357,7 +357,7 @@ describe("runSurfaceCommand", () => {
     expect(res).toEqual({ ok: false, result: "HTTP 500 — lint backend down" });
   });
 
-  it("async core dispatch success returns null — the 'Dispatched' note is now truthful", async () => {
+  it("async core dispatch success returns {ok, dispatched, runId} — FA7 replaces the null contract", async () => {
     vi.mocked(workbenchApi.synthesize).mockResolvedValue({
       ok: true,
       runId: "synth_0009",
@@ -366,7 +366,20 @@ describe("runSurfaceCommand", () => {
     const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
     const res = await runSurfaceCommand(synth, {});
     expect(workbenchApi.synthesize).toHaveBeenCalled(); // resolved BEFORE returning
-    expect(res).toBeNull();
+    // The run id rides the result so the dispatch note can name it and
+    // "View in Runs" has something to point at.
+    expect(res).toMatchObject({ ok: true, dispatched: true, runId: "synth_0009" });
+  });
+
+  it("a sync core run carries its run id but is never 'dispatched'", async () => {
+    vi.mocked(workbenchApi.simulate).mockResolvedValue({
+      run: { id: "sim_0003", status: "passed" },
+      manifestWarnings: [],
+    } as never);
+    const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
+    const res = await runSurfaceCommand(sim, {});
+    expect(res).toMatchObject({ ok: true, runId: "sim_0003" });
+    expect(res.dispatched).toBeUndefined();
   });
 
   it("async core dispatch failure surfaces inline instead of a false 'Dispatched'", async () => {
@@ -374,6 +387,7 @@ describe("runSurfaceCommand", () => {
     const synth = CORE_SURFACE_COMMANDS.find((c) => c.id === "synth")!;
     const res = await runSurfaceCommand(synth, {});
     expect(res).toEqual({ ok: false, result: "Quota exceeded." });
+    expect(res.dispatched).toBeUndefined();
   });
 
   // dev#51 (follow-up): runCommand's nothing-ran cases used to come back as
@@ -388,8 +402,9 @@ describe("runSurfaceCommand", () => {
     const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
     const first = runSurfaceCommand(sim, {}); // holds the in-flight guard
     const second = await runSurfaceCommand(sim, {});
-    expect(second).not.toBeNull(); // null would render "Dispatched"
+    // dispatched:true would render the "Dispatched" note — must be absent.
     expect(second).toMatchObject({ ok: false });
+    expect(second.dispatched).toBeUndefined();
     expect(String(second!.result)).toMatch(/already running/i);
     // Only ONE simulate call ever reached the backend.
     expect(workbenchApi.simulate).toHaveBeenCalledTimes(1);
@@ -402,6 +417,7 @@ describe("runSurfaceCommand", () => {
     const sim = CORE_SURFACE_COMMANDS.find((c) => c.id === "sim")!;
     const res = await runSurfaceCommand(sim, {});
     expect(res).toEqual({ ok: false, result: "No active session" });
+    expect(res.dispatched).toBeUndefined();
     expect(workbenchApi.simulate).not.toHaveBeenCalled();
   });
 });
