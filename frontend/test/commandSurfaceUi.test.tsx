@@ -82,12 +82,95 @@ beforeEach(() => {
   useWorkbenchUiStore.setState({ commandSurfaceOpen: true });
 });
 
+const filter = () => screen.getByTestId("command-surface-filter");
 const railButton = (label: string) =>
   screen
     .getAllByRole("button")
     .find((b) => b.textContent === label || b.textContent === `${label}async`);
 
 const payloadText = () => screen.getByLabelText("tool call payload").textContent ?? "";
+
+describe("CommandSurface — rail filter + keyboard (W6)", () => {
+  it("filters the rail over label/tool/category and shows an honest empty state", () => {
+    render(<CommandSurface />);
+    expect(filter()).toHaveFocus(); // type-to-filter, mirroring ⌘K
+    fireEvent.change(filter(), { target: { value: "retry p" } });
+    expect(railButton("Retry P&R")).toBeTruthy();
+    expect(railButton("Lint")).toBeUndefined();
+    // Tool-name match: "retry_pd" is Retry P&R's tool.
+    fireEvent.change(filter(), { target: { value: "retry_pd" } });
+    expect(railButton("Retry P&R")).toBeTruthy();
+    // Category match: "flow" keeps all four.
+    fireEvent.change(filter(), { target: { value: "flow" } });
+    for (const label of ["Lint", "Simulate", "Synthesize", "Retry P&R"]) {
+      expect(railButton(label)).toBeTruthy();
+    }
+    fireEvent.change(filter(), { target: { value: "zzz-nothing" } });
+    expect(screen.getByText("No matching commands.")).toBeInTheDocument();
+    // The selection is not forced into the filtered set — the form stays.
+    expect(screen.getByLabelText("tool call payload")).toBeInTheDocument();
+  });
+
+  it("↑/↓ move the selection through the filtered list (wrapping); Enter snaps to the first match", () => {
+    render(<CommandSurface />);
+    // Initial selection is synth.
+    expect(railButton("Synthesize")).toHaveAttribute("aria-current", "true");
+    fireEvent.keyDown(filter(), { key: "ArrowDown" });
+    expect(railButton("Retry P&R")).toHaveAttribute("aria-current", "true");
+    fireEvent.keyDown(filter(), { key: "ArrowDown" }); // wraps
+    expect(railButton("Lint")).toHaveAttribute("aria-current", "true");
+    fireEvent.keyDown(filter(), { key: "ArrowUp" });
+    expect(railButton("Retry P&R")).toHaveAttribute("aria-current", "true");
+    // Filter away the selection, Enter selects the first visible match.
+    fireEvent.change(filter(), { target: { value: "lint" } });
+    fireEvent.keyDown(filter(), { key: "Enter" });
+    expect(railButton("Lint")).toHaveAttribute("aria-current", "true");
+  });
+
+  it("Esc discipline (A23): a consumed Esc clears the filter WITHOUT closing; a bare Esc closes", () => {
+    render(<CommandSurface />);
+    fireEvent.change(filter(), { target: { value: "sim" } });
+    // The filter consumes Esc (preventDefault) — the Surface's window
+    // listener must check defaultPrevented FIRST and stay open.
+    fireEvent.keyDown(filter(), { key: "Escape" });
+    expect(filter()).toHaveValue("");
+    expect(screen.getByTestId("command-surface")).toBeInTheDocument();
+    expect(useWorkbenchUiStore.getState().commandSurfaceOpen).toBe(true);
+    // Empty filter: Esc is unconsumed → the Surface closes.
+    fireEvent.keyDown(filter(), { key: "Escape" });
+    expect(useWorkbenchUiStore.getState().commandSurfaceOpen).toBe(false);
+  });
+
+  it("R69: an Esc some OTHER consumer already cancelled (preventDefault, no stopPropagation) never closes the Surface", () => {
+    // The house discipline: consumers preventDefault(); global listeners check
+    // defaultPrevented. The rail filter and the combo also stopPropagation,
+    // which shields the window listener by accident — this test removes that
+    // accident and pins the check itself.
+    render(<CommandSurface />);
+    const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    ev.preventDefault();
+    act(() => {
+      window.dispatchEvent(ev);
+    });
+    expect(useWorkbenchUiStore.getState().commandSurfaceOpen).toBe(true);
+    // A bare Esc at the window still closes.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(useWorkbenchUiStore.getState().commandSurfaceOpen).toBe(false);
+  });
+
+  it("a combo dropdown's consumed Esc no longer closes the Surface by accident either", () => {
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Simulate")!);
+    const tb = screen.getByRole("combobox", { name: "Testbench" });
+    fireEvent.focus(tb);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    fireEvent.keyDown(tb, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(useWorkbenchUiStore.getState().commandSurfaceOpen).toBe(true);
+  });
+});
 
 describe("CommandSurface — no needs-login badge (L2/A19)", () => {
   it("renders the four Flow commands and NO sign-in (KeyRound) badges", () => {

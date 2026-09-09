@@ -616,8 +616,11 @@ export function CommandSurface() {
   // Server-side field errors from the last invoke, keyed cmd.id → field →
   // message. A field's message clears as soon as the user edits it.
   const [fieldErrs, setFieldErrs] = React.useState<Record<string, Record<string, string>>>({});
+  // W6: rail filter query (substring over label + tool name + category).
+  const [railQ, setRailQ] = React.useState("");
   const rightBodyRef = React.useRef<HTMLDivElement>(null);
   const centerRef = React.useRef<HTMLDivElement>(null);
+  const filterRef = React.useRef<HTMLInputElement>(null);
   const { status: authStatus, signIn } = useAuth();
   // W5: client-side clock for the sync "Running — Ns" indicator (a clock,
   // never a poller — invariant 6).
@@ -655,14 +658,22 @@ export function CommandSurface() {
   React.useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setOpen(false);
-      }
+      if (e.key !== "Escape") return;
+      // House Esc discipline (A23/FA11): consumers (combo dropdowns, the rail
+      // filter clearing its text) preventDefault — check FIRST so the
+      // Surface never closes over an inner consumer's Esc.
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      setOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, setOpen]);
+
+  // W6: opening focuses the rail filter (type-to-filter, mirroring ⌘K).
+  React.useEffect(() => {
+    if (open) filterRef.current?.focus();
+  }, [open]);
 
   // W4/A18: the Surface's auth-intent replay host. After the sign-in round
   // trip (WorkOS full-page redirect via the Launcher re-stash, or Google/GIS
@@ -709,6 +720,23 @@ export function CommandSurface() {
     [surfaceGroups]
   );
 
+  // W6: the rail filtered by the query — a group disappears when none of its
+  // commands match; selection is NOT forced to stay in the filtered set (the
+  // rail is selection-stateful — the open form keeps showing). Everything
+  // matched against is catalog-derived (label, tool name, category label).
+  const visibleGroups = React.useMemo(() => {
+    const needle = railQ.trim().toLowerCase();
+    if (!needle) return surfaceGroups;
+    return surfaceGroups
+      .map((g) => ({
+        label: g.label,
+        commands: g.commands.filter((c) =>
+          [c.label, c.tool, g.label].some((t) => t.toLowerCase().includes(needle))
+        ),
+      }))
+      .filter((g) => g.commands.length > 0);
+  }, [surfaceGroups, railQ]);
+
   if (!open || !currentSession) return null;
 
   const catalogLoading =
@@ -731,6 +759,41 @@ export function CommandSurface() {
     setResultOpen(true);
     if (rightBodyRef.current) rightBodyRef.current.scrollTop = 0;
     if (centerRef.current) centerRef.current.scrollTop = 0;
+  };
+
+  // W6: filter-input keyboard nav — ↑/↓ move the SELECTION through the
+  // visible (filtered) list (wrapping), Enter snaps to the first match when
+  // the current selection was filtered away. Esc with text clears it
+  // (consumed — the Surface's window listener sees defaultPrevented and stays
+  // open); Esc with empty text is left alone, so the Surface closes.
+  const flatVisible = visibleGroups.flatMap((g) => g.commands);
+  const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      if (railQ) {
+        e.preventDefault();
+        e.stopPropagation();
+        setRailQ("");
+      }
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (flatVisible.length === 0) return;
+      const idx = flatVisible.findIndex((c) => c.id === selectedId);
+      const next =
+        idx < 0
+          ? e.key === "ArrowDown"
+            ? 0
+            : flatVisible.length - 1
+          : (idx + (e.key === "ArrowDown" ? 1 : -1) + flatVisible.length) % flatVisible.length;
+      selectCommand(flatVisible[next].id);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (flatVisible.length === 0) return;
+      if (!flatVisible.some((c) => c.id === selectedId)) selectCommand(flatVisible[0].id);
+    }
   };
 
   // W4/L2: the sign-in CTA — stash the exact command + form state, then start
@@ -906,9 +969,29 @@ export function CommandSurface() {
 
         {/* ---- Body: left rail · center form · right payload ---- */}
         <div className="flex min-h-0 flex-1">
-          {/* Left rail — grouped command list (Flow pinned; rest schema-driven) */}
-          <div className="w-[210px] shrink-0 overflow-y-auto border-r border-border bg-surface-0 py-1.5">
-            {surfaceGroups.map((group) => {
+          {/* Left rail — filter + grouped command list (Flow pinned; rest schema-driven) */}
+          <div className="flex w-[210px] shrink-0 flex-col border-r border-border bg-surface-0">
+            <div className="shrink-0 border-b border-border p-2">
+              <div className="relative">
+                <Search
+                  className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden
+                />
+                <Input
+                  ref={filterRef}
+                  type="text"
+                  value={railQ}
+                  onChange={(e) => setRailQ(e.target.value)}
+                  onKeyDown={onFilterKeyDown}
+                  placeholder="Filter commands…"
+                  aria-label="Filter commands"
+                  data-testid="command-surface-filter"
+                  className="h-7 pl-6 text-xs"
+                />
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto py-1.5">
+            {visibleGroups.map((group) => {
               if (group.commands.length === 0) return null;
               return (
                 <div key={group.label}>
@@ -958,6 +1041,11 @@ export function CommandSurface() {
                 </div>
               );
             })}
+            {railQ.trim() !== "" && flatVisible.length === 0 && (
+              <p className="px-3 py-2 text-[11px] italic text-muted-foreground">
+                No matching commands.
+              </p>
+            )}
             {/* Introspected-catalog states below the always-available Flow group. */}
             {catalogLoading && (
               <div data-testid="command-surface-catalog-loading" className="space-y-2 px-3 py-2">
@@ -985,6 +1073,7 @@ export function CommandSurface() {
                 </Button>
               </div>
             )}
+            </div>
           </div>
 
           {/* Center — param form */}
