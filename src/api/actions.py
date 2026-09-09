@@ -619,6 +619,7 @@ def build_actions_router(
             manifest = manifest_mod.read_manifest(workspace, session_id)
             manifest_files = manifest_mod.files_for_stage(manifest, "lint")
             notes: List[str] = []
+            dropped: List[str] = []
             scope_modules: set = set()
             if override:
                 try:
@@ -644,7 +645,14 @@ def build_actions_router(
                 rel_files = manifest_files
             if not rel_files:
                 return {"empty": True}
-            call_id = _ui_log_call(workspace, session_id, "linter_tool", {"verilog_files": rel_files, "engine": engine})
+            # Invariant 3 — one event log, rendered everywhere: a file-scoped
+            # lint's verdict means something different from a whole-design
+            # lint's, so the durable event says so (scope in the call, notes
+            # in the result), not just the transient toast.
+            call_id = _ui_log_call(workspace, session_id, "linter_tool", {
+                "verilog_files": rel_files, "engine": engine,
+                "fileScoped": bool(dropped), "scopeModules": sorted(scope_modules),
+            })
             abs_files = [os.path.join(workspace, f) for f in rel_files]
             result = run_linter(abs_files, cwd=workspace, engine=engine, scope_modules=scope_modules)
             notes = notes + list(result.get("notes") or [])
@@ -653,7 +661,7 @@ def build_actions_router(
             _ui_log_result(
                 workspace, session_id, "linter_tool", call_id,
                 {"status": "passed" if passed else "failed", "engine": result.get("engine"),
-                 "warnings": len(warnings), "errors": len(errors)},
+                 "warnings": len(warnings), "errors": len(errors), "notes": notes},
                 ok=passed,
             )
             return {
