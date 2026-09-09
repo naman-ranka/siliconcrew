@@ -580,6 +580,45 @@ test("surface port: nested design, overrides, file-scoped lint, sim, context men
       expect(surface.getByText(/^passed \(/).first()).toBeVisible({ timeout: 15_000 })
     );
     await snap(page, "lint-top-result");
+
+    // The same lint on VERILATOR. Before bbfac25 this was the false case:
+    // verilator's -I module auto-discovery elaborated rtl/alu.v anyway —
+    // a silent pass with no scope note under a drop note claiming alu.v was
+    // left out. With `+libext+` pointed at an extension no source has, it
+    // must now lint exactly rtl/top.v: passed, and the scope note names alu.
+    await surface.getByRole("button", { name: "verilator", exact: true }).click();
+    await check("payload carries engine verilator, files still [rtl/top.v]", async () => {
+      await expect(payloadOf(page)).toContainText('"verilator"');
+      const flat = (await payloadOf(page).innerText()).replace(/\s+/g, "");
+      expect(flat).toContain('"files":["rtl/top.v"]');
+    });
+    const { resp: resp3 } = await invokeAndWait(page, "/lint");
+    const body3 = await resp3.json();
+    results.lint_top_only_verilator = body3;
+    log("lint(rtl/top.v, verilator) RAW →", JSON.stringify(body3));
+    const warn3: string[] = body3.manifestWarnings ?? [];
+    await check("verilator: request was file-scoped to rtl/top.v", () =>
+      expect(body3.files).toEqual(["rtl/top.v"])
+    );
+    await check("verilator: the engine that ran is verilator", () =>
+      expect(body3.engine).toBe("verilator")
+    );
+    await check("verilator: verdict is PASSED", () => expect(body3.status).toBe("passed"));
+    await check("verilator: notes name the dropped rtl/alu.v", () =>
+      expect(warn3.join("\n")).toContain("rtl/alu.v")
+    );
+    await check("verilator: the file-scoped note names `alu` (was silently absent before bbfac25)", () =>
+      expect(warn3.join("\n")).toMatch(/File-scoped lint:.*\balu\b.*not elaborated/)
+    );
+    await check("verilator: no unresolved-module error survives in `errors`", () =>
+      expect(JSON.stringify(body3.errors ?? [])).not.toMatch(/Cannot find file containing module|Unknown module type/)
+    );
+    await check("verilator: inline result says passed with 2 manifest warnings", () =>
+      expect(surface.getByText(/^passed \(verilator\).*2 manifest warnings/).first()).toBeVisible({
+        timeout: 15_000,
+      })
+    );
+    await snap(page, "lint-top-result-verilator");
   });
 
   // ── 6. Use manifest set → chips back, payload without files ──────────────
