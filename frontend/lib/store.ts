@@ -314,6 +314,32 @@ function scheduleRunsRefresh(get: () => AppState): void {
   }, 1200);
 }
 
+// P3-6 (adversarial review, measured): the recursive path index is a full
+// tree walk (GET /dir?recursive=paths, 20k cap). invalidateDirs fired it
+// directly, and singleFlight dedupes only CONCURRENT walks — so N file-
+// writing tool frames whose walks had each settled = N walks, and a frame
+// landing mid-walk was DROPPED (deduped onto the walk that could not see its
+// write). Same shape as the three schedulers above: one debounced walk per
+// burst; a walk still in flight at fire time defers one more beat instead of
+// deduping, so the trailing write is always walked.
+let _pathIndexRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePathIndexRefresh(get: () => AppState): void {
+  if (_pathIndexRefreshTimer) return;
+  _pathIndexRefreshTimer = setTimeout(() => {
+    _pathIndexRefreshTimer = null;
+    const { currentSession, pathIndex } = get();
+    // Re-read at fire time: a session switch reset the slice (nothing to
+    // revalidate), and an index nobody opened still pays nothing.
+    if (!currentSession) return;
+    if (pathIndex.status !== "ready" && pathIndex.status !== "revalidating") return;
+    if (_inflight.has(`pathIndex:${currentSession.id}`)) {
+      schedulePathIndexRefresh(get);
+      return;
+    }
+    void get().loadPathIndex({ revalidate: true });
+  }, 1200);
+}
+
 interface AppState {
   // Project state
   projects: Project[];
@@ -2321,10 +2347,11 @@ export const useStore = create<AppState>((set, get) => ({
     }
     // The recursive path index is a view of the SAME tree — any dir
     // invalidation revalidates it too, but only once populated (sessions that
-    // never opened quick-open/the Surface pay nothing).
+    // never opened quick-open/the Surface pay nothing) and coalesced: one
+    // walk per burst of invalidations, never one per tool frame (P3-6).
     const pi = get().pathIndex;
     if (pi.status === "ready" || pi.status === "revalidating") {
-      void get().loadPathIndex({ revalidate: true });
+      schedulePathIndexRefresh(get);
     }
   },
 

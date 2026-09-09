@@ -423,12 +423,68 @@ describe("pathIndex: loadPathIndex", () => {
     useStore.getState().invalidateDirs([""]);
     await Promise.resolve();
     expect(workspaceApi.getDirPaths).not.toHaveBeenCalled();
-    // Populated slice: invalidation revalidates it.
+    // Populated slice: invalidation revalidates it — one debounced walk per
+    // burst of invalidations (P3-6), the way the activity refresh coalesces.
     useStore.setState({
       pathIndex: { status: "ready", paths: ["alu.v"], truncated: false, error: null },
     });
-    useStore.getState().invalidateDirs([""]);
-    await Promise.resolve();
-    expect(workspaceApi.getDirPaths).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers();
+    try {
+      useStore.getState().invalidateDirs([""]);
+      await vi.advanceTimersByTimeAsync(1200);
+      expect(workspaceApi.getDirPaths).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("P3-6: N sequential invalidations (one per agent tool frame) coalesce into ONE walk, not N", async () => {
+    // Adversarial review P3-6 (measured): with the index populated, each
+    // file-writing tool frame called loadPathIndex({revalidate}) directly;
+    // singleFlight only dedupes CONCURRENT walks, so five frames whose walks
+    // had each settled = five recursive walks (the 20k-cap GET /dir?recursive).
+    (workspaceApi.getDir as any).mockResolvedValue({ ok: true, path: "", entries: [] });
+    (workspaceApi.getDirPaths as any).mockResolvedValue({ ok: true, paths: ["alu.v"], truncated: false });
+    useStore.setState({
+      pathIndex: { status: "ready", paths: ["alu.v"], truncated: false, error: null },
+    });
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        useStore.getState().invalidateDirs([""]);
+        // Let any walk the frame started settle before the next frame lands.
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      await vi.advanceTimersByTimeAsync(1200);
+      expect(workspaceApi.getDirPaths).toHaveBeenCalledTimes(1);
+      expect(useStore.getState().pathIndex.status).toBe("ready");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("P3-6: an invalidation that lands while a walk is in flight gets a TRAILING walk (the write it announces is never missed)", async () => {
+    let resolveFirst!: (v: unknown) => void;
+    (workspaceApi.getDir as any).mockResolvedValue({ ok: true, path: "", entries: [] });
+    (workspaceApi.getDirPaths as any)
+      .mockReturnValueOnce(new Promise((r) => (resolveFirst = r)))
+      .mockResolvedValue({ ok: true, paths: ["alu.v", "new.v"], truncated: false });
+    useStore.setState({
+      pathIndex: { status: "ready", paths: ["alu.v"], truncated: false, error: null },
+    });
+    vi.useFakeTimers();
+    try {
+      useStore.getState().invalidateDirs([""]);
+      await vi.advanceTimersByTimeAsync(1200); // first walk starts (still in flight)
+      expect(workspaceApi.getDirPaths).toHaveBeenCalledTimes(1);
+      useStore.getState().invalidateDirs([""]); // a write landed mid-walk
+      await vi.advanceTimersByTimeAsync(1200);
+      resolveFirst({ ok: true, paths: ["alu.v"], truncated: false });
+      await vi.advanceTimersByTimeAsync(1200);
+      expect(workspaceApi.getDirPaths).toHaveBeenCalledTimes(2);
+      expect(useStore.getState().pathIndex.paths).toEqual(["alu.v", "new.v"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
