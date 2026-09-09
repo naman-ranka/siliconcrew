@@ -717,6 +717,16 @@ export function CommandSurface() {
     if (intent.sessionId !== currentSession.id) return;
     setSelectedId(intent.commandId);
     setValues((prev) => ({ ...prev, [intent.commandId]: intent.values }));
+    // P3-5: on the in-place (Google/GIS) path the Surface never unmounted, so
+    // the `signinRequired` result that raised the CTA is still in the pane —
+    // "Sign in to run this" after the user IS signed in. The result is about
+    // a state that no longer holds; drop it.
+    setResults((prev) => {
+      if (!(intent.commandId in prev)) return prev;
+      const next = { ...prev };
+      delete next[intent.commandId];
+      return next;
+    });
     setOpen(true);
   }, [authStatus, currentSession, setOpen]);
 

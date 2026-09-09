@@ -272,6 +272,30 @@ describe("CommandSurface — sign-in CTA + form-state restore (W4/L2)", () => {
     });
   });
 
+  it("P3-5: an in-place (Google/GIS) sign-in clears the stale CTA when the intent replays", async () => {
+    vi.mocked(workbenchApi.synthesize).mockRejectedValue(
+      Object.assign(new Error("Sign in to run synthesis."), {
+        code: "signin_required",
+        status: 403,
+      })
+    );
+    const view = render(<CommandSurface />);
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    await screen.findByTestId("command-surface-signin-cta");
+    fireEvent.click(screen.getByRole("button", { name: /Sign in to run this/ }));
+    expect(signIn).toHaveBeenCalledTimes(1);
+
+    // GIS signs in with NO navigation: the Surface stays mounted and the
+    // replay host fires on the status transition alone.
+    authState = { enabled: true, status: "signed_in", signIn };
+    view.rerender(<CommandSurface />);
+    await waitFor(() => expect(sessionStorage.getItem(KEY)).toBeNull()); // intent consumed
+    expect(screen.queryByTestId("command-surface-signin-cta")).toBeNull();
+    expect(screen.queryByText("Result")).toBeNull();
+    // The form came back and the button is live for the signed-in user.
+    expect(screen.getByTestId("command-surface-invoke")).not.toBeDisabled();
+  });
+
   it("ordinary failures keep the raw error — no CTA", async () => {
     vi.mocked(workbenchApi.synthesize).mockRejectedValue(new Error("Quota exceeded."));
     render(<CommandSurface />);
