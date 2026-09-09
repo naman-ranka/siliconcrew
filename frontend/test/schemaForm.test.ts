@@ -209,11 +209,15 @@ describe("conventionOptions", () => {
   it("yaml_path → *.yaml/*.yml paths (the stem picks the extensions; _path is a file suffix)", () => {
     expect(conventionOptions("yaml_path", CTX)).toEqual(["specs/counter_spec.yaml", "legacy_spec.yml"]);
   });
-  it("spec_filename matches NEITHER side's rule today (FA27 backend gap) → free text, no suggestions", () => {
-    // A strict mirror of tool_catalog._looks_like_file_arg: the backend does
-    // not contain `spec_filename`, so the UI does not claim it is a file
-    // either. When the backend adds it to _FILE_ARG_NAMES, isFileKey follows.
-    expect(conventionOptions("spec_filename", CTX)).toBeNull();
+  it("spec_filename is a file key (mirrors _FILE_ARG_NAMES) → *.yaml/*.yml from its `spec` stem", () => {
+    // A strict mirror of tool_catalog._looks_like_file_arg: the backend
+    // contains `spec_filename` (P3-3 closed the FA27 gap), so the UI treats
+    // it as a file — the `spec` stem rule and the `filename` alternation in
+    // fileKeyStem are live, not dead table entries.
+    expect(conventionOptions("spec_filename", CTX)).toEqual([
+      "specs/counter_spec.yaml",
+      "legacy_spec.yml",
+    ]);
   });
   it("filename / file_path and unknown-stem file keys → the whole recursive index", () => {
     for (const key of ["filename", "file_path", "from_file", "report_path"]) {
@@ -262,12 +266,20 @@ describe("conventionOptions", () => {
 
 describe("isFileKey (mirror of tool_catalog._looks_like_file_arg)", () => {
   it("matches the _file/_files/_path suffixes and the filename/file_path names", () => {
-    for (const key of ["verilog_file", "verilog_files", "yaml_path", "filename", "file_path", "sby_file"]) {
+    for (const key of [
+      "verilog_file",
+      "verilog_files",
+      "yaml_path",
+      "filename",
+      "file_path",
+      "spec_filename",
+      "sby_file",
+    ]) {
       expect(isFileKey(key)).toBe(true);
     }
-    // Not file-valued by the rule: modules, runs, free text — and the two
-    // FA27 backend gaps the mirror must NOT paper over.
-    for (const key of ["top_module", "run_id", "query", "spec_filename", "from_ir"]) {
+    // Not file-valued by the rule: modules, runs, free text — and the FA27
+    // backend gap (`from_ir`) the mirror must NOT paper over.
+    for (const key of ["top_module", "run_id", "query", "from_ir"]) {
       expect(isFileKey(key)).toBe(false);
     }
   });
@@ -278,7 +290,7 @@ describe("valueKindFor", () => {
     for (const key of ["filename", "verilog_file", "verilog_files", "vcd_file", "yaml_path", "script_file"]) {
       expect(valueKindFor(key)).toBe("file");
     }
-    expect(valueKindFor("spec_filename")).toBeUndefined(); // strict mirror (FA27)
+    expect(valueKindFor("spec_filename")).toBe("file"); // strict mirror (P3-3)
     for (const key of ["sim_top", "top_module", "module_name", "python_module", "top_name"]) {
       expect(valueKindFor(key)).toBe("module");
     }

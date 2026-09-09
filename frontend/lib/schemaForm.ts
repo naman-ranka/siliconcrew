@@ -29,8 +29,8 @@ const BASIC_KEYS = new Set(["query", "stage", "mode", "generator"]);
  * File-valued argument names — the SAME rule the backend uses to decide which
  * args get workspace containment (`tool_catalog._looks_like_file_arg`:
  * `_FILE_ARG_SUFFIXES = ("_file", "_files", "_path")`, `_FILE_ARG_NAMES =
- * ("filename", "file_path")`). One rule, two mirrors — the keys the backend
- * contains are the keys the UI treats as files (FA3).
+ * ("filename", "file_path", "spec_filename")`). One rule, two mirrors — the
+ * keys the backend contains are the keys the UI treats as files (FA3).
  */
 export function isFileKey(key: string): boolean {
   return (
@@ -38,7 +38,8 @@ export function isFileKey(key: string): boolean {
     key.endsWith("_files") ||
     key.endsWith("_path") ||
     key === "filename" ||
-    key === "file_path"
+    key === "file_path" ||
+    key === "spec_filename"
   );
 }
 
