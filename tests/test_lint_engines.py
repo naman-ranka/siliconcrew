@@ -85,9 +85,9 @@ def test_run_linter_verilator_end_to_end_with_fake_binary(monkeypatch, tmp_path)
 
     monkeypatch.setattr(rl, "_run", fake_run)
     result = rl.run_linter([str(tmp_path / "alu.v")], cwd=str(tmp_path), engine="verilator")
-    assert captured["cmd"][:7] == [
+    assert captured["cmd"][:8] == [
         "verilator", "--lint-only", "--timing", "-Wall", "-Wno-fatal",
-        "-Wno-EOFNEWLINE", "-Wno-DECLFILENAME",
+        "-Wno-EOFNEWLINE", "-Wno-DECLFILENAME", f"+libext+{rl._NO_LIBRARY_EXT}",
     ]
     assert result["engine"] == "verilator"
     # Errors present in the parsed diagnostics → success False even with rc 0.
@@ -253,3 +253,30 @@ def test_split_unresolved_module_diagnostics_honors_scope():
     kept, missing = rl.split_unresolved_module_diagnostics(diags, {"counter"})
     assert missing == ["counter"]
     assert [d["message"] for d in kept] == ["Unknown module type: countr"]
+
+
+def test_verilator_lints_exactly_the_files_it_is_given(monkeypatch, tmp_path):
+    """Staging drive 2026-09-09: verilator treats -I dirs as module libraries,
+    so linting rtl/top.v alone silently elaborated the unlisted rtl/alu.v beside
+    it — the run was never file-scoped and the drop note ("not part of this
+    run") was false. The command must switch module auto-discovery off while
+    keeping -I for `include` resolution."""
+    monkeypatch.setattr(rl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    captured = {}
+
+    def fake_run(cmd, cwd, timeout):
+        captured["cmd"] = cmd
+        return {"returncode": 0, "stdout": "", "stderr": "", "command": " ".join(cmd)}
+
+    monkeypatch.setattr(rl, "_run", fake_run)
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    (rtl / "top.v").write_text("module top; alu u(); endmodule\n")
+    (rtl / "alu.v").write_text("module alu; endmodule\n")
+    rl.run_linter([str(rtl / "top.v")], cwd=str(tmp_path), engine="verilator")
+    cmd = captured["cmd"]
+    libext = [a for a in cmd if a.startswith("+libext+")]
+    assert libext == [f"+libext+{rl._NO_LIBRARY_EXT}"], cmd
+    assert not rl._NO_LIBRARY_EXT.endswith((".v", ".sv")), "the library extension must match no source file"
+    assert f"-I{rtl}" in cmd, "include resolution stays on"
+    assert str(rtl / "alu.v") not in cmd, "the unlisted file is not added by us either"
