@@ -571,6 +571,63 @@ describe("CommandSurface — the Dispatch button never silently re-arms (F1)", (
   });
 });
 
+describe("CommandSurface — in-flight results never land in the next session (P2-2)", () => {
+  // Adversarial review P2-2: F3 resets state that EXISTS at switch time; a
+  // promise still in flight wrote after the reset. The guard is keyed on the
+  // session id captured at invoke time — the store's own idiom.
+  it("a dispatch that resolves after a session switch leaves no note and no re-arm lock", async () => {
+    let resolveSynth!: (v: unknown) => void;
+    vi.mocked(workbenchApi.synthesize).mockReturnValue(
+      new Promise((r) => {
+        resolveSynth = r;
+      }) as never
+    );
+    render(<CommandSurface />);
+    fireEvent.click(screen.getByTestId("command-surface-invoke")); // synth is default
+    act(() => {
+      useStore.setState({ currentSession: { ...SESSION, id: "s2", name: "s2" } as never });
+    });
+    await act(async () => {
+      resolveSynth(SYNTH_DISPATCH);
+    });
+    expect(screen.queryByTestId("command-surface-dispatch-note")).toBeNull();
+    expect(screen.queryByTestId("command-surface-rearm")).toBeNull();
+    expect(screen.getByTestId("command-surface-invoke")).not.toBeDisabled();
+  });
+
+  it("a sync result that resolves after a session switch never renders in the new pane", async () => {
+    let resolveLint!: (v: unknown) => void;
+    vi.mocked(workbenchApi.lint).mockReturnValue(
+      new Promise((r) => {
+        resolveLint = r;
+      }) as never
+    );
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Lint")!);
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    act(() => {
+      useStore.setState({ currentSession: { ...SESSION, id: "s2", name: "s2" } as never });
+    });
+    await act(async () => {
+      resolveLint({
+        ok: false,
+        status: "failed",
+        warnings: [],
+        errors: [{ file: "alu.v", line: 3, message: "boom" }],
+        byFile: {},
+        command: "iverilog alu.v",
+        files: ["alu.v"],
+        engine: "iverilog",
+      });
+    });
+    fireEvent.click(railButton("Lint")!);
+    expect(screen.queryByText("Result")).toBeNull();
+    expect(screen.queryByText(/failed \(iverilog\)/)).toBeNull();
+    // The clock stops either way — the network call did settle.
+    expect(screen.queryByTestId("command-surface-elapsed")).toBeNull();
+  });
+});
+
 describe("CommandSurface — session switch resets the form (F3)", () => {
   it("values, selection and dispatch state do not leak into the next workspace", async () => {
     vi.mocked(workbenchApi.synthesize).mockResolvedValue(SYNTH_DISPATCH as never);

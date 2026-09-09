@@ -888,6 +888,11 @@ export function CommandSurface() {
 
   const invoke = async () => {
     if (running || missingRun || needsRearm) return;
+    // Stale-response guard (the store's idiom for every cross-session async):
+    // the session this call was made FOR. A switch mid-flight resets the
+    // Surface (F3), and the late result must not land in the next workspace's
+    // pane — a wrong-session verdict, dispatch note or re-arm lock.
+    const sid = currentSession.id;
     setRunning(true);
     setDispatched((prev) => ({ ...prev, [cmd.id]: undefined }));
     // Each dispatch consumes the acknowledgement — the NEXT one asks again.
@@ -895,6 +900,7 @@ export function CommandSurface() {
     try {
       // Pass only the user-touched values — runSurfaceCommand merges defaults.
       const res = await runSurfaceCommand(cmd, userVals);
+      if (useStore.getState().currentSession?.id !== sid) return; // switched away mid-flight
       if (res.dispatched) {
         // A successful async core dispatch (W5/A20 — explicit flag + run id,
         // replacing the old null contract): the note below is truthful by
