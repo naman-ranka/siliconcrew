@@ -625,9 +625,11 @@ export function CommandSurface() {
   const [running, setRunning] = React.useState(false);
   const [results, setResults] = React.useState<Record<string, SurfaceRunResult>>({});
   // Per-command last successful async dispatch (W5/A20): the run id feeds the
-  // dispatch note + "View in Runs". Absent = nothing dispatched.
+  // dispatch note + "View in Runs" and the F1 guard. Absent = nothing
+  // dispatched. `noteVisible` is the note's own lifetime (this visit); the
+  // record outlives it — see the close effect below (P2-4).
   const [dispatched, setDispatched] = React.useState<
-    Record<string, { runId: string | null } | undefined>
+    Record<string, { runId: string | null; noteVisible: boolean } | undefined>
   >({});
   // F1: the explicit "yes, dispatch a SECOND job" acknowledgement. Never
   // sticky — cleared on close, on a session switch, and on every dispatch.
@@ -648,11 +650,19 @@ export function CommandSurface() {
   // F1 (adversarial review): the Surface stays MOUNTED when it closes, so its
   // state outlives the dialog. A "Dispatched — synth_0042" note from an
   // earlier visit is stale on reopen (and the run it names may be long done),
-  // so the note and any re-arm acknowledgement die with the dialog. What
-  // survives is the honest live-run check below, which reads the runs slice.
+  // so the note and any re-arm acknowledgement die with the dialog. The
+  // dispatch RECORD does not (P2-4): it is the only honest evidence that a
+  // paid job went out until the runs slice shows that run finished — and the
+  // slice is filtered by runKindFilter, so it may never show it. It dies on
+  // a session switch (F3) or when the slice proves the run terminal.
   React.useEffect(() => {
     if (open) return;
-    setDispatched((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setDispatched((prev) => {
+      if (!Object.values(prev).some((d) => d?.noteVisible)) return prev;
+      return Object.fromEntries(
+        Object.entries(prev).map(([k, d]) => [k, d && { ...d, noteVisible: false }])
+      );
+    });
     setRearmed((prev) => (Object.keys(prev).length === 0 ? prev : {}));
   }, [open]);
 
@@ -869,10 +879,10 @@ export function CommandSurface() {
   // async command that produces a run row (registry `producesRun`, FA9) is
   // disarmed — one explicit "Dispatch again?" re-arms it — whenever either
   // honest read says a job of this kind may still be in flight:
-  //   * this Surface visit dispatched one and the runs slice has not yet
-  //     shown that run reaching a terminal state, or
-  //   * the runs slice carries a live run of the kind this command produces
-  //     (this is what survives close → reopen, where the note is cleared).
+  //   * this Surface dispatched one (the record survives close → reopen;
+  //     only the note is per visit) and the runs slice has not yet shown
+  //     that run reaching a terminal state, or
+  //   * the runs slice carries a live run of the kind this command produces.
   // Both are reads of already-loaded state; the Surface still never polls.
   // The runs slice is scoped by runKindFilter, so "as far as this view knows"
   // in the copy below is load-bearing, not decoration.
@@ -906,7 +916,10 @@ export function CommandSurface() {
         // replacing the old null contract): the note below is truthful by
         // construction. Drop any stale result from a previous failed attempt
         // so the pane doesn't contradict the dispatch note.
-        setDispatched((prev) => ({ ...prev, [cmd.id]: { runId: res.runId ?? null } }));
+        setDispatched((prev) => ({
+          ...prev,
+          [cmd.id]: { runId: res.runId ?? null, noteVisible: true },
+        }));
         setResults((prev) => {
           if (!(cmd.id in prev)) return prev;
           const next = { ...prev };
@@ -1320,7 +1333,7 @@ export function CommandSurface() {
                   </Button>
                 </div>
               )}
-              {wasDispatched && (
+              {wasDispatched?.noteVisible && (
                 <div data-testid="command-surface-dispatch-note" className="space-y-1.5">
                   <p className="font-mono text-[10px] text-muted-foreground">
                     Dispatched{wasDispatched.runId ? ` — ${wasDispatched.runId}` : ""} · follow

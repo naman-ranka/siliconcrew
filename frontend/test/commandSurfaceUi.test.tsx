@@ -538,6 +538,34 @@ describe("CommandSurface — the Dispatch button never silently re-arms (F1)", (
     expect(workbenchApi.synthesize).toHaveBeenCalledTimes(1);
   });
 
+  it("P2-4: close → reopen keeps the guard when the (filtered) runs slice never showed the run", async () => {
+    // Adversarial review P2-4: the runs slice is fetched with runKindFilter —
+    // Runs tab on "sim" (or the post-dispatch loadRuns not landed yet) means
+    // the slice will never carry synth_0042. Clearing the dispatch record on
+    // close then left the button silently armed: one click = a second paid job.
+    useStore.setState({
+      runs: [{ ...runningSynth("sim_0003"), kind: "sim", status: "passed" }] as never,
+    });
+    vi.mocked(workbenchApi.synthesize).mockResolvedValue(SYNTH_DISPATCH as never);
+    render(<CommandSurface />);
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    await screen.findByTestId("command-surface-dispatch-note");
+
+    act(() => useWorkbenchUiStore.setState({ commandSurfaceOpen: false }));
+    act(() => useWorkbenchUiStore.setState({ commandSurfaceOpen: true }));
+
+    expect(screen.queryByTestId("command-surface-dispatch-note")).toBeNull(); // the note is per visit
+    expect(screen.getByTestId("command-surface-invoke")).toBeDisabled();
+    expect(screen.getByTestId("command-surface-rearm")).toHaveTextContent(
+      "synth_0042 has not finished as far as this view knows."
+    );
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    expect(workbenchApi.synthesize).toHaveBeenCalledTimes(1);
+    // The explicit gesture is still the one way to fire twice.
+    fireEvent.click(screen.getByRole("button", { name: "Dispatch again?" }));
+    expect(screen.getByTestId("command-surface-invoke")).not.toBeDisabled();
+  });
+
   it("a finished run leaves the button armed — the guard is live state, not a lock", async () => {
     vi.mocked(workbenchApi.synthesize).mockResolvedValue(SYNTH_DISPATCH as never);
     render(<CommandSurface />);
