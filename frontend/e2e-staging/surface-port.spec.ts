@@ -205,7 +205,9 @@ async function selectRailCommand(page: Page, label: string) {
   // for a Simulate row that was filtered away — clear it first.
   const filter = page.getByTestId("command-surface-filter");
   if ((await filter.inputValue().catch(() => "")) !== "") await filter.fill("");
-  await surface.getByRole("button", { name: label, exact: true }).click();
+  // Async rows carry an "async" badge INSIDE the button, so their accessible
+  // name is "Synthesize async" — an exact "Synthesize" never matches (run 3).
+  await surface.getByRole("button", { name: new RegExp(`^${label}( async)?$`) }).click();
   await expect(surface.getByRole("heading", { name: label, exact: true })).toBeVisible();
 }
 
@@ -390,9 +392,12 @@ test("surface port: nested design, overrides, file-scoped lint, sim, context men
     await filter.fill("lint");
     await check("filter 'lint' hides Synthesize, keeps Lint", async () => {
       await expect(surface.getByRole("button", { name: "Lint", exact: true })).toBeVisible();
-      await expect(surface.getByRole("button", { name: "Synthesize", exact: true })).toHaveCount(0);
+      await expect(surface.getByRole("button", { name: /^Synthesize/ })).toHaveCount(0);
     });
     await filter.press("Enter");
+    await check("filter 'lint' really hid the async rows too (Synthesize async)", () =>
+      expect(surface.getByRole("button", { name: /^Synthesize async$/ })).toHaveCount(0)
+    );
     await check("Enter selects Lint (aria-current) and opens its detail", async () => {
       await expect(surface.getByRole("button", { name: "Lint", exact: true })).toHaveAttribute(
         "aria-current",
