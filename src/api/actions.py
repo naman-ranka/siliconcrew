@@ -42,6 +42,11 @@ from src.utils.paths import is_within
 from src.platform_engines import auth as _auth_engine
 from src.tools import manifest as manifest_mod
 from src.tools import file_ops
+# The SAME multi-file resolver the agent/MCP wrappers use: calling one shared
+# helper from both the REST twins and the wrappers — not mere parameter
+# presence — is what keeps invariant 2 (zero drift) true. Drop notes come from
+# manifest_mod.override_drop_notes, likewise shared.
+from src.tools.file_resolver import FileResolutionError, resolve_workspace_files
 from src.tools.run_linter import run_linter
 from src.tools.sim_manager import (
     run_sim_isolated,
@@ -77,6 +82,10 @@ class SimulateRequest(BaseModel):
     simTop: Optional[str] = None
     mode: str = "rtl"
     runId: Optional[str] = None
+    # Optional compile-set override: workspace-relative paths or basenames,
+    # resolved through the shared file resolver. Empty/absent = the manifest's
+    # files_for_stage set, exactly as before.
+    files: Optional[List[str]] = None
 
 
 class SynthesizeRequest(BaseModel):
@@ -94,6 +103,9 @@ class SynthesizeRequest(BaseModel):
     # Last flow stage to execute; "finish" (default) = full RTL->GDS flow,
     # "synth" = fast synthesis-only PPA estimate. Later stages are "skipped".
     maxStage: str = "finish"
+    # Optional compile-set override; same .v/.sv filter as the manifest path
+    # (constraints still flow via constraintsMode, never this list).
+    verilogFiles: Optional[List[str]] = None
 
 
 class RetryRequest(BaseModel):
@@ -117,6 +129,8 @@ class InvokeRequest(BaseModel):
 
 class LintRequest(BaseModel):
     engine: str = "auto"  # auto | iverilog | verilator
+    # Optional compile-set override; empty/absent = manifest lint set.
+    files: Optional[List[str]] = None
 
 
 # --- Shared helpers ---------------------------------------------------------
@@ -267,7 +281,7 @@ def _split_lint_diagnostics(diagnostics: List[Dict[str, Any]]):
 def _classify_file(name: str) -> str:
     """FileInfo.type classification — mirrors api.py's list_workspace_files."""
     ext = os.path.splitext(name)[1].lower()
-    if ext in (".v", ".sv"):
+    if ext in manifest_mod.RTL_EXTS:
         return "verilog"
     if ext == ".yaml":
         return "spec" if "_spec" in name else "yaml"
@@ -356,7 +370,7 @@ def _code_file_rel_paths(workspace: str, manifest: manifest_mod.DesignManifest) 
     rels = {f.path for f in manifest.files if f.role in ("rtl", "tb", "include")}
     rels.update(
         rel for rel in manifest_mod.iter_workspace_files(workspace, manifest.ignore)
-        if rel.lower().endswith((".v", ".sv"))
+        if rel.lower().endswith(manifest_mod.RTL_EXTS)
     )
     return sorted(r for r in rels if os.path.isfile(os.path.join(workspace, r)))
 
@@ -599,15 +613,38 @@ def build_actions_router(
         uid = require_owned(session_id, identity)
         workspace = await require_workspace(session_id)
         engine = (body.engine if body else "auto") or "auto"
+        override = list(body.files) if body and body.files else []
 
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
-            rel_files = manifest_mod.files_for_stage(manifest, "lint")
+            manifest_files = manifest_mod.files_for_stage(manifest, "lint")
+            notes: List[str] = []
+            if override:
+                try:
+                    rel_files = resolve_workspace_files(workspace, override, exts=manifest_mod.RTL_EXTS)
+                except FileResolutionError as exc:
+                    return {"badFiles": str(exc)}
+                notes = manifest_mod.override_drop_notes("lint", manifest_files, rel_files)
+            else:
+                rel_files = manifest_files
             if not rel_files:
                 return {"empty": True}
             call_id = _ui_log_call(workspace, session_id, "linter_tool", {"verilog_files": rel_files, "engine": engine})
             abs_files = [os.path.join(workspace, f) for f in rel_files]
-            result = run_linter(abs_files, cwd=workspace, engine=engine)
+            # An override that leaves manifest lint files out (exactly what
+            # override_drop_notes just listed) is a FILE-SCOPED lint: modules
+            # the dropped files would have supplied are missing by the user's
+            # own choice, so "Unknown module type" is a scope note, not a
+            # FAILED verdict (invariant 4 — no false verdicts). An override
+            # that keeps the whole manifest set stays strict, and so does the
+            # manifest path itself. Derived, not declared: a client cannot
+            # claim file-scoped for a whole-design lint. Caveat: this relies on
+            # the manifest knowing the design's rtl set; an override against an
+            # EMPTY manifest lint set is strict lint by construction (a false
+            # "fail" on unresolved modules is possible only when the manifest
+            # tracks nothing — never a false "pass").
+            result = run_linter(abs_files, cwd=workspace, engine=engine, file_scoped=bool(notes))
+            notes = notes + list(result.get("notes") or [])
             warnings, errors, by_file = _split_lint_diagnostics(result.get("diagnostics") or [])
             passed = bool(result.get("success"))
             _ui_log_result(
@@ -623,11 +660,14 @@ def build_actions_router(
                 "warnings": warnings,
                 "errors": errors,
                 "byFile": by_file,
+                "notes": notes,
             }
 
         # mutates=True: lint itself is a read, but it now records itself in the
         # per-session event log (attempt_events.jsonl), which must persist.
         out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
+        if out.get("badFiles"):
+            _err("invalid_files", out["badFiles"], status=400)
         if out.get("empty"):
             _err("no_rtl", "No RTL files in the manifest to lint.", status=400)
 
@@ -640,6 +680,9 @@ def build_actions_router(
             "byFile": out["byFile"],
             "command": result.get("command", ""),
             "files": out["files"],
+            # Same channel simulate/synthesize use: honest notes about what a
+            # file override changed (which manifest files it left out).
+            "manifestWarnings": out["notes"],
         })
 
     # ---- Simulate (sync, isolated run) -------------------------------------
@@ -654,7 +697,16 @@ def build_actions_router(
             top = body.simTop or manifest.simTop
             if not top:
                 return {"error": "no_sim_top"}
-            rel_files = manifest_mod.files_for_stage(manifest, "simulate")
+            manifest_files = manifest_mod.files_for_stage(manifest, "simulate")
+            notes: List[str] = []
+            if body.files:
+                try:
+                    rel_files = resolve_workspace_files(workspace, body.files, exts=manifest_mod.RTL_EXTS)
+                except FileResolutionError as exc:
+                    return {"error": "bad_files", "message": str(exc)}
+                notes = manifest_mod.override_drop_notes("simulate", manifest_files, rel_files)
+            else:
+                rel_files = manifest_files
             if not rel_files:
                 return {"error": "no_files"}
             call_id = _ui_log_call(workspace, session_id, "run_simulation", {
@@ -675,11 +727,13 @@ def build_actions_router(
                  "vcdPath": sim_run.get("vcdPath")},
                 ok=passed,
             )
-            return {"simRun": sim_run, "warnings": _compile_set_warnings(workspace, rel_files)}
+            return {"simRun": sim_run, "warnings": [*notes, *_compile_set_warnings(workspace, rel_files)]}
 
         out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error") == "no_sim_top":
             _err("no_sim_top", "No simTop in the manifest and none provided.", status=400)
+        if out.get("error") == "bad_files":
+            _err("invalid_files", out.get("message", "Invalid files override."), status=400)
         if out.get("error") == "no_files":
             _err("no_files", "Manifest has no rtl/tb files to simulate.", status=400)
         return _ok({"run": out["simRun"], "manifestWarnings": out["warnings"]})
@@ -697,7 +751,29 @@ def build_actions_router(
             if not top:
                 return {"error": "no_synth_top"}
             rel_files = manifest_mod.files_for_stage(manifest, "synthesize")
-            src_files = [f for f in rel_files if f.lower().endswith((".v", ".sv"))]
+            manifest_src = [f for f in rel_files if f.lower().endswith(manifest_mod.RTL_EXTS)]
+            notes: List[str] = []
+            if body.verilogFiles:
+                try:
+                    resolved_files = resolve_workspace_files(
+                        workspace, body.verilogFiles, exts=manifest_mod.RTL_EXTS
+                    )
+                except FileResolutionError as exc:
+                    return {"error": "bad_files", "message": str(exc)}
+                # Same .v/.sv filter the manifest path applies — but an
+                # explicitly overridden file must never vanish silently: name
+                # each one the filter drops. Constraints flow via constraintsMode.
+                src_files = [f for f in resolved_files if f.lower().endswith(manifest_mod.RTL_EXTS)]
+                notes.extend(
+                    f"Override file '{f}' was dropped — synthesis compiles only .v/.sv "
+                    "sources (constraints flow via constraintsMode, not this list)."
+                    for f in resolved_files if f not in src_files
+                )
+                notes.extend(manifest_mod.override_drop_notes("synthesize", manifest_src, src_files))
+                if not src_files:
+                    return {"error": "no_override_sources"}
+            else:
+                src_files = manifest_src
             if not src_files:
                 return {"error": "no_files"}
             abs_files = [os.path.join(workspace, f) for f in src_files]
@@ -734,11 +810,15 @@ def build_actions_router(
                  "status": (result or {}).get("status")},
                 ok=dispatched,
             )
-            return {"result": result, "warnings": _compile_set_warnings(workspace, src_files)}
+            return {"result": result, "warnings": [*notes, *_compile_set_warnings(workspace, src_files)]}
 
         out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("error") == "no_synth_top":
             _err("no_synth_top", "No synthTop in the manifest and none provided.", status=400)
+        if out.get("error") == "bad_files":
+            _err("invalid_files", out.get("message", "Invalid verilogFiles override."), status=400)
+        if out.get("error") == "no_override_sources":
+            _err("no_files", "The verilogFiles override contains no .v/.sv sources to synthesize.", status=400)
         if out.get("error") == "no_files":
             _err("no_files", "Manifest has no rtl files to synthesize.", status=400)
         result = out["result"]
