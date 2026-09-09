@@ -47,7 +47,7 @@ from src.tools import file_ops
 # presence — is what keeps invariant 2 (zero drift) true. Drop notes come from
 # manifest_mod.override_drop_notes, likewise shared.
 from src.tools.file_resolver import FileResolutionError, resolve_workspace_files
-from src.tools.run_linter import run_linter
+from src.tools.run_linter import files_compiled, run_linter
 from src.tools.sim_manager import (
     run_sim_isolated,
     list_sim_runs,
@@ -618,7 +618,6 @@ def build_actions_router(
         def work():
             manifest = manifest_mod.read_manifest(workspace, session_id)
             manifest_files = manifest_mod.files_for_stage(manifest, "lint")
-            notes: List[str] = []
             dropped: List[str] = []
             scope_modules: set = set()
             if override:
@@ -627,9 +626,8 @@ def build_actions_router(
                 except FileResolutionError as exc:
                     return {"badFiles": str(exc)}
                 dropped = manifest_mod.dropped_manifest_files(manifest_files, rel_files)
-                notes = manifest_mod.override_drop_notes("lint", manifest_files, rel_files)
                 # An override that leaves manifest lint files out (exactly the
-                # files the notes just named) is a FILE-SCOPED lint. The
+                # files the drop notes name below) is a FILE-SCOPED lint. The
                 # manifest already knows which modules each design file
                 # declares, so the linter is told precisely which unresolved
                 # names are the user's own choice: "Unknown module type:
@@ -654,14 +652,36 @@ def build_actions_router(
                 "fileScoped": bool(dropped), "scopeModules": sorted(scope_modules),
             })
             abs_files = [os.path.join(workspace, f) for f in rel_files]
-            result = run_linter(abs_files, cwd=workspace, engine=engine, scope_modules=scope_modules)
-            notes = notes + list(result.get("notes") or [])
+            # -I is the manifest's include directories (invariant 1), never the
+            # source directories — on verilator -I is also a module library.
+            result = run_linter(
+                abs_files, cwd=workspace, engine=engine, scope_modules=scope_modules,
+                include_dirs=manifest_mod.include_dirs(manifest),
+            )
+            # The drop notes are written AFTER the run, from what the engine
+            # proved it read. The residual widening case: an include-role file
+            # lives in a source directory, so that directory is on -I and
+            # verilator's library search finds a dropped file there anyway.
+            # Then the dropped file WAS compiled, its note says so (one helper,
+            # one wording, same as the agent wrapper), and its modules are
+            # struck from the recorded scope: they were elaborated, so they
+            # cannot be excused — and by construction never were, since an
+            # elaborated module raises no unresolved-module diagnostic for the
+            # excuse to act on. The record is what is corrected here.
+            compiled = files_compiled(result)
+            notes = manifest_mod.override_drop_notes(
+                "lint", manifest_files, rel_files, compiled=compiled, engine=result.get("engine")
+            ) + list(result.get("notes") or [])
+            widened = [f for f in dropped if f in compiled]
+            if widened:
+                scope_modules = scope_modules - manifest_mod.modules_defined_by(workspace, manifest, widened)
             warnings, errors, by_file = _split_lint_diagnostics(result.get("diagnostics") or [])
             passed = bool(result.get("success"))
             _ui_log_result(
                 workspace, session_id, "linter_tool", call_id,
                 {"status": "passed" if passed else "failed", "engine": result.get("engine"),
-                 "warnings": len(warnings), "errors": len(errors), "notes": notes},
+                 "warnings": len(warnings), "errors": len(errors), "notes": notes,
+                 "scopeModules": sorted(scope_modules), "filesRead": result.get("filesRead")},
                 ok=passed,
             )
             return {
@@ -691,6 +711,9 @@ def build_actions_router(
             "byFile": out["byFile"],
             "command": result.get("command", ""),
             "files": out["files"],
+            # What the engine proved it read (run_linter: verilator, after a
+            # clean elaboration); null = not measured, never "read nothing".
+            "filesRead": result.get("filesRead"),
             # Same channel simulate/synthesize use: honest notes about what a
             # file override changed (which manifest files it left out).
             "manifestWarnings": out["notes"],

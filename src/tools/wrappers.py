@@ -4,7 +4,7 @@ import time
 from typing import Any, Literal, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
-from src.tools.run_linter import run_linter
+from src.tools.run_linter import files_compiled, run_linter
 from src.tools.read_waveform import read_waveform
 from src.tools.run_cocotb import run_cocotb
 from src.tools.run_sby import run_sby
@@ -344,16 +344,25 @@ def linter_tool(
         return f"Error: {exc}"
     filepaths = [os.path.join(workspace, rel) for rel in rel_files]
 
-    # The same drop notes the REST twin (/lint) emits, from the same helper:
-    # which manifest lint files this explicit list leaves out. Narration only —
-    # the verdict stays strict (no scope_modules): the agent chose the set and
-    # is told to include the dependencies.
+    # The manifest supplies the include directories (invariant 1) — the same
+    # helper the REST twin (/lint) uses — so an explicit file list still
+    # resolves the design's headers. The verdict stays strict (no
+    # scope_modules): the agent chose the set and is told to include the
+    # dependencies.
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
-    notes = manifest_mod.override_drop_notes(
-        "lint", manifest_mod.files_for_stage(m, "lint"), rel_files
+    result = run_linter(
+        filepaths, cwd=workspace, engine=engine, include_dirs=manifest_mod.include_dirs(m)
     )
-
-    result = run_linter(filepaths, cwd=workspace, engine=engine)
+    # The same drop notes the REST twin emits, from the same helper, written
+    # after the run from what the engine proved it read: a manifest lint file
+    # this list left out is named as "not part of this run" — or, if the
+    # engine read it anyway (a header the listed files `include, or a module
+    # verilator found by library lookup in an include directory), as read
+    # after all (see the /lint handler for the residual case).
+    notes = manifest_mod.override_drop_notes(
+        "lint", manifest_mod.files_for_stage(m, "lint"), rel_files,
+        compiled=files_compiled(result), engine=result.get("engine"),
+    )
 
     diags = result.get("diagnostics") or []
     warnings = [d for d in diags if d["severity"] == "warning"]

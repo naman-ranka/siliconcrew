@@ -47,7 +47,7 @@ def test_linter_tool_resolves_nested_basename(ws, monkeypatch):
     _mk(ws, "rtl/alu.v")
     seen = {}
 
-    def fake_linter(files, cwd, engine="auto"):
+    def fake_linter(files, cwd, engine="auto", **kw):
         seen["files"] = files
         return {"success": True, "engine": "iverilog", "stderr": "", "diagnostics": []}
 

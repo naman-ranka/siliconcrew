@@ -103,7 +103,7 @@ def test_lint_override_that_drops_manifest_files_is_file_scoped(client, monkeypa
         f.write("module top(input clk); counter c(.clk(clk), .q()); endmodule\n")
     seen = {}
 
-    def fake_linter(files, cwd, engine="auto", scope_modules=None):
+    def fake_linter(files, cwd, engine="auto", scope_modules=None, **kw):
         seen["scope_modules"] = scope_modules
         return {"success": True, "engine": "iverilog", "stderr": "", "command": "",
                 "diagnostics": [], "notes": ["File-scoped lint: counter not in the linted file set."]}
@@ -126,7 +126,7 @@ def test_lint_override_covering_the_manifest_set_stays_strict(client, monkeypatc
     _seed_nested(ws)
     seen = {}
 
-    def fake_linter(files, cwd, engine="auto", scope_modules=None):
+    def fake_linter(files, cwd, engine="auto", scope_modules=None, **kw):
         seen["scope_modules"] = scope_modules
         return {"success": True, "engine": "iverilog", "stderr": "", "command": "", "diagnostics": [], "notes": []}
 
@@ -148,7 +148,7 @@ def test_lint_override_scope_is_the_dropped_files_module_set_only(client, monkey
         f.write("module top(input clk); counter c(.clk(clk), .q()); adder a(.a(clk), .b()); endmodule\n")
     seen = {}
 
-    def fake_linter(files, cwd, engine="auto", scope_modules=None):
+    def fake_linter(files, cwd, engine="auto", scope_modules=None, **kw):
         seen["scope_modules"] = set(scope_modules or ())
         return {"success": True, "engine": "iverilog", "stderr": "", "command": "", "diagnostics": [], "notes": []}
 
@@ -196,7 +196,7 @@ def test_lint_without_override_is_never_file_scoped(client, monkeypatch):
     _seed_nested(ws)
     seen = {}
 
-    def fake_linter(files, cwd, engine="auto", scope_modules=None):
+    def fake_linter(files, cwd, engine="auto", scope_modules=None, **kw):
         seen["scope_modules"] = scope_modules
         return {"success": True, "engine": "iverilog", "stderr": "", "command": "", "diagnostics": [], "notes": []}
 
@@ -501,3 +501,178 @@ def test_twins_and_wrappers_share_one_resolver():
     # And the extension set they hand the resolver is the one definition (B12).
     assert actions_mod.manifest_mod.RTL_EXTS is manifest.RTL_EXTS
     assert wrappers.RTL_EXTS is manifest.RTL_EXTS
+
+
+# --- -I is the manifest's include dirs; drop notes tell the truth about what
+# --- the engine read (staging discrepancy A, 2026-09-09) -----------------------
+
+def _seed_include(ws, rel, text="`define W 8\n"):
+    path = os.path.join(ws, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def _lint_result(**extra):
+    return {"success": True, "engine": "verilator", "stderr": "", "command": "",
+            "diagnostics": [], "notes": [], **extra}
+
+
+def test_lint_handler_passes_the_manifest_include_dirs_not_source_dirs(client, monkeypatch):
+    c, ws = client
+    _seed_nested(ws)
+    _seed_include(ws, "inc/glob.vh")
+    seen = {}
+
+    def fake_linter(files, cwd, engine="auto", **kw):
+        seen.update(kw)
+        return _lint_result()
+
+    monkeypatch.setattr(actions_mod, "run_linter", fake_linter)
+    assert c.post(f"/api/workspace/{SID}/lint").status_code == 200
+    from src.tools import manifest
+    m = manifest.read_manifest(ws, SID)
+    assert manifest.include_dirs(m) == ["inc"]
+    assert seen["include_dirs"] == ["inc"]  # the helper's answer, verbatim; "rtl" is NOT there
+    # Same on an explicit override.
+    assert c.post(f"/api/workspace/{SID}/lint", json={"files": ["rtl/counter.v"]}).status_code == 200
+    assert seen["include_dirs"] == ["inc"]
+
+
+def test_lint_handler_names_a_dropped_file_the_engine_compiled_anyway(client, monkeypatch):
+    """The residual case: the engine's read list shows the dropped manifest
+    file was compiled after all. The note must say so (not "not part of this
+    run"), its modules leave the recorded scope, and the read list reaches
+    the response and the durable event."""
+    c, ws = client
+    _seed_nested(ws)
+    with open(os.path.join(ws, "rtl", "top.v"), "w") as f:
+        f.write("module top(input clk); counter c(.clk(clk), .q()); endmodule\n")
+    seen = {}
+
+    def fake_linter(files, cwd, engine="auto", **kw):
+        seen["scope_modules"] = set(kw.get("scope_modules") or ())
+        return _lint_result(filesRead=["/usr/share/verilator/include/verilated_std.sv", "rtl/counter.v", "rtl/top.v"])
+
+    monkeypatch.setattr(actions_mod, "run_linter", fake_linter)
+    r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["rtl/top.v"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    from src.tools.manifest import override_drop_notes
+    expected = override_drop_notes("lint", ["rtl/counter.v", "rtl/top.v"], ["rtl/top.v"],
+                                   compiled={"rtl/counter.v"}, engine="verilator")
+    assert expected == [
+        "Override omits manifest lint file 'rtl/counter.v' — verilator read it anyway "
+        "(`include, or a module lookup in an include directory); the verdict covers it."
+    ]
+    assert body["manifestWarnings"] == expected
+    assert not any("not part of this run" in n for n in body["manifestWarnings"])
+    assert body["filesRead"] == ["/usr/share/verilator/include/verilated_std.sv", "rtl/counter.v", "rtl/top.v"]
+    # The linter was told the pre-run scope (the only one knowable before the
+    # run); the record is corrected from what was actually read.
+    assert seen["scope_modules"] == {"counter"}
+    ev = c.get(f"/api/workspace/{SID}/activity").json()["events"][0]
+    summary = json.loads(ev["resultSummary"])
+    assert summary["scopeModules"] == []
+    assert summary["filesRead"] == body["filesRead"]
+    assert summary["notes"] == expected
+
+
+def test_lint_handler_dropped_file_with_a_diagnostic_counts_as_compiled(client, monkeypatch):
+    """A failed verilator run writes no read list, but a diagnostic AT the
+    dropped file proves it was read — the note still tells the truth."""
+    c, ws = client
+    _seed_nested(ws)
+    with open(os.path.join(ws, "rtl", "top.v"), "w") as f:
+        f.write("module top(input clk); counter c(.clk(clk), .q()); endmodule\n")
+    monkeypatch.setattr(actions_mod, "run_linter", lambda files, cwd, engine="auto", **kw: _lint_result(
+        success=False,
+        diagnostics=[{"file": "rtl/counter.v", "line": 1, "severity": "error",
+                      "message": "Can't find definition of variable: 'x'", "code": None}],
+    ))
+    body = c.post(f"/api/workspace/{SID}/lint", json={"files": ["rtl/top.v"]}).json()
+    assert body["status"] == "failed"
+    assert body["filesRead"] is None
+    assert body["manifestWarnings"] == [
+        "Override omits manifest lint file 'rtl/counter.v' — verilator read it anyway "
+        "(`include, or a module lookup in an include directory); the verdict covers it."
+    ]
+
+
+def test_lint_handler_dropped_file_not_read_keeps_the_plain_note(client, monkeypatch):
+    c, ws = client
+    _seed_nested(ws)
+    with open(os.path.join(ws, "rtl", "top.v"), "w") as f:
+        f.write("module top(input clk); counter c(.clk(clk), .q()); endmodule\n")
+    monkeypatch.setattr(actions_mod, "run_linter", lambda files, cwd, engine="auto", **kw: _lint_result(
+        filesRead=["rtl/top.v"], notes=["File-scoped lint: counter instantiated but not in the linted file set."],
+    ))
+    body = c.post(f"/api/workspace/{SID}/lint", json={"files": ["rtl/top.v"]}).json()
+    assert body["manifestWarnings"][0] == "Override omits manifest lint file 'rtl/counter.v' — it is not part of this run."
+    ev = c.get(f"/api/workspace/{SID}/activity").json()["events"][0]
+    assert json.loads(ev["resultSummary"])["scopeModules"] == ["counter"]
+
+
+def test_linter_tool_wrapper_passes_include_dirs_and_names_compiled_anyway(tmp_path, monkeypatch):
+    wrappers, ws = _wrap(tmp_path, monkeypatch)
+    _seed_include(ws, "inc/glob.vh")
+    with open(os.path.join(ws, "rtl", "top.v"), "w") as f:
+        f.write("module top(input clk); counter c(.clk(clk), .q()); endmodule\n")
+    seen = {}
+
+    def fake_linter(files, cwd, engine="auto", **kw):
+        seen.update(kw)
+        return _lint_result(filesRead=["rtl/counter.v", "rtl/top.v"])
+
+    monkeypatch.setattr(wrappers, "run_linter", fake_linter)
+    out = wrappers.linter_tool.func(verilog_files=["top.v"])
+    assert seen["include_dirs"] == ["inc"]
+    assert "scope_modules" not in seen or not seen["scope_modules"]  # still strict
+    assert ("Override omits manifest lint file 'rtl/counter.v' — verilator read it anyway "
+            "(`include, or a module lookup in an include directory); the verdict covers it.") in out
+    assert "'rtl/counter.v' — it is not part of this run" not in out
+    # The header the list left out and the engine did not read keeps the plain note.
+    assert "Override omits manifest lint file 'inc/glob.vh' — it is not part of this run." in out
+
+
+@pytest.mark.requires_eda
+@pytest.mark.skipif(__import__("shutil").which("verilator") is None, reason="verilator not installed")
+def test_lint_handler_real_verilator_residual_case_end_to_end(client):
+    """No fakes: a header in rtl/ puts rtl/ on -I, so linting rtl/top.v alone
+    lets verilator's library search compile rtl/alu.v — and the response says
+    exactly that instead of 'not part of this run'."""
+    c, ws = client
+    _seed_include(ws, "rtl/defs.vh")
+    _seed_include(ws, "rtl/alu.v", "module alu(input [7:0] a, b, output [7:0] y);\n  assign y = a + b;\nendmodule\n")
+    _seed_include(ws, "rtl/top.v", '`include "defs.vh"\nmodule top(input [`W-1:0] a, b, output [`W-1:0] y);\n  alu u(.a(a), .b(b), .y(y));\nendmodule\n')
+    body = c.post(f"/api/workspace/{SID}/lint", json={"engine": "verilator", "files": ["rtl/top.v"]}).json()
+    assert body["status"] == "passed", body
+    assert {"rtl/alu.v", "rtl/defs.vh", "rtl/top.v"} <= set(body["filesRead"])
+    # Both dropped manifest files were read — alu.v by library lookup, defs.vh
+    # by `include — and both notes say so; neither claims "not part of this run".
+    assert body["manifestWarnings"] == [
+        f"Override omits manifest lint file '{rel}' — verilator read it anyway "
+        "(`include, or a module lookup in an include directory); the verdict covers it."
+        for rel in ("rtl/alu.v", "rtl/defs.vh")
+    ]
+    # And with the header elsewhere, the same gesture is file-scoped for real:
+    # -I names the root now, alu.v is not there, the run is honestly scoped.
+    os.replace(os.path.join(ws, "rtl", "defs.vh"), os.path.join(ws, "defs.vh"))
+    with open(os.path.join(ws, "rtl", "top.v"), "w") as f:
+        f.write('`include "../defs.vh"\nmodule top(input [`W-1:0] a, b, output [`W-1:0] y);\n  alu u(.a(a), .b(b), .y(y));\nendmodule\n')
+    body = c.post(f"/api/workspace/{SID}/lint", json={"engine": "verilator", "files": ["rtl/top.v"]}).json()
+    assert body["status"] == "passed", body
+    assert body["filesRead"] is None  # a failed elaboration (alu unresolved) writes no read list
+    assert "Override omits manifest lint file 'rtl/alu.v' — it is not part of this run." in body["manifestWarnings"]
+    assert any("File-scoped lint" in n and "alu" in n for n in body["manifestWarnings"])
+
+
+def test_twins_and_wrappers_share_the_include_dirs_and_files_compiled_helpers():
+    """Structural parity pin, same shape as the resolver pin: both surfaces
+    reach ONE include_dirs helper and ONE read-evidence helper."""
+    from src.tools import manifest, run_linter
+    wrappers = pytest.importorskip("src.tools.wrappers")
+    assert actions_mod.manifest_mod.include_dirs is manifest.include_dirs
+    assert wrappers.manifest_mod.include_dirs is manifest.include_dirs
+    assert actions_mod.files_compiled is run_linter.files_compiled
+    assert wrappers.files_compiled is run_linter.files_compiled

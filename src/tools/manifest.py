@@ -21,8 +21,9 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import re
-from typing import Any, Dict, Iterator, List, Literal, NamedTuple, Optional, get_args
+from typing import Any, Collection, Dict, Iterator, List, Literal, NamedTuple, Optional, get_args
 
 from pydantic import BaseModel, Field
 
@@ -1105,6 +1106,21 @@ def files_for_stage(manifest: DesignManifest, stage: str) -> List[str]:
     return [f.path for f in manifest.files if f.role in roles]
 
 
+def include_dirs(manifest: DesignManifest) -> List[str]:
+    """Workspace-relative directories of the manifest's include-role files —
+    the ``-I`` search path a lint/compile needs for an `` `include`` that does
+    not live beside the file including it (``"."`` for the workspace root).
+
+    The manifest is the ONE source of this (invariant 1): the REST twin and
+    the agent/MCP wrapper both pass it to ``run_linter``, so an explicit agent
+    file list still resolves the design's headers. It is deliberately NOT the
+    source files' directories — on verilator ``-I`` doubles as a module
+    library, and naming a source directory there silently widens the compile
+    past the files given (see ``run_linter``).
+    """
+    return sorted({posixpath.dirname(f.path) or "." for f in manifest.files if f.role == "include"})
+
+
 def dropped_manifest_files(manifest_files: List[str], override_files: List[str]) -> List[str]:
     """Manifest-supplied files a user override leaves out, in manifest order —
     the delta between :func:`files_for_stage`'s set and what actually ran."""
@@ -1116,6 +1132,8 @@ def override_drop_notes(
     stage: str,
     manifest_files: List[str],
     override_files: List[str],
+    compiled: Optional[Collection[str]] = None,
+    engine: str = "",
 ) -> List[str]:
     """One honest note per manifest-supplied file a user override leaves out.
 
@@ -1123,11 +1141,29 @@ def override_drop_notes(
     in the reply, never a dispatch failure) — the override is legitimate; the
     note just says out loud what it changed. Empty when the override covers
     the whole manifest set.
+
+    ``compiled``: the files the engine proved it read on THIS run
+    (``run_linter.files_compiled``). A dropped file that is in it was not
+    left out after all — a header the listed files `` `include``, or a module
+    verilator found by library lookup in an include directory — and the note
+    says exactly that instead of the false "not part of this run" (invariant
+    4). The read list does not say WHICH of the two happened, so the note
+    names both rather than guess. Callers that cannot measure (simulate,
+    synthesize; a failed verilator elaboration writes no read list) pass
+    nothing and get the plain wording.
     """
-    return [
-        f"Override omits manifest {stage} file '{rel}' — it is not part of this run."
-        for rel in dropped_manifest_files(manifest_files, override_files)
-    ]
+    compiled_set = set(compiled or ())
+    who = engine or "the engine"
+    notes: List[str] = []
+    for rel in dropped_manifest_files(manifest_files, override_files):
+        if rel in compiled_set:
+            notes.append(
+                f"Override omits manifest {stage} file '{rel}' — {who} read it anyway "
+                "(`include, or a module lookup in an include directory); the verdict covers it."
+            )
+        else:
+            notes.append(f"Override omits manifest {stage} file '{rel}' — it is not part of this run.")
+    return notes
 
 
 def synthesis_sources(files: List[str]) -> "tuple[List[str], List[str]]":

@@ -130,3 +130,23 @@ def test_files_for_stage(tmp_path):
 
     synth = set(m.files_for_stage(manifest, "synthesize"))
     assert synth == {"counter.v", "constraints.sdc"}
+
+
+def test_include_dirs_are_the_include_role_directories_only(tmp_path):
+    """-I for a lint/compile comes from the manifest's include-role files:
+    their directories, workspace-relative, "." for the root, deduped and
+    sorted — and never the source files' directories (on verilator -I is
+    also a module library; naming rtl/ there widens the compile)."""
+    ws = str(tmp_path)
+    os.makedirs(os.path.join(ws, "rtl", "sub"))
+    os.makedirs(os.path.join(ws, "inc"))
+    _write(ws, "rtl/counter.v", DUT)
+    _write(ws, "rtl/sub/adder.v", "module adder(input a, output y); assign y = a; endmodule\n")
+    _write(ws, "counter_tb.v", TB)
+    _write(ws, "defs.vh", "`define WIDTH 8\n")
+    _write(ws, "inc/glob.vh", "`define G 4\n")
+    _write(ws, "inc/other.svh", "`define H 4\n")
+    manifest = m.read_manifest(ws, session_id="s1")
+    assert m.include_dirs(manifest) == [".", "inc"]
+    no_headers = m.DesignManifest(files=[f for f in manifest.files if f.role != "include"])
+    assert m.include_dirs(no_headers) == []
