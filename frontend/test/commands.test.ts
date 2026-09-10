@@ -463,3 +463,53 @@ describe("runCommand surfaces manifestWarnings", () => {
     expect(locals.some((e) => e.resultSummary === "sim_0001 passed")).toBe(true);
   });
 });
+
+// ---- double-submit guard is scoped by session --------------------------------
+
+describe("runCommand double-submit guard is keyed by session + command", () => {
+  // PR #92 review (adjacent to finding 2): the guard was a module-level Set of
+  // bare command ids — the documented "in-memory registries keyed by bare ids
+  // collide across workspaces" sharp edge. Session B's first Lint came back
+  // "Lint is already running" about a call session A had made.
+  it("the same command in session B while A's is in flight reaches the API", async () => {
+    let resolveA!: (v: unknown) => void;
+    vi.mocked(workbenchApi.lint).mockReturnValueOnce(
+      new Promise((r) => {
+        resolveA = r;
+      }) as never
+    );
+    vi.mocked(workbenchApi.lint).mockResolvedValueOnce({ ok: true, ...PASSING_LINT } as never);
+    const first = runCommand("lint"); // s1, in flight
+    useStore.setState({ currentSession: { ...SESSION, id: "s2", name: "s2" } as never });
+    const second = await runCommand("lint"); // s2 — a different workspace
+    expect(second).toMatchObject({ ok: true, ran: true });
+    expect(second.summary).not.toMatch(/already running/i);
+    expect(workbenchApi.lint).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(workbenchApi.lint).mock.calls[1][0]).toBe("s2");
+    resolveA({ ok: true, ...PASSING_LINT });
+    await first;
+  });
+
+  it("a genuine same-session duplicate still short-circuits with the existing message", async () => {
+    let resolveA!: (v: unknown) => void;
+    vi.mocked(workbenchApi.lint).mockReturnValue(
+      new Promise((r) => {
+        resolveA = r;
+      }) as never
+    );
+    const first = runCommand("lint");
+    const dup = await runCommand("lint");
+    expect(dup).toEqual({
+      ok: false,
+      summary: "Lint is already running — wait for it to finish",
+      runId: null,
+      ran: false,
+    });
+    expect(workbenchApi.lint).toHaveBeenCalledTimes(1);
+    resolveA({ ok: true, ...PASSING_LINT });
+    await first;
+    // Released after settle: the next invoke runs.
+    await runCommand("lint");
+    expect(workbenchApi.lint).toHaveBeenCalledTimes(2);
+  });
+});

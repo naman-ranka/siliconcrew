@@ -381,7 +381,11 @@ export interface CommandOutcome {
 // Double-submit guard: a rapid second ⌘L/⌘R while the first is in flight is
 // a no-op. Sync commands hold the guard for their whole call; async ones only
 // through dispatch (queuing a second synth job behind a running one is valid).
-const inFlight = new Set<CommandId>();
+// Keyed by session + command (PR #92 review): a bare command id collides
+// across workspaces — the documented sharp edge — and would answer session
+// B's first Lint with "already running" about a call session A made.
+const inFlight = new Set<string>();
+const inFlightKey = (sessionId: string, id: CommandId) => `${sessionId}:${id}`;
 
 export async function runCommand(
   id: CommandId,
@@ -396,7 +400,9 @@ export async function runCommand(
   if (!session) {
     return { ok: false, summary: "No active session", runId: null, ran: false };
   }
-  if (inFlight.has(id)) {
+  const sessionId = session.id;
+  const flightKey = inFlightKey(sessionId, id);
+  if (inFlight.has(flightKey)) {
     return {
       ok: false,
       summary: `${cmd.label} is already running — wait for it to finish`,
@@ -404,8 +410,7 @@ export async function runCommand(
       ran: false,
     };
   }
-  inFlight.add(id);
-  const sessionId = session.id;
+  inFlight.add(flightKey);
   const ui = useWorkbenchUiStore.getState();
   const vals = { ...defaultValues(id, { manifest: store.manifest, runs: store.runs }), ...(values ?? {}) };
 
@@ -536,7 +541,7 @@ export async function runCommand(
         // not (a PD retry reuses the source run's netlist — no compile set).
         const manifestWarnings =
           id === "synth" ? (dispatch as { manifestWarnings?: string[] }).manifestWarnings : undefined;
-        inFlight.delete(id); // dispatched — a second job may now be queued
+        inFlight.delete(flightKey); // dispatched — a second job may now be queued
         done({ runId, resultSummary: `${runId} dispatched${warningsSuffix(manifestWarnings)}` });
         store.pushToast({
           kind: "info",
@@ -557,7 +562,7 @@ export async function runCommand(
     if (outcome && isSignInRequired(e)) (outcome as CommandOutcome).signinRequired = true;
     store.pushToast({ kind: "error", title: `${cmd.label} failed`, detail: errText(e) });
   } finally {
-    inFlight.delete(id);
+    inFlight.delete(flightKey);
     refresh();
   }
   // Every switch arm narrates through done() (the catch does too), so outcome
