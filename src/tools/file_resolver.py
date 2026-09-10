@@ -57,7 +57,16 @@ def _posix(rel: str) -> str:
 def _stored_manifest_paths(workspace: str) -> List[str]:
     """Workspace-relative paths from the persisted manifest, WITHOUT a
     reconcile (same rationale as :func:`manifest.stored_ignore`: resolving one
-    argument must not pay for a full workspace rescan)."""
+    argument must not pay for a full workspace rescan).
+
+    This is a deliberate choice (F6: the STORED manifest decides), and it has
+    a consequence: ``manifest.json`` is read off disk here, so a manifest
+    write that reconcile skipped — a failed role coercion leaves the file
+    untouched — can leave this index one write behind the in-memory manifest
+    the calling handler holds. A file missing from the index still resolves
+    through the tree fallback, and containment applies to every hit either
+    way; the only visible effect is which index gets to call a basename
+    ambiguous."""
     raw = manifest_mod._load_raw(workspace)
     out: List[str] = []
     if isinstance(raw, dict) and isinstance(raw.get("files"), list):
