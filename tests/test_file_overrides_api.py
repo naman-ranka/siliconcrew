@@ -183,7 +183,9 @@ def test_lint_override_typo_module_still_fails_file_scoped(client, monkeypatch):
     assert any("countr" in e["message"] for e in body["errors"])
     assert not any("File-scoped lint" in n for n in body["manifestWarnings"])
 
-    stderr["text"] = "rtl/top.v:1: error: Unknown module type: counter\n"
+    # The real iverilog closes with its total (one reference + the root = 2);
+    # the forgiven exit is checked against it (finding 3).
+    stderr["text"] = "rtl/top.v:1: error: Unknown module type: counter\n2 error(s) during elaboration.\n"
     r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["top.v"]})
     body = r.json()
     assert body["status"] == "passed" and body["errors"] == []
