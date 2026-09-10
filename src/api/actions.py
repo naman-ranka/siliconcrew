@@ -619,12 +619,20 @@ def build_actions_router(
             manifest = manifest_mod.read_manifest(workspace, session_id)
             manifest_files = manifest_mod.files_for_stage(manifest, "lint")
             dropped: List[str] = []
+            filter_notes: List[str] = []
             scope_modules: set = set()
             if override:
                 try:
                     rel_files = resolve_workspace_files(workspace, override, exts=manifest_mod.RTL_EXTS)
                 except FileResolutionError as exc:
                     return {"badFiles": str(exc)}
+                # Same source filter the manifest path applies (files_for_stage
+                # never hands lint a non-source) — an explicit file the engine
+                # would only choke on is named as dropped, by the one helper
+                # the wrappers and the other twins call too.
+                rel_files, filter_notes = manifest_mod.compile_sources("lint", rel_files)
+                if not rel_files:
+                    return {"error": "no_override_sources"}
                 dropped = manifest_mod.dropped_manifest_files(manifest_files, rel_files)
                 # An override that leaves manifest lint files out (exactly the
                 # files the drop notes name below) is a FILE-SCOPED lint. The
@@ -669,7 +677,7 @@ def build_actions_router(
             # elaborated module raises no unresolved-module diagnostic for the
             # excuse to act on. The record is what is corrected here.
             compiled = files_compiled(result)
-            notes = manifest_mod.override_drop_notes(
+            notes = filter_notes + manifest_mod.override_drop_notes(
                 "lint", manifest_files, rel_files, compiled=compiled, engine=result.get("engine")
             ) + list(result.get("notes") or [])
             widened = [f for f in dropped if f in compiled]
@@ -699,6 +707,8 @@ def build_actions_router(
         out = await run_scoped(session_id, workspace, work, _uid=uid, _id=identity, mutates=True)
         if out.get("badFiles"):
             _err("invalid_files", out["badFiles"], status=400)
+        if out.get("error") == "no_override_sources":
+            _err("no_files", "The files override contains no .v/.sv/.vh/.svh sources to lint.", status=400)
         if out.get("empty"):
             _err("no_rtl", "No RTL files in the manifest to lint.", status=400)
 
@@ -738,7 +748,12 @@ def build_actions_router(
                     rel_files = resolve_workspace_files(workspace, body.files, exts=manifest_mod.RTL_EXTS)
                 except FileResolutionError as exc:
                     return {"error": "bad_files", "message": str(exc)}
-                notes = manifest_mod.override_drop_notes("simulate", manifest_files, rel_files)
+                # Same source filter the manifest path applies; an explicit
+                # non-source is named as dropped, never handed to iverilog.
+                rel_files, notes = manifest_mod.compile_sources("simulate", rel_files)
+                if not rel_files:
+                    return {"error": "no_override_sources"}
+                notes.extend(manifest_mod.override_drop_notes("simulate", manifest_files, rel_files))
             else:
                 rel_files = manifest_files
             if not rel_files:
@@ -768,6 +783,8 @@ def build_actions_router(
             _err("no_sim_top", "No simTop in the manifest and none provided.", status=400)
         if out.get("error") == "bad_files":
             _err("invalid_files", out.get("message", "Invalid files override."), status=400)
+        if out.get("error") == "no_override_sources":
+            _err("no_files", "The files override contains no .v/.sv/.vh/.svh sources to simulate.", status=400)
         if out.get("error") == "no_files":
             _err("no_files", "Manifest has no rtl/tb files to simulate.", status=400)
         return _ok({"run": out["simRun"], "manifestWarnings": out["warnings"]})
@@ -797,7 +814,7 @@ def build_actions_router(
                 # Same .v/.sv filter the manifest path applies — but an
                 # explicitly overridden file must never vanish silently: the
                 # shared helper names each one it drops (the wrapper calls it too).
-                src_files, notes = manifest_mod.synthesis_sources(resolved_files)
+                src_files, notes = manifest_mod.compile_sources("synthesize", resolved_files)
                 notes.extend(manifest_mod.override_drop_notes("synthesize", manifest_src, src_files))
                 if not src_files:
                     return {"error": "no_override_sources"}

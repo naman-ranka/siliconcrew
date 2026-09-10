@@ -183,7 +183,9 @@ def test_lint_override_typo_module_still_fails_file_scoped(client, monkeypatch):
     assert any("countr" in e["message"] for e in body["errors"])
     assert not any("File-scoped lint" in n for n in body["manifestWarnings"])
 
-    stderr["text"] = "rtl/top.v:1: error: Unknown module type: counter\n"
+    # The real iverilog closes with its total (one reference + the root = 2);
+    # the forgiven exit is checked against it (finding 3).
+    stderr["text"] = "rtl/top.v:1: error: Unknown module type: counter\n2 error(s) during elaboration.\n"
     r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["top.v"]})
     body = r.json()
     assert body["status"] == "passed" and body["errors"] == []
@@ -456,8 +458,8 @@ def test_start_synthesis_wrapper_filters_non_sources_with_the_twin_note(tmp_path
     # The .sdc never reaches yosys (the REST twin already filtered it)…
     assert seen["verilog_files"] == [os.path.join(ws, "rtl/counter.v")]
     # …and it is named, in the twin's words, in the same channel.
-    from src.tools.manifest import synthesis_sources
-    _, expected = synthesis_sources(["rtl/counter.v", "constraints.sdc"])
+    from src.tools.manifest import compile_sources
+    _, expected = compile_sources("synthesize", ["rtl/counter.v", "constraints.sdc"])
     assert expected and all(n in out["manifestWarnings"] for n in expected)
 
 
@@ -495,9 +497,9 @@ def test_twins_and_wrappers_share_one_resolver():
     # reach it through the one manifest module.
     assert actions_mod.manifest_mod.override_drop_notes is manifest.override_drop_notes
     assert wrappers.manifest_mod.override_drop_notes is manifest.override_drop_notes
-    # The synthesis .v/.sv filter + its note is one helper too (P3-2).
-    assert actions_mod.manifest_mod.synthesis_sources is manifest.synthesis_sources
-    assert wrappers.manifest_mod.synthesis_sources is manifest.synthesis_sources
+    # The per-stage source filter + its note is one helper too (P3-2).
+    assert actions_mod.manifest_mod.compile_sources is manifest.compile_sources
+    assert wrappers.manifest_mod.compile_sources is manifest.compile_sources
     # And the extension set they hand the resolver is the one definition (B12).
     assert actions_mod.manifest_mod.RTL_EXTS is manifest.RTL_EXTS
     assert wrappers.RTL_EXTS is manifest.RTL_EXTS
@@ -676,3 +678,151 @@ def test_twins_and_wrappers_share_the_include_dirs_and_files_compiled_helpers():
     assert wrappers.manifest_mod.include_dirs is manifest.include_dirs
     assert actions_mod.files_compiled is run_linter.files_compiled
     assert wrappers.files_compiled is run_linter.files_compiled
+
+
+# --- one per-stage source filter (PR #92 review, finding 1) --------------------
+#
+# /synthesize filtered an override through synthesis_sources; /lint and
+# /simulate handed the resolved list to the engine raw, so {"files":
+# ["manifest.json"]} produced an engine parse error instead of the honest drop
+# note. Now ONE helper, compile_sources(stage, files), filters every stage on
+# every surface with the extensions the manifest path itself feeds that stage.
+
+def _seed_manifest(ws):
+    """Persist manifest.json so it is a real, resolvable workspace file."""
+    from src.tools import manifest
+    manifest.read_manifest(ws, SID)
+    assert os.path.isfile(os.path.join(ws, "manifest.json"))
+
+
+def test_compile_sources_per_stage_matches_files_for_stage_roles():
+    from src.tools.manifest import compile_sources
+    files = ["rtl/counter.v", "inc/glob.vh", "constraints.sdc", "manifest.json"]
+    # lint / simulate: RTL + include headers (files_for_stage gives them the include role).
+    for stage in ("lint", "simulate", "sim", "simulation"):
+        kept, notes = compile_sources(stage, files)
+        assert kept == ["rtl/counter.v", "inc/glob.vh"], stage
+        assert len(notes) == 2 and all("was dropped" in n for n in notes)
+    # synthesize: RTL only, wording byte-for-byte what the synth tests pin.
+    for stage in ("synthesize", "synth", "synthesis"):
+        kept, notes = compile_sources(stage, files)
+        assert kept == ["rtl/counter.v"], stage
+        assert notes[0] == (
+            "Override file 'inc/glob.vh' was dropped — synthesis compiles only .v/.sv "
+            "sources (constraints flow via constraintsMode, not this list)."
+        )
+    assert compile_sources("lint", ["manifest.json"]) == (
+        [], ["Override file 'manifest.json' was dropped — lint compiles only .v/.sv/.vh/.svh sources."],
+    )
+    assert compile_sources("simulate", ["manifest.json"]) == (
+        [], ["Override file 'manifest.json' was dropped — simulation compiles only .v/.sv/.vh/.svh sources."],
+    )
+    assert compile_sources("lint", []) == ([], [])
+
+
+def test_lint_override_non_source_is_noted_and_never_reaches_the_engine(client, monkeypatch):
+    c, ws = client
+    _seed_nested(ws)
+    _seed_manifest(ws)
+    seen = {}
+
+    def fake_linter(files, cwd, engine="auto", **kw):
+        seen["files"] = files
+        return _lint_result(engine="iverilog")
+
+    monkeypatch.setattr(actions_mod, "run_linter", fake_linter)
+    r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["counter.v", "manifest.json"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert seen["files"] == [os.path.join(ws, "rtl/counter.v")]
+    assert body["files"] == ["rtl/counter.v"]
+    assert body["manifestWarnings"] == [
+        "Override file 'manifest.json' was dropped — lint compiles only .v/.sv/.vh/.svh sources."
+    ]
+
+
+def test_lint_override_with_no_sources_is_honest_400(client, monkeypatch):
+    c, ws = client
+    _seed_nested(ws)
+    _seed_manifest(ws)
+    called = []
+    monkeypatch.setattr(actions_mod, "run_linter", lambda *a, **kw: called.append(a) or _lint_result())
+    r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["manifest.json"]})
+    assert r.status_code == 400, r.text
+    err = r.json()["detail"]["error"]
+    assert err["code"] == "no_files" and "override" in err["message"]
+    assert called == []
+
+
+def test_simulate_override_non_source_is_noted_and_never_reaches_the_engine(client, monkeypatch):
+    c, ws = client
+    _seed_nested(ws)
+    _seed_manifest(ws)
+    seen = {}
+
+    def fake_sim(**kw):
+        seen.update(kw)
+        return {"id": "sim_0001", "kind": "sim", "status": "passed", "vcdPath": ""}
+
+    monkeypatch.setattr(actions_mod, "run_sim_isolated", fake_sim)
+    r = c.post(f"/api/workspace/{SID}/simulate", json={"files": ["counter.v", "counter_tb.v", "manifest.json"]})
+    assert r.status_code == 200, r.text
+    assert seen["verilog_files"] == ["rtl/counter.v", "tb/counter_tb.v"]
+    assert r.json()["manifestWarnings"] == [
+        "Override file 'manifest.json' was dropped — simulation compiles only .v/.sv/.vh/.svh sources."
+    ]
+
+
+def test_simulate_override_with_no_sources_is_honest_400(client, monkeypatch):
+    c, ws = client
+    _seed_nested(ws)
+    _seed_manifest(ws)
+    called = []
+    monkeypatch.setattr(actions_mod, "run_sim_isolated", lambda **kw: called.append(kw) or {})
+    r = c.post(f"/api/workspace/{SID}/simulate", json={"files": ["manifest.json"]})
+    assert r.status_code == 400, r.text
+    err = r.json()["detail"]["error"]
+    assert err["code"] == "no_files" and "override" in err["message"]
+    assert called == []
+
+
+def test_linter_tool_wrapper_filters_non_sources_with_the_twin_note(tmp_path, monkeypatch):
+    wrappers, ws = _wrap(tmp_path, monkeypatch)
+    _seed_manifest(ws)
+    seen = {}
+
+    def fake_linter(files, cwd, engine="auto", **kw):
+        seen["files"] = files
+        return _lint_result(engine="iverilog")
+
+    monkeypatch.setattr(wrappers, "run_linter", fake_linter)
+    out = wrappers.linter_tool.func(verilog_files=["counter.v", "manifest.json"])
+    assert out.startswith("Syntax OK")
+    assert seen["files"] == [os.path.join(ws, "rtl/counter.v")]
+    assert "Override file 'manifest.json' was dropped — lint compiles only .v/.sv/.vh/.svh sources." in out
+    # Nothing left: an honest error, no engine call (the REST twin is a 400 here).
+    seen.clear()
+    out = wrappers.linter_tool.func(verilog_files=["manifest.json"])
+    assert out.startswith("Error:") and ".v/.sv/.vh/.svh" in out
+    assert seen == {}
+
+
+def test_run_simulation_wrapper_filters_non_sources_with_the_twin_note(tmp_path, monkeypatch):
+    wrappers, ws = _wrap(tmp_path, monkeypatch)
+    _seed_manifest(ws)
+    seen = {}
+
+    def fake_sim(**kw):
+        seen.update(kw)
+        return {"id": "sim_0001", "status": "passed"}
+
+    monkeypatch.setattr(wrappers, "run_sim_isolated", fake_sim)
+    out = json.loads(wrappers.run_simulation.func(verilog_files=["counter.v", "counter_tb.v", "manifest.json"]))
+    assert seen["verilog_files"] == ["rtl/counter.v", "tb/counter_tb.v"]
+    assert out["manifestWarnings"] == [
+        "Override file 'manifest.json' was dropped — simulation compiles only .v/.sv/.vh/.svh sources."
+    ]
+    seen.clear()
+    out = wrappers.run_simulation.func(verilog_files=["manifest.json"])
+    assert out.startswith("Error:") and ".v/.sv/.vh/.svh" in out
+    assert seen == {}

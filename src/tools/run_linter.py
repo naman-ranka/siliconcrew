@@ -155,6 +155,53 @@ _UNRESOLVED_MODULE_PATS = (
 # hint after "Cannot find include file" stays, as that error stays).
 _SEARCH_PATH_HINT_PAT = re.compile(r"^This may be because there's no search path specified")
 
+# Each engine states its own error total on stderr. That total is what lets a
+# file-scoped run judge a non-zero exit honestly: the exit is forgiven ONLY
+# when the engine counted nothing beyond the diagnostics this module excused.
+# An error the parser never saw — a "%Error:" with no file:line, a crash, a
+# timeout — is still in the engine's count, so it can no longer hide behind an
+# excused unresolved module.
+#   verilator 5.020 (measured): "%Error: Exiting due to N error(s)". Every
+#   %Error line counts one, the -I hint after an unresolved module included
+#   (one module + hint = 2; two modules share one hint = 3). A parse failure
+#   prints "%Error: Cannot continue" and NO total.
+#   iverilog (elaborate.cc / main.cc; two real samples and the fixture agree):
+#   "N error(s) during elaboration." with N = unresolved references + 1: the
+#   root work item (elaborate_root_scope_t) adds one when the root's scope
+#   elaboration reports des->errors != 0. That is one per root module whose
+#   scope ran at or after the first error; the file-scoped gesture lints one
+#   file, one root. A further root with errors of its own counts one more and
+#   is judged unexplained — the strict direction, never the lenient one.
+_ENGINE_ERROR_TOTAL_PATS = {
+    "verilator": re.compile(r"^%Error: Exiting due to (?P<n>\d+) error", re.M),
+    "iverilog": re.compile(r"^(?P<n>\d+) error\(s\) during elaboration\.", re.M),
+}
+_ENGINE_ERROR_TOTAL_SLACK = {"verilator": 0, "iverilog": 1}
+
+
+def engine_error_total(engine: str, stderr: str) -> Optional[int]:
+    """The error total the engine printed, or ``None`` when it printed none
+    (verilator after a parse failure, a crash, a timeout)."""
+    pat = _ENGINE_ERROR_TOTAL_PATS.get(engine)
+    m = pat.search(stderr or "") if pat else None
+    return int(m.group("n")) if m else None
+
+
+def exit_explained_by_excused(engine: str, stderr: str, excused: int) -> bool:
+    """Whether a non-zero exit is fully accounted for by the ``excused``
+    diagnostics (those :func:`split_unresolved_module_diagnostics` removed,
+    hints included): the engine's own total is present and no larger than
+    what those diagnostics cost in that engine's units."""
+    if excused <= 0:
+        return False
+    total = engine_error_total(engine, stderr)
+    return total is not None and total <= excused + _ENGINE_ERROR_TOTAL_SLACK.get(engine, 0)
+
+
+def _stderr_tail(stderr: str, n: int = 5) -> str:
+    lines = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+    return " | ".join(lines[-n:])
+
 
 def split_unresolved_module_diagnostics(
     diagnostics: List[Dict[str, Any]],
@@ -371,8 +418,11 @@ def run_linter(
         diagnostics = parse_iverilog_diagnostics(raw["stderr"], cwd)
 
     notes: List[str] = []
+    excused = 0
     if scope_modules:
+        parsed = diagnostics
         diagnostics, missing = split_unresolved_module_diagnostics(diagnostics, frozenset(scope_modules))
+        excused = len(parsed) - len(diagnostics)
         if missing:
             notes.append(
                 "File-scoped lint: "
@@ -382,9 +432,21 @@ def run_linter(
             )
 
     has_errors = any(d["severity"] == "error" for d in diagnostics)
-    # The engine's exit code counted the errors we just explained away, so a
-    # file-scoped run that dropped some of them judges itself on what is LEFT.
-    exit_ok = raw["returncode"] == 0 or bool(notes)
+    # The engine's exit code counted the errors just explained away, so a
+    # file-scoped run judges itself on what is LEFT — but only when the
+    # engine's own total says nothing else was counted (see
+    # exit_explained_by_excused). A non-zero exit nothing accounts for is a
+    # failure that SAYS so: the stderr tail becomes the diagnostic rather than
+    # a bare success=False with an empty list.
+    rc = raw["returncode"]
+    exit_ok = rc == 0 or exit_explained_by_excused(eng, raw["stderr"], excused)
+    if not exit_ok and not has_errors:
+        diagnostics.append({
+            "file": None, "line": None, "severity": "error", "code": "EXIT",
+            "message": f"{eng} exited {rc} with errors this lint did not account for: "
+                       f"{_stderr_tail(raw['stderr']) or '(no stderr)'}",
+        })
+        has_errors = True
     out = {
         "success": exit_ok and not has_errors,
         "stdout": raw["stdout"],

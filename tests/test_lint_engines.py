@@ -131,7 +131,12 @@ tb.v:3: error: malformed statement
 tb.v:5: error: Unknown module type: alu
 """
 
-VERILATOR_MISSING_MODULE = "%Error: top.v:3:10: Cannot find file containing module: 'missing_mod'\n"
+# The real binary always closes with its total (finding 3: that total is what
+# a forgiven non-zero exit is checked against).
+VERILATOR_MISSING_MODULE = (
+    "%Error: top.v:3:10: Cannot find file containing module: 'missing_mod'\n"
+    "%Error: Exiting due to 1 error(s)\n"
+)
 
 
 def _iverilog(monkeypatch, stderr, returncode=1):
@@ -504,3 +509,124 @@ def test_real_verilator_residual_widening_is_visible_in_files_read(tmp_path):
     assert result["notes"] == [], "nothing was left unresolved, so nothing is excused"
     assert "rtl/alu.v" in result["filesRead"]
     assert "rtl/alu.v" in rl.files_compiled(result)
+
+
+# --- a forgiven non-zero exit must be FULLY explained (PR #92 review, finding 3)
+#
+# Pre-fix: exit_ok = rc == 0 or bool(notes) — one excused unresolved module
+# forgave the whole exit, so an error the parser never saw (a %Error with no
+# file:line, a crash, a timeout) rode to success behind it. Now the engine's
+# own total must be present and no larger than what the excused diagnostics
+# cost in that engine's units (verilator: one per %Error line, hint included;
+# iverilog: references + 1 for the root).
+
+VERILATOR_MISSING_PLUS_UNPARSED = """%Error: rtl/top.v:3:3: Cannot find file containing module: 'alu'
+%Error: rtl/top.v:3:3: This may be because there's no search path specified with -I<dir>.
+%Error: Cannot find file containing module: nope.v
+%Error: Exiting due to 3 error(s)
+"""
+
+# Measured on verilator 5.020: two unresolved modules share ONE hint -> 3.
+VERILATOR_TWO_MISSING_5020 = """%Error: top.v:2:3: Cannot find file containing module: 'alu'
+%Error: top.v:2:3: This may be because there's no search path specified with -I<dir>.
+%Error: top.v:3:3: Cannot find file containing module: 'blk'
+%Error: Exiting due to 3 error(s)
+"""
+
+
+def test_engine_error_total_regexes():
+    assert rl.engine_error_total("verilator", VERILATOR_MISSING_MODULE_5020) == 2
+    assert rl.engine_error_total("verilator", VERILATOR_TWO_MISSING_5020) == 3
+    assert rl.engine_error_total("verilator", "%Error: a.v:3:1: syntax error\n%Error: Cannot continue\n") is None
+    assert rl.engine_error_total("iverilog", IVERILOG_MISSING_MODULE) == 2
+    assert rl.engine_error_total("iverilog", IVERILOG_MISSING_PLUS_SYNTAX) is None
+    assert rl.engine_error_total("iverilog", "3 error(s) in post-elaboration processing.\n") is None
+
+
+def test_excused_module_plus_unparsed_fatal_line_is_still_a_failure(monkeypatch, tmp_path):
+    """The reviewer's sequence: alu is excused, but verilator also counted an
+    error the parser dropped (no file:line). Pre-fix: success True."""
+    _capture_verilator(monkeypatch, returncode=1, stderr=VERILATOR_MISSING_PLUS_UNPARSED)
+    result = rl.run_linter(["rtl/top.v", "nope.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
+    assert result["success"] is False
+    assert any("alu" in n for n in result["notes"])  # the excuse is still narrated…
+    errs = [d for d in result["diagnostics"] if d["severity"] == "error"]
+    assert len(errs) == 1 and errs[0]["code"] == "EXIT"  # …and the rest is an honest failure
+    assert "nope.v" in errs[0]["message"] and "exited 1" in errs[0]["message"]
+
+
+def test_iverilog_total_above_the_excused_references_is_a_failure(monkeypatch, tmp_path):
+    stderr = IVERILOG_MISSING_MODULE.replace("2 error(s)", "3 error(s)")
+    _iverilog(monkeypatch, stderr)
+    result = rl.run_linter(["tb.v"], cwd=str(tmp_path), engine="iverilog", scope_modules={"alu"})
+    assert result["success"] is False
+    assert [d["code"] for d in result["diagnostics"]] == ["EXIT"]
+    assert "3 error(s) during elaboration" in result["diagnostics"][0]["message"]
+
+
+def test_excused_module_without_the_engine_total_stays_a_failure(monkeypatch, tmp_path):
+    """No total = the engine did not finish normally (verilator prints none
+    after "Cannot continue"); nothing vouches for the exit, so it stands."""
+    _capture_verilator(monkeypatch, returncode=1,
+                       stderr="%Error: top.v:3:10: Cannot find file containing module: 'missing_mod'\n")
+    result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"missing_mod"})
+    assert result["success"] is False
+    assert "missing_mod" in result["notes"][0]
+    assert result["diagnostics"][-1]["code"] == "EXIT"
+
+
+def test_verilator_total_matching_two_excused_modules_and_one_hint_passes(monkeypatch, tmp_path):
+    _capture_verilator(monkeypatch, returncode=1, stderr=VERILATOR_TWO_MISSING_5020)
+    result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"alu", "blk"})
+    assert result["success"] is True and result["diagnostics"] == []
+    assert "alu" in result["notes"][0] and "blk" in result["notes"][0]
+    # Excuse only one of them: the other stays an error AND the total no longer matches.
+    result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
+    assert result["success"] is False
+    assert any("blk" in (d["message"] or "") for d in result["diagnostics"])
+
+
+def test_unparsed_non_zero_exit_is_never_silent(monkeypatch, tmp_path):
+    """Strict lint, rc=1, nothing the parser recognises (a file that does not
+    exist, on verilator): previously success=False with diagnostics=[] — a
+    failure with no reason. Now the tail is the reason."""
+    _capture_verilator(monkeypatch, returncode=1, stderr=(
+        "%Error: Cannot find file containing module: nope.v\n"
+        "%Error: This may be because there's no search path specified with -I<dir>.\n"
+        "%Error: Exiting due to 2 error(s)\n"
+    ))
+    result = rl.run_linter(["nope.v"], cwd=str(tmp_path), engine="verilator")
+    assert result["success"] is False
+    assert len(result["diagnostics"]) == 1 and result["diagnostics"][0]["code"] == "EXIT"
+    assert "nope.v" in result["diagnostics"][0]["message"]
+    # A timeout is the same shape.
+    monkeypatch.setattr(rl, "_run", lambda cmd, cwd, timeout: {
+        "returncode": -1, "stdout": "", "stderr": "Error: Linting timed out.", "command": "x"})
+    result = rl.run_linter(["a.v"], cwd=str(tmp_path), engine="iverilog")
+    assert result["success"] is False
+    assert "timed out" in result["diagnostics"][0]["message"]
+
+
+def test_exit_explained_by_excused_units():
+    assert rl.exit_explained_by_excused("verilator", VERILATOR_MISSING_MODULE_5020, 2) is True
+    assert rl.exit_explained_by_excused("verilator", VERILATOR_MISSING_MODULE_5020, 1) is False
+    assert rl.exit_explained_by_excused("verilator", VERILATOR_MISSING_MODULE_5020, 0) is False
+    assert rl.exit_explained_by_excused("iverilog", IVERILOG_MISSING_MODULE, 1) is True   # 2 == 1 + root
+    assert rl.exit_explained_by_excused("iverilog", "3 error(s) during elaboration.\n", 1) is False
+    assert rl.exit_explained_by_excused("iverilog", IVERILOG_MISSING_PLUS_SYNTAX, 1) is False
+
+
+@pytest.mark.requires_eda
+@_real_verilator
+def test_real_verilator_excused_exit_matches_its_total(tmp_path):
+    """rtl/top.v alone, alu excused: the real total (1 module + 1 hint = 2)
+    equals what was excused, so the scoped lint still passes — and adding a
+    file verilator cannot find (an error with no file:line the parser never
+    sees) makes the same gesture fail instead of riding behind the excuse."""
+    rtl, _ = _nested_design(tmp_path)
+    result = rl.run_linter([str(rtl / "top.v")], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
+    assert result["success"] is True, result
+    assert rl.engine_error_total("verilator", result["stderr"]) == 2
+    result = rl.run_linter([str(rtl / "top.v"), "nope.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
+    assert result["success"] is False, result
+    assert any(d["code"] == "EXIT" and "nope.v" in d["message"] for d in result["diagnostics"]), result["diagnostics"]

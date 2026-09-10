@@ -342,6 +342,12 @@ def linter_tool(
         rel_files = resolve_workspace_files(workspace, verilog_files, exts=RTL_EXTS)
     except FileResolutionError as exc:
         return f"Error: {exc}"
+    # Same source filter and the same note the REST twin (/lint) emits, from
+    # the same helper: a non-source given here is named as dropped rather
+    # than handed to the engine to choke on.
+    rel_files, filter_notes = manifest_mod.compile_sources("lint", rel_files)
+    if not rel_files:
+        return "Error: verilog_files contains no .v/.sv/.vh/.svh sources to lint."
     filepaths = [os.path.join(workspace, rel) for rel in rel_files]
 
     # The manifest supplies the include directories (invariant 1) — the same
@@ -359,7 +365,7 @@ def linter_tool(
     # engine read it anyway (a header the listed files `include, or a module
     # verilator found by library lookup in an include directory), as read
     # after all (see the /lint handler for the residual case).
-    notes = manifest_mod.override_drop_notes(
+    notes = filter_notes + manifest_mod.override_drop_notes(
         "lint", manifest_mod.files_for_stage(m, "lint"), rel_files,
         compiled=files_compiled(result), engine=result.get("engine"),
     )
@@ -564,9 +570,13 @@ def run_simulation(
             files = resolve_workspace_files(workspace, files, exts=RTL_EXTS)
         except FileResolutionError as exc:
             return f"Error: {exc}"
-        notes = manifest_mod.override_drop_notes(
+        # Same source filter and note as the REST twin (/simulate).
+        files, notes = manifest_mod.compile_sources("simulate", files)
+        if not files:
+            return "Error: verilog_files contains no .v/.sv/.vh/.svh sources to simulate."
+        notes.extend(manifest_mod.override_drop_notes(
             "simulate", manifest_mod.files_for_stage(m, "simulate"), files
-        )
+        ))
     else:
         files = manifest_mod.files_for_stage(m, "simulate")
         if not files:
@@ -669,9 +679,9 @@ def start_synthesis(
     # from the same helpers: a constraints file given here is named as dropped
     # rather than handed to yosys, and manifest synthesis files this list
     # leaves out are named too.
-    src_files, notes = manifest_mod.synthesis_sources(rel_files)
+    src_files, notes = manifest_mod.compile_sources("synthesize", rel_files)
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
-    manifest_src, _ = manifest_mod.synthesis_sources(manifest_mod.files_for_stage(m, "synthesize"))
+    manifest_src, _ = manifest_mod.compile_sources("synthesize", manifest_mod.files_for_stage(m, "synthesize"))
     notes.extend(manifest_mod.override_drop_notes("synthesize", manifest_src, src_files))
     if not src_files:
         return "Error: verilog_files contains no .v/.sv sources to synthesize."

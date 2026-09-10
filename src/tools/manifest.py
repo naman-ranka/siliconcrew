@@ -56,7 +56,10 @@ _MAX_SCAN_DEPTH = 6
 # file resolver) reads this tuple rather than retyping it.
 RTL_EXTS: tuple[str, ...] = (".v", ".sv")
 _RTL_EXTS = frozenset(RTL_EXTS)
-_INCLUDE_EXTS = {".vh", ".svh"}
+# Header files (`include targets). Role ``include`` reaches lint and simulate
+# beside the RTL (files_for_stage), never synthesis.
+INCLUDE_EXTS: tuple[str, ...] = (".vh", ".svh")
+_INCLUDE_EXTS = frozenset(INCLUDE_EXTS)
 
 # One position-ordered alternation instead of two passes: precedence between
 # strings, `//` and `/* */` falls out of scan order, exactly as a lexer sees
@@ -1094,16 +1097,40 @@ def files_for_stage(manifest: DesignManifest, stage: str) -> List[str]:
     sby's job (Wave F); this function only stops it from breaking the stages
     that exist.
     """
-    stage = stage.lower()
+    stage = _stage_key(stage)
     if stage == "lint":
         roles = {"rtl", "include"}
-    elif stage in ("sim", "simulate", "simulation"):
+    elif stage == "simulate":
         roles = {"rtl", "tb", "include"}
-    elif stage in ("synth", "synthesize", "synthesis"):
+    elif stage == "synthesize":
         roles = {"rtl", "sdc"}
     else:
         roles = {"rtl", "tb", "include", "sdc"}
     return [f.path for f in manifest.files if f.role in roles]
+
+
+def _stage_key(stage: str) -> str:
+    """The one spelling of a stage name (``sim``/``simulation`` -> ``simulate``,
+    ``synth``/``synthesis`` -> ``synthesize``); anything else is returned
+    lowercased for the caller's own fallback."""
+    stage = (stage or "").lower()
+    if stage in ("sim", "simulate", "simulation"):
+        return "simulate"
+    if stage in ("synth", "synthesize", "synthesis"):
+        return "synthesize"
+    return stage
+
+
+# What each stage COMPILES from a file list — the extensions files_for_stage's
+# role set resolves to. Lint and simulate take the include-role headers beside
+# the RTL; synthesis takes RTL only (its sdc role is not a source: constraints
+# flow via constraintsMode).
+_COMPILE_EXTS: Dict[str, tuple] = {
+    "lint": RTL_EXTS + INCLUDE_EXTS,
+    "simulate": RTL_EXTS + INCLUDE_EXTS,
+    "synthesize": RTL_EXTS,
+}
+_COMPILE_LABEL = {"lint": "lint", "simulate": "simulation", "synthesize": "synthesis"}
 
 
 def include_dirs(manifest: DesignManifest) -> List[str]:
@@ -1166,19 +1193,26 @@ def override_drop_notes(
     return notes
 
 
-def synthesis_sources(files: List[str]) -> "tuple[List[str], List[str]]":
-    """(the ``.v``/``.sv`` sources in ``files``, one note per file the filter dropped).
+def compile_sources(stage: str, files: List[str]) -> "tuple[List[str], List[str]]":
+    """(the files in ``files`` that ``stage`` compiles, one note per file dropped).
 
-    Synthesis compiles only RTL sources; constraints flow via constraintsMode,
-    not the file list. The manifest path applies this filter silently (its
-    ``sdc`` role never was a source), but an EXPLICIT file must never vanish
-    without a word — the REST twin and the agent/MCP wrapper both call this so
-    every actor narrates the same drop the same way (invariant 2).
+    The manifest path applies this filter silently — :func:`files_for_stage`
+    only ever hands a stage the roles it compiles — but an EXPLICIT file must
+    never vanish without a word: ``manifest.json`` in a lint override reaches
+    neither iverilog nor verilator; it is named here instead of producing an
+    engine parse error. The REST twins and the agent/MCP wrappers all call
+    this one helper so every actor narrates the same drop the same way
+    (invariant 2). The accepted extensions per stage are exactly what the
+    manifest path itself feeds that stage: lint and simulate take the
+    include-role headers beside the RTL, synthesis takes RTL only.
     """
-    src = [f for f in files if f.lower().endswith(RTL_EXTS)]
+    key = _stage_key(stage)
+    exts = _COMPILE_EXTS[key]
+    label = _COMPILE_LABEL[key]
+    remedy = " (constraints flow via constraintsMode, not this list)" if key == "synthesize" else ""
+    src = [f for f in files if f.lower().endswith(exts)]
     notes = [
-        f"Override file '{f}' was dropped — synthesis compiles only .v/.sv "
-        "sources (constraints flow via constraintsMode, not this list)."
+        f"Override file '{f}' was dropped — {label} compiles only {'/'.join(exts)} sources{remedy}."
         for f in files if f not in src
     ]
     return src, notes
