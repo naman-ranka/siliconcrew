@@ -79,6 +79,49 @@ beforeEach(() => {
   } as never);
 });
 
+const INTENT_KEY = "sc-auth-intent";
+const stashSurfaceIntent = (sessionId: string) =>
+  sessionStorage.setItem(
+    INTENT_KEY,
+    JSON.stringify({
+      intent: { kind: "surfaceCommand", sessionId, commandId: "synth", values: {} },
+      at: Date.now(),
+    })
+  );
+
+describe("deep-link failure + the surfaceCommand auth intent (P2-3)", () => {
+  beforeEach(() => sessionStorage.clear());
+
+  it("a not-found session consumes the intent that pointed at it (the Launcher would otherwise route back forever)", async () => {
+    stashSurfaceIntent("ghost");
+    useStore.setState(
+      baseState(async () => ({ ok: false, reason: "not_found", message: "Session not found" }))
+    );
+    render(<Workbench sessionId="ghost" />);
+    await screen.findByTestId("workbench-not-found");
+    await waitFor(() => expect(sessionStorage.getItem(INTENT_KEY)).toBeNull());
+  });
+
+  it("an intent for ANOTHER session, or an outage, is left alone", async () => {
+    stashSurfaceIntent("elsewhere");
+    useStore.setState(
+      baseState(async () => ({ ok: false, reason: "not_found", message: "Session not found" }))
+    );
+    const { unmount } = render(<Workbench sessionId="ghost" />);
+    await screen.findByTestId("workbench-not-found");
+    expect(sessionStorage.getItem(INTENT_KEY)).toContain("elsewhere");
+    unmount();
+
+    stashSurfaceIntent("alive");
+    useStore.setState(
+      baseState(async () => ({ ok: false, reason: "unreachable", message: "fetch failed" }))
+    );
+    render(<Workbench sessionId="alive" />);
+    await screen.findByTestId("workbench-unreachable");
+    expect(sessionStorage.getItem(INTENT_KEY)).toContain("alive"); // Retry may still open it
+  });
+});
+
 describe("deep-link failure screens", () => {
   it("renders the honest not-found screen for a real 404", async () => {
     useStore.setState(

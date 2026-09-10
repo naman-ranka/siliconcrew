@@ -21,8 +21,9 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import re
-from typing import Any, Dict, Iterator, List, Literal, NamedTuple, Optional, get_args
+from typing import Any, Collection, Dict, Iterator, List, Literal, NamedTuple, Optional, get_args
 
 from pydantic import BaseModel, Field
 
@@ -50,8 +51,15 @@ _IGNORED_DIRS = {
 # (relative to the workspace root) are never descended into.
 _MAX_SCAN_DEPTH = 6
 
-_RTL_EXTS = {".v", ".sv"}
-_INCLUDE_EXTS = {".vh", ".svh"}
+# The one definition of "a Verilog/SystemVerilog source" — every caller that
+# filters or resolves RTL by extension (the REST twins, the tool wrappers, the
+# file resolver) reads this tuple rather than retyping it.
+RTL_EXTS: tuple[str, ...] = (".v", ".sv")
+_RTL_EXTS = frozenset(RTL_EXTS)
+# Header files (`include targets). Role ``include`` reaches lint and simulate
+# beside the RTL (files_for_stage), never synthesis.
+INCLUDE_EXTS: tuple[str, ...] = (".vh", ".svh")
+_INCLUDE_EXTS = frozenset(INCLUDE_EXTS)
 
 # One position-ordered alternation instead of two passes: precedence between
 # strings, `//` and `/* */` falls out of scan order, exactly as a lexer sees
@@ -1089,13 +1097,137 @@ def files_for_stage(manifest: DesignManifest, stage: str) -> List[str]:
     sby's job (Wave F); this function only stops it from breaking the stages
     that exist.
     """
-    stage = stage.lower()
+    stage = _stage_key(stage)
     if stage == "lint":
         roles = {"rtl", "include"}
-    elif stage in ("sim", "simulate", "simulation"):
+    elif stage == "simulate":
         roles = {"rtl", "tb", "include"}
-    elif stage in ("synth", "synthesize", "synthesis"):
+    elif stage == "synthesize":
         roles = {"rtl", "sdc"}
     else:
         roles = {"rtl", "tb", "include", "sdc"}
     return [f.path for f in manifest.files if f.role in roles]
+
+
+def _stage_key(stage: str) -> str:
+    """The one spelling of a stage name (``sim``/``simulation`` -> ``simulate``,
+    ``synth``/``synthesis`` -> ``synthesize``); anything else is returned
+    lowercased for the caller's own fallback."""
+    stage = (stage or "").lower()
+    if stage in ("sim", "simulate", "simulation"):
+        return "simulate"
+    if stage in ("synth", "synthesize", "synthesis"):
+        return "synthesize"
+    return stage
+
+
+# What each stage COMPILES from a file list — the extensions files_for_stage's
+# role set resolves to. Lint and simulate take the include-role headers beside
+# the RTL; synthesis takes RTL only (its sdc role is not a source: constraints
+# flow via constraintsMode).
+_COMPILE_EXTS: Dict[str, tuple] = {
+    "lint": RTL_EXTS + INCLUDE_EXTS,
+    "simulate": RTL_EXTS + INCLUDE_EXTS,
+    "synthesize": RTL_EXTS,
+}
+_COMPILE_LABEL = {"lint": "lint", "simulate": "simulation", "synthesize": "synthesis"}
+
+
+def include_dirs(manifest: DesignManifest) -> List[str]:
+    """Workspace-relative directories of the manifest's include-role files —
+    the ``-I`` search path a lint/compile needs for an `` `include`` that does
+    not live beside the file including it (``"."`` for the workspace root).
+
+    The manifest is the ONE source of this (invariant 1): the REST twin and
+    the agent/MCP wrapper both pass it to ``run_linter``, so an explicit agent
+    file list still resolves the design's headers. It is deliberately NOT the
+    source files' directories — on verilator ``-I`` doubles as a module
+    library, and naming a source directory there silently widens the compile
+    past the files given (see ``run_linter``).
+    """
+    return sorted({posixpath.dirname(f.path) or "." for f in manifest.files if f.role == "include"})
+
+
+def dropped_manifest_files(manifest_files: List[str], override_files: List[str]) -> List[str]:
+    """Manifest-supplied files a user override leaves out, in manifest order —
+    the delta between :func:`files_for_stage`'s set and what actually ran."""
+    override = set(override_files)
+    return [rel for rel in manifest_files if rel not in override]
+
+
+def override_drop_notes(
+    stage: str,
+    manifest_files: List[str],
+    override_files: List[str],
+    compiled: Optional[Collection[str]] = None,
+    engine: str = "",
+) -> List[str]:
+    """One honest note per manifest-supplied file a user override leaves out.
+
+    Same delivery pattern as :func:`compile_set_collisions` (best-effort notes
+    in the reply, never a dispatch failure) — the override is legitimate; the
+    note just says out loud what it changed. Empty when the override covers
+    the whole manifest set.
+
+    ``compiled``: the files the engine proved it read on THIS run
+    (``run_linter.files_compiled``). A dropped file that is in it was not
+    left out after all — a header the listed files `` `include``, or a module
+    verilator found by library lookup in an include directory — and the note
+    says exactly that instead of the false "not part of this run" (invariant
+    4). The read list does not say WHICH of the two happened, so the note
+    names both rather than guess. Callers that cannot measure (simulate,
+    synthesize; a failed verilator elaboration writes no read list) pass
+    nothing and get the plain wording.
+    """
+    compiled_set = set(compiled or ())
+    who = engine or "the engine"
+    notes: List[str] = []
+    for rel in dropped_manifest_files(manifest_files, override_files):
+        if rel in compiled_set:
+            notes.append(
+                f"Override omits manifest {stage} file '{rel}' — {who} read it anyway "
+                "(`include, or a module lookup in an include directory); the verdict covers it."
+            )
+        else:
+            notes.append(f"Override omits manifest {stage} file '{rel}' — it is not part of this run.")
+    return notes
+
+
+def compile_sources(stage: str, files: List[str]) -> "tuple[List[str], List[str]]":
+    """(the files in ``files`` that ``stage`` compiles, one note per file dropped).
+
+    The manifest path applies this filter silently — :func:`files_for_stage`
+    only ever hands a stage the roles it compiles — but an EXPLICIT file must
+    never vanish without a word: ``manifest.json`` in a lint override reaches
+    neither iverilog nor verilator; it is named here instead of producing an
+    engine parse error. The REST twins and the agent/MCP wrappers all call
+    this one helper so every actor narrates the same drop the same way
+    (invariant 2). The accepted extensions per stage are exactly what the
+    manifest path itself feeds that stage: lint and simulate take the
+    include-role headers beside the RTL, synthesis takes RTL only.
+    """
+    key = _stage_key(stage)
+    exts = _COMPILE_EXTS[key]
+    label = _COMPILE_LABEL[key]
+    remedy = " (constraints flow via constraintsMode, not this list)" if key == "synthesize" else ""
+    src = [f for f in files if f.lower().endswith(exts)]
+    notes = [
+        f"Override file '{f}' was dropped — {label} compiles only {'/'.join(exts)} sources{remedy}."
+        for f in files if f not in src
+    ]
+    return src, notes
+
+
+def modules_defined_by(workspace: str, manifest: DesignManifest, paths: List[str]) -> set:
+    """Module names the given manifest design files DECLARE, from the ONE
+    cached module scan every reconcile already pays for (:func:`_scan_design_files`).
+
+    This is what makes a file-scoped lint a statement of fact rather than a
+    policy: an engine's "Unknown module type: X" is only a scoping artifact
+    when X is defined by a file the caller deliberately left out. Only rtl/tb
+    files are scanned (the manifest's own rule), so a dropped ``include`` file
+    contributes nothing — an unresolved name it happened to define stays an
+    error, which is the strict direction.
+    """
+    scans = _scan_design_files(workspace, manifest.files)
+    return {m for p in paths for m in (scans[p].modules if p in scans else ())}

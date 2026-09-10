@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { Command } from "cmdk";
 import {
   Activity,
@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
-import { workspaceApi } from "@/lib/api";
 import { parseArtifactKey } from "@/lib/artifactKeys";
 import { artifactKeyForFile, artifactLabel, openArtifact } from "@/lib/openArtifact";
 import type { ArtifactKind } from "@/types";
@@ -68,37 +67,18 @@ export function QuickOpen() {
   const runs = useStore((s) => s.runs);
   const spec = useStore((s) => s.spec);
 
-  // File-path source: fetched when the dialog opens, cached per session in
-  // component state (stale list stays usable while a refresh is in flight).
-  const [paths, setPaths] = useState<string[]>([]);
-  const [truncated, setTruncated] = useState(false);
-  const cacheRef = useRef<{ sessionId: string; paths: string[]; truncated: boolean } | null>(null);
+  // File-path source: the store's recursive path index (shared with the
+  // Command Surface's file suggestions). Opening revalidates — the stale list
+  // stays usable while the refresh is in flight (SWR iron rule), and a failed
+  // refetch keeps the last-known paths visible.
+  const paths = useStore((s) => s.pathIndex.paths);
+  const truncated = useStore((s) => s.pathIndex.truncated);
+  const loadPathIndex = useStore((s) => s.loadPathIndex);
 
   useEffect(() => {
     if (!open || !sessionId) return;
-    if (cacheRef.current?.sessionId === sessionId) {
-      setPaths(cacheRef.current.paths);
-      setTruncated(cacheRef.current.truncated);
-    } else {
-      setPaths([]);
-      setTruncated(false);
-    }
-    let cancelled = false;
-    workspaceApi
-      .getDirPaths(sessionId)
-      .then((res) => {
-        if (cancelled) return;
-        cacheRef.current = { sessionId, paths: res.paths, truncated: res.truncated };
-        setPaths(res.paths);
-        setTruncated(res.truncated);
-      })
-      .catch(() => {
-        /* keep whatever list we have — quick-open stays usable */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, sessionId]);
+    void loadPathIndex({ revalidate: true });
+  }, [open, sessionId, loadPathIndex]);
 
   const items = useMemo<QuickOpenItem[]>(() => {
     const map = new Map<string, QuickOpenItem>();

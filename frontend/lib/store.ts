@@ -159,6 +159,23 @@ export interface ActivitySlice {
   error: string | null;
 }
 
+// Recursive workspace file-path index (GET /dir?recursive=paths) — the same
+// walk quick-open uses, held as a store slice so the Command Surface's file
+// suggestions cover the whole tree, not just the root (command-surface-
+// simplification W2/A8). Revalidated alongside dirCache; reset per session.
+export interface PathIndexSlice {
+  status: SliceStatus;
+  /** Workspace-relative FILE paths (dirs excluded), as the backend walks them. */
+  paths: string[];
+  /** The backend truncated the walk — surfaced honestly, never hidden. */
+  truncated: boolean;
+  error: string | null;
+}
+
+export function emptyPathIndex(): PathIndexSlice {
+  return { status: "empty", paths: [], truncated: false, error: null };
+}
+
 const FILE_CACHE_CAP = 30;
 const ARTIFACT_CACHE_CAP = 12;
 
@@ -294,6 +311,32 @@ function scheduleRunsRefresh(get: () => AppState): void {
   _runsRefreshTimer = setTimeout(() => {
     _runsRefreshTimer = null;
     void get().loadRuns();
+  }, 1200);
+}
+
+// P3-6 (adversarial review, measured): the recursive path index is a full
+// tree walk (GET /dir?recursive=paths, 20k cap). invalidateDirs fired it
+// directly, and singleFlight dedupes only CONCURRENT walks — so N file-
+// writing tool frames whose walks had each settled = N walks, and a frame
+// landing mid-walk was DROPPED (deduped onto the walk that could not see its
+// write). Same shape as the three schedulers above: one debounced walk per
+// burst; a walk still in flight at fire time defers one more beat instead of
+// deduping, so the trailing write is always walked.
+let _pathIndexRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePathIndexRefresh(get: () => AppState): void {
+  if (_pathIndexRefreshTimer) return;
+  _pathIndexRefreshTimer = setTimeout(() => {
+    _pathIndexRefreshTimer = null;
+    const { currentSession, pathIndex } = get();
+    // Re-read at fire time: a session switch reset the slice (nothing to
+    // revalidate), and an index nobody opened still pays nothing.
+    if (!currentSession) return;
+    if (pathIndex.status !== "ready" && pathIndex.status !== "revalidating") return;
+    if (_inflight.has(`pathIndex:${currentSession.id}`)) {
+      schedulePathIndexRefresh(get);
+      return;
+    }
+    void get().loadPathIndex({ revalidate: true });
   }, 1200);
 }
 
@@ -508,6 +551,11 @@ interface AppState {
   // only), keeping old entries visible (status "revalidating").
   invalidateDirs: (prefixes: string[]) => void;
 
+  // Recursive file-path index (quick-open + Command Surface suggestions).
+  // Fetched on first need; invalidateDirs revalidates it once populated.
+  pathIndex: PathIndexSlice;
+  loadPathIndex: (opts?: { revalidate?: boolean }) => Promise<void>;
+
   // Smart file cache (LRU cap 30). Cache hit iff the caller's `modified` stamp
   // matches the cached one and both are non-null (null = always stale).
   fileCache: Record<string, FileSlice>;
@@ -642,6 +690,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Workbench v2 data-layer state
   dirCache: {},
+  pathIndex: emptyPathIndex(),
   fileCache: {},
   artifactCache: {},
   activity: emptyActivity(),
@@ -791,6 +840,7 @@ export const useStore = create<AppState>((set, get) => ({
         artifactsVisible: false,
         // v2 caches are per-session — never leak across a switch.
         dirCache: {},
+        pathIndex: emptyPathIndex(),
         fileCache: {},
         artifactCache: {},
         activity: emptyActivity(),
@@ -870,6 +920,7 @@ export const useStore = create<AppState>((set, get) => ({
       files: [],
       // v2 caches are per-session — never leak across a switch.
       dirCache: {},
+      pathIndex: emptyPathIndex(),
       fileCache: {},
       artifactCache: {},
       activity: emptyActivity(),
@@ -2294,6 +2345,52 @@ export const useStore = create<AppState>((set, get) => ({
         void get().loadDir(path, { revalidate: true });
       }
     }
+    // The recursive path index is a view of the SAME tree — any dir
+    // invalidation revalidates it too, but only once populated (sessions that
+    // never opened quick-open/the Surface pay nothing) and coalesced: one
+    // walk per burst of invalidations, never one per tool frame (P3-6).
+    const pi = get().pathIndex;
+    if (pi.status === "ready" || pi.status === "revalidating") {
+      schedulePathIndexRefresh(get);
+    }
+  },
+
+  loadPathIndex: async (opts) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const sid = currentSession.id;
+    const cached = get().pathIndex;
+    const populated = cached.status === "ready" || cached.status === "revalidating";
+    if (populated && !opts?.revalidate) return;
+    // SWR iron rule: populated → "revalidating" (paths stay visible).
+    set({
+      pathIndex: {
+        status: populated ? "revalidating" : "loading",
+        paths: cached.paths,
+        truncated: cached.truncated,
+        error: null,
+      },
+    });
+    await singleFlight(`pathIndex:${sid}`, async () => {
+      try {
+        const res = await workspaceApi.getDirPaths(sid);
+        if (get().currentSession?.id !== sid) return; // stale-response guard
+        set({
+          pathIndex: { status: "ready", paths: res.paths, truncated: res.truncated, error: null },
+        });
+      } catch (e) {
+        if (get().currentSession?.id !== sid) return;
+        // Failed revalidate keeps the old paths visible + records the error.
+        set((s) => ({
+          pathIndex: {
+            status: "error",
+            paths: s.pathIndex.paths,
+            truncated: s.pathIndex.truncated,
+            error: errMsg(e),
+          },
+        }));
+      }
+    });
   },
 
   loadFile: async (path, opts) => {

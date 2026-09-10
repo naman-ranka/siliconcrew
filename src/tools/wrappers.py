@@ -4,7 +4,7 @@ import time
 from typing import Any, Literal, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
-from src.tools.run_linter import run_linter
+from src.tools.run_linter import files_compiled, run_linter
 from src.tools.read_waveform import read_waveform
 from src.tools.run_cocotb import run_cocotb
 from src.tools.run_sby import run_sby
@@ -27,6 +27,17 @@ from src.tools.file_patch import apply_unified_patch
 # sites in this file resolve the workspace via get_workspace_path().
 from src.utils.workspace import get_workspace_path, resolve_in_workspace
 from src.utils.session_context import current_session_id
+
+# ONE file-value resolution contract for every tool that takes a file name:
+# ws-relative path, basename, or basename-without-extension all resolve the
+# same way everywhere (manifest list first, then the workspace tree), with the
+# resolver's own is_within containment. See src/tools/file_resolver.py.
+from src.tools.file_resolver import (
+    FileResolutionError,
+    resolve_workspace_file,
+    resolve_workspace_files,
+)
+from src.tools.manifest import RTL_EXTS
 
 
 # =============================================================================
@@ -327,14 +338,37 @@ def linter_tool(
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
 
-    filepaths = []
-    for item in verilog_files:
-        fp = item if os.path.isabs(item) else os.path.join(workspace, item)
-        if not os.path.exists(fp):
-            return f"Error: File {item} does not exist."
-        filepaths.append(fp)
+    try:
+        rel_files = resolve_workspace_files(workspace, verilog_files, exts=RTL_EXTS)
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    # Same source filter and the same note the REST twin (/lint) emits, from
+    # the same helper: a non-source given here is named as dropped rather
+    # than handed to the engine to choke on.
+    rel_files, filter_notes = manifest_mod.compile_sources("lint", rel_files)
+    if not rel_files:
+        return "Error: verilog_files contains no .v/.sv/.vh/.svh sources to lint."
+    filepaths = [os.path.join(workspace, rel) for rel in rel_files]
 
-    result = run_linter(filepaths, cwd=workspace, engine=engine)
+    # The manifest supplies the include directories (invariant 1) — the same
+    # helper the REST twin (/lint) uses — so an explicit file list still
+    # resolves the design's headers. The verdict stays strict (no
+    # scope_modules): the agent chose the set and is told to include the
+    # dependencies.
+    m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
+    result = run_linter(
+        filepaths, cwd=workspace, engine=engine, include_dirs=manifest_mod.include_dirs(m)
+    )
+    # The same drop notes the REST twin emits, from the same helper, written
+    # after the run from what the engine proved it read: a manifest lint file
+    # this list left out is named as "not part of this run" — or, if the
+    # engine read it anyway (a header the listed files `include, or a module
+    # verilator found by library lookup in an include directory), as read
+    # after all (see the /lint handler for the residual case).
+    notes = filter_notes + manifest_mod.override_drop_notes(
+        "lint", manifest_mod.files_for_stage(m, "lint"), rel_files,
+        compiled=files_compiled(result), engine=result.get("engine"),
+    )
 
     diags = result.get("diagnostics") or []
     warnings = [d for d in diags if d["severity"] == "warning"]
@@ -345,13 +379,22 @@ def linter_tool(
         code = f" [{d['code']}]" if d.get("code") else ""
         return f"{loc}: {d['severity']}{code}: {d['message']}"
 
+    def _with_notes(text: str) -> str:
+        if not notes:
+            return text
+        return text + "\nNotes:\n" + "\n".join(f"  - {n}" for n in notes)
+
     if result["success"] and not warnings:
-        return f"Syntax OK. (engine: {result.get('engine')})"
+        return _with_notes(f"Syntax OK. (engine: {result.get('engine')})")
     if result["success"]:
         lines = "\n".join(_fmt(d) for d in warnings)
-        return f"Lint passed with {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
+        return _with_notes(
+            f"Lint passed with {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
+        )
     lines = "\n".join(_fmt(d) for d in (errors + warnings)) or result["stderr"]
-    return f"Lint FAILED — {len(errors)} error(s), {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
+    return _with_notes(
+        f"Lint FAILED — {len(errors)} error(s), {len(warnings)} warning(s) (engine: {result.get('engine')}):\n{lines}"
+    )
 
 from src.tools.search_logs import search_logs
 from src.tools import manifest as manifest_mod
@@ -431,7 +474,9 @@ del _roles
 del _t
 
 
-def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -> dict:
+def _with_manifest_warnings(
+    result: dict, workspace: str, compile_files: list, extra_notes: list | None = None
+) -> dict:
     """Front the dispatch reply with any duplicate-module collision in THIS set.
 
     The manifest carries the same warnings, but a run is where they cost
@@ -440,11 +485,17 @@ def _with_manifest_warnings(result: dict, workspace: str, compile_files: list) -
     the assembled compile set are reported; the message adds the remedy the
     compiler's own error can't (which file to ignore), it does not restate it.
     Kept INSIDE the JSON so ``/invoke`` still parses a typed result.
+
+    ``extra_notes``: honest notes about a user file override (which manifest
+    files it dropped) travel in the same ``manifestWarnings`` channel, ahead of
+    the collision warnings — best-effort, never a dispatch failure. A failing
+    collision scan yields no warnings; it never swallows the notes.
     """
     try:
         warnings = manifest_mod.compile_set_collisions(workspace, compile_files)
     except Exception:
-        return result
+        warnings = []
+    warnings = [*(extra_notes or []), *warnings]
     if not warnings:
         return result
     return {"manifestWarnings": warnings, **result}
@@ -489,7 +540,8 @@ def run_simulation(
         sim_top: Testbench top module. Empty uses the manifest's simTop.
         verilog_files: Explicit file list to compile, testbench included — the
             escape hatch for a set the manifest does not describe. Omit it (the
-            normal case) to compile the manifest's simulate set.
+            normal case) to compile the manifest's simulate set. Any manifest
+            simulate file the list leaves out is named in `manifestWarnings`.
         mode: 'rtl' compiles the sources. 'post_synth' drops the design RTL,
             substitutes the gate netlist from a synthesis run, and links
             stdcell models.
@@ -511,12 +563,20 @@ def run_simulation(
     m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
     files = _normalize_verilog_files_arg(verilog_files) if verilog_files else []
     explicit = bool(files)
+    notes: list[str] = []
 
     if explicit:
-        for f in files:
-            path = f if os.path.isabs(f) else os.path.join(workspace, f)
-            if not os.path.exists(path):
-                return f"Error: File {f} does not exist."
+        try:
+            files = resolve_workspace_files(workspace, files, exts=RTL_EXTS)
+        except FileResolutionError as exc:
+            return f"Error: {exc}"
+        # Same source filter and note as the REST twin (/simulate).
+        files, notes = manifest_mod.compile_sources("simulate", files)
+        if not files:
+            return "Error: verilog_files contains no .v/.sv/.vh/.svh sources to simulate."
+        notes.extend(manifest_mod.override_drop_notes(
+            "simulate", manifest_mod.files_for_stage(m, "simulate"), files
+        ))
     else:
         files = manifest_mod.files_for_stage(m, "simulate")
         if not files:
@@ -542,7 +602,9 @@ def run_simulation(
         sim_profile=sim_profile,
         pass_marker=pass_marker,
     )
-    return json.dumps(_with_manifest_warnings(result, workspace, files), indent=2)
+    return json.dumps(
+        _with_manifest_warnings(result, workspace, files, extra_notes=notes), indent=2
+    )
 
 
 @tool(parse_docstring=True)
@@ -609,12 +671,21 @@ def start_synthesis(
     workspace = get_workspace_path()
     verilog_files = _normalize_verilog_files_arg(verilog_files)
 
-    abs_files = []
-    for f in verilog_files:
-        abs_f = f if os.path.isabs(f) else os.path.join(workspace, f)
-        if not os.path.exists(abs_f):
-            return f"Error: File {f} does not exist."
-        abs_files.append(abs_f)
+    try:
+        rel_files = resolve_workspace_files(workspace, verilog_files, exts=RTL_EXTS)
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    # Same .v/.sv filter and the same notes the REST twin (/synthesize) emits,
+    # from the same helpers: a constraints file given here is named as dropped
+    # rather than handed to yosys, and manifest synthesis files this list
+    # leaves out are named too.
+    src_files, notes = manifest_mod.compile_sources("synthesize", rel_files)
+    m = manifest_mod.read_manifest(workspace, session_id=current_session_id())
+    manifest_src, _ = manifest_mod.compile_sources("synthesize", manifest_mod.files_for_stage(m, "synthesize"))
+    notes.extend(manifest_mod.override_drop_notes("synthesize", manifest_src, src_files))
+    if not src_files:
+        return "Error: verilog_files contains no .v/.sv sources to synthesize."
+    abs_files = [os.path.join(workspace, rel) for rel in src_files]
 
     result = start_synthesis_job(
         workspace=workspace,
@@ -629,7 +700,9 @@ def start_synthesis(
         constraints_mode=constraints_mode,
         max_stage=max_stage,
     )
-    return json.dumps(_with_manifest_warnings(result, workspace, abs_files), indent=2)
+    return json.dumps(
+        _with_manifest_warnings(result, workspace, abs_files, extra_notes=notes), indent=2
+    )
 
 
 @tool(parse_docstring=True)
@@ -770,7 +843,8 @@ def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
     change, first 2000 rows, with a footer saying how many were withheld.
 
     Args:
-        vcd_file: The .vcd to read. run_simulation returns it as `vcdPath`
+        vcd_file: The .vcd to read, as a workspace-relative path or a
+            basename. run_simulation returns it as `vcdPath`
             (sim_runs/sim_NNNN/...). An older run may have left one in the
             workspace root, wherever the testbench's $dumpfile put it.
         signals: Signal names. A full hierarchical path ('tb.dut.count') always
@@ -781,8 +855,11 @@ def waveform_tool(vcd_file: str, signals: list[str], start_time: int = 0,
         end_time: End of the window, same units. Omit to read to the end.
     """
     workspace = get_workspace_path()
-    abs_file = os.path.join(workspace, vcd_file)
-    return read_waveform(abs_file, signals, start_time, end_time)
+    try:
+        rel = resolve_workspace_file(workspace, vcd_file, exts=(".vcd",))
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    return read_waveform(os.path.join(workspace, rel), signals, start_time, end_time)
 
 @tool(parse_docstring=True)
 @policy(category="synthesis", protected=True, mutates=False, async_job=False,
@@ -1158,8 +1235,14 @@ def read_spec(spec_filename: str = None) -> str:
             read the most recently modified *_spec.yaml in the workspace.
     """
     workspace = get_workspace_path()
-    
+
     if spec_filename:
+        try:
+            spec_filename = resolve_workspace_file(
+                workspace, spec_filename, exts=(".yaml", ".yml")
+            )
+        except FileResolutionError as exc:
+            return f"Error: {exc}"
         spec_path = os.path.join(workspace, spec_filename)
     else:
         # Find most recent spec file
@@ -1255,11 +1338,12 @@ def schematic_tool(verilog_file: str, top_module: str) -> str:
         )
 
     workspace = get_workspace_path()
-    abs_file = os.path.join(workspace, verilog_file)
-    
-    if not os.path.exists(abs_file):
-        return f"Error: File {verilog_file} does not exist."
-        
+    try:
+        rel_file = resolve_workspace_file(workspace, verilog_file, exts=RTL_EXTS)
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    abs_file = os.path.join(workspace, rel_file)
+
     result = generate_schematic(abs_file, top_module, cwd=workspace)
     
     if result["success"]:
@@ -1321,7 +1405,14 @@ def build_interactive_sim(
 
     """
     workspace = get_workspace_path()
-    files = _normalize_verilog_files_arg(verilog_files)
+    # Pre-resolution only — build_websim_netlist's own name/containment/existence
+    # validation still runs on the resolved workspace-relative paths.
+    try:
+        files = resolve_workspace_files(
+            workspace, _normalize_verilog_files_arg(verilog_files), exts=RTL_EXTS
+        )
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
     result = build_websim_netlist(files, top_module, cwd=workspace, parameters=parameters)
 
     if not result["success"]:
@@ -1414,6 +1505,13 @@ def run_python_analysis(script_file: str, args: list[str] = None) -> str:
     workspace = get_workspace_path()
     from src.tools.run_python import run_python_analysis as _run_python, PythonAnalysisError
 
+    # Pre-resolution only (basename / no-ext convenience). run_python's own
+    # containment + not-found validation still runs on the resolved path.
+    try:
+        script_file = resolve_workspace_file(workspace, script_file, exts=(".py",))
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+
     try:
         result = _run_python(workspace, script_file, args or [])
     except PythonAnalysisError as exc:
@@ -1440,10 +1538,13 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
     """
     workspace = get_workspace_path()
 
-    abs_files = [os.path.join(workspace, f) for f in verilog_files]
-    missing = [f for f in abs_files if not os.path.exists(f)]
-    if missing:
-        return "Error: source file(s) not found: " + ", ".join(missing)
+    try:
+        rel_files = resolve_workspace_files(
+            workspace, _normalize_verilog_files_arg(verilog_files), exts=RTL_EXTS
+        )
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    abs_files = [os.path.join(workspace, rel) for rel in rel_files]
 
     r = run_cocotb(abs_files, top_module, python_module, cwd=workspace)
     status = r.get("status")
@@ -1528,11 +1629,12 @@ def sby_tool(sby_file: str) -> str:
             the properties to prove.
     """
     workspace = get_workspace_path()
-    abs_file = os.path.join(workspace, sby_file)
-    
-    if not os.path.exists(abs_file):
-        return f"Error: File {sby_file} does not exist."
-        
+    try:
+        rel_file = resolve_workspace_file(workspace, sby_file, exts=(".sby",))
+    except FileResolutionError as exc:
+        return f"Error: {exc}"
+    abs_file = os.path.join(workspace, rel_file)
+
     result = run_sby(abs_file, cwd=workspace)
     status = result["status"]
     tail = ((result.get("stdout") or "") + "\n" + (result.get("stderr") or "")).strip()[-600:]

@@ -1,14 +1,16 @@
-import { workbenchApi } from "@/lib/api";
+import { isSignInRequired, workbenchApi } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { useWorkbenchUiStore } from "@/lib/workbenchUiStore";
-import type { ActivityEvent, DesignManifest, RunSummary } from "@/types";
+import type { ActivityEvent, DesignManifest, FileRole, RunKind, RunSummary } from "@/types";
 
 // The v2 invocation model: every tool run — palette (⌘K), file context menu,
 // activity "Re-run", param modal — goes through this registry. The guiding
-// principle: THE MANIFEST SUPPLIES FILES AND TARGETS; THE USER ONLY SUPPLIES
-// CHOICES. Files are never hand-picked in the UI — the backend re-resolves
-// each command's file set from the manifest (files_for_stage), so the param
-// surface here is choices only (platform, clock, mode, stages…).
+// principle: THE MANIFEST SUPPLIES FILES AND TARGETS BY DEFAULT; the user
+// supplies choices (platform, clock, mode, stages…) and — since L1
+// (command-surface-simplification) REVERSED the old no-hand-picking fence —
+// may OPTIONALLY override the file set through a `type: "files"` param
+// (`files` on lint/sim, `verilogFiles` on synth). An empty/absent override
+// keeps the backend's manifest resolution (files_for_stage) exactly as before.
 //
 // Sync commands (lint, sim) resolve inline; async ones (synth, pnr) are
 // DISPATCH-ONLY: POST → run appears queued/running → done. The UI is a viewer
@@ -53,8 +55,18 @@ export interface CommandCtx {
 export interface CommandParam {
   key: string;
   label: string;
-  /** "combo" = text input with filtered suggestions; free entry always allowed. */
-  type: "enum" | "number" | "boolean" | "text" | "combo";
+  /** "combo" = text input with filtered suggestions; free entry always allowed.
+   *  "files" = an OPTIONAL file-set override (L1): the key IS the REST body
+   *  key; empty = omitted = the backend resolves `files_for_stage` from the
+   *  manifest exactly as before; a non-empty list replaces that set. Its
+   *  suggestions are the manifest files in `roles`. */
+  type: "enum" | "number" | "boolean" | "text" | "combo" | "files";
+  /** `files` params: the manifest roles the backend's files_for_stage uses
+   *  for this stage — the suggested tier and the "supplied by manifest" chips. */
+  roles?: FileRole[];
+  /** Module-valued vs file-valued (rendered as a tiny tag in the Surface).
+   *  `files` params are file-valued by construction. */
+  valueKind?: "file" | "module";
   /** Fixed choices, or a resolver against live state (testbenches, runs). */
   options?: readonly string[] | ((ctx: CommandCtx) => string[]);
   /** The parameter's default — one declaration, read by BOTH surfaces. */
@@ -84,6 +96,11 @@ export interface CommandDef {
   tool: string;
   description: string;
   async: boolean;
+  /** The kind of run row this command produces in the runs slice (sim →
+   *  sim_NNNN, synth/pnr → synth_NNNN). Declared where the command is, so the
+   *  Surface's "is a job of this kind still live?" guard (F1) reads the
+   *  registry, never a parallel map. */
+  producesRun?: RunKind;
   /** Display shortcut, rendered as ⌘/Ctrl + key. */
   shortcut: string;
   /** "Supplied by manifest" — shown in both the param modal and the Command
@@ -92,8 +109,24 @@ export interface CommandDef {
   params: CommandParam[];
 }
 
-const filesByRole = (m: DesignManifest | null, roles: string[]): string =>
-  (m?.files ?? []).filter((f) => roles.includes(f.role)).map((f) => f.name).join(", ") || "—";
+/** Ws-relative PATHS of the manifest files in the given roles — `name` is
+ *  documented display-only (manifest.py); a nested `rtl/alu.v` silently broke
+ *  on it (LN11/FA2). */
+export const filesByRoles = (m: DesignManifest | null, roles: readonly FileRole[]): string[] =>
+  (m?.files ?? []).filter((f) => roles.includes(f.role)).map((f) => f.path);
+
+/** An optional file-set override param (L1). Declared per stage with the
+ *  roles its backend `files_for_stage` resolves; one shape for all three. */
+const fileOverride = (key: string, roles: FileRole[], hint: string): CommandParam => ({
+  key,
+  label: key,
+  type: "files",
+  roles,
+  def: [],
+  optional: true, // empty → omitted → manifest-driven (unchanged behavior)
+  source: "manifest",
+  hint,
+});
 
 /**
  * The four core flow commands — the ONE definition of them in the frontend.
@@ -111,12 +144,13 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
     label: "Lint",
     tool: "linter_tool",
     description:
-      "Lint/syntax check (iverilog or verilator). The manifest supplies the rtl + include files.",
+      "Lint/syntax check (iverilog or verilator). The manifest supplies the rtl + include files; override to lint a different set.",
     async: false,
     shortcut: "L",
-    facts: (c: CommandCtx) => [{ label: "files", value: filesByRole(c.manifest, ["rtl", "include"]) }],
     params: [
       { key: "engine", label: "Engine", type: "enum", options: LINT_ENGINES, def: "auto", source: "choice" },
+      // REST key `files`: optional override of the rtl + include set.
+      fileOverride("files", ["rtl", "include"], "empty = the manifest's rtl + include set"),
     ],
   },
   sim: {
@@ -126,18 +160,24 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
     description:
       "Manifest-driven sim in its own sim_runs/sim_NNNN/ dir — own VCD + provenance.",
     async: false,
+    producesRun: "sim",
     shortcut: "R",
     facts: (c: CommandCtx) => [
       { label: "default tb", value: c.manifest?.simTop || "—" },
       { label: "testbenches", value: `${testbenchChoices(c.manifest).length} available` },
-      { label: "files", value: filesByRole(c.manifest, ["rtl", "tb", "include"]) },
     ],
     params: [
       { key: "mode", label: "Mode", type: "enum", options: ["rtl", "post_synth"], def: "rtl", source: "choice" },
+      // REST key `files`: optional override of the compile set.
+      fileOverride("files", ["rtl", "tb", "include"], "empty = the manifest's rtl + tb + include set"),
       // Options resolve live from manifest.testbenches — free entry stays
       // allowed for modules the scan missed.
       {
-        key: "simTop", label: "Testbench", type: "combo", source: "manifest",
+        // Named for what it IS — a testbench MODULE (the Surface's subtitles
+        // show each module's defining file, so the ".v or not" question never
+        // comes up).
+        key: "simTop", label: "Testbench (module)", type: "combo", source: "manifest",
+        valueKind: "module",
         options: (c) => testbenchChoices(c.manifest),
         def: (c: CommandCtx) => c.manifest?.simTop ?? "",
         optional: true, // empty → backend falls back to the manifest default
@@ -152,13 +192,17 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
     description:
       "Async ORFS job for the synth top → { run_id } immediately; completion arrives via activity events / Refresh (no client polling).",
     async: true,
+    producesRun: "synth",
     shortcut: "Y",
     facts: (c: CommandCtx) => [
       { label: "top module", value: c.manifest?.synthTop ?? "—" },
-      { label: "sources", value: filesByRole(c.manifest, ["rtl"]) },
-      { label: "constraints", value: (c.manifest?.files ?? []).some((f) => f.role === "sdc") ? filesByRole(c.manifest, ["sdc"]) : "auto" },
+      { label: "constraints", value: filesByRoles(c.manifest, ["sdc"]).join(", ") || "auto" },
     ],
     params: [
+      // REST key `verilogFiles`: optional override of the rtl set — the
+      // backend keeps its .v/.sv filter and rejects non-Verilog overrides
+      // honestly (400 invalid_files / no_files).
+      fileOverride("verilogFiles", ["rtl"], "empty = the manifest's rtl set"),
       { key: "platform", label: "Platform", type: "enum", options: PLATFORMS, def: (c: CommandCtx) => c.manifest?.platform ?? "sky130hd", source: "manifest" },
       { key: "maxStage", label: "Max stage", type: "enum", options: SYNTH_STAGES, def: "finish", source: "choice", hint: "“synth” = fast synthesis-only estimate" },
       { key: "clockPeriodNs", label: "Clock period", type: "number", unit: "ns", step: 0.1, min: 0.1, def: (c: CommandCtx) => c.manifest?.clockPeriodNs ?? 10, source: "manifest" },
@@ -175,6 +219,7 @@ export const COMMANDS: Record<CommandId, CommandDef> = {
     description:
       "Branches a child PD run from an existing run and reruns downstream ORFS stages — first-class lineage.",
     async: true,
+    producesRun: "synth",
     shortcut: "E",
     facts: () => [{ label: "reuses", value: "netlist + constraints of the source run" }],
     params: [
@@ -202,8 +247,11 @@ export function resolveParamDef(p: CommandParam, ctx: CommandCtx): unknown {
   return typeof p.def === "function" ? (p.def as (c: CommandCtx) => unknown)(ctx) : p.def;
 }
 
-/** A param's choices, resolved against live state. */
+/** A param's choices, resolved against live state. `files` params suggest
+ *  the manifest paths in their roles — ONE resolver for the modal's facts and
+ *  the Surface's override box. */
 export function resolveParamOptions(p: CommandParam, ctx: CommandCtx): string[] {
+  if (p.type === "files") return filesByRoles(ctx.manifest, p.roles ?? []);
   if (!p.options) return [];
   return typeof p.options === "function" ? p.options(ctx) : [...p.options];
 }
@@ -227,11 +275,19 @@ export function manifestFacts(id: CommandId, ctx: { manifest: DesignManifest | n
  * menu) — dev#51 (2): right-click → Simulate on a testbench must run THAT
  * testbench, not silently fall back to the manifest default.
  *
- * Only mappings the REST contracts can honestly express are made: sim gets
- * `simTop` when the clicked file is a known testbench (manifest.testbenches
- * carries file → module). Lint/synth bodies have no per-file field — the
- * backend re-resolves their sets from the manifest — so they pass nothing
- * rather than a pretend argument the backend would ignore.
+ * Only mappings the contracts can honestly express are made (A15):
+ * - sim gets `simTop` when the clicked file is a known testbench
+ *   (manifest.testbenches carries file → module). It does NOT single-file-
+ *   override the compile set — a testbench needs its dependencies, which the
+ *   manifest resolves.
+ * - lint gets `files: [clicked]` through the override — "lint this file"
+ *   honestly lints exactly that file. The backend runs that override
+ *   FILE-SCOPED (run_linter's `file_scoped`, derived from the drop notes):
+ *   modules the clicked file instantiates but the override left out are
+ *   reported as a note, not as the false FAILED verdict a single-file
+ *   elaboration of a hierarchical design would otherwise produce.
+ * - synth passes nothing: a one-file synth override from a right-click would
+ *   silently drop the rest of the design.
  */
 export function commandValuesForFile(
   id: CommandId,
@@ -242,6 +298,7 @@ export function commandValuesForFile(
     const tb = (manifest?.testbenches ?? []).find((t) => t.file === path);
     if (tb?.module) return { simTop: tb.module };
   }
+  if (id === "lint") return { files: [path] };
   return {};
 }
 
@@ -310,6 +367,9 @@ export interface CommandOutcome {
   /** False when nothing was executed at all (no session / duplicate in-flight)
    *  — no activity event, no toast, nothing to follow in Activity/Runs. */
   ran: boolean;
+  /** The failure was the hosted-anonymous signin_required rejection (by CODE,
+   *  W4/A17) — callers render a sign-in CTA instead of a raw error string. */
+  signinRequired?: boolean;
 }
 
 /**
@@ -321,7 +381,11 @@ export interface CommandOutcome {
 // Double-submit guard: a rapid second ⌘L/⌘R while the first is in flight is
 // a no-op. Sync commands hold the guard for their whole call; async ones only
 // through dispatch (queuing a second synth job behind a running one is valid).
-const inFlight = new Set<CommandId>();
+// Keyed by session + command (PR #92 review): a bare command id collides
+// across workspaces — the documented sharp edge — and would answer session
+// B's first Lint with "already running" about a call session A made.
+const inFlight = new Set<string>();
+const inFlightKey = (sessionId: string, id: CommandId) => `${sessionId}:${id}`;
 
 export async function runCommand(
   id: CommandId,
@@ -336,7 +400,9 @@ export async function runCommand(
   if (!session) {
     return { ok: false, summary: "No active session", runId: null, ran: false };
   }
-  if (inFlight.has(id)) {
+  const sessionId = session.id;
+  const flightKey = inFlightKey(sessionId, id);
+  if (inFlight.has(flightKey)) {
     return {
       ok: false,
       summary: `${cmd.label} is already running — wait for it to finish`,
@@ -344,8 +410,7 @@ export async function runCommand(
       ran: false,
     };
   }
-  inFlight.add(id);
-  const sessionId = session.id;
+  inFlight.add(flightKey);
   const ui = useWorkbenchUiStore.getState();
   const vals = { ...defaultValues(id, { manifest: store.manifest, runs: store.runs }), ...(values ?? {}) };
 
@@ -373,25 +438,45 @@ export async function runCommand(
     void s.loadRuns();
   };
 
+  // L1 file overrides: ONE generic mapping for every `type: "files"` param the
+  // command declares — its key IS the REST body key. Empty/absent → the key
+  // is absent → byte-for-byte today's manifest-driven body.
+  const overrides: Record<string, string[]> = {};
+  for (const p of cmd.params) {
+    if (p.type !== "files") continue;
+    const v = vals[p.key];
+    const list = Array.isArray(v) ? v.filter((f): f is string => typeof f === "string" && !!f) : [];
+    if (list.length > 0) overrides[p.key] = list;
+  }
+
   try {
     switch (id) {
       case "lint": {
         const result = await workbenchApi.lint(sessionId, {
           engine: String(vals.engine ?? "auto"),
+          ...overrides,
         });
         const nErr = result.errors.length;
         const nWarn = result.warnings.length;
         // Auto resolves server-side — name the engine that actually ran.
         const engineTag = result.engine ? ` (${result.engine})` : "";
+        // Lint carries manifestWarnings too (dropped manifest files, and the
+        // file-scoped-lint note) — surfaced exactly like sim's, never folded
+        // into the pass/fail narration (F5: they used to die at the type
+        // boundary — write-only durable state).
+        const manifestWarnings = result.manifestWarnings;
         done({
           status: result.status === "passed" ? "ok" : "error",
-          resultSummary: `${result.status}${engineTag} · ${nErr} error(s), ${nWarn} warning(s)`,
+          resultSummary:
+            `${result.status}${engineTag} · ${nErr} error(s), ${nWarn} warning(s)` +
+            warningsSuffix(manifestWarnings),
         });
         store.pushToast(
           result.status === "passed"
             ? { kind: nWarn ? "info" : "success", title: `Lint passed${engineTag}${nWarn ? ` · ${nWarn} warning(s)` : ""}` }
             : { kind: "error", title: `Lint failed${engineTag} · ${nErr} error(s)` }
         );
+        notifyManifestWarnings(store, manifestWarnings);
         // Keep the structured diagnostics available to the feed/editor.
         useStore.setState({ lintResult: result });
         break;
@@ -403,6 +488,7 @@ export async function runCommand(
           mode: String(vals.mode ?? "rtl"),
           // Empty = let the backend fall back to the manifest's default TB.
           ...(simTop ? { simTop } : {}),
+          ...overrides,
         });
         done({
           status: run.status === "passed" ? "ok" : "error",
@@ -444,6 +530,7 @@ export async function runCommand(
                 aspectRatio: vals.aspectRatio,
                 coreMargin: vals.coreMargin,
                 runEquiv: vals.runEquiv,
+                ...overrides,
               })
             : await workbenchApi.retryRun(sessionId, String(vals.runId), {
                 fromStage: String(vals.fromStage ?? "floorplan"),
@@ -454,7 +541,7 @@ export async function runCommand(
         // not (a PD retry reuses the source run's netlist — no compile set).
         const manifestWarnings =
           id === "synth" ? (dispatch as { manifestWarnings?: string[] }).manifestWarnings : undefined;
-        inFlight.delete(id); // dispatched — a second job may now be queued
+        inFlight.delete(flightKey); // dispatched — a second job may now be queued
         done({ runId, resultSummary: `${runId} dispatched${warningsSuffix(manifestWarnings)}` });
         store.pushToast({
           kind: "info",
@@ -472,9 +559,10 @@ export async function runCommand(
     }
   } catch (e) {
     done({ status: "error", resultSummary: errText(e) });
+    if (outcome && isSignInRequired(e)) (outcome as CommandOutcome).signinRequired = true;
     store.pushToast({ kind: "error", title: `${cmd.label} failed`, detail: errText(e) });
   } finally {
-    inFlight.delete(id);
+    inFlight.delete(flightKey);
     refresh();
   }
   // Every switch arm narrates through done() (the catch does too), so outcome

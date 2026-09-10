@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractErrorMessage } from "@/lib/api";
+import { extractErrorCode, extractErrorDetails, extractErrorMessage, isSignInRequired } from "@/lib/api";
 
 // E1 (onboarding wave): every backend error shape must reduce to a readable
 // string — the signed-out create/fork regression rendered "[object Object]"
@@ -49,5 +49,64 @@ describe("extractErrorMessage", () => {
     for (const s of shapes) {
       expect(extractErrorMessage(s, "fallback")).not.toContain("object Object");
     }
+  });
+});
+
+// W4/A17: the CTA is detected by CODE — across the core twins' 403 detail
+// shape AND /invoke's 401 _err envelope — never by message text.
+describe("extractErrorCode", () => {
+  it("reads the auth-dep detail {code} (core twins' 403)", () => {
+    expect(
+      extractErrorCode({ detail: { code: "signin_required", message: "Sign in." } })
+    ).toBe("signin_required");
+  });
+
+  it("reads the _err envelope-in-HTTPException (/invoke's 401)", () => {
+    expect(
+      extractErrorCode({
+        detail: {
+          ok: false,
+          error: { code: "signin_required", message: "'start_synthesis' requires signing in.", details: {} },
+        },
+      })
+    ).toBe("signin_required");
+  });
+
+  it("reads a top-level { ok:false, error:{code} } envelope", () => {
+    expect(extractErrorCode({ ok: false, error: { code: "no_rtl", message: "x" } })).toBe("no_rtl");
+  });
+
+  it("returns undefined for codeless shapes", () => {
+    expect(extractErrorCode({ detail: "plain string" })).toBeUndefined();
+    expect(extractErrorCode({ detail: [{ msg: "field required" }] })).toBeUndefined();
+    expect(extractErrorCode(null)).toBeUndefined();
+    expect(extractErrorCode({})).toBeUndefined();
+  });
+});
+
+describe("isSignInRequired", () => {
+  it("matches only errors carrying code=signin_required", () => {
+    expect(isSignInRequired(Object.assign(new Error("x"), { code: "signin_required" }))).toBe(true);
+    expect(isSignInRequired(Object.assign(new Error("x"), { code: "no_rtl" }))).toBe(false);
+    // Message text alone must NOT trigger the CTA.
+    expect(isSignInRequired(new Error("'start_synthesis' requires signing in."))).toBe(false);
+    expect(isSignInRequired(null)).toBe(false);
+  });
+});
+
+// FA8: the `_err` envelope's structured details reach thrown errors, so a
+// 400 invalid_arguments lights up field-level messages in the Surface.
+describe("extractErrorDetails", () => {
+  it("reads details from the envelope-in-HTTPException and top-level shapes", () => {
+    const fields = [{ field: "run_id", message: "unknown run" }];
+    expect(
+      extractErrorDetails({ detail: { ok: false, error: { code: "invalid_arguments", details: { fields } } } })
+    ).toEqual({ fields });
+    expect(extractErrorDetails({ ok: false, error: { code: "x", details: { fields } } })).toEqual({ fields });
+  });
+  it("is undefined for detail-less shapes", () => {
+    expect(extractErrorDetails({ detail: { code: "signin_required", message: "m" } })).toBeUndefined();
+    expect(extractErrorDetails({ detail: "plain" })).toBeUndefined();
+    expect(extractErrorDetails(null)).toBeUndefined();
   });
 });
