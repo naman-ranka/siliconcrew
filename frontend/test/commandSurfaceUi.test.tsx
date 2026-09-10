@@ -696,6 +696,102 @@ describe("CommandSurface — in-flight results never land in the next session (P
     // The clock stops either way — the network call did settle.
     expect(screen.queryByTestId("command-surface-elapsed")).toBeNull();
   });
+
+  // PR #92 review, finding 2: `running` was one component-wide flag, so a slow
+  // call in session A kept B's Invoke button disabled — and showed B a
+  // "Running — Ns" clock for a command B never invoked — until A's promise
+  // settled. The prior tests only asserted the post-resolve state. This one
+  // pins the in-flight window: B must be enabled BEFORE A resolves.
+  it("a slow call in session A never disables session B's Invoke or shows B a clock (before AND after A settles)", async () => {
+    let resolveLint!: (v: unknown) => void;
+    vi.mocked(workbenchApi.lint).mockReturnValue(
+      new Promise((r) => {
+        resolveLint = r;
+      }) as never
+    );
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Lint")!);
+    fireEvent.click(screen.getByTestId("command-surface-invoke"));
+    expect(screen.getByTestId("command-surface-invoke")).toBeDisabled();
+    expect(screen.getByTestId("command-surface-elapsed")).toHaveTextContent("Running — 0s");
+    act(() => {
+      useStore.setState({ currentSession: { ...SESSION, id: "s2", name: "s2" } as never });
+    });
+    // While A's call is STILL in flight: B is a fresh workspace, nothing runs here.
+    fireEvent.click(railButton("Lint")!); // F3 reset the selection; Lint is the sync one
+    expect(screen.getByTestId("command-surface-invoke")).not.toBeDisabled();
+    expect(screen.queryByTestId("command-surface-elapsed")).toBeNull();
+    await act(async () => {
+      resolveLint({
+        ok: true,
+        status: "passed",
+        warnings: [],
+        errors: [],
+        byFile: {},
+        command: "iverilog alu.v",
+        files: ["alu.v"],
+        engine: "iverilog",
+      });
+    });
+    // A's late settle changes nothing in B.
+    expect(screen.getByTestId("command-surface-invoke")).not.toBeDisabled();
+    expect(screen.queryByTestId("command-surface-elapsed")).toBeNull();
+    expect(screen.queryByText(/passed \(iverilog\)/)).toBeNull();
+  });
+
+  it("a run started in session B stays running when session A's earlier call settles", async () => {
+    // The stale promise's `finally` must clear only ITS session's slot: A's
+    // settle would otherwise re-enable B's button mid-run — the exact
+    // "enabled while a run for THIS session is in flight" hazard. B runs a
+    // DIFFERENT command because lib/commands.ts carries its own per-command
+    // double-submit guard (a separate layer, not under test here).
+    let resolveLint!: (v: unknown) => void;
+    vi.mocked(workbenchApi.lint).mockReturnValue(
+      new Promise((r) => {
+        resolveLint = r;
+      }) as never
+    );
+    let resolveSim!: (v: unknown) => void;
+    vi.mocked(workbenchApi.simulate).mockReturnValue(
+      new Promise((r) => {
+        resolveSim = r;
+      }) as never
+    );
+    render(<CommandSurface />);
+    fireEvent.click(railButton("Lint")!);
+    fireEvent.click(screen.getByTestId("command-surface-invoke")); // A's call
+    act(() => {
+      useStore.setState({ currentSession: { ...SESSION, id: "s2", name: "s2" } as never });
+    });
+    fireEvent.click(railButton("Simulate")!);
+    fireEvent.click(screen.getByTestId("command-surface-invoke")); // B's call
+    expect(workbenchApi.simulate).toHaveBeenCalledWith("s2", expect.anything());
+    expect(screen.getByTestId("command-surface-invoke")).toBeDisabled();
+    expect(screen.getByTestId("command-surface-elapsed")).toHaveTextContent("Running — 0s");
+    await act(async () => {
+      resolveLint({
+        ok: true,
+        status: "passed",
+        warnings: [],
+        errors: [],
+        byFile: {},
+        command: "iverilog alu.v",
+        files: ["alu.v"],
+        engine: "iverilog",
+      }); // A settles first — B is still running
+    });
+    expect(screen.getByTestId("command-surface-invoke")).toBeDisabled();
+    expect(screen.getByTestId("command-surface-elapsed")).toBeInTheDocument();
+    await act(async () => {
+      resolveSim({
+        run: { id: "sim_0001", kind: "sim", status: "passed" },
+        manifestWarnings: [],
+      }); // B settles → B's own result lands
+    });
+    expect(screen.getByTestId("command-surface-invoke")).not.toBeDisabled();
+    expect(screen.queryByTestId("command-surface-elapsed")).toBeNull();
+    expect(screen.getByText(/sim_0001 passed/)).toBeInTheDocument();
+  });
 });
 
 describe("CommandSurface — session switch resets the form (F3)", () => {

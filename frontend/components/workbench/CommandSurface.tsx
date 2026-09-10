@@ -622,7 +622,12 @@ export function CommandSurface() {
   const [values, setValues] = React.useState<Record<string, Record<string, unknown>>>({});
   const [advOpen, setAdvOpen] = React.useState(false);
   const [resultOpen, setResultOpen] = React.useState(true);
-  const [running, setRunning] = React.useState(false);
+  // In-flight invokes keyed by the session they were made FOR (finding 2 of
+  // the PR review): a slow call in session A must not disable session B's
+  // Invoke button or show B a "Running — Ns" clock for a command B never
+  // invoked, and A's late `finally` must not clear a run B has since started.
+  // `running` below is the derived read for the CURRENT session only.
+  const [inFlight, setInFlight] = React.useState<Record<string, true>>({});
   const [results, setResults] = React.useState<Record<string, SurfaceRunResult>>({});
   // Per-command last successful async dispatch (W5/A20): the run id feeds the
   // dispatch note + "View in Runs" and the F1 guard. Absent = nothing
@@ -643,8 +648,10 @@ export function CommandSurface() {
   const centerRef = React.useRef<HTMLDivElement>(null);
   const filterRef = React.useRef<HTMLInputElement>(null);
   const { status: authStatus, signIn } = useAuth();
+  const running = Boolean(currentSession && inFlight[currentSession.id]);
   // W5: client-side clock for the sync "Running — Ns" indicator (a clock,
-  // never a poller — invariant 6).
+  // never a poller — invariant 6). Follows the per-session read, so a switch
+  // freezes it and the next invoke in the new session restarts it from 0.
   const elapsed = useElapsedSeconds(running);
 
   // F1 (adversarial review): the Surface stays MOUNTED when it closes, so its
@@ -913,7 +920,7 @@ export function CommandSurface() {
     // Surface (F3), and the late result must not land in the next workspace's
     // pane — a wrong-session verdict, dispatch note or re-arm lock.
     const sid = currentSession.id;
-    setRunning(true);
+    setInFlight((prev) => ({ ...prev, [sid]: true }));
     setDispatched((prev) => ({ ...prev, [cmd.id]: undefined }));
     // Each dispatch consumes the acknowledgement — the NEXT one asks again.
     setRearmed((prev) => (prev[cmd.id] ? { ...prev, [cmd.id]: false } : prev));
@@ -947,7 +954,14 @@ export function CommandSurface() {
         setResultOpen(true);
       }
     } finally {
-      setRunning(false);
+      // Clear only THIS session's slot — never a run another session started
+      // while this one was in flight.
+      setInFlight((prev) => {
+        if (!(sid in prev)) return prev;
+        const next = { ...prev };
+        delete next[sid];
+        return next;
+      });
     }
   };
 
