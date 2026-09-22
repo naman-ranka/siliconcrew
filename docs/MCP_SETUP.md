@@ -217,8 +217,9 @@ workspace/default/
 
 ## Available Tools
 
-A default connection is advertised **24 tools**: the 19 design tools below plus
-the 5 session tools a client needs before any session exists.
+A default connection is advertised **28 tools**: the 21 design tools below, the
+2 skill tools (`list_skills`, `read_skill`), and the 5 session tools a client
+needs before any session exists.
 
 ### Session Management (5 tools)
 - `create_session_tool` - Create new isolated workspace
@@ -294,7 +295,7 @@ I'll design a 2-bit counter following the expert workflow.
 ```
 
 All following the **exact best practices from SYSTEM_PROMPT**!
-24 tools | Same 24 tools |
+28 tools | Same 28 tools |
 | **Workflow** | Your Gemini agent | Claude + SYSTEM_PROMPT |
 | **Sessions** | REST API management | MCP tools + resources |
 | **UI** | Custom React tabs | Claude's chat UI |
