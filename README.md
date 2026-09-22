@@ -186,6 +186,7 @@ If any phase fails, the agent analyzes errors and iterates on the design.
 - Python 3.10 or higher
 - Node.js 18+ and npm (for the frontend)
 - Icarus Verilog (`iverilog`)
+- Verilator (recommended: real lint with warning codes; without it lint falls back to iverilog's syntax check)
 - Docker (for synthesis features)
 - At least one LLM provider API key (Gemini, OpenAI, or Anthropic)
 - (Optional) Claude Desktop or VS Code for MCP access
@@ -223,10 +224,21 @@ cd frontend && npm install && cd ..
 | macOS | `brew install icarus-verilog` |
 | Windows | [Download installer](https://bleyer.org/icarus/) |
 
+### Installing Verilator
+
+| Platform | Command |
+|----------|---------|
+| Ubuntu/Debian | `sudo apt-get install verilator` |
+| macOS | `brew install verilator` |
+| Windows | [MSYS2](https://www.msys2.org/), then `pacman -S mingw-w64-ucrt-x86_64-verilator`, with `C:\msys64\ucrt64\bin` on `PATH` |
+
 ### Docker Setup (for Synthesis)
 
 ```bash
 docker pull openroad/orfs:latest
+
+# Optional: measured code coverage for cocotb tests (cocotb_tool coverage=True)
+docker build -t siliconcrew/cocotb-coverage:1 - < Dockerfile.cocotb-coverage
 ```
 
 ### First-Run Standard-Cell Bootstrap (Required for Post-Synthesis Simulation)
