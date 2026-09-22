@@ -58,8 +58,10 @@ def _host_workspace():
     configured = _HOST_WORKSPACE
     if configured and _is_absolute_host_path(configured):
         return configured
-    if not configured and not os.path.exists("/.dockerenv"):
-        return None  # native self-host: paths are already host paths
+    if not os.path.exists("/.dockerenv"):
+        # Native self-host: paths are already host paths. A relative value here
+        # is the compose setting read from a shared .env, not a DooD mount.
+        return None
     if not _discovered_host_workspace:
         _discovered_host_workspace = _discover_host_workspace() or None
     if _discovered_host_workspace:

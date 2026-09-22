@@ -132,3 +132,12 @@ def test_failed_discovery_is_retried(dood, monkeypatch):
         lambda argv, **k: subprocess.CompletedProcess(argv, 0, _mounts_json("/srv/ws"), ""),
     )
     assert rd._translate_dood_path("/workspace/s1") == "/srv/ws/s1"
+
+
+def test_relative_value_on_a_native_host_is_ignored(dood):
+    # .env.example suggests HOST_WORKSPACE=./workspace for compose, and
+    # `python api.py` loads the same .env. Natively that must be a no-op,
+    # not a docker inspect round-trip and a DooD error.
+    calls = dood(host_workspace="./workspace", in_container=False)
+    assert rd._translate_dood_path("/workspace/s1") == "/workspace/s1"
+    assert calls == []
