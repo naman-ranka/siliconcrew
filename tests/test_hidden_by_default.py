@@ -1,6 +1,6 @@
 """What "hidden by default" means, written down as a test.
 
-Six rare-flow or environment-dependent tools no longer cost an agent
+Four rare-flow or environment-dependent tools no longer cost an agent
 description bytes for a step it will almost never take. Hidden is a statement
 about SURFACES, and about which ones:
 
@@ -12,11 +12,12 @@ about SURFACES, and about which ones:
                     which is how our own first-party clients start it (the Codex
                     runtime and the benchmark harness).
 
-So nothing is deleted and nothing is unreachable. Formal verification and cocotb
-are differentiators; they are hidden because they are rarely the next step, not
-because they are unimportant. Re-enabling them for an agent is connect-time tool
-scoping, which is a later phase — deliberately not a runtime toggle, because the
-last one leaked one tenant's tool list into another's.
+So nothing is deleted and nothing is unreachable. cocotb_tool and sby_tool used
+to be in this set and are not any more: SiliconCrew's main use is people
+attaching their own workflows over MCP, and those workflows verify with a
+cocotb testbench (with measured coverage) and formal. Per-client narrowing is
+connect-time tool scoping, a later phase, and deliberately not a runtime toggle,
+because the last one leaked one tenant's tool list into another's.
 """
 import pytest
 
@@ -29,16 +30,17 @@ HIDDEN = {
     "build_interactive_sim",
     "schematic_tool",
     "run_python_analysis",
-    "cocotb_tool",
-    "sby_tool",
 }
+
+# Verification tools a workflow attached over MCP builds on: advertised.
+ADVERTISED_VERIFICATION = {"cocotb_tool", "sby_tool"}
 
 
 def _names(tools) -> set:
     return {t.name for t in tools}
 
 
-def test_the_hidden_set_is_exactly_these_six():
+def test_the_hidden_set_is_exactly_these_four():
     """Derived from the tools' own declarations, so hiding a seventh (or
     un-hiding one) has to be a deliberate edit here too."""
     hidden = {t.name for t in ALL_TOOLS
@@ -81,6 +83,7 @@ FLOW_TOOLS = {
     "write_file", "read_file", "edit_file", "list_files_tool",
     "get_manifest", "update_manifest",
     "linter_tool", "run_simulation", "waveform_tool",
+    "cocotb_tool", "sby_tool",
     "start_synthesis", "retry_pd", "get_synthesis_status",
     "get_synthesis_metrics", "read_stage_report", "compare_pd_runs",
     "search_logs_tool", "generate_report_tool",
@@ -94,8 +97,8 @@ def test_the_agent_surface_is_the_flow_tools_plus_the_skill_pair():
     here, out loud. The skill pair was that decision: the store lives outside
     every workspace, so `read_file` cannot reach it."""
     assert _names(architect_tools) == FLOW_TOOLS | SKILL_TOOLS
-    assert len(FLOW_TOOLS) == 19
-    assert len(architect_tools) == 21
+    assert len(FLOW_TOOLS) == 21
+    assert len(architect_tools) == 23
 
 
 def test_a_default_mcp_connection_gets_the_same_set_plus_the_bootstrap():
@@ -112,3 +115,11 @@ def test_the_command_surface_keeps_every_hidden_tool():
     from src.api.tool_catalog import build_catalog
 
     assert HIDDEN <= {e["name"] for e in build_catalog()}
+
+
+@pytest.mark.parametrize("name", sorted(ADVERTISED_VERIFICATION))
+def test_cocotb_and_formal_are_advertised_everywhere(name):
+    """A default MCP connection, the in-process agent and the UI all get them."""
+    assert name in _names(mcp_tools)
+    assert name in _names(architect_tools)
+    assert name in _names(tools_on_surface("ui"))

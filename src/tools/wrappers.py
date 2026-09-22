@@ -113,10 +113,11 @@ ALL_SURFACES = ("agent", "mcp", "ui")
 # for every description on every turn: the architect's tool list, and the
 # default MCP advertisement a stranger's client caches.
 #
-# Formal verification and cocotb are differentiators; they are hidden because
-# they are rarely the next step, never because they are unimportant. Re-enabling
-# them for an agent is connect-time tool scoping, which P6 owns; there is
-# deliberately no runtime toggle (the last one leaked across tenants).
+# cocotb_tool and sby_tool are NOT hidden: the main use of SiliconCrew is people
+# attaching their own workflows over MCP, and a testbench-with-coverage tool and
+# a formal tool are what those workflows verify with. Their descriptions are
+# worth the bytes. Per-client narrowing is connect-time tool scoping (P6);
+# there is deliberately no runtime toggle (the last one leaked across tenants).
 HIDDEN_BY_DEFAULT = ("ui", "codex")
 
 # How a tool call moves the attempt log forward (see attempt_logger).
@@ -1521,7 +1522,7 @@ def run_python_analysis(script_file: str, args: list[str] = None) -> str:
 
 @tool(parse_docstring=True)
 @policy(category="verification", protected=True, mutates=True, async_job=False,
-        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
+        surfaces=ALL_SURFACES, requires_session=True)
 def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
     """
     Run a cocotb (Python) testbench against your RTL in a pinned simulator container.
@@ -1586,7 +1587,7 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
 
 @tool(parse_docstring=True)
 @policy(category="verification", protected=True, mutates=True, async_job=False,
-        surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
+        surfaces=ALL_SURFACES, requires_session=True)
 def sby_tool(sby_file: str) -> str:
     """
     Run formal verification with SymbiYosys (SBY).
