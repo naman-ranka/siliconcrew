@@ -267,6 +267,7 @@ If post-synthesis simulation reports missing stdcells, run the same commands and
 ```bash
 # Terminal 1 — backend
 python api.py                      # Runs on http://localhost:8000
+# Hacking on the backend? uvicorn api:app --reload --reload-dir src
 
 # Terminal 2 — frontend
 cd frontend && npm run dev         # Runs on http://localhost:3000

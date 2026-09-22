@@ -3251,5 +3251,11 @@ async def health_check():
 # =============================================================================
 
 if __name__ == "__main__":
+    # `python api.py` is the plain local run. No auto-reload: the reloader
+    # watches the working directory, which includes workspace/, so every file
+    # the agent writes would restart the server mid-turn. For backend
+    # development, run `uvicorn api:app --reload --reload-dir src` instead.
+    # Loopback only: self-host has no auth. The Docker entrypoint binds
+    # 0.0.0.0 itself.
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="127.0.0.1", port=8000)
