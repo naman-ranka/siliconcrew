@@ -87,6 +87,8 @@ def test_relative_value_without_discovery_fails_loudly_before_docker_run(dood, m
     dood(host_workspace="./workspace", inspect_rc=1)
     popen_called = []
     monkeypatch.setattr(rd.subprocess, "Popen", lambda *a, **k: popen_called.append(a))
+    # run_docker_command creates workspace_path first; keep that off the real disk.
+    monkeypatch.setattr(rd.os, "makedirs", lambda *a, **k: None)
 
     result = rd.run_docker_command("true", workspace_path="/workspace/s1")
 
