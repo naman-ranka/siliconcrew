@@ -55,13 +55,18 @@ build_dir  = os.environ.get("SC_BUILD_DIR", "/tmp/sc_build")
 sim        = os.environ.get("SC_SIM", "icarus")
 
 coverage   = os.environ.get("SC_COVERAGE") == "1"
+# Taken out of the environment before the test runs, so the test (which
+# shares stdout) cannot learn it and print a report that passes for ours.
+run_tag    = os.environ.pop("SC_RUN_TAG", "")
 
 runner = get_runner(sim)
 _bk = dict(verilog_sources=sources, hdl_toplevel=toplevel, build_dir=build_dir, always=True)
 if coverage:
     # Verilator line + toggle coverage; lint warnings stay warnings so a design
     # that simulates is not refused over style.
-    _bk["build_args"] = ["--coverage-line", "--coverage-toggle", "-Wno-fatal"]
+    # --timing: RTL with delays (q <= #1 d) builds as it simulates under Icarus,
+    # instead of failing NEEDTIMINGOPT and turning a PASS into a build ERROR.
+    _bk["build_args"] = ["--coverage-line", "--coverage-toggle", "--timing", "-Wno-fatal"]
 try:
     # Default a 1ns/1ps timescale so Clock(...ns) self-tests work even when the agent's TB
     # doesn't set one (real CVDP harnesses set it via .env). Older runners lack the kwarg.
@@ -109,8 +114,14 @@ if coverage:
     # f=file, l=line, o=signal, page=v_line/.. | v_toggle/.. | v_branch/..
     # Only points in the design's own sources count.
     dats = sorted(glob.glob(os.path.join(build_dir, "**", "coverage.dat"), recursive=True))
-    names = set(os.path.basename(s) for s in sources)
-    kinds, lines_missed, toggles_missed = {}, set(), []
+
+    def _rel(p):
+        # Workspace-relative, so rtl/alu.v and sub/alu.v stay two files.
+        p = os.path.relpath(p, os.getcwd()) if os.path.isabs(p) else p
+        return os.path.normpath(p).replace("\\", "/")
+
+    wanted = set(_rel(s) for s in sources)
+    kinds, lines_missed, branches_missed, toggles_missed = {}, set(), [], []
     for dat in dats[:1]:
         with open(dat, errors="replace") as fh:
             for raw in fh:
@@ -118,29 +129,38 @@ if coverage:
                     continue
                 body, _, count = raw.rstrip("\n").rpartition("' ")
                 fields = dict(kv.split("\x02", 1) for kv in body[3:].split("\x01") if "\x02" in kv)
-                fname = os.path.basename(fields.get("f", ""))
-                if fname not in names:
+                fname = _rel(fields.get("f", ""))
+                if fname not in wanted:
                     continue
                 kind = fields.get("page", "").split("/")[0].replace("v_", "") or "other"
                 hit = count.strip().isdigit() and int(count) > 0
                 tally = kinds.setdefault(kind, [0, 0])
                 tally[0] += 1 if hit else 0
                 tally[1] += 1
-                if not hit:
-                    if kind in ("line", "branch"):
-                        lines_missed.add((fname, int(fields.get("l", "0") or 0)))
-                    elif kind == "toggle":
-                        toggles_missed.append("%s (%s:%s)" % (fields.get("o", "?"), fname, fields.get("l", "?")))
+                if hit:
+                    continue
+                where = "%s:%s" % (fname, fields.get("l", "?"))
+                if kind == "line":
+                    lines_missed.add((fname, int(fields.get("l", "0") or 0)))
+                elif kind == "branch":
+                    # A branch point sits on the `if` line, which may well have
+                    # run; name the arm that did not, e.g. ram.v:4 (else).
+                    branches_missed.append("%s (%s)" % (where, fields.get("o", "?")))
+                elif kind == "toggle":
+                    toggles_missed.append("%s (%s)" % (fields.get("o", "?"), where))
     summary = {k: {"covered": c, "total": t, "pct": round(100.0 * c / t, 1) if t else None}
                for k, (c, t) in sorted(kinds.items())}
-    print("SC_COCOTB_COVERAGE " + json.dumps({
+    # Tagged per run: the test module shares this stdout and must not be able
+    # to print a report that is taken for this one.
+    print("SC_COCOTB_COVERAGE_%s %s" % (run_tag, json.dumps({
         "measured": bool(dats),
         "summary": summary,
         "uncoveredLines": ["%s:%d" % fl for fl in sorted(lines_missed)][:40],
+        "uncoveredBranches": branches_missed[:40],
         # Ports and control signals before memory bits (mem[3][5]), which
         # would otherwise fill the list.
         "uncoveredToggles": sorted(toggles_missed, key=lambda t: t.split(" ")[0].count("["))[:40],
-    }))
+    })))
 sys.exit(0 if (npass > 0 and nfail == 0) else 1)
 """
 
@@ -219,9 +239,17 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
         "SC_BUILD_DIR": f"/tmp/sc_build_{uid}",   # unique → no cross-run collision (native)
         "SC_SIM": sim,
         "SC_COVERAGE": "1" if coverage else "0",
+        "SC_RUN_TAG": uid,
     }
 
-    res = get_tool_engine().run(
+    engine = get_tool_engine()
+    if coverage and _is_docker_engine(engine) and not _local_image_exists(image):
+        # A locally built tag must never be pulled: whatever a registry has
+        # under that name would run with the workspace mounted.
+        return _err(f"Coverage image '{image}' is not built on this server. Build it with: "
+                    f"docker build -t {image} - < Dockerfile.cocotb-coverage", command)
+
+    res = engine.run(
         image=image, command=command, cwd=cwd, env=env, timeout=timeout, name_prefix="sc_cocotb",
         # Native path only: scrub the backend process env so the agent's cocotb
         # Python can't read secrets (docker already isolates). See PA1 / Item 3.
@@ -259,28 +287,43 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
         "command": res.get("command", command),
     }
     if coverage:
-        out["coverage"] = _parse_coverage(stdout)
+        out["coverage"] = _parse_coverage(stdout, uid)
     return out
+
+
+def _is_docker_engine(engine) -> bool:
+    return type(engine).__name__ == "DockerToolEngine"
+
+
+def _local_image_exists(image: str) -> bool:
+    import subprocess
+    try:
+        return subprocess.run(["docker", "image", "inspect", image], capture_output=True,
+                              stdin=subprocess.DEVNULL, timeout=20).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 # docker's wording for a local tag that was never built.
 _IMAGE_MISSING = re.compile(r"Unable to find image|pull access denied|repository does not exist", re.I)
 
 
-def _parse_coverage(stdout: str):
-    """The runner's coverage report, or {"measured": False} when it printed none."""
-    m = re.search(r"^SC_COCOTB_COVERAGE (\{.*\})$", stdout or "", re.M)
-    if not m:
+def _parse_coverage(stdout: str, tag: str):
+    """This run's coverage report (tagged, last one wins), or {"measured": False}."""
+    found = re.findall(r"^SC_COCOTB_COVERAGE_%s (\{.*\})$" % re.escape(tag), stdout or "", re.M)
+    if not found:
         return {"measured": False}
     try:
-        return json.loads(m.group(1))
+        return json.loads(found[-1])
     except ValueError:
         return {"measured": False}
 
 
 def _parse_counts(stdout: str) -> tuple[int, int]:
-    m = re.search(r"SC_COCOTB_RESULT pass=(\d+) fail=(\d+)", stdout or "")
-    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    # The runner prints its result after the test's own output, so the last
+    # marker is the real one; an earlier copy can only come from the test.
+    found = re.findall(r"SC_COCOTB_RESULT pass=(\d+) fail=(\d+)", stdout or "")
+    return (int(found[-1][0]), int(found[-1][1])) if found else (0, 0)
 
 
 def _err(msg: str, command: str = "") -> dict:

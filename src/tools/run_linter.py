@@ -78,12 +78,12 @@ ENGINES = ("auto", "iverilog", "verilator")
 # In both patterns `file` may begin with a Windows drive ("C:\..."): that colon
 # is part of the path, not the file:line separator.
 _IVERILOG_PAT = re.compile(
-    r"^(?P<file>(?:[A-Za-z]:)?[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<sev>error|warning|syntax error)?:?\s*(?P<msg>.*)$"
+    r"^(?P<file>(?:[A-Za-z]:(?=[\\/]))?[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<sev>error|warning|syntax error)?:?\s*(?P<msg>.*)$"
 )
 
 # verilator: "%Warning-WIDTH: file.v:12:5: ..." / "%Error: file.v:3: ..."
 _VERILATOR_PAT = re.compile(
-    r"^%(?P<sev>Warning|Error)(?:-(?P<code>[A-Z0-9_]+))?:\s*(?P<file>(?:[A-Za-z]:)?[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<msg>.*)$"
+    r"^%(?P<sev>Warning|Error)(?:-(?P<code>[A-Z0-9_]+))?:\s*(?P<file>(?:[A-Za-z]:(?=[\\/]))?[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<msg>.*)$"
 )
 
 
@@ -336,7 +336,8 @@ def resolve_engine(engine: str = "auto") -> Dict[str, Any]:
     """Pick the engine to run. Honest failure when an explicit choice is missing."""
     engine = (engine or "auto").lower()
     if engine not in ENGINES:
-        return {"error": f"Unknown lint engine '{engine}'. Choose one of: {', '.join(ENGINES)}."}
+        return {"error": f"Unknown lint engine '{engine}'. Choose one of: {', '.join(ENGINES)}.",
+                "invalid": True}
     have_verilator = _verilator_command() is not None
     have_iverilog = shutil.which("iverilog") is not None
     if engine == "auto":
@@ -418,9 +419,11 @@ def run_linter(
             "engine": None,
             "diagnostics": [{"file": None, "line": None, "severity": "error", "message": resolved["error"], "code": "ENGINE"}],
             "notes": [],
-            # Nothing was linted: a missing engine is the server's gap, never a
-            # verdict on the design. Callers report it as an error, not FAILED.
-            "unavailable": True,
+            # Nothing was linted, so neither case is a verdict on the design:
+            # an unknown engine name is the caller's mistake, a missing engine
+            # is the server's gap. Callers report both as errors, never FAILED.
+            "invalid_engine": bool(resolved.get("invalid")),
+            "unavailable": not resolved.get("invalid"),
         }
     eng = resolved["engine"]
 

@@ -88,6 +88,37 @@ def test_rest_lint_returns_engine_unavailable_not_a_failed_lint(tmp_path, monkey
     assert res.json()["detail"]["error"]["code"] == "engine_unavailable"
 
 
+def test_unknown_engine_is_invalid_not_unavailable(tmp_path):
+    (tmp_path / "a.v").write_text("module a; endmodule\n")
+    r = rl.run_linter([str(tmp_path / "a.v")], cwd=str(tmp_path), engine="foo")
+    assert r["invalid_engine"] is True and r["unavailable"] is False
+
+
+def test_rest_lint_unknown_engine_is_a_400(tmp_path):
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src.api.actions import build_actions_router
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "a.v").write_text("module a; endmodule\n")
+    (ws / "manifest.json").write_text(json.dumps({"files": [{"path": "a.v", "role": "rtl"}]}))
+    app = FastAPI()
+    app.include_router(build_actions_router(lambda sid: str(ws)))
+    res = TestClient(app).post("/api/workspace/s1/lint", json={"engine": "foo"})
+    assert res.status_code == 400 and res.json()["detail"]["error"]["code"] == "invalid_engine"
+
+
+def test_posix_single_letter_file_with_a_column_still_parses_as_before():
+    # The drive prefix needs a path separator after the colon, so `a:3:5:` is
+    # file `a`, line 3 — not file `a:3`, line 5.
+    [d] = rl.parse_verilator_diagnostics("%Error: a:3:5: bad")
+    assert (d["file"], d["line"]) == ("a", 3)
+    [d] = rl.parse_iverilog_diagnostics("b:10:3: syntax error")
+    assert (d["file"], d["line"]) == ("b", 10)
+
+
 def test_verilator_diagnostic_with_a_windows_drive_parses():
     out = r"%Error-MODMISSING: C:\ws\rtl\top.v:2:3: Cannot find file containing module: 'alu'"
     [d] = rl.parse_verilator_diagnostics(out, cwd=r"C:\ws" if os.name == "nt" else None)

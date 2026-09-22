@@ -359,7 +359,7 @@ def linter_tool(
     result = run_linter(
         filepaths, cwd=workspace, engine=engine, include_dirs=manifest_mod.include_dirs(m)
     )
-    if result.get("unavailable"):
+    if result.get("unavailable") or result.get("invalid_engine"):
         # Nothing ran, so there is no verdict to report — "Lint FAILED" here
         # read as a broken design and cost every agent a call.
         return (f"Error: {result['stderr']} Nothing was linted; this says nothing "
