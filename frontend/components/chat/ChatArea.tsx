@@ -218,7 +218,7 @@ export function ChatArea({
             <div className="flex items-center gap-2">
               <AlertCircle className={isConfig ? "h-4 w-4 text-info shrink-0" : "h-4 w-4 text-destructive shrink-0"} />
               <p className={isConfig ? "text-xs text-info" : "text-sm text-destructive"}>
-                {isConfig ? "AI assistant needs ANTHROPIC_API_KEY — lint/sim/synth work without it." : chatError}
+                {isConfig ? "The model provider rejected the API key. Check it in Settings or .env — lint/sim/synth work without one." : chatError}
               </p>
             </div>
             <Button
