@@ -14,11 +14,11 @@ import uuid
 # inside a container, it is resolved by asking the daemon for our own mount.
 _HOST_WORKSPACE = os.environ.get("HOST_WORKSPACE")
 _CONTAINER_WORKSPACE_ALIASES = ("/workspace", "/app/workspace")
-_discovered_host_workspace = None  # cache: None = not tried, "" = not found
+_discovered_host_workspace = None  # cached only once found; failures are retried
 
 
 class DoodWorkspaceError(RuntimeError):
-    """HOST_WORKSPACE is relative and the daemon could not tell us the real path."""
+    """In a container, and the host path of /workspace is not known."""
 
 
 def _is_absolute_host_path(path):
@@ -49,43 +49,50 @@ def _discover_host_workspace():
 
 
 def _host_workspace():
-    """The host path to rewrite /workspace to, or None when not in DooD mode."""
+    """The host path to rewrite /workspace to, or None when not in DooD mode.
+
+    Raises DoodWorkspaceError inside a container when the path can't be found:
+    passing `/workspace` through untranslated makes the daemon mount an empty
+    host directory, and ORFS then fails with an unrelated-looking error."""
     global _discovered_host_workspace
     configured = _HOST_WORKSPACE
     if configured and _is_absolute_host_path(configured):
         return configured
     if not configured and not os.path.exists("/.dockerenv"):
         return None  # native self-host: paths are already host paths
-    if _discovered_host_workspace is None:
-        _discovered_host_workspace = _discover_host_workspace()
+    if not _discovered_host_workspace:
+        _discovered_host_workspace = _discover_host_workspace() or None
     if _discovered_host_workspace:
         return _discovered_host_workspace
-    if configured:
-        raise DoodWorkspaceError(
-            f"HOST_WORKSPACE={configured!r} is a relative path, which the host Docker "
-            "daemon cannot mount, and the real path could not be read from "
-            "`docker inspect`. Set HOST_WORKSPACE to the absolute host path of the "
-            "workspace directory (start.sh does this)."
-        )
-    return None
+    what = (f"HOST_WORKSPACE={configured!r} is relative, which the host Docker daemon "
+            "cannot mount," if configured else "HOST_WORKSPACE is not set,")
+    raise DoodWorkspaceError(
+        f"{what} and the host path of /workspace could not be read from "
+        "`docker inspect` (is the Docker socket mounted, and the hostname the "
+        "container id?). Set HOST_WORKSPACE to the absolute host path of the "
+        "workspace directory (start.sh does this)."
+    )
 
 
 def _translate_dood_path(path):
     """Map /workspace paths from this container to the host bind mount path."""
-    host_workspace = _host_workspace() if path else None
-    if not host_workspace:
+    if not path:
         return path
 
     normalized = path.replace("\\", "/")
     for alias in _CONTAINER_WORKSPACE_ALIASES:
+        prefix = alias + "/"
+        if normalized != alias and not normalized.startswith(prefix):
+            continue
+        host_workspace = _host_workspace()
+        if not host_workspace:
+            return path
         if normalized == alias:
             return host_workspace
-        prefix = alias + "/"
-        if normalized.startswith(prefix):
-            suffix = normalized[len(prefix):]
-            if ":" in host_workspace or "\\" in host_workspace:
-                return host_workspace.rstrip("\\/") + "\\" + suffix.replace("/", "\\")
-            return host_workspace.rstrip("/") + "/" + suffix
+        suffix = normalized[len(prefix):]
+        if ":" in host_workspace or "\\" in host_workspace:
+            return host_workspace.rstrip("\\/") + "\\" + suffix.replace("/", "\\")
+        return host_workspace.rstrip("/") + "/" + suffix
     return path
 
 

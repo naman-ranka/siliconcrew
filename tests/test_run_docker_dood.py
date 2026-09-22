@@ -91,7 +91,7 @@ def test_relative_value_without_discovery_fails_loudly_before_docker_run(dood, m
     result = rd.run_docker_command("true", workspace_path="/workspace/s1")
 
     assert result["success"] is False
-    assert "HOST_WORKSPACE='./workspace' is a relative path" in result["stderr"]
+    assert "HOST_WORKSPACE='./workspace' is relative" in result["stderr"]
     assert popen_called == []
 
 
@@ -99,6 +99,34 @@ def test_python_analysis_surfaces_the_same_error(dood):
     from src.tools.run_python import PythonAnalysisError, build_docker_argv
 
     dood(host_workspace="./workspace", inspect_rc=1)
-    with pytest.raises(PythonAnalysisError, match="relative path"):
+    with pytest.raises(PythonAnalysisError, match="is relative"):
         build_docker_argv(image="img:1", workspace="/workspace", rel_script="g.py",
                           args=[], container_name="sc_py_x")
+
+
+def test_unset_inside_container_without_discovery_fails_loudly(dood):
+    # compose now passes HOST_WORKSPACE empty; a custom `hostname:` breaks
+    # `docker inspect <hostname>`. Passing /workspace through would mount an
+    # empty host dir, so this must be an error, not a silent fallback.
+    dood(host_workspace=None, inspect_rc=1)
+    with pytest.raises(rd.DoodWorkspaceError, match="HOST_WORKSPACE is not set"):
+        rd._translate_dood_path("/workspace/s1")
+
+
+def test_paths_outside_workspace_need_no_host_path(dood):
+    calls = dood(host_workspace=None, inspect_rc=1)
+    assert rd._translate_dood_path("/opt/pdk/sky130") == "/opt/pdk/sky130"
+    assert calls == []
+
+
+def test_failed_discovery_is_retried(dood, monkeypatch):
+    # One transient failure (daemon still starting) must not stick for the
+    # life of the process.
+    dood(host_workspace=None, inspect_rc=1)
+    with pytest.raises(rd.DoodWorkspaceError):
+        rd._translate_dood_path("/workspace/s1")
+    monkeypatch.setattr(
+        rd.subprocess, "run",
+        lambda argv, **k: subprocess.CompletedProcess(argv, 0, _mounts_json("/srv/ws"), ""),
+    )
+    assert rd._translate_dood_path("/workspace/s1") == "/srv/ws/s1"
