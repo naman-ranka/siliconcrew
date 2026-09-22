@@ -271,7 +271,7 @@ Read the specification file from session "counter_design"
 | Feature | Claude Desktop | VS Code + Copilot |
 |---------|---------------|-------------------|
 | **Session Management** | ✅ Full support | ✅ Full support |
-| **Tool Access** | ✅ The default 24 | ✅ The default 24 |
+| **Tool Access** | ✅ The default 28 | ✅ The default 28 |
 | **System Prompt** | ✅ rtl_design_workflow | ✅ rtl_design_workflow |
 | **File Access** | ✅ Via resources | ✅ Via resources + workspace |
 | **Code Context** | ❌ Limited | ✅ Inline code awareness |
