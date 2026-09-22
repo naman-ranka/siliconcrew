@@ -74,14 +74,16 @@ from typing import Any, Collection, Dict, List, Optional
 
 ENGINES = ("auto", "iverilog", "verilator")
 
-# iverilog stderr: "file.v:12: warning: ..." / "file.v:12: syntax error"
+# iverilog stderr: "file.v:12: warning: ..." / "file.v:12: syntax error".
+# In both patterns `file` may begin with a Windows drive ("C:\..."): that colon
+# is part of the path, not the file:line separator.
 _IVERILOG_PAT = re.compile(
-    r"^(?P<file>[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<sev>error|warning|syntax error)?:?\s*(?P<msg>.*)$"
+    r"^(?P<file>(?:[A-Za-z]:)?[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<sev>error|warning|syntax error)?:?\s*(?P<msg>.*)$"
 )
 
 # verilator: "%Warning-WIDTH: file.v:12:5: ..." / "%Error: file.v:3: ..."
 _VERILATOR_PAT = re.compile(
-    r"^%(?P<sev>Warning|Error)(?:-(?P<code>[A-Z0-9_]+))?:\s*(?P<file>[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<msg>.*)$"
+    r"^%(?P<sev>Warning|Error)(?:-(?P<code>[A-Z0-9_]+))?:\s*(?P<file>(?:[A-Za-z]:)?[^:\n]+):(?P<line>\d+):(?:\d+:)?\s*(?P<msg>.*)$"
 )
 
 
@@ -239,10 +241,19 @@ def split_unresolved_module_diagnostics(
     return kept, missing
 
 
+# A make rule's separator is a colon followed by whitespace — not the first
+# colon: on Windows every path has one (`C:\...`), and --Mdir is absolute, so
+# the targets themselves carry a drive colon.
+_DEPFILE_RULE_SEP = re.compile(r":(?=\s|$)")
+
+
 def _rel_or_abs(path: str, cwd: str) -> str:
     """Workspace-relative POSIX for a file under ``cwd``; absolute otherwise."""
     absolute = os.path.abspath(os.path.join(cwd, path))
-    rel = os.path.relpath(absolute, cwd)
+    try:
+        rel = os.path.relpath(absolute, cwd)
+    except ValueError:  # Windows: another drive, or a device such as NUL
+        return absolute
     if rel == "." or rel.startswith(".."):
         return absolute
     return rel.replace(os.sep, "/")
@@ -261,9 +272,10 @@ def parse_verilator_depfile(text: str, cwd: str) -> List[str]:
     keeps the relative entries.
     """
     body = text.replace("\\\n", " ")
-    _, sep, deps = body.partition(":")
-    if not sep:
+    parts = _DEPFILE_RULE_SEP.split(body, maxsplit=1)
+    if len(parts) < 2:
         return []
+    deps = parts[1]
     return sorted({_rel_or_abs(tok, cwd) for tok in deps.split() if tok})
 
 
@@ -290,12 +302,42 @@ def files_compiled(result: Dict[str, Any]) -> set:
     return files
 
 
+_IS_WINDOWS = os.name == "nt"
+_WIN_RUNNABLE = (".exe", ".bat", ".cmd", ".com")
+
+
+def _verilator_command() -> Optional[Dict[str, Any]]:
+    """How to run verilator here: {"exe", "env"}, or None when it isn't installed.
+
+    Normally `verilator` itself. Windows MSYS2/MinGW packages install `verilator`
+    as a Perl script, which CreateProcess cannot run (WinError 193): the engine
+    is `verilator_bin.exe` beside it, and it needs VERILATOR_ROOT to find its
+    built-in waivers. Found by `shutil.which` either way, so without this an
+    installed verilator made every `auto` lint fail."""
+    path = shutil.which("verilator")
+    msys_script = (_IS_WINDOWS and path is not None and os.path.isfile(path)
+                   and os.path.splitext(path)[1].lower() not in _WIN_RUNNABLE)
+    if not path:
+        return None
+    if not msys_script:
+        return {"exe": "verilator", "env": {}}
+    bin_path = shutil.which("verilator_bin")
+    if not bin_path:
+        return None
+    env: Dict[str, str] = {}
+    if not os.environ.get("VERILATOR_ROOT"):
+        root = os.path.join(os.path.dirname(os.path.dirname(bin_path)), "share", "verilator")
+        if os.path.isdir(root):
+            env["VERILATOR_ROOT"] = root
+    return {"exe": bin_path, "env": env}
+
+
 def resolve_engine(engine: str = "auto") -> Dict[str, Any]:
     """Pick the engine to run. Honest failure when an explicit choice is missing."""
     engine = (engine or "auto").lower()
     if engine not in ENGINES:
         return {"error": f"Unknown lint engine '{engine}'. Choose one of: {', '.join(ENGINES)}."}
-    have_verilator = shutil.which("verilator") is not None
+    have_verilator = _verilator_command() is not None
     have_iverilog = shutil.which("iverilog") is not None
     if engine == "auto":
         if have_verilator:
@@ -310,10 +352,12 @@ def resolve_engine(engine: str = "auto") -> Dict[str, Any]:
     return {"engine": engine}
 
 
-def _run(cmd: List[str], cwd: str, timeout: int) -> Dict[str, Any]:
+def _run(cmd: List[str], cwd: str, timeout: int, env_extra: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     proc = None
+    env = {**os.environ, **env_extra} if env_extra else None
     try:
-        proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, stdin=subprocess.DEVNULL)
         stdout, stderr = proc.communicate(timeout=timeout)
         return {"returncode": proc.returncode, "stdout": stdout, "stderr": stderr, "command": " ".join(cmd)}
     except subprocess.TimeoutExpired:
@@ -374,6 +418,9 @@ def run_linter(
             "engine": None,
             "diagnostics": [{"file": None, "line": None, "severity": "error", "message": resolved["error"], "code": "ENGINE"}],
             "notes": [],
+            # Nothing was linted: a missing engine is the server's gap, never a
+            # verdict on the design. Callers report it as an error, not FAILED.
+            "unavailable": True,
         }
     eng = resolved["engine"]
 
@@ -394,12 +441,13 @@ def run_linter(
         # which is harmless because it is empty.
         mdir = tempfile.mkdtemp(prefix="lint_deps_")
         try:
+            vcmd = _verilator_command()
             cmd = [
-                "verilator", "--lint-only", "--timing", "-Wall", "-Wno-fatal",
+                vcmd["exe"], "--lint-only", "--timing", "-Wall", "-Wno-fatal",
                 "-Wno-EOFNEWLINE", "-Wno-DECLFILENAME", "--relative-includes",
                 "-MMD", "--Mdir", mdir,
             ] + include_args + list(verilog_files)
-            raw = _run(cmd, cwd, timeout)
+            raw = _run(cmd, cwd, timeout, env_extra=vcmd["env"]) if vcmd["env"] else _run(cmd, cwd, timeout)
             files_read = _read_verilator_depfiles(mdir, cwd)
         finally:
             shutil.rmtree(mdir, ignore_errors=True)

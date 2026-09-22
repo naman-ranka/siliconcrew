@@ -626,7 +626,10 @@ def test_real_verilator_excused_exit_matches_its_total(tmp_path):
     rtl, _ = _nested_design(tmp_path)
     result = rl.run_linter([str(rtl / "top.v")], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
     assert result["success"] is True, result
-    assert rl.engine_error_total("verilator", result["stderr"]) == 2
+    # 5.020 counts the "no search path" hint as its own %Error (total 2);
+    # 5.048 prints it as a `...` continuation (total 1). Either way the total
+    # is fully explained by what was excused, which is what the verdict needs.
+    assert rl.engine_error_total("verilator", result["stderr"]) in (1, 2)
     result = rl.run_linter([str(rtl / "top.v"), "nope.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
     assert result["success"] is False, result
     assert any(d["code"] == "EXIT" and "nope.v" in d["message"] for d in result["diagnostics"]), result["diagnostics"]

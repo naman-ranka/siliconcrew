@@ -359,6 +359,11 @@ def linter_tool(
     result = run_linter(
         filepaths, cwd=workspace, engine=engine, include_dirs=manifest_mod.include_dirs(m)
     )
+    if result.get("unavailable"):
+        # Nothing ran, so there is no verdict to report — "Lint FAILED" here
+        # read as a broken design and cost every agent a call.
+        return (f"Error: {result['stderr']} Nothing was linted; this says nothing "
+                f"about the design. engine='auto' uses whichever engine is installed.")
     # The same drop notes the REST twin emits, from the same helper, written
     # after the run from what the engine proved it read: a manifest lint file
     # this list left out is named as "not part of this run" — or, if the
