@@ -195,6 +195,9 @@ If any phase fails, the agent analyzes errors and iterates on the design.
 ```bash
 # Clone the repository
 git clone https://github.com/naman-ranka/siliconcrew.git
+# Windows: example ORFS outputs have paths up to ~130 chars, so a clone in a
+# deep folder hits the 260-char limit ("Filename too long"). Clone with:
+#   git clone -c core.longpaths=true https://github.com/naman-ranka/siliconcrew.git
 cd siliconcrew
 
 # Create virtual environment
