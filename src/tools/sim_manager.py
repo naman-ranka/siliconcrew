@@ -122,7 +122,7 @@ def _git_commit() -> Optional[str]:
     try:
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         out = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, timeout=5
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL
         )
         if out.returncode == 0:
             commit = out.stdout.strip()
@@ -137,7 +137,7 @@ def _iverilog_version() -> Optional[str]:
         return _PROVENANCE_CACHE["iverilogVersion"]
     version = None
     try:
-        out = subprocess.run(["iverilog", "-V"], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["iverilog", "-V"], capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL)
         first = (out.stdout or out.stderr or "").splitlines()
         if first:
             m = re.search(r"version\s+(\S+)", first[0])

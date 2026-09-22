@@ -37,6 +37,7 @@ def _discover_host_workspace():
         out = subprocess.run(
             ["docker", "inspect", socket.gethostname(), "--format", "{{json .Mounts}}"],
             capture_output=True, text=True, timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         if out.returncode != 0:
             return ""
@@ -197,7 +198,7 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
             docker_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True, stdin=subprocess.DEVNULL
         )
         stdout, stderr = proc.communicate(timeout=timeout)
 
@@ -213,7 +214,7 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
         # Killing the docker CLI alone can orphan the container; when a name was
         # supplied, hard-kill the container too.
         if name:
-            subprocess.run(["docker", "kill", name], capture_output=True, text=True)
+            subprocess.run(["docker", "kill", name], capture_output=True, text=True, stdin=subprocess.DEVNULL)
         if proc: proc.kill()
         return {
             "success": False,

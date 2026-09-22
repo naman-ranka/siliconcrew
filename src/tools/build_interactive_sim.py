@@ -190,6 +190,7 @@ def _run_yosys(script: str, cwd: str, engine: str) -> Dict[str, Any]:
                 text=True,
                 env=_scrubbed_env(cwd),
                 preexec_fn=_posix_rlimits(),
+                stdin=subprocess.DEVNULL,
             )
             stdout, stderr = proc.communicate(timeout=_YOSYS_TIMEOUT_SEC)
             return {"success": proc.returncode == 0, "stderr": stderr or stdout}

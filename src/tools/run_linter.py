@@ -313,7 +313,7 @@ def resolve_engine(engine: str = "auto") -> Dict[str, Any]:
 def _run(cmd: List[str], cwd: str, timeout: int) -> Dict[str, Any]:
     proc = None
     try:
-        proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL)
         stdout, stderr = proc.communicate(timeout=timeout)
         return {"returncode": proc.returncode, "stdout": stdout, "stderr": stderr, "command": " ".join(cmd)}
     except subprocess.TimeoutExpired:

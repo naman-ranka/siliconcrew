@@ -1320,7 +1320,7 @@ def _run_equiv_check(golden_files: List[str], gate_file: str, top_module: str, t
     ]
     cmd = ["yosys", "-q", "-p", "; ".join(script)]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return {"status": "fail", "note": "equivalence timed out"}
     except Exception as exc:
