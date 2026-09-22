@@ -43,6 +43,14 @@ describe("chat 'Add an API key' CTA (Slice 3)", () => {
     expect(screen.getByTestId("chat-add-key")).toBeInTheDocument();
   });
 
+  it("a provider-rejected key names no provider in the notice (the model may be any of them)", () => {
+    try { localStorage.clear(); } catch {}
+    useStore.setState({ chatError: "400 INVALID_ARGUMENT: API key not valid. Please pass a valid API key.", chatErrorCode: null } as any);
+    render(<ChatArea />);
+    expect(screen.getByText(/rejected the API key/)).toBeInTheDocument();
+    expect(screen.queryByText(/ANTHROPIC_API_KEY/)).toBeNull();
+  });
+
   it("a generic error (no key code) does NOT show the add-key CTA", () => {
     useStore.setState({ chatError: "Some other failure", chatErrorCode: null } as any);
     render(<ChatArea />);

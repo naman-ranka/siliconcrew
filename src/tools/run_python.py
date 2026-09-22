@@ -143,9 +143,12 @@ def build_docker_argv(*, image: str, workspace: str, rel_script: str, args: List
     container. Without it, SIGKILLing the foreground CLI client (which we started)
     does NOT stop the container dockerd owns, so an unbounded script would run
     past the wall timeout forever (AR-1)."""
-    from src.tools.run_docker import _translate_dood_volume
+    from src.tools.run_docker import DoodWorkspaceError, _translate_dood_volume
 
-    volume = _translate_dood_volume(f"{workspace}:/workspace:rw")
+    try:
+        volume = _translate_dood_volume(f"{workspace}:/workspace:rw")
+    except DoodWorkspaceError as exc:
+        raise PythonAnalysisError(str(exc)) from exc
     return [
         "docker", "run", "--rm",
         "--name", container_name,

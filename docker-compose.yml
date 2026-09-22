@@ -13,7 +13,10 @@ services:
       - ${HOST_DATA_DIR:-./.siliconcrew_data}:/root/.siliconcrew
     environment:
       - RTL_WORKSPACE=/workspace
-      - HOST_WORKSPACE=${HOST_WORKSPACE:-./workspace}
+      # Host path of the /workspace mount, for sibling ORFS/sby containers.
+      # Left empty, the backend reads it from `docker inspect` on itself;
+      # a relative default here would be passed to the daemon verbatim.
+      - HOST_WORKSPACE=${HOST_WORKSPACE:-}
     env_file:
       # Created by start.sh from .env.example; optional so `compose config`
       # doesn't fail before you've made it.
