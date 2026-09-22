@@ -1,35 +1,96 @@
+import json
+import re
+import socket
 import subprocess
 import os
 import sys
 import uuid
 
-# When running inside a container (DooD mode), HOST_WORKSPACE holds the
-# host-side path to the workspace bind mount so sibling ORFS containers
-# can mount the same directory via the host Docker daemon.
+# When running inside a container (DooD mode), sibling containers (ORFS, sby,
+# python-analysis) are started by the HOST daemon, so their -v sources must be
+# host paths. HOST_WORKSPACE is the host-side path of our /workspace bind mount.
+# An absolute value is used as given. A relative one (docker-compose's old
+# `./workspace` default) means nothing to the daemon, so, like an unset value
+# inside a container, it is resolved by asking the daemon for our own mount.
 _HOST_WORKSPACE = os.environ.get("HOST_WORKSPACE")
 _CONTAINER_WORKSPACE_ALIASES = ("/workspace", "/app/workspace")
+_discovered_host_workspace = None  # cache: None = not tried, "" = not found
+
+
+class DoodWorkspaceError(RuntimeError):
+    """HOST_WORKSPACE is relative and the daemon could not tell us the real path."""
+
+
+def _is_absolute_host_path(path):
+    # The host may be Windows (Docker Desktop) while we run on Linux, so
+    # os.path.isabs() is not enough: accept C:\..., C:/... and UNC paths too.
+    return (path.startswith("/") or path.startswith("\\\\")
+            or re.match(r"^[A-Za-z]:[\\/]", path) is not None)
+
+
+def _discover_host_workspace():
+    """Host-side source of this container's /workspace mount, or "" if unknown.
+
+    Docker sets the container hostname to its short id, which `docker inspect`
+    accepts. Outside a container, or without a socket, this fails quietly."""
+    try:
+        out = subprocess.run(
+            ["docker", "inspect", socket.gethostname(), "--format", "{{json .Mounts}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode != 0:
+            return ""
+        for mount in json.loads(out.stdout) or []:
+            if mount.get("Type") == "bind" and mount.get("Destination") in _CONTAINER_WORKSPACE_ALIASES:
+                return mount.get("Source") or ""
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return ""
+
+
+def _host_workspace():
+    """The host path to rewrite /workspace to, or None when not in DooD mode."""
+    global _discovered_host_workspace
+    configured = _HOST_WORKSPACE
+    if configured and _is_absolute_host_path(configured):
+        return configured
+    if not configured and not os.path.exists("/.dockerenv"):
+        return None  # native self-host: paths are already host paths
+    if _discovered_host_workspace is None:
+        _discovered_host_workspace = _discover_host_workspace()
+    if _discovered_host_workspace:
+        return _discovered_host_workspace
+    if configured:
+        raise DoodWorkspaceError(
+            f"HOST_WORKSPACE={configured!r} is a relative path, which the host Docker "
+            "daemon cannot mount, and the real path could not be read from "
+            "`docker inspect`. Set HOST_WORKSPACE to the absolute host path of the "
+            "workspace directory (start.sh does this)."
+        )
+    return None
 
 
 def _translate_dood_path(path):
     """Map /workspace paths from this container to the host bind mount path."""
-    if not (_HOST_WORKSPACE and path):
+    host_workspace = _host_workspace() if path else None
+    if not host_workspace:
         return path
 
     normalized = path.replace("\\", "/")
     for alias in _CONTAINER_WORKSPACE_ALIASES:
         if normalized == alias:
-            return _HOST_WORKSPACE
+            return host_workspace
         prefix = alias + "/"
         if normalized.startswith(prefix):
             suffix = normalized[len(prefix):]
-            if ":" in _HOST_WORKSPACE or "\\" in _HOST_WORKSPACE:
-                return _HOST_WORKSPACE.rstrip("\\/") + "\\" + suffix.replace("/", "\\")
-            return os.path.join(_HOST_WORKSPACE, *suffix.split("/"))
+            if ":" in host_workspace or "\\" in host_workspace:
+                return host_workspace.rstrip("\\/") + "\\" + suffix.replace("/", "\\")
+            return host_workspace.rstrip("/") + "/" + suffix
     return path
 
 
 def _translate_dood_volume(volume):
-    if not (_HOST_WORKSPACE and volume):
+    if not volume:
         return volume
 
     parts = volume.split(":")
@@ -84,10 +145,18 @@ def run_docker_command(command, image="openroad/orfs:latest", cwd="/OpenROAD-flo
 
     # In DooD mode, translate container paths (/workspace/...) to host paths
     # so the sibling ORFS container mounts the correct host directory.
-    if _HOST_WORKSPACE:
+    try:
         workspace_path = _translate_dood_path(workspace_path)
         if volumes:
             volumes = [_translate_dood_volume(v) for v in volumes]
+    except DoodWorkspaceError as e:
+        return {
+            "success": False,
+            "stdout": "",
+            "stderr": f"Error: {e}",
+            "command": "docker run",
+            "timed_out": False,
+        }
 
     # Construct Docker command
     # We use --rm to clean up the container after exit
