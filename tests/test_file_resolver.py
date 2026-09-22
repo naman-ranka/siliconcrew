@@ -289,3 +289,35 @@ def test_symlink_inside_workspace_found_by_basename_is_still_honored(tmp_path):
     os.makedirs(os.path.join(ws, "old"))
     os.symlink(real, os.path.join(ws, "old", "alu_link.v"))
     assert resolve_workspace_file(ws, "alu_link.v") == "old/alu_link.v"
+
+
+def test_pathed_extensionless_value_matching_two_exts_is_ambiguous(tmp_path):
+    """rtl/alu.v + rtl/alu.sv: 'rtl/alu' used to pick .v by tuple order and
+    silently compile a possibly stale file."""
+    ws = str(tmp_path)
+    _mk(ws, "rtl/alu.v")
+    _mk(ws, "rtl/alu.sv")
+    with pytest.raises(FileResolutionError) as ei:
+        resolve_workspace_file(ws, "rtl/alu", exts=(".v", ".sv"))
+    msg = str(ei.value)
+    assert "Ambiguous" in msg
+    assert "rtl/alu.v" in msg and "rtl/alu.sv" in msg
+
+
+def test_root_extensionless_value_matching_two_exts_is_ambiguous(tmp_path):
+    ws = str(tmp_path)
+    _mk(ws, "alu.v")
+    _mk(ws, "alu.sv")
+    with pytest.raises(FileResolutionError) as ei:
+        resolve_workspace_file(ws, "alu", exts=(".v", ".sv"))
+    msg = str(ei.value)
+    assert "Ambiguous" in msg
+    assert "alu.v" in msg and "alu.sv" in msg
+
+
+def test_extensionless_value_with_only_sv_present_resolves(tmp_path):
+    ws = str(tmp_path)
+    _mk(ws, "rtl/alu.sv")
+    assert resolve_workspace_file(ws, "rtl/alu", exts=(".v", ".sv")) == "rtl/alu.sv"
+    _mk(ws, "top.sv")
+    assert resolve_workspace_file(ws, "top", exts=(".v", ".sv")) == "top.sv"

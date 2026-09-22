@@ -156,10 +156,19 @@ def resolve_workspace_file(
         return _posix(os.path.normpath(value))
 
     # Extension completion on the exact address ('rtl/alu' or 'alu' + '.v').
-    for ext in exts:
-        with_ext = candidate + ext
-        if os.path.isfile(with_ext) and is_within(workspace, with_ext):
-            return _posix(os.path.normpath(value + ext))
+    # alu.v AND alu.sv both present is ambiguous — tuple order must not pick one.
+    completed = sorted(
+        _posix(os.path.normpath(value + ext))
+        for ext in exts
+        if os.path.isfile(candidate + ext) and is_within(workspace, candidate + ext)
+    )
+    if len(completed) == 1:
+        return completed[0]
+    if len(completed) > 1:
+        raise FileResolutionError(
+            f"Ambiguous file '{value}' — matches {', '.join(completed)}. "
+            "Use the workspace-relative path to pick one."
+        )
 
     ext_note = f" (also tried extensions: {', '.join(exts)})" if exts else ""
     if "/" in _posix(value):
