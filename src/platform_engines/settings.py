@@ -152,6 +152,9 @@ class PlatformSettings:
     # selects the LOCAL/self-host engine.
     python_engine: str = "docker"
     python_image: str = "siliconcrew/python-analysis:1"
+    # cocotb_tool coverage=True runs here (Verilator + a C++ compiler); see
+    # Dockerfile.cocotb-coverage. Plain cocotb runs stay on the grader image.
+    cocotb_coverage_image: str = "siliconcrew/cocotb-coverage:1"
 
     # Subagents (P6) — the two built-in fan-out roles. NATIVE AGENT ONLY: a
     # subagent needs a loop, and an MCP client is not one. Off on hosted no
@@ -358,6 +361,7 @@ def get_settings() -> PlatformSettings:
         subagent_max_children=_int_env("SUBAGENT_MAX_CHILDREN", 6),
         agent_read_only=_flag("SILICONCREW_AGENT_READ_ONLY", default=False),
         python_image=_env("PYTHON_ANALYSIS_IMAGE", "siliconcrew/python-analysis:1"),
+        cocotb_coverage_image=_env("COCOTB_COVERAGE_IMAGE", "siliconcrew/cocotb-coverage:1"),
     )
 
 

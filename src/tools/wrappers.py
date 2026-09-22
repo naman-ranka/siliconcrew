@@ -1527,7 +1527,8 @@ def run_python_analysis(script_file: str, args: list[str] = None) -> str:
 @tool(parse_docstring=True)
 @policy(category="verification", protected=True, mutates=True, async_job=False,
         surfaces=HIDDEN_BY_DEFAULT, requires_session=True)
-def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -> str:
+def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str,
+                coverage: bool = False) -> str:
     """
     Run a cocotb (Python) testbench against your RTL in a pinned simulator container.
 
@@ -1536,10 +1537,21 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
     loop, missing clock, or unbounded test), not an inconclusive result. Returns a structured
     pass/fail with an output tail.
 
+    The default run uses the grader's image: Icarus with cocotb 2.0.0.dev0, which takes
+    `Clock(dut.clk, 10, units="ns")` and rejects the newer `unit=` spelling. `units=` works in
+    both images, so write that.
+
+    With coverage=True the same test runs under Verilator in a separate coverage image and the
+    result adds `coverage`: line/toggle/branch covered, total and pct for your RTL sources, plus
+    the uncovered lines and signals. Those numbers are measured, so report them rather than a
+    count your testbench keeps for itself. Line coverage says which RTL no test reached; it does
+    not say the checks were right, so it complements spec-derived functional checks.
+
     Args:
         verilog_files: DUT + dependency Verilog/SV sources (workspace-relative).
         top_module: Top-level HDL module name.
         python_module: cocotb test module importable from the workspace (e.g. "verif.test_dut").
+        coverage: Measure code coverage (Verilator). Slower: it compiles the design to C++.
     """
     workspace = get_workspace_path()
 
@@ -1551,7 +1563,7 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
         return f"Error: {exc}"
     abs_files = [os.path.join(workspace, rel) for rel in rel_files]
 
-    r = run_cocotb(abs_files, top_module, python_module, cwd=workspace)
+    r = run_cocotb(abs_files, top_module, python_module, cwd=workspace, coverage=coverage)
     status = r.get("status")
     tail = ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()[-16000:]
 
@@ -1587,6 +1599,11 @@ def cocotb_tool(verilog_files: list[str], top_module: str, python_module: str) -
             "summary": "Cocotb Test ERROR ⚠️ (build/collection failure — no test ran).",
             "output_tail": tail,
         }
+    if coverage:
+        payload["coverage"] = r.get("coverage") or {"measured": False}
+        if status == "PASS":
+            payload["summary"] = payload["summary"].replace(
+                "verified in the reference container", "run under Verilator for coverage")
     return json.dumps(payload, indent=2)
 
 @tool(parse_docstring=True)

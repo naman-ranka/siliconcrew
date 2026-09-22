@@ -54,8 +54,14 @@ test_mod   = os.environ["SC_TEST_MODULE"]
 build_dir  = os.environ.get("SC_BUILD_DIR", "/tmp/sc_build")
 sim        = os.environ.get("SC_SIM", "icarus")
 
+coverage   = os.environ.get("SC_COVERAGE") == "1"
+
 runner = get_runner(sim)
 _bk = dict(verilog_sources=sources, hdl_toplevel=toplevel, build_dir=build_dir, always=True)
+if coverage:
+    # Verilator line + toggle coverage; lint warnings stay warnings so a design
+    # that simulates is not refused over style.
+    _bk["build_args"] = ["--coverage-line", "--coverage-toggle", "-Wno-fatal"]
 try:
     # Default a 1ns/1ps timescale so Clock(...ns) self-tests work even when the agent's TB
     # doesn't set one (real CVDP harnesses set it via .env). Older runners lack the kwarg.
@@ -97,6 +103,44 @@ if failures:
         print(f)
         print("------------------------------")
 print("SC_COCOTB_RESULT pass=%d fail=%d xml=%s" % (npass, nfail, "yes" if results else "no"))
+
+if coverage:
+    # coverage.dat: one point per line, C '<\x01key\x02value ...>' <count>, with
+    # f=file, l=line, o=signal, page=v_line/.. | v_toggle/.. | v_branch/..
+    # Only points in the design's own sources count.
+    dats = sorted(glob.glob(os.path.join(build_dir, "**", "coverage.dat"), recursive=True))
+    names = set(os.path.basename(s) for s in sources)
+    kinds, lines_missed, toggles_missed = {}, set(), []
+    for dat in dats[:1]:
+        with open(dat, errors="replace") as fh:
+            for raw in fh:
+                if not raw.startswith("C '"):
+                    continue
+                body, _, count = raw.rstrip("\n").rpartition("' ")
+                fields = dict(kv.split("\x02", 1) for kv in body[3:].split("\x01") if "\x02" in kv)
+                fname = os.path.basename(fields.get("f", ""))
+                if fname not in names:
+                    continue
+                kind = fields.get("page", "").split("/")[0].replace("v_", "") or "other"
+                hit = count.strip().isdigit() and int(count) > 0
+                tally = kinds.setdefault(kind, [0, 0])
+                tally[0] += 1 if hit else 0
+                tally[1] += 1
+                if not hit:
+                    if kind in ("line", "branch"):
+                        lines_missed.add((fname, int(fields.get("l", "0") or 0)))
+                    elif kind == "toggle":
+                        toggles_missed.append("%s (%s:%s)" % (fields.get("o", "?"), fname, fields.get("l", "?")))
+    summary = {k: {"covered": c, "total": t, "pct": round(100.0 * c / t, 1) if t else None}
+               for k, (c, t) in sorted(kinds.items())}
+    print("SC_COCOTB_COVERAGE " + json.dumps({
+        "measured": bool(dats),
+        "summary": summary,
+        "uncoveredLines": ["%s:%d" % fl for fl in sorted(lines_missed)][:40],
+        # Ports and control signals before memory bits (mem[3][5]), which
+        # would otherwise fill the list.
+        "uncoveredToggles": sorted(toggles_missed, key=lambda t: t.split(" ")[0].count("["))[:40],
+    }))
 sys.exit(0 if (npass > 0 and nfail == 0) else 1)
 """
 
@@ -133,7 +177,7 @@ def _to_rel(path: str, cwd: str) -> str:
 
 
 def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
-               timeout=DEFAULT_TIMEOUT, sim="icarus", image=DEFAULT_OSVB_IMAGE):
+               timeout=DEFAULT_TIMEOUT, sim="icarus", image=DEFAULT_OSVB_IMAGE, coverage=False):
     """Run a cocotb testbench via the selected ToolEngine.
 
     Args:
@@ -144,6 +188,9 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
         timeout (int): hard wall-clock limit; on expiry the run is killed and status=TIMEOUT.
         sim (str): cocotb simulator name (default "icarus").
         image (str): reference container for the docker engine (digest-pinned).
+        coverage (bool): measure line + toggle code coverage. Runs under Verilator
+            in the coverage image (settings.cocotb_coverage_image) instead of the
+            grader image; the result gains a ``coverage`` dict.
 
     Returns:
         dict: {success, status: PASS|FAIL|TIMEOUT|ERROR, passed, failed, timed_out,
@@ -157,6 +204,9 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
         return _err(f"Source file(s) not found: {', '.join(missing)}")
 
     sources = [_to_rel(f, cwd) for f in verilog_files]
+    if coverage:
+        from src.platform_engines.settings import get_settings
+        sim, image = "verilator", get_settings().cocotb_coverage_image
     uid = uuid.uuid4().hex[:8]
     runner_path = f"/tmp/sc_cocotb_runner_{uid}.py"
     b64 = base64.b64encode(_RUNNER.encode()).decode()
@@ -168,6 +218,7 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
         "SC_TEST_MODULE": python_module,
         "SC_BUILD_DIR": f"/tmp/sc_build_{uid}",   # unique → no cross-run collision (native)
         "SC_SIM": sim,
+        "SC_COVERAGE": "1" if coverage else "0",
     }
 
     res = get_tool_engine().run(
@@ -193,7 +244,11 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
     else:
         status = "ERROR"                        # no results produced (collection error, etc.)
 
-    return {
+    if coverage and status == "ERROR" and _IMAGE_MISSING.search(stderr + stdout):
+        return _err(f"Coverage image '{image}' is not built on this server. Build it with: "
+                    f"docker build -t {image} - < Dockerfile.cocotb-coverage", res.get("command", command))
+
+    out = {
         "success": status == "PASS",
         "status": status,
         "passed": npass,
@@ -203,6 +258,24 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
         "stderr": stderr,
         "command": res.get("command", command),
     }
+    if coverage:
+        out["coverage"] = _parse_coverage(stdout)
+    return out
+
+
+# docker's wording for a local tag that was never built.
+_IMAGE_MISSING = re.compile(r"Unable to find image|pull access denied|repository does not exist", re.I)
+
+
+def _parse_coverage(stdout: str):
+    """The runner's coverage report, or {"measured": False} when it printed none."""
+    m = re.search(r"^SC_COCOTB_COVERAGE (\{.*\})$", stdout or "", re.M)
+    if not m:
+        return {"measured": False}
+    try:
+        return json.loads(m.group(1))
+    except ValueError:
+        return {"measured": False}
 
 
 def _parse_counts(stdout: str) -> tuple[int, int]:

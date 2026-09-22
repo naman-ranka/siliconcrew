@@ -1,0 +1,21 @@
+# SiliconCrew cocotb coverage image (cocotb_tool coverage=True, docker engine).
+#
+# Code coverage needs Verilator (--coverage-line/--coverage-toggle) and a C++
+# compiler. The pinned grader image (ghcr.io/hdl/sim/osvb) can't provide it:
+# it has no C++ compiler, and its cocotb 2.0.0.dev0 + Verilator 5.027-devel pair
+# hangs at t=0 on a plain cocotb test (measured 2026-09). Grading and plain
+# cocotb_tool runs stay on that image; only coverage runs use this one.
+#
+# Released versions only, matching the app image: Debian trixie's verilator
+# (5.032) and cocotb 2.0.1.
+#
+# Build (no build context needed):
+#   docker build -t siliconcrew/cocotb-coverage:1 - < Dockerfile.cocotb-coverage
+#
+# Pin the tag in COCOTB_COVERAGE_IMAGE (defaults to siliconcrew/cocotb-coverage:1).
+FROM python:3.12-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends verilator g++ make \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir cocotb==2.0.1

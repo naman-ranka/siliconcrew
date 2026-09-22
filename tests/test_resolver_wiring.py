@@ -116,7 +116,7 @@ def test_cocotb_tool_resolves_nested_basename(ws, monkeypatch):
     _mk(ws, "rtl/dut.v")
     seen = {}
 
-    def fake_cocotb(files, top, mod, cwd):
+    def fake_cocotb(files, top, mod, cwd, coverage=False):
         seen["files"] = files
         return {"status": "PASS", "passed": 1, "failed": 0, "stdout": "ok", "stderr": ""}
 
