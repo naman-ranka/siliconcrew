@@ -1774,6 +1774,11 @@ def _first_orfs_error(run_dir: str) -> Optional[Dict[str, str]]:
 def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, Any]) -> Dict[str, str]:
     artifacts = _collect_artifacts(run_dir)
     if artifacts["reports"] == 0:
+        # A run that died before writing any report (RTL read, early yosys)
+        # still logged why; say that rather than only what is missing.
+        first = _first_orfs_error(run_dir) if not docker_result.get("success") else None
+        if first:
+            return {"status": "fail", "note": f"ORFS failed in {first['log']}: {first['line']}"}
         return {"status": "fail", "note": "No ORFS reports found"}
 
     recovered = False

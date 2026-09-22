@@ -55,8 +55,23 @@ def test_a_runnable_verilator_is_called_by_name_as_before(monkeypatch):
 
 
 def test_no_verilator_means_none_even_if_other_binaries_exist(monkeypatch):
+    monkeypatch.delenv("VERILATOR_ROOT", raising=False)
     monkeypatch.setattr(rl.shutil, "which", lambda name: None if name == "verilator" else f"/usr/bin/{name}")
     assert rl._verilator_command() is None
+    monkeypatch.setattr(rl, "_IS_WINDOWS", True)   # no install tree beside it either
+    assert rl._verilator_command() is None
+
+
+def test_windows_python_below_312_finds_verilator_bin_directly(monkeypatch, tmp_path):
+    # Python 3.10/3.11 shutil.which only tries PATHEXT names, so the MSYS2
+    # wrapper `verilator` (no extension) is invisible; verilator_bin.exe is not.
+    bin_dir, share = _msys_layout(tmp_path)
+    monkeypatch.setattr(rl, "_IS_WINDOWS", True)
+    monkeypatch.delenv("VERILATOR_ROOT", raising=False)
+    monkeypatch.setattr(rl.shutil, "which",
+                        lambda name: str(bin_dir / "verilator_bin.exe") if name == "verilator_bin" else None)
+    assert rl._verilator_command() == {"exe": str(bin_dir / "verilator_bin.exe"),
+                                       "env": {"VERILATOR_ROOT": str(share)}}
 
 
 def test_unavailable_engine_is_flagged_not_a_verdict(monkeypatch, tmp_path):

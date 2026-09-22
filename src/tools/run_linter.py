@@ -312,24 +312,27 @@ def _verilator_command() -> Optional[Dict[str, Any]]:
     Normally `verilator` itself. Windows MSYS2/MinGW packages install `verilator`
     as a Perl script, which CreateProcess cannot run (WinError 193): the engine
     is `verilator_bin.exe` beside it, and it needs VERILATOR_ROOT to find its
-    built-in waivers. Found by `shutil.which` either way, so without this an
-    installed verilator made every `auto` lint fail."""
+    built-in waivers. Python 3.12's `shutil.which` finds the extensionless
+    script; 3.10/3.11 only try PATHEXT names and return None. Either way the
+    Windows answer is verilator_bin, so it is probed directly."""
     path = shutil.which("verilator")
     msys_script = (_IS_WINDOWS and path is not None and os.path.isfile(path)
                    and os.path.splitext(path)[1].lower() not in _WIN_RUNNABLE)
-    if not path:
-        return None
-    if not msys_script:
+    if path and not msys_script:
         return {"exe": "verilator", "env": {}}
+    if not _IS_WINDOWS:
+        return None
     bin_path = shutil.which("verilator_bin")
     if not bin_path:
         return None
-    env: Dict[str, str] = {}
-    if not os.environ.get("VERILATOR_ROOT"):
-        root = os.path.join(os.path.dirname(os.path.dirname(bin_path)), "share", "verilator")
-        if os.path.isdir(root):
-            env["VERILATOR_ROOT"] = root
-    return {"exe": bin_path, "env": env}
+    root = os.path.join(os.path.dirname(os.path.dirname(bin_path)), "share", "verilator")
+    if os.environ.get("VERILATOR_ROOT"):
+        return {"exe": bin_path, "env": {}}
+    if os.path.isdir(root):
+        return {"exe": bin_path, "env": {"VERILATOR_ROOT": root}}
+    # A verilator_bin with no install tree beside it can't find its own
+    # waivers; only accept it when the `verilator` wrapper vouched for it.
+    return {"exe": bin_path, "env": {}} if path else None
 
 
 def resolve_engine(engine: str = "auto") -> Dict[str, Any]:

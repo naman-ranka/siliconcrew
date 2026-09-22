@@ -43,6 +43,21 @@ def test_yosys_errors_count_too(tmp_path):
     assert sm._first_orfs_error(str(tmp_path))["line"].startswith("ERROR: Module `alu'")
 
 
+def test_a_failure_before_any_report_still_names_the_error(tmp_path):
+    # Yosys dies reading RTL: no .rpt is ever written.
+    base = tmp_path / "orfs_logs" / "sky130hd" / "top" / "base"
+    base.mkdir(parents=True)
+    (base / "1_2_yosys.log").write_text("ERROR: Module `alu' referenced in module `top' is not part of the design.\n")
+    out = sm._signoff_guardrail(str(tmp_path), "top", {"success": False})
+    assert out["note"] == ("ORFS failed in 1_2_yosys.log: ERROR: Module `alu' referenced "
+                           "in module `top' is not part of the design.")
+
+
+def test_no_reports_and_no_error_line_keeps_the_old_note(tmp_path):
+    out = sm._signoff_guardrail(str(tmp_path), "top", {"success": False})
+    assert out == {"status": "fail", "note": "No ORFS reports found"}
+
+
 def test_no_error_line_keeps_the_old_note(tmp_path):
     (tmp_path / "orfs_reports").mkdir()
     (tmp_path / "orfs_reports" / "a.rpt").write_text("x\n")
