@@ -139,12 +139,12 @@ Close and reopen VS Code to activate the MCP server.
    What tools do you have access to?
    ```
    
-   You should see 24 tools:
+   You should see 28 tools:
    - Session management: create_session_tool, list_sessions_tool, etc.
    - RTL tools: write_spec, read_spec, write_file, etc.
-   - Verification: linter_tool, run_simulation, waveform_tool
+   - Verification: linter_tool, run_simulation, waveform_tool, cocotb_tool, sby_tool
    - Synthesis: start_synthesis, get_synthesis_status, get_synthesis_metrics, etc.
-   Six rare-flow tools are hidden by default — see MCP_SETUP.md.
+   Four rare-flow tools are hidden by default — see MCP_SETUP.md.
 
 ---
 

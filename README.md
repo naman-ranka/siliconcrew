@@ -117,7 +117,7 @@ The full pipeline (problem selection, agent run, container grading, and a proven
 │                                                                            │
 │   System prompt (~130-line methodology, versioned in prompts/architect/)   │
 │   + Provider-selected LLM (Gemini / OpenAI / Anthropic)                                 │
-│   + 19 LangChain tools (6 more are hidden by default)                      │
+│   + 21 LangChain tools (4 more are hidden by default)                      │
 │                                                                            │
 │   Workflow: Spec → RTL → Testbench → Lint → Simulate → Debug → Synthesize │
 └──────────────────────────────────┬─────────────────────────────────────────┘
