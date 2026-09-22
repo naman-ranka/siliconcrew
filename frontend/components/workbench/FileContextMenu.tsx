@@ -280,8 +280,12 @@ function Menu({ menu }: { menu: ContextMenuState }) {
           <MenuItem
             onSelect={() => run("lint")}
             icon={<SearchCheck className="h-3.5 w-3.5" />}
-            label={COMMANDS.lint.label}
-            kbd={`⌘${COMMANDS.lint.shortcut}`}
+            // Not the ⌘L whole-design lint: this scopes the run to the clicked
+            // file (file-scoped — external modules are not elaborated), so the
+            // label must not promise a design-wide verdict.
+            label="Lint this file"
+            // No ⌘L badge here: that shortcut lints the whole manifest set,
+            // which is a different run from this one.
           />
           <MenuItem
             onSelect={() => run("sim")}

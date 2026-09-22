@@ -1,4 +1,4 @@
-import { workbenchApi } from "@/lib/api";
+import { isSignInRequired, workbenchApi } from "@/lib/api";
 import {
   COMMANDS,
   RUN_ORDER,
@@ -11,9 +11,9 @@ import {
   type CommandParam,
 } from "@/lib/commands";
 import { TOOL } from "@/lib/toolNames";
-import { buildFormModel, shortDescription } from "@/lib/schemaForm";
+import { buildFormModel, shortDescription, subtitlesByKind } from "@/lib/schemaForm";
 import { useStore } from "@/lib/store";
-import type { ActivityEvent, DesignManifest, RunSummary, ToolCatalogEntry } from "@/types";
+import type { ActivityEvent, DesignManifest, RunKind, RunSummary, ToolCatalogEntry } from "@/types";
 
 // The Command Surface: EVERY user-invocable tool as command → real tool call.
 // The catalog is NOT hand-written — it renders from the backend's introspected
@@ -29,16 +29,22 @@ import type { ActivityEvent, DesignManifest, RunSummary, ToolCatalogEntry } from
 export type SurfaceParamSource = "manifest" | "choice" | "run" | "default" | "text";
 
 export interface SurfaceCtx extends CommandCtx {
-  /** Workspace-root file names (from the dir cache) — file-picking conventions. */
-  rootFiles: string[];
+  /** Recursive workspace file PATHS (the store's path-index slice) — every
+   *  file-picking convention suggests ws-relative paths, consistently. */
+  wsPaths: string[];
+  /** The backend truncated the path walk — suggestions may be incomplete;
+   *  surfaced in the UI, never hidden (invariant 4). */
+  wsPathsTruncated: boolean;
 }
 
 export interface SurfaceParam {
   key: string;
   label: string;
   /** "combo" = text input with filtered suggestions (resolveOptions); free
-   *  entry always allowed — the "search ≻ suggest ≻ type anything" editor. */
-  editor: "enum" | "number" | "bool" | "text" | "multi" | "combo";
+   *  entry always allowed — the "search ≻ suggest ≻ type anything" editor.
+   *  "json" = a validated JSON textarea (W7/A24) for dict / list[dict]
+   *  params the plain editors can't type — parsed client-side before send. */
+  editor: "enum" | "number" | "bool" | "text" | "multi" | "combo" | "json";
   source: SurfaceParamSource;
   options?: readonly string[] | ((ctx: SurfaceCtx) => string[]);
   def: unknown | ((ctx: SurfaceCtx) => unknown);
@@ -50,6 +56,34 @@ export interface SurfaceParam {
   optional?: boolean;
   hint?: string;
   when?: (vals: Record<string, unknown>) => boolean;
+  /** L1: a file-set OVERRIDE param — rendered as the "Supplied by manifest"
+   *  box (manifest chips, collapsed) with an "Override…" affordance that
+   *  swaps in the multi-combo, not as a plain row. Empty value = the
+   *  backend's manifest resolution, exactly as before. */
+  override?: true;
+  /** Module-valued vs file-valued — rendered as a tiny tag next to the source
+   *  badge so the ".v here but not there" question answers itself. */
+  valueKind?: "module" | "file";
+  /** json editors only: the shape the backend expects — "object" (a dict,
+   *  e.g. build_interactive_sim.parameters) or "array" (list[dict], e.g.
+   *  write_spec.ports). Drives client-side validation. */
+  jsonKind?: "object" | "array";
+  /** Per-value subtitles for combo suggestions (module → its file;
+   *  file → its manifest role). Display-only decoration. */
+  subtitles?: (ctx: SurfaceCtx) => Record<string, string>;
+  /** Owner refinement (2026-08-14): the manifest set that backs a plural
+   *  file field. The field itself starts EMPTY (no chip wall) — this is what
+   *  the value MEANS when empty, so the placeholder can say it honestly and
+   *  `fillFromManifest` can put it in the payload. */
+  manifestDefault?: (ctx: SurfaceCtx) => string[];
+  /** The tool REQUIRES the list (cocotb_tool / build_interactive_sim), so an
+   *  empty field cannot mean "omit the key": buildSurfacePayload injects
+   *  `manifestDefault` — and the payload pane shows exactly that (invariant
+   *  4: what is sent is visible). Optional override params (lint/sim/synth)
+   *  do NOT set this — empty stays "omit the key, backend resolves". */
+  fillFromManifest?: true;
+  /** Input placeholder — the honest "what happens if you leave this empty". */
+  placeholder?: string;
 }
 
 export interface SurfaceCommand {
@@ -61,6 +95,9 @@ export interface SurfaceCommand {
   async?: boolean;
   requiresSignIn?: boolean;
   mutates?: boolean;
+  /** The run kind an async core command produces (from the registry) — the
+   *  F1 re-arm guard asks the runs slice whether one is still live. */
+  producesRun?: RunKind;
   /** Delegate execution to the core command engine (polling, unread, toasts). */
   core?: CommandId;
   /** "Supplied by manifest" rows — resolved from lib/commands' one definition. */
@@ -81,9 +118,14 @@ const EDITOR_BY_TYPE: Record<CommandParam["type"], SurfaceParam["editor"]> = {
   boolean: "bool",
   text: "text",
   combo: "combo",
+  files: "multi",
 };
 
 function toSurfaceParam(p: CommandParam): SurfaceParam {
+  // A `files` registry param is file-valued by construction and renders as
+  // the override box; its suggestions/subtitles come from the same resolver
+  // the ⌘K modal reads (resolveParamOptions).
+  const valueKind = p.type === "files" ? "file" : p.valueKind;
   return {
     key: p.key,
     label: p.label,
@@ -98,6 +140,13 @@ function toSurfaceParam(p: CommandParam): SurfaceParam {
     adv: p.advanced,
     optional: p.optional,
     hint: p.hint,
+    ...(p.type === "files" ? { override: true as const } : {}),
+    ...(valueKind
+      ? {
+          valueKind,
+          subtitles: (ctx: SurfaceCtx) => subtitlesByKind(valueKind, ctx.manifest),
+        }
+      : {}),
   };
 }
 
@@ -109,6 +158,7 @@ function toSurfaceCommand(def: CommandDef): SurfaceCommand {
     tool: def.tool,
     desc: def.description,
     async: def.async,
+    producesRun: def.producesRun,
     core: def.id,
     facts: def.facts,
     params: def.params.map(toSurfaceParam),
@@ -235,12 +285,64 @@ export function buildSurfacePayload(
   cmd.params.forEach((p) => {
     if (p.when && !p.when(merged)) return;
     let v = merged[p.key];
+    if (p.editor === "json" && typeof v === "string") {
+      // W7/A24: the textarea holds TEXT; the backend needs the parsed value
+      // (`parameters` as dict, `ports` as list[dict]). Empty = omitted;
+      // unparseable text stays visible as-is (jsonParamErrors blocks the
+      // actual send with a field error, so this never reaches the wire).
+      const trimmed = v.trim();
+      if (!trimmed) return;
+      try {
+        v = JSON.parse(trimmed);
+      } catch {
+        /* keep the raw string for the live preview */
+      }
+    }
+    // Owner refinement (2026-08-14): a REQUIRED plural file field left empty
+    // means "the manifest set" — inject it here so the payload pane shows the
+    // exact list that goes on the wire. Optional override params never take
+    // this branch: empty keeps meaning "omit the key" and the backend
+    // resolves the manifest itself.
+    if (p.fillFromManifest && Array.isArray(v) && v.length === 0) {
+      const set = p.manifestDefault?.(ctx) ?? [];
+      if (set.length > 0) {
+        args[p.key] = set;
+        return;
+      }
+    }
     if (p.optional && (v === "" || v == null || (Array.isArray(v) && v.length === 0))) return;
     if (v === undefined) return;
     if (p.editor === "number" && v !== "") v = Number(v);
     args[p.key] = v;
   });
   return { tool: cmd.tool, arguments: args };
+}
+
+/** Client-side validation for json-editor fields (W7/A24): empty = omitted;
+ *  anything present must parse AND match the param's jsonKind. */
+export function jsonParamErrors(
+  cmd: SurfaceCommand,
+  vals: Record<string, unknown>
+): SurfaceFieldError[] {
+  const out: SurfaceFieldError[] = [];
+  for (const p of cmd.params) {
+    if (p.editor !== "json") continue;
+    const v = vals[p.key];
+    if (typeof v !== "string" || !v.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v.trim());
+    } catch {
+      out.push({ field: p.key, message: "not valid JSON" });
+      continue;
+    }
+    if (p.jsonKind === "object" && (parsed == null || typeof parsed !== "object" || Array.isArray(parsed))) {
+      out.push({ field: p.key, message: "must be a JSON object" });
+    } else if (p.jsonKind === "array" && !Array.isArray(parsed)) {
+      out.push({ field: p.key, message: "must be a JSON array" });
+    }
+  }
+  return out;
 }
 
 // --- execution ----------------------------------------------------------------
@@ -272,11 +374,22 @@ export interface SurfaceRunResult {
   result: unknown;
   /** Per-field messages from a 400 invalid_arguments response, when available. */
   fieldErrors?: SurfaceFieldError[];
+  /** Hosted-anonymous signin_required rejection (detected by CODE across the
+   *  /invoke 401 envelope and the core twins' 403 detail, W4/A17) — the
+   *  Surface renders a "Sign in to run this" CTA, never a raw error. */
+  signinRequired?: boolean;
+  /** An ASYNC core dispatch succeeded (W5/A20, FA7) — nothing "completed";
+   *  the run id is what to follow. Replaces the old `null` return, which
+   *  carried no run id for the dispatch note. ABSENT on every nothing-ran
+   *  path, so the note can only ever render off an explicit dispatch. */
+  dispatched?: true;
+  /** The run the core engine produced (dispatched async job, or a finished
+   *  sync sim); null when the outcome had none. */
+  runId?: string | null;
 }
 
-// The api layer's actionFetch throws a plain Error carrying only the message
-// (it does not attach the envelope's details today) — read details defensively
-// so field-level errors light up if it ever starts attaching them.
+// actionFetch attaches the envelope's `details` (FA8) — read them defensively
+// (any thrown Error may still be message-only).
 function fieldErrorsFrom(e: unknown): SurfaceFieldError[] | undefined {
   const details = (e as { details?: { fields?: unknown } } | null)?.details;
   const fields = details?.fields;
@@ -288,15 +401,14 @@ function fieldErrorsFrom(e: unknown): SurfaceFieldError[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-/** Live ctx for resolution — manifest, runs, and workspace-root file names. */
+/** Live ctx for resolution — manifest, runs, and the recursive path index. */
 function storeCtx(): SurfaceCtx {
   const store = useStore.getState();
   return {
     manifest: store.manifest,
     runs: store.runs,
-    rootFiles: (store.dirCache[""]?.entries ?? [])
-      .filter((e) => e.kind === "file")
-      .map((e) => e.name),
+    wsPaths: store.pathIndex.paths,
+    wsPathsTruncated: store.pathIndex.truncated,
   };
 }
 
@@ -304,19 +416,28 @@ function storeCtx(): SurfaceCtx {
  * Execute a surface command. Core flow commands delegate to runCommand (which
  * owns unread/toasts) and are AWAITED so the caller's spinner and result pane
  * reflect what actually happened; the rest go through POST /invoke and return
- * their result for the inline result pane.
+ * their result for the inline result pane. Always resolves to ONE shape
+ * (FA7 — the old `null`-means-dispatched contract is gone): a successful
+ * async dispatch is `{ok:true, dispatched:true, runId}`.
  */
 export async function runSurfaceCommand(
   cmd: SurfaceCommand,
   vals: Record<string, unknown>
-): Promise<SurfaceRunResult | null> {
+): Promise<SurfaceRunResult> {
   const store = useStore.getState();
   const session = store.currentSession;
-  // Honest nothing-ran outcome — `null` from this function means exactly one
-  // thing (async core dispatch succeeded), so the Surface's "Dispatched" note
-  // can never appear when nothing was dispatched (dev#51 follow-up).
+  // Honest nothing-ran outcome (dev#51 follow-up): the "Dispatched" note can
+  // only ever render off an explicit dispatched:true result.
   if (!session) return { ok: false, result: "No active session" };
   const ctx = storeCtx();
+
+  // W7/A24: json-editor fields are validated CLIENT-SIDE before anything is
+  // sent — `parameters` must arrive as a dict, `ports` as a list[dict]; an
+  // unparseable field blocks the call with a field-level message.
+  const jsonErrs = jsonParamErrors(cmd, { ...surfaceDefaults(cmd, ctx), ...vals });
+  if (jsonErrs.length > 0) {
+    return { ok: false, result: "Invalid JSON in the highlighted field(s).", fieldErrors: jsonErrs };
+  }
 
   if (cmd.core) {
     // dev#51 (1): await the core engine so the Invoke spinner is truthful and
@@ -327,11 +448,19 @@ export async function runSurfaceCommand(
     // (duplicate in-flight, no session) arrive as ok:false/ran:false and
     // render as an inline error, never as "Dispatched".
     const outcome = await runCommand(cmd.core, { ...surfaceDefaults(cmd, ctx), ...vals });
-    if (!outcome.ok) return { ok: false, result: outcome.summary };
-    // Async dispatches keep the "Dispatched — follow it in Activity/Runs"
-    // note (now rendered only after the dispatch actually succeeded); sync
+    if (!outcome.ok) {
+      return {
+        ok: false,
+        result: outcome.summary,
+        ...(outcome.signinRequired ? { signinRequired: true } : {}),
+      };
+    }
+    // Async dispatches return the run id for the dispatch note + "View in
+    // Runs" (rendered only after the dispatch actually succeeded); sync
     // cores render their real completion summary inline.
-    return cmd.async ? null : { ok: true, result: outcome.summary };
+    return cmd.async
+      ? { ok: true, dispatched: true, runId: outcome.runId, result: outcome.summary }
+      : { ok: true, result: outcome.summary, ...(outcome.runId ? { runId: outcome.runId } : {}) };
   }
 
   const { tool, arguments: args } = buildSurfacePayload(cmd, vals, ctx);
@@ -366,7 +495,12 @@ export async function runSurfaceCommand(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       store.appendLocalActivity({ ...ev, status: "error", resultSummary: msg, durationMs: Date.now() - new Date(ev.ts).getTime() });
-      return { ok: false, result: msg, fieldErrors: fieldErrorsFrom(e) };
+      return {
+        ok: false,
+        result: msg,
+        fieldErrors: fieldErrorsFrom(e),
+        ...(isSignInRequired(e) ? { signinRequired: true } : {}),
+      };
     }
   }
 
@@ -388,6 +522,11 @@ export async function runSurfaceCommand(
       durationMs: Date.now() - new Date(ev.ts).getTime(),
     });
     void useStore.getState().loadActivity();
-    return { ok: false, result: msg, fieldErrors: fieldErrorsFrom(e) };
+    return {
+      ok: false,
+      result: msg,
+      fieldErrors: fieldErrorsFrom(e),
+      ...(isSignInRequired(e) ? { signinRequired: true } : {}),
+    };
   }
 }

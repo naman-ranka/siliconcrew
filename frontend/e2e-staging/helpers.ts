@@ -50,7 +50,7 @@ export async function signIn(page: Page) {
   await expect(email).toBeVisible({ timeout: 30_000 });
   await email.fill(EMAIL);
   await email.press("Enter");
-  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
   await dumpAuthState(page, "after-email");
 
   const pwd = page.locator('input[type="password"]').first();

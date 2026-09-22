@@ -41,6 +41,30 @@ describe("authIntent", () => {
     expect(takeAuthIntent()).toEqual({ kind: "fork", templateId: "alu4" });
   });
 
+  // W4/A18: the Command Surface's sign-in CTA carries the full form state.
+  it("round-trips a surfaceCommand intent (sessionId + commandId + values)", () => {
+    const intent = {
+      kind: "surfaceCommand" as const,
+      sessionId: "s1",
+      commandId: "synth",
+      values: { maxStage: "synth", clockPeriodNs: 8 },
+    };
+    stashAuthIntent(intent);
+    expect(takeAuthIntent("surfaceCommand")).toEqual(intent);
+    expect(takeAuthIntent()).toBeNull(); // cleared
+  });
+
+  it("surfaceCommand is kind-scoped: other hosts' takes leave it stashed", () => {
+    stashAuthIntent({
+      kind: "surfaceCommand",
+      sessionId: "s1",
+      commandId: "lint",
+      values: {},
+    });
+    expect(takeAuthIntent("create")).toBeNull(); // the create modal's take
+    expect(takeAuthIntent("surfaceCommand")).toMatchObject({ commandId: "lint" });
+  });
+
   it("clears and returns null on malformed or unknown-kind payloads", () => {
     sessionStorage.setItem("sc-auth-intent", "{not json");
     expect(takeAuthIntent()).toBeNull();

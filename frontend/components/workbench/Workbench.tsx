@@ -8,6 +8,7 @@ import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { useAuth } from "@/lib/auth";
 import { replaceThreadUrl } from "@/lib/nav";
+import { peekAuthIntent, takeAuthIntent } from "@/lib/authIntent";
 import { useWorkbenchSync } from "@/lib/useWorkbenchSync";
 import { useSessionUi, useWorkbenchUiStore } from "@/lib/workbenchUiStore";
 import { useWorkbenchShortcuts } from "@/hooks/useWorkbenchShortcuts";
@@ -107,6 +108,22 @@ export function Workbench({ sessionId, threadId = null, view = "ide" }: Workbenc
         setLoadFailure(res.ok ? null : { sessionId, reason: res.reason, message: res.message });
         if (!res.ok) {
           setRetrying(false);
+          // P2-3: the Surface's auth-intent replay host never fires here (no
+          // currentSession), and the Launcher routes to the intent's session
+          // on every visit to `/` while it is stashed. A signed-in "not found"
+          // is final for that id — consume the intent so the dead link is
+          // visited once, not looped. "unreachable" keeps it (Retry may open
+          // the session); the signed-out screen keeps it too (its own sign-in
+          // re-runs this load with the intent's rightful owner).
+          const intent = peekAuthIntent("surfaceCommand");
+          if (
+            res.reason === "not_found" &&
+            !(authEnabled && authStatus === "anonymous") &&
+            intent?.kind === "surfaceCommand" &&
+            intent.sessionId === sessionId
+          ) {
+            takeAuthIntent("surfaceCommand");
+          }
           return;
         }
       }

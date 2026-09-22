@@ -157,7 +157,7 @@ def test_lint_action_logs_ui_event(client, monkeypatch):
     with open(os.path.join(ws, "counter.v"), "w") as f:
         f.write(DUT)
     monkeypatch.setattr(actions_mod, "run_linter",
-                        lambda files, cwd, engine="auto": {
+                        lambda files, cwd, engine="auto", **kw: {
                             "success": True, "stderr": "", "command": "iverilog -t null counter.v",
                             "engine": "iverilog", "diagnostics": [],
                         })
@@ -173,6 +173,57 @@ def test_lint_action_logs_ui_event(client, monkeypatch):
     assert ev["status"] == "ok"
     assert ev["args"]["verilog_files"] == ["counter.v"]
     assert ev["durationMs"] is not None
+
+
+def test_lint_action_logs_ui_event_without_override_is_not_file_scoped(client, monkeypatch):
+    c, ws = client
+    with open(os.path.join(ws, "counter.v"), "w") as f:
+        f.write(DUT)
+    monkeypatch.setattr(actions_mod, "run_linter",
+                        lambda files, cwd, engine="auto", **kw: {
+                            "success": True, "stderr": "", "command": "", "engine": "iverilog",
+                            "diagnostics": [], "notes": [],
+                        })
+    assert c.post(f"/api/workspace/{SID}/lint").status_code == 200
+    ev = c.get(f"/api/workspace/{SID}/activity").json()["events"][0]
+    assert ev["args"]["fileScoped"] is False
+    assert ev["args"]["scopeModules"] == []
+    assert json.loads(ev["resultSummary"])["notes"] == []
+
+
+def test_file_scoped_lint_action_logs_scope_and_notes(client, monkeypatch):
+    """Adversarial-review P3-1 (invariant 3): the durable event for a
+    file-scoped lint must say it was file-scoped — which modules the linter
+    was allowed to leave unresolved, and the notes that qualify the verdict —
+    so the Activity dock and the agent-shell cards (two views of ONE log) do
+    not read a scoped "passed" as a whole-design pass."""
+    c, ws = client
+    with open(os.path.join(ws, "counter.v"), "w") as f:
+        f.write(DUT)
+    with open(os.path.join(ws, "top.v"), "w") as f:
+        f.write("module top(input clk); counter c(.clk(clk), .q()); endmodule\n")
+    monkeypatch.setattr(actions_mod, "run_linter",
+                        lambda files, cwd, engine="auto", **kw: {
+                            "success": True, "stderr": "", "command": "", "engine": "iverilog",
+                            "diagnostics": [],
+                            "notes": ["File-scoped lint: counter instantiated but not in the linted file set."],
+                        })
+
+    r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["top.v"]})
+    assert r.status_code == 200 and r.json()["status"] == "passed"
+
+    ev = c.get(f"/api/workspace/{SID}/activity").json()["events"][0]
+    assert ev["tool"] == "linter_tool" and ev["status"] == "ok"
+    assert ev["args"]["verilog_files"] == ["top.v"]
+    assert ev["args"]["fileScoped"] is True
+    assert ev["args"]["scopeModules"] == ["counter"]
+    recorded = json.loads(ev["resultSummary"])
+    assert recorded["status"] == "passed"
+    # Both kinds of note — what the override dropped and what that cost — and
+    # the same list the REST reply carried as manifestWarnings.
+    assert recorded["notes"] == r.json()["manifestWarnings"]
+    assert any("counter.v" in n for n in recorded["notes"])
+    assert any("File-scoped lint" in n for n in recorded["notes"])
 
 
 def test_simulate_action_logs_ui_event_with_run_id(client, monkeypatch):

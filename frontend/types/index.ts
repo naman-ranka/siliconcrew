@@ -281,6 +281,10 @@ export interface LintResult {
   files: string[];
   /** Engine that actually ran (auto resolves to iverilog or verilator). */
   engine?: string | null;
+  /** Advisory notes from the backend, on the same channel sim/synth use:
+   *  which manifest files a file override left out, and — for a file-scoped
+   *  lint — which instantiated modules were therefore not elaborated. */
+  manifestWarnings?: string[];
 }
 
 export interface PpaDiff {

@@ -133,7 +133,7 @@ describe("the catalog's category ORDER is the palette's group order", () => {
     async: false,
     mutates: false,
   });
-  const ctx = { manifest: null, runs: [], rootFiles: [] };
+  const ctx = { manifest: null, runs: [], wsPaths: [], wsPathsTruncated: false };
 
   it("renders backend categories in first-seen order, Flow pinned first", () => {
     // The backend emits the catalog already sorted by its CATEGORY_ORDER; the
