@@ -43,15 +43,21 @@ def _hosted() -> bool:
     return get_settings().hosted
 
 
-def _stdcell_bootstrap_hint(platform: Optional[str]) -> str:
+def _stdcell_bootstrap_hint(platform: Optional[str], bootstrap_attempted: bool = False) -> str:
     pf = platform or "<platform>"
     root = stdcell_root()
+    populate = f'PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace "{root}" --platform {pf}.'
+    if bootstrap_attempted:
+        return (
+            "Standard-cell models are missing for post-synthesis simulation, and this "
+            "run's download of them failed (the run's stdcell bootstrap result says why). They are "
+            "baked into the backend image only on hosted; on this install, populate "
+            f"them with: {populate}"
+        )
     return (
-        "Standard-cell models are missing for post-synthesis simulation. They ship "
-        "baked into the backend image at the install root, so on a hosted or "
-        "self-host deploy this should never happen — report it. For a local "
-        "checkout, populate them with: "
-        f'PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace "{root}" --platform {pf}.'
+        "Standard-cell models are missing for post-synthesis simulation. They are "
+        "baked into the backend image on hosted, so there this should never happen "
+        f"— report it. On a local install, populate them with: {populate}"
     )
 
 
@@ -544,7 +550,7 @@ def run_simulation(
                 )
         if stdcell_err is not None:
             is_cache_err = _is_stdcell_cache_error(stdcell_err)
-            hint = _stdcell_bootstrap_hint(platform) if is_cache_err else ""
+            hint = _stdcell_bootstrap_hint(platform, stdcell_bootstrap_attempted) if is_cache_err else ""
             msg = str(stdcell_err)
             if hint:
                 msg = f"{msg}\n{hint}"

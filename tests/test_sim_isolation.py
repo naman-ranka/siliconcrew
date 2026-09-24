@@ -274,6 +274,8 @@ def test_isolated_post_synth_missing_cache_recovery_propagates(tmp_path):
         return {"status": "compile_failed", "pass_marker_found": False,
                 "outcome": "stdcell_cache_missing",
                 "recovery": {"kind": "infra", "label": "x", "detail": "y"},
+                "stdcell_bootstrap_attempted": True,
+                "stdcell_bootstrap_result": {"error": "network unreachable"},
                 "compile_command": "iverilog", "sim_command": None,
                 "stdout_tail": "", "stderr_tail": "cache missing", "log_truncated": False,
                 "failure_type": "compile", "first_failure_line": "cache missing"}
@@ -284,6 +286,9 @@ def test_isolated_post_synth_missing_cache_recovery_propagates(tmp_path):
     assert r["status"] == "failed"
     assert r["outcome"] == "stdcell_cache_missing"
     assert r["recovery"]["kind"] == "infra"
+    # The recovery text points at the bootstrap result, so the record carries it.
+    assert r["stdcellBootstrapAttempted"] is True
+    assert r["stdcellBootstrapResult"] == {"error": "network unreachable"}
 
 
 def test_post_synth_gets_past_run_resolution_with_real_runner(tmp_path, monkeypatch):

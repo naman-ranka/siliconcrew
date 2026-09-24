@@ -289,7 +289,7 @@ def stdcell_recovery_action(platform: Optional[str], bootstrap_attempted: bool =
             "missing (report it). Self-host: "
             + (
                 "this post_synth run already tried to download them from the "
-                "pinned sources and failed (see stdcell_bootstrap_result). The "
+                "pinned sources and failed (the run's stdcell bootstrap result says why). The "
                 "operator can populate them with scripts/bootstrap_stdcells.py "
                 "once the host has network access."
                 if bootstrap_attempted else

@@ -79,6 +79,9 @@ def test_self_host_bootstrap_failure_is_reported_honestly(monkeypatch, tmp_path)
     assert out["stdcell_bootstrap_attempted"] is True
     assert "network unreachable" in out["stdcell_bootstrap_result"]["error"]
     assert "retries the bootstrap" not in out["recovery"]["detail"]
+    # The hint in the error text agrees with the recovery: it happened, it is not "impossible".
+    assert "should never happen" not in out["stderr_tail"]
+    assert "download of them failed" in out["stderr_tail"]
 
 
 def test_hosted_cache_miss_is_reported_not_bootstrapped(monkeypatch, tmp_path):

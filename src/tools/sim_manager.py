@@ -499,6 +499,8 @@ def run_sim_isolated(
         # stdcell_cache_missing -> a bootstrap action the IDE/agent can invoke).
         "outcome": sim_result.get("outcome") or sim_status_to_outcome(sim_result.get("status")),
         "recovery": sim_result.get("recovery"),
+        "stdcellBootstrapAttempted": sim_result.get("stdcell_bootstrap_attempted"),
+        "stdcellBootstrapResult": sim_result.get("stdcell_bootstrap_result"),
         "compileCommand": sim_result.get("compile_command") or "",
         "simCommand": sim_result.get("sim_command") or "",
         # raw log surfaces for the console (not part of the frozen RunBase, but
