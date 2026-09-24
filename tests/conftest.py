@@ -1,11 +1,23 @@
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 
 import pytest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+
+# No test may touch the developer's real app state. api.py binds DB_PATH and the
+# workspace dir at import time from these two variables, falling back to
+# ~/.siliconcrew/state.db and <checkout>/workspace, so set them before any test
+# module imports it. Unconditional: a developer's shell may point them at real data.
+_TEST_STATE = tempfile.mkdtemp(prefix="siliconcrew-tests-")
+atexit.register(shutil.rmtree, _TEST_STATE, ignore_errors=True)
+os.environ["RTL_DATA_DIR"] = os.path.join(_TEST_STATE, "data")
+os.environ["RTL_WORKSPACE"] = os.path.join(_TEST_STATE, "workspace")
 
 
 @pytest.fixture(autouse=True)

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from src.tools.wrappers import write_file
 
 
@@ -13,12 +11,10 @@ def test_write_file_schema_exposes_field_descriptions():
     assert "full text" in props["content"]["description"].lower()
 
 
-def test_write_file_missing_content_is_recoverable_error(monkeypatch):
-    workspace = Path(__file__).resolve().parents[1] / "workspace" / "test_write_file_tool"
-    workspace.mkdir(parents=True, exist_ok=True)
+def test_write_file_missing_content_is_recoverable_error(monkeypatch, tmp_path):
+    workspace = tmp_path / "test_write_file_tool"
+    workspace.mkdir()
     target = workspace / "dot_product_tb.v"
-    if target.exists():
-        target.unlink()
 
     monkeypatch.setenv("RTL_WORKSPACE", str(workspace))
 
