@@ -286,11 +286,19 @@ def test_isolated_post_synth_missing_cache_recovery_propagates(tmp_path):
     assert r["recovery"]["kind"] == "infra"
 
 
-def test_post_synth_gets_past_run_resolution_with_real_runner(tmp_path):
+def test_post_synth_gets_past_run_resolution_with_real_runner(tmp_path, monkeypatch):
     """End-to-end: with the real run_simulation, post_synth via the isolated
     path resolves a workspace synth run and proceeds PAST run resolution
     (it may still fail later at stdcell/compile, but never with the
     unresolved-run_id / missing-netlist errors)."""
+    from src.tools import run_simulation as rs
+
+    # On a fresh checkout the cache is empty and self-host would download it;
+    # keep this unit test off the network.
+    def offline(*_a, **_k):
+        raise OSError("offline")
+
+    monkeypatch.setattr(rs, "bootstrap_stdcells", offline, raising=False)
     ws = str(tmp_path)
     open(os.path.join(ws, "tb.v"), "w").close()
     _make_synth_run(ws, run_id="synth_0001")

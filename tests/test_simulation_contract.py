@@ -124,6 +124,10 @@ def test_post_synth_excludes_design_rtl_from_compile_set(monkeypatch):
         assert mod_counts["top"] == 1
 
 
+def _offline_bootstrap(*_args, **_kwargs):
+    raise OSError("offline")
+
+
 def test_post_synth_missing_cache_yields_semantic_recoverable_outcome(monkeypatch):
     """A missing stdcell cache is a typed, recoverable outcome that names a
     native platform action — not a raw traceback."""
@@ -136,6 +140,10 @@ def test_post_synth_missing_cache_yields_semantic_recoverable_outcome(monkeypatc
                 FileNotFoundError("Standard-cell cache missing for platform 'sky130hd'.")
             ),
         )
+
+        # Self-host bootstraps on a miss; keep the test off the network and out
+        # of the install root by failing that bootstrap as an offline host would.
+        monkeypatch.setattr(rs, "bootstrap_stdcells", _offline_bootstrap, raising=False)
 
         result = rs.run_simulation(
             verilog_files=[tb], top_module="tb", cwd=ws, workspace=ws,
@@ -290,6 +298,7 @@ def test_post_synth_missing_cache_includes_bootstrap_hint(monkeypatch):
                 FileNotFoundError("Standard-cell cache missing for platform 'asap7'.")
             ),
         )
+        monkeypatch.setattr(rs, "bootstrap_stdcells", _offline_bootstrap, raising=False)
 
         result = rs.run_simulation(
             verilog_files=[tb],
