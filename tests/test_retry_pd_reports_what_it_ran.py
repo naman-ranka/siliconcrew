@@ -81,3 +81,14 @@ def test_config_mk_reads_the_last_export_like_make(tmp_path):
         f.write("export CORE_UTILIZATION = 20\nexport CORE_MARGIN = 6\nexport CORE_UTILIZATION = 15\n")
 
     assert sm._read_config_mk_pd_parameters(run_dir) == {"utilization": 15, "core_margin": 6.0}
+
+
+def test_a_fractional_utilization_survives_a_retry_of_a_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr(sm, "_run_orfs_targets", _fake_targets)
+    ws = _workspace(tmp_path)
+    child = _retry(ws, {"CORE_UTILIZATION": 15.5})
+    assert child["utilization"] == 15.5
+
+    # No new override: the grandchild must run what its parent ran.
+    grandchild = sm._pd_parameters_from_run(os.path.join(ws, "synth_runs", child["run_id"]), child)
+    assert grandchild["utilization"] == 15.5

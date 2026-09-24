@@ -1273,7 +1273,7 @@ def _pd_parameters_from_run(run_dir: str, run_meta: Dict[str, Any]) -> Dict[str,
     # run_meta carry no utilization is an OLD run, and old runs really did
     # floorplan at 5; re-running one at 40 would silently change the
     # experiment the retry is supposed to reproduce.
-    utilization = _pick("utilization", 5, int)
+    utilization = _pick("utilization", 5, _pd_number)
     return {
         "utilization": max(1, min(100, utilization)),
         "aspect_ratio": _pick("aspect_ratio", 1.0, float),
