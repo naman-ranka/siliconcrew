@@ -1,4 +1,6 @@
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 
@@ -13,6 +15,7 @@ if ROOT not in sys.path:
 # ~/.siliconcrew/state.db and <checkout>/workspace, so set them before any test
 # module imports it. Unconditional: a developer's shell may point them at real data.
 _TEST_STATE = tempfile.mkdtemp(prefix="siliconcrew-tests-")
+atexit.register(shutil.rmtree, _TEST_STATE, ignore_errors=True)
 os.environ["RTL_DATA_DIR"] = os.path.join(_TEST_STATE, "data")
 os.environ["RTL_WORKSPACE"] = os.path.join(_TEST_STATE, "workspace")
 
