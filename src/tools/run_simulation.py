@@ -4,7 +4,12 @@ import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional
 
-from src.tools.stdcells import get_asap7_compat_model_files, resolve_stdcell_models, stdcell_root
+from src.tools.stdcells import (
+    bootstrap_stdcells,
+    get_asap7_compat_model_files,
+    resolve_stdcell_models,
+    stdcell_root,
+)
 
 
 PASS_MARKER_DEFAULT = "TEST PASSED"
@@ -29,6 +34,12 @@ def resolve_pass_marker(explicit: Optional[str], workspace: str) -> str:
 def _is_stdcell_cache_error(exc: Exception) -> bool:
     msg = str(exc or "")
     return ("Standard-cell cache missing" in msg) or ("No stdcell model files found" in msg)
+
+
+def _hosted() -> bool:
+    from src.platform_engines.settings import get_settings
+
+    return get_settings().hosted
 
 
 def _stdcell_bootstrap_hint(platform: Optional[str]) -> str:
@@ -508,13 +519,30 @@ def run_simulation(
         if effective_sim_profile == "auto":
             effective_sim_profile = "compat" if platform == "asap7" else "pinned"
 
+        stdcell_err: Optional[Exception] = None
         try:
             stdcells, manifest = resolve_stdcell_models(stdcell_root(), platform)
         except Exception as exc:
-            stdcells = []
-            is_cache_err = _is_stdcell_cache_error(exc)
+            stdcells, stdcell_err = [], exc
+        # Self-host has no image bake, so a fresh checkout starts with no cache:
+        # populate it once from the pinned sources and resolve again. Hosted
+        # bakes the cache into the image; a miss there is reported, not fixed.
+        if stdcell_err is not None and _is_stdcell_cache_error(stdcell_err) and not _hosted():
+            stdcell_bootstrap_attempted = True
+            try:
+                stdcell_bootstrap_result = bootstrap_stdcells(stdcell_root(), platform)
+                stdcells, manifest = resolve_stdcell_models(stdcell_root(), platform)
+                stdcell_err = None
+            except Exception as exc:
+                stdcell_bootstrap_result = {"error": str(exc)}
+                stdcell_err = FileNotFoundError(
+                    f"Standard-cell cache missing for platform '{platform}'; "
+                    f"bootstrap from the pinned sources failed: {exc}"
+                )
+        if stdcell_err is not None:
+            is_cache_err = _is_stdcell_cache_error(stdcell_err)
             hint = _stdcell_bootstrap_hint(platform) if is_cache_err else ""
-            msg = str(exc)
+            msg = str(stdcell_err)
             if hint:
                 msg = f"{msg}\n{hint}"
             return {
