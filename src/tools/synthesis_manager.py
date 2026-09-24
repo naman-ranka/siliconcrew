@@ -1216,6 +1216,19 @@ def _load_run_meta_with_inferred_stages(run_dir: str) -> Dict[str, Any]:
     return _refresh_stage_metadata(run_dir, run_meta, terminal_status=terminal_status)
 
 
+def _pd_number(value: Any) -> Any:
+    number = float(value)
+    return int(number) if number.is_integer() else number
+
+
+# ORFS variable -> run_meta pd_parameters key, and how to read its value.
+_PD_PARAMETER_KEYS = [
+    ("CORE_UTILIZATION", "utilization", _pd_number),
+    ("CORE_ASPECT_RATIO", "aspect_ratio", float),
+    ("CORE_MARGIN", "core_margin", float),
+]
+
+
 def _read_config_mk_pd_parameters(run_dir: str) -> Dict[str, Any]:
     config_path = os.path.join(run_dir, "config.mk")
     if not os.path.exists(config_path):
@@ -1227,16 +1240,14 @@ def _read_config_mk_pd_parameters(run_dir: str) -> Dict[str, Any]:
         return {}
 
     values: Dict[str, Any] = {}
-    for key, out_key, cast in [
-        ("CORE_UTILIZATION", "utilization", int),
-        ("CORE_ASPECT_RATIO", "aspect_ratio", float),
-        ("CORE_MARGIN", "core_margin", float),
-    ]:
-        match = re.search(rf"^\s*export\s+{key}\s*=\s*([^\s#]+)", text, re.MULTILINE)
-        if not match:
+    for key, out_key, cast in _PD_PARAMETER_KEYS:
+        # A retry's config.mk exports the parent's value, then the override;
+        # make uses the last one, so read the last one.
+        matches = re.findall(rf"^\s*export\s+{key}\s*=\s*([^\s#]+)", text, re.MULTILINE)
+        if not matches:
             continue
         try:
-            values[out_key] = cast(match.group(1))
+            values[out_key] = cast(matches[-1])
         except Exception:
             pass
     return values
@@ -1617,6 +1628,14 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     copied_inputs, copied_spec = _copy_retry_inputs(parent_run_dir, run_dir, parent_meta=parent_meta)
     _copy_retry_constraints(parent_run_dir, run_dir)
     copied_prereqs = _copy_retry_prerequisites(parent_run_dir, run_dir, args["start_stage"])
+    # Retries start at floorplan or later and reuse the parent's synthesized
+    # netlist, so its synth report (area, cells) is this run's too.
+    parent_stat = _find_report_file(parent_run_dir, "synth_stat.txt")
+    if parent_stat:
+        rel = os.path.relpath(parent_stat, os.path.join(parent_run_dir, "orfs_reports"))
+        stat_dst = os.path.join(run_dir, "orfs_reports", rel)
+        os.makedirs(os.path.dirname(stat_dst), exist_ok=True)
+        shutil.copy2(parent_stat, stat_dst)
 
     auto_checks = GuardrailSummary(
         constraints=parent_meta.get("auto_checks", {}).get("constraints", "pass"),
@@ -2668,6 +2687,13 @@ def retry_pd_job(
         return quota_error
 
     pd_parameters = _pd_parameters_from_run(parent_run_dir, parent_meta)
+    # A CORE_* override is what make runs with, so it is what this run records.
+    for key, out_key, cast in _PD_PARAMETER_KEYS:
+        if key in orfs_overrides:
+            try:
+                pd_parameters[out_key] = cast(orfs_overrides[key])
+            except (TypeError, ValueError):
+                pass
     run_id, run_dir = _allocate_run_dir(workspace)
     # A retry is bounded at max_stage (floorplan..finish → the full P&R budget).
     timeout_sec = _resolve_timeout_sec(max_stage, timeout)
