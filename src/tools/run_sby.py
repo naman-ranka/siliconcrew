@@ -22,7 +22,7 @@ import re
 import shutil
 import tempfile
 
-from src.platform_engines.tool_engine import get_tool_engine
+from src.platform_engines.tool_engine import get_tool_engine, local_image_exists
 
 DEFAULT_SBY_IMAGE = "siliconcrew-sby:latest"   # openroad/orfs + z3 (build: docker build -t siliconcrew-sby:latest - < Dockerfile.sby)
 DEFAULT_TIMEOUT = 110                           # under codex's ~120s MCP tool-call limit
@@ -174,8 +174,19 @@ def run_sby(sby_file, cwd=None, timeout=DEFAULT_TIMEOUT, image=DEFAULT_SBY_IMAGE
     task_dir = os.path.join(workdir, sby_name[:-4])      # strip ".sby"
     command = f"sby -f {sby_name}"
 
+    engine = get_tool_engine()
+    if getattr(engine, "mode", "") == "docker" and local_image_exists(image) is False:
+        # A locally built tag with nothing to pull: say what to build instead of
+        # letting docker answer with "pull access denied".
+        try:
+            os.remove(norm_path)
+        except OSError:
+            pass
+        return _err(f"Formal image '{image}' is not built on this server. Build it with: "
+                    f"docker build -t {image} - < Dockerfile.sby", command)
+
     try:
-        res = get_tool_engine().run(
+        res = engine.run(
             image=image, command=command, cwd=workdir, timeout=timeout, name_prefix="sc_sby"
         )
     finally:

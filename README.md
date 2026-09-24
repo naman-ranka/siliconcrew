@@ -232,14 +232,22 @@ cd frontend && npm install && cd ..
 | macOS | `brew install verilator` |
 | Windows | [MSYS2](https://www.msys2.org/), then `pacman -S mingw-w64-ucrt-x86_64-verilator`, with `C:\msys64\ucrt64\bin` on `PATH` |
 
-### Docker Setup (for Synthesis)
+### Docker Setup (for Synthesis and the Verification Tools)
 
 ```bash
+# Synthesis (start_synthesis)
 docker pull openroad/orfs:latest
 
-# Optional: measured code coverage for cocotb tests (cocotb_tool coverage=True)
+# Formal verification (sby_tool)
+docker build -t siliconcrew-sby:latest - < Dockerfile.sby
+
+# Measured code coverage for cocotb tests (cocotb_tool coverage=True)
 docker build -t siliconcrew/cocotb-coverage:1 - < Dockerfile.cocotb-coverage
 ```
+
+`cocotb_tool` without coverage pulls the pinned grader image
+(`ghcr.io/hdl/sim/osvb`, several GB) on its first run. Each tool tells you
+which image it needs if it is missing.
 
 ### First-Run Standard-Cell Bootstrap (Required for Post-Synthesis Simulation)
 

@@ -51,5 +51,14 @@
         "netlist": "fixture/6_final.v"
       }
     }
+  },
+  "summary_metrics": {
+    "fmax_mhz": null,
+    "worst_slack_ns": null,
+    "clock_period_min_ns": null,
+    "timing_met": null,
+    "timing_corner": null,
+    "timing_note": "legacy snapshot (metrics schema v1); this run's reports are no longer on disk, so the real worst slack and achieved Fmax cannot be recovered \u2014 the v1 fmax was derived from ORFS's clamped wns and has been dropped rather than kept as a target echo",
+    "metrics_schema_version": 3
   }
 }

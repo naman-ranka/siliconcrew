@@ -149,6 +149,29 @@ class NativeToolEngine:
                 _kill_group(proc)
 
 
+def local_image_exists(image: str) -> Optional[bool]:
+    """Is this image on the local daemon? None when the daemon can't be asked.
+
+    Locally built tags (siliconcrew-sby, siliconcrew/cocotb-coverage) have no
+    registry to pull from: `docker run` would either fail with a bare "pull
+    access denied" or, for a namespaced tag, run whatever a registry happens to
+    serve under that name with the workspace mounted. Callers check first and
+    name the build command — but ONLY on a definite False. A stopped daemon is
+    not a missing image, and the engine already reports that case honestly.
+    """
+    try:
+        out = subprocess.run(["docker", "image", "inspect", image], capture_output=True,
+                             text=True, stdin=subprocess.DEVNULL, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode == 0:
+        return True
+    blob = f"{out.stderr or ''}{out.stdout or ''}".lower()
+    if "cannot connect" in blob or "failed to connect" in blob or "is the docker daemon running" in blob:
+        return None
+    return False
+
+
 def _kill_group(proc) -> None:
     if not proc:
         return

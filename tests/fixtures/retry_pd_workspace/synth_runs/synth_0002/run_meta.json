@@ -1,6 +1,8 @@
 {
   "run_id": "synth_0002",
-  "created_at": "2026-07-02T22:57:02.271516+00:00",
+  "dispatched_at": "2026-09-24T04:20:43.164199+00:00",
+  "timeout_sec": 3600,
+  "created_at": "2026-09-24T04:20:43.174228+00:00",
   "status": "completed",
   "mode": "pd_retry",
   "parent_run_id": "synth_0001",
@@ -19,6 +21,8 @@
   "effective_clock_period_ns": 10.0,
   "clock_period_ns": 10.0,
   "clock_source": "requested",
+  "constraints_note": null,
+  "sdc_time_unit": null,
   "constraints_mode": "auto",
   "utilization": 5,
   "aspect_ratio": 1.0,
@@ -31,7 +35,8 @@
   "auto_checks": {
     "constraints": "pass",
     "signoff": "pass",
-    "equiv": "skip"
+    "equiv": "skip",
+    "timing": "skip"
   },
   "check_notes": "PD retry completed",
   "stages": {
@@ -50,54 +55,71 @@
     "place": {
       "status": "completed",
       "artifacts": {
-        "odb": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/3_place.odb",
-        "sdc": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/3_place.sdc"
+        "odb": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_results\\sky130hd\\demo_top\\base\\3_place.odb",
+        "sdc": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_results\\sky130hd\\demo_top\\base\\3_place.sdc"
       }
     },
     "cts": {
       "status": "completed",
       "artifacts": {
-        "report": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_reports/sky130hd/demo_top/base/4_cts_final.rpt",
-        "odb": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/4_cts.odb"
+        "report": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_reports\\sky130hd\\demo_top\\base\\4_cts_final.rpt",
+        "odb": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_results\\sky130hd\\demo_top\\base\\4_cts.odb"
       }
     },
     "grt": {
       "status": "completed",
       "artifacts": {
-        "odb": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/5_1_grt.odb"
+        "odb": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_results\\sky130hd\\demo_top\\base\\5_1_grt.odb"
       }
     },
     "route": {
       "status": "completed",
       "artifacts": {
-        "report": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_reports/sky130hd/demo_top/base/5_route_drc.rpt",
-        "odb": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/5_route.odb"
+        "report": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_reports\\sky130hd\\demo_top\\base\\5_route_drc.rpt",
+        "odb": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_results\\sky130hd\\demo_top\\base\\5_route.odb"
       }
     },
     "finish": {
       "status": "completed",
       "artifacts": {
-        "report": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_reports/sky130hd/demo_top/base/6_finish.rpt",
-        "netlist": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/6_final.v"
+        "report": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_reports\\sky130hd\\demo_top\\base\\6_finish.rpt",
+        "netlist": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_results\\sky130hd\\demo_top\\base\\6_final.v"
       }
     }
   },
   "retry_prerequisites": {
-    "3_place.odb": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/3_place.odb",
-    "3_place.sdc": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/3_place.sdc"
+    "3_place.odb": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_results\\sky130hd\\demo_top\\base\\3_place.odb",
+    "3_place.sdc": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_results\\sky130hd\\demo_top\\base\\3_place.sdc"
   },
   "provenance": {
-    "repo_commit": "unknown",
+    "repo_commit": "deadbeefcafe",
     "orfs_image_digest": null,
     "pdk": "sky130hd",
     "iverilog_version": "12.0",
-    "num_cores": 4
+    "num_cores": 4,
+    "prompt_version": null,
+    "prompt_sha": null,
+    "skills_loaded": null,
+    "skills_sha": null,
+    "skills_disabled": null,
+    "tool_set": null,
+    "context_edit": null
   },
   "docker_command": "fake",
   "docker_success": true,
   "docker_stdout_tail": "ok",
   "docker_stderr_tail": "",
-  "netlist_path": "/home/user/siliconcrew/tests/fixtures/retry_pd_workspace/synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/6_final.v",
+  "netlist_path": "C:\\Users\\naman\\Desktop\\Projects\\SiliconCrew\\siliconcrew\\tests\\fixtures\\retry_pd_workspace\\synth_runs\\synth_0002\\orfs_results\\sky130hd\\demo_top\\base\\6_final.v",
+  "sim_contract": {
+    "schema_version": 1,
+    "mode": "post_synth",
+    "platform": "sky130hd",
+    "top": "demo_top",
+    "netlist": "synth_runs/synth_0002/orfs_results/sky130hd/demo_top/base/6_final.v",
+    "netlist_origin": "synthesis",
+    "stdcell_platform": "sky130hd",
+    "stdcell_manifest_version": "2026-09-22T04:24:10.644828+00:00"
+  },
   "summary_metrics": {
     "area_um2": null,
     "cell_count": null,
@@ -105,9 +127,15 @@
     "tns_ns": null,
     "power_uw": null,
     "power_mw": null,
-    "fmax_mhz": 100.5
+    "fmax_mhz": null,
+    "worst_slack_ns": null,
+    "clock_period_min_ns": null,
+    "timing_met": null,
+    "timing_corner": "TT (typical)",
+    "timing_note": "fmax_mhz unavailable: this report carries neither an 'fmax =' line nor a 'worst slack max' line, and ORFS's clamped wns cannot stand in for the achieved frequency",
+    "metrics_schema_version": 3
   },
   "next_action": "Inspect stage summaries and continue tuning.",
-  "finished_at": "2026-07-02T22:57:02.272564+00:00",
-  "elapsed_sec": 0.0
+  "finished_at": "2026-09-24T04:20:43.184257+00:00",
+  "elapsed_sec": 0.02
 }

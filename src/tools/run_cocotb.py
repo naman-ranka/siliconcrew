@@ -251,7 +251,7 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
                     "runs the native engine (SIM_ENGINE=native), where the toolchain on PATH is "
                     "not the measured one. Run without coverage=True, or use the docker engine.",
                     command)
-    if coverage and not _local_image_exists(image):
+    if coverage and _local_image_exists(image) is False:
         # A locally built tag must never be pulled: whatever a registry has
         # under that name would run with the workspace mounted.
         return _err(f"Coverage image '{image}' is not built on this server. Build it with: "
@@ -305,13 +305,10 @@ def _is_docker_engine(engine) -> bool:
     return getattr(engine, "mode", "") == "docker"
 
 
-def _local_image_exists(image: str) -> bool:
-    import subprocess
-    try:
-        return subprocess.run(["docker", "image", "inspect", image], capture_output=True,
-                              stdin=subprocess.DEVNULL, timeout=20).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
+def _local_image_exists(image: str):
+    from src.platform_engines.tool_engine import local_image_exists
+
+    return local_image_exists(image)
 
 
 # docker's wording for a local tag that was never built.
