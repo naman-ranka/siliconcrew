@@ -170,8 +170,9 @@ PD_PREREQ_FILES = {
 # Per-stage completion markers for runs bounded by max_stage. Each entry lists
 # (scope, filename) candidates; ANY present artifact proves the stage actually
 # completed. Chosen per stage:
-#   synth     -> orfs_reports/synth_stat.txt (yosys writes it right after logic
-#                synthesis) or the 1_synth.odb checkpoint in orfs_results.
+#   synth     -> the 1_synth.odb checkpoint in orfs_results. Not synth_stat.txt:
+#                yosys writes it before synth_odb.tcl reads the netlist back, so
+#                a synth stage that fails at that read still has one.
 #   floorplan -> orfs_results/2_floorplan.odb checkpoint, else the
 #                2_floorplan_final.rpt report.
 #   place     -> orfs_results/3_place.odb checkpoint.
@@ -182,7 +183,7 @@ PD_PREREQ_FILES = {
 #                exist for an incomplete route).
 #   finish    -> orfs_reports/6_finish.rpt (the historical full-flow proof).
 _STAGE_COMPLETION_MARKERS: Dict[str, List[tuple]] = {
-    "synth": [("orfs_reports", "synth_stat.txt"), ("orfs_results", "1_synth.odb")],
+    "synth": [("orfs_results", "1_synth.odb")],
     "floorplan": [("orfs_results", "2_floorplan.odb"), ("orfs_reports", "2_floorplan_final.rpt")],
     "place": [("orfs_results", "3_place.odb")],
     "cts": [("orfs_results", "4_cts.odb"), ("orfs_reports", "4_cts_final.rpt")],
@@ -1053,6 +1054,10 @@ def _stage_artifacts_indicate_completion(stage: str, artifacts: Dict[str, str]) 
         return False
     if stage == "route":
         return "odb" in artifacts or "sdc" in artifacts
+    if stage == "synth":
+        # Same rule as _STAGE_COMPLETION_MARKERS: the stat report and the sdc
+        # predate the netlist read that can still fail.
+        return "odb" in artifacts
     return True
 
 
@@ -1154,8 +1159,8 @@ def stage_progress_from_files(run_dir: str, meta: Dict[str, Any]) -> Dict[str, A
         PD_STAGE_SEQUENCE.index(retry_start) if retry_start in PD_STAGE_SEQUENCE else None
     )
 
-    history: List[Dict[str, Any]] = []
-    current: Optional[str] = None
+    # Pass 1: what each stage's own marker proves (None = no marker).
+    history: List[Optional[Dict[str, Any]]] = []
     for idx, stage in enumerate(PD_STAGE_SEQUENCE):
         if stage not in plan:
             history.append({"stage": stage, "status": "skipped"})
@@ -1189,6 +1194,27 @@ def stage_progress_from_files(run_dir: str, meta: Dict[str, Any]) -> Dict[str, A
             # parent state — not "running", never `current`.
             history.append({"stage": stage, "status": "inherited"})
             continue
+        history.append(None)
+
+    # Pass 2: the flow is sequential, so a later stage's completion proves the
+    # earlier ones finished even when their own checkpoint is gone (bundles
+    # prune .odb files). No later proof, no inference: a synth that failed at
+    # its netlist read still has nothing after it.
+    later: Optional[str] = None
+    for idx in range(len(history) - 1, -1, -1):
+        entry = history[idx]
+        if entry is None:
+            if later is not None:
+                history[idx] = {"stage": PD_STAGE_SEQUENCE[idx], "status": later,
+                                "ended_at": None, "inferred": True}
+        elif entry["status"] in ("completed", "inherited"):
+            later = entry["status"]
+
+    current: Optional[str] = None
+    for idx, entry in enumerate(history):
+        if entry is not None:
+            continue
+        stage = PD_STAGE_SEQUENCE[idx]
         if current is None:
             current = stage
             # C1 coherence: for a run whose persisted status is terminal
@@ -1196,9 +1222,9 @@ def stage_progress_from_files(run_dir: str, meta: Dict[str, Any]) -> Dict[str, A
             # "failed", never "running", so stage / current_stage /
             # stage_history / stages all tell one story.
             first_status = "failed" if meta.get("status") == "failed" else "running"
-            history.append({"stage": stage, "status": first_status})
+            history[idx] = {"stage": stage, "status": first_status}
         else:
-            history.append({"stage": stage, "status": "pending"})
+            history[idx] = {"stage": stage, "status": "pending"}
 
     # Everything complete up to the bound → the run sits at its bound.
     return {"stage_history": history, "current_stage": current or bound}
@@ -3161,7 +3187,7 @@ def _reconcile_stale_status(
     keying on it would mis-mark a failed run as completed. For a bounded run
     (max_stage != "finish") the flow never produces 6_finish.rpt, so completion
     keys on that stage's own marker instead (see _STAGE_COMPLETION_MARKERS,
-    e.g. synth -> synth_stat.txt/1_synth.odb, place -> 3_place.odb).
+    e.g. synth -> 1_synth.odb, place -> 3_place.odb).
 
     Tombstone (Wave 9): a run that is past its dispatch ceiling, has no live
     worker in this process, and shows no file activity is declared FAILED —

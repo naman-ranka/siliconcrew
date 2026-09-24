@@ -72,6 +72,9 @@ def test_live_run_reports_running_elapsed_and_progress(tmp_path):
     # Two stages provably done (fresh markers, past the dispatch-time floor).
     _write(os.path.join(run_dir, "constraints.sdc"), "create_clock ...\n")
     _write(os.path.join(_reports_base(run_dir), "synth_stat.txt"), "Number of cells: 42\n")
+    # synth is done when its checkpoint exists; the stat report alone predates
+    # the netlist read that can still fail.
+    _write(os.path.join(run_dir, "orfs_results", "sky130hd", "counter", "base", "1_synth.odb"), "odb")
 
     resp = sm.get_synthesis_metrics(workspace=workspace, run_id="synth_0001")
 
