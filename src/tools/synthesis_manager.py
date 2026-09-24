@@ -1054,6 +1054,10 @@ def _stage_artifacts_indicate_completion(stage: str, artifacts: Dict[str, str]) 
         return False
     if stage == "route":
         return "odb" in artifacts or "sdc" in artifacts
+    if stage == "synth":
+        # Same rule as _STAGE_COMPLETION_MARKERS: the stat report and the sdc
+        # predate the netlist read that can still fail.
+        return "odb" in artifacts
     return True
 
 
@@ -3162,7 +3166,7 @@ def _reconcile_stale_status(
     keying on it would mis-mark a failed run as completed. For a bounded run
     (max_stage != "finish") the flow never produces 6_finish.rpt, so completion
     keys on that stage's own marker instead (see _STAGE_COMPLETION_MARKERS,
-    e.g. synth -> synth_stat.txt/1_synth.odb, place -> 3_place.odb).
+    e.g. synth -> 1_synth.odb, place -> 3_place.odb).
 
     Tombstone (Wave 9): a run that is past its dispatch ceiling, has no live
     worker in this process, and shows no file activity is declared FAILED —

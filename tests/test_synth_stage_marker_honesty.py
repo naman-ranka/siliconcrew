@@ -77,3 +77,18 @@ def test_stat_report_alone_does_not_prove_synth_completed(tmp_path):
 
     _write_file(os.path.join(run_dir, "orfs_results", "sky130hd", "counter", "base", "1_synth.odb"), "odb")
     assert sm._find_stage_completion_marker(run_dir, "synth").endswith("1_synth.odb")
+
+
+def test_failed_synth_is_not_also_reported_as_a_completed_stage(tmp_path):
+    # One status response must not say synth both completed (stages) and failed
+    # (stage_history): the persisted stage table keys on the same checkpoint.
+    run_dir = str(tmp_path)
+    base = os.path.join(run_dir, "orfs_%s", "sky130hd", "counter", "base")
+    _write_file(os.path.join(base % "reports", "synth_stat.txt"), "Number of cells: 10\n")
+    _write_file(os.path.join(base % "results", "1_synth.sdc"), "create_clock ...\n")
+    meta = {"run_id": "synth_0001", "status": "failed", "max_stage": "synth", "current_stage": "synth",
+            "auto_checks": {"constraints": "pass"}}
+
+    out = sm._refresh_stage_metadata(run_dir, meta, terminal_status="failed")
+
+    assert out["stages"]["synth"]["status"] != "completed"
