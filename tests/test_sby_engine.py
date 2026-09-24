@@ -79,6 +79,10 @@ def test_docker_path_unchanged_via_run_docker_command(tmp_path, monkeypatch):
         return {"success": True, "stdout": "DONE (PASS, x)", "stderr": "", "command": "docker ...", "timed_out": False}
 
     monkeypatch.setattr("src.tools.run_docker.run_docker_command", fake_rdc)
+    # The formal image is built on the machine, so the docker path checks it is
+    # there before running (tests/test_image_guard.py). Say it is: this test is
+    # about the command, not the image.
+    monkeypatch.setattr("src.tools.run_sby.local_image_exists", lambda image: True)
     res = run_sby(_sby(tmp_path), timeout=99)
     assert res["status"] == "PASS"
     assert seen["workspace_path"] == str(tmp_path) and seen["cwd"] == "/workspace"
