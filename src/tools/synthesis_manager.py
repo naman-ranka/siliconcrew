@@ -1159,8 +1159,8 @@ def stage_progress_from_files(run_dir: str, meta: Dict[str, Any]) -> Dict[str, A
         PD_STAGE_SEQUENCE.index(retry_start) if retry_start in PD_STAGE_SEQUENCE else None
     )
 
-    history: List[Dict[str, Any]] = []
-    current: Optional[str] = None
+    # Pass 1: what each stage's own marker proves (None = no marker).
+    history: List[Optional[Dict[str, Any]]] = []
     for idx, stage in enumerate(PD_STAGE_SEQUENCE):
         if stage not in plan:
             history.append({"stage": stage, "status": "skipped"})
@@ -1194,6 +1194,27 @@ def stage_progress_from_files(run_dir: str, meta: Dict[str, Any]) -> Dict[str, A
             # parent state — not "running", never `current`.
             history.append({"stage": stage, "status": "inherited"})
             continue
+        history.append(None)
+
+    # Pass 2: the flow is sequential, so a later stage's completion proves the
+    # earlier ones finished even when their own checkpoint is gone (bundles
+    # prune .odb files). No later proof, no inference: a synth that failed at
+    # its netlist read still has nothing after it.
+    later: Optional[str] = None
+    for idx in range(len(history) - 1, -1, -1):
+        entry = history[idx]
+        if entry is None:
+            if later is not None:
+                history[idx] = {"stage": PD_STAGE_SEQUENCE[idx], "status": later,
+                                "ended_at": None, "inferred": True}
+        elif entry["status"] in ("completed", "inherited"):
+            later = entry["status"]
+
+    current: Optional[str] = None
+    for idx, entry in enumerate(history):
+        if entry is not None:
+            continue
+        stage = PD_STAGE_SEQUENCE[idx]
         if current is None:
             current = stage
             # C1 coherence: for a run whose persisted status is terminal
@@ -1201,9 +1222,9 @@ def stage_progress_from_files(run_dir: str, meta: Dict[str, Any]) -> Dict[str, A
             # "failed", never "running", so stage / current_stage /
             # stage_history / stages all tell one story.
             first_status = "failed" if meta.get("status") == "failed" else "running"
-            history.append({"stage": stage, "status": first_status})
+            history[idx] = {"stage": stage, "status": first_status}
         else:
-            history.append({"stage": stage, "status": "pending"})
+            history[idx] = {"stage": stage, "status": "pending"}
 
     # Everything complete up to the bound → the run sits at its bound.
     return {"stage_history": history, "current_stage": current or bound}

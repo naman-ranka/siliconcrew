@@ -92,3 +92,23 @@ def test_failed_synth_is_not_also_reported_as_a_completed_stage(tmp_path):
     out = sm._refresh_stage_metadata(run_dir, meta, terminal_status="failed")
 
     assert out["stages"]["synth"]["status"] != "completed"
+
+
+def test_a_pruned_completed_bundle_still_shows_every_stage_done(tmp_path):
+    # Template/showcase bundles prune every .odb but keep the reports. Later
+    # stages completing proves the earlier ones did; synth must not read
+    # "running" in a run that finished (examples/aes_invsbox is this shape).
+    run_dir = str(tmp_path)
+    base = os.path.join(run_dir, "orfs_%s", "sky130hd", "counter", "base")
+    _write_file(os.path.join(run_dir, "constraints.sdc"), "create_clock ...\n")
+    _write_file(os.path.join(base % "reports", "synth_stat.txt"), "Number of cells: 10\n")
+    _write_file(os.path.join(base % "reports", "2_floorplan_final.rpt"), "fp\n")
+    _write_file(os.path.join(base % "reports", "4_cts_final.rpt"), "cts\n")
+    _write_file(os.path.join(base % "results", "5_route.sdc"), "sdc\n")
+    _write_file(os.path.join(base % "reports", "6_finish.rpt"), "wns max 0.0\n")
+    meta = {"run_id": "synth_0001", "status": "completed", "max_stage": "finish"}
+
+    out = sm.stage_progress_from_files(run_dir, meta)
+
+    assert [s["status"] for s in out["stage_history"]] == ["completed"] * 8
+    assert out["current_stage"] == "finish"
