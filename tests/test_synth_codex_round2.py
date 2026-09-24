@@ -356,6 +356,9 @@ def test_cloud_outputs_adopted_before_ceiling(tmp_path, durable_store, event_spy
     marker = job_out / "orfs_reports" / "sky130hd" / "counter" / "base" / "synth_stat.txt"
     marker.parent.mkdir(parents=True)
     marker.write_text("Chip area for module '\\counter': 12.0\n10 1.0 cells\n", encoding="utf-8")
+    odb = job_out / "orfs_results" / "sky130hd" / "counter" / "base" / "1_synth.odb"
+    odb.parent.mkdir(parents=True)
+    odb.write_text("odb", encoding="utf-8")
     durable_store.put_tree(f"{session_id}/{run_id}/out", str(job_out))
 
     with session_scope(SessionContext(session_id, ws)):

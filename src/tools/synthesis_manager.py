@@ -170,8 +170,9 @@ PD_PREREQ_FILES = {
 # Per-stage completion markers for runs bounded by max_stage. Each entry lists
 # (scope, filename) candidates; ANY present artifact proves the stage actually
 # completed. Chosen per stage:
-#   synth     -> orfs_reports/synth_stat.txt (yosys writes it right after logic
-#                synthesis) or the 1_synth.odb checkpoint in orfs_results.
+#   synth     -> the 1_synth.odb checkpoint in orfs_results. Not synth_stat.txt:
+#                yosys writes it before synth_odb.tcl reads the netlist back, so
+#                a synth stage that fails at that read still has one.
 #   floorplan -> orfs_results/2_floorplan.odb checkpoint, else the
 #                2_floorplan_final.rpt report.
 #   place     -> orfs_results/3_place.odb checkpoint.
@@ -182,7 +183,7 @@ PD_PREREQ_FILES = {
 #                exist for an incomplete route).
 #   finish    -> orfs_reports/6_finish.rpt (the historical full-flow proof).
 _STAGE_COMPLETION_MARKERS: Dict[str, List[tuple]] = {
-    "synth": [("orfs_reports", "synth_stat.txt"), ("orfs_results", "1_synth.odb")],
+    "synth": [("orfs_results", "1_synth.odb")],
     "floorplan": [("orfs_results", "2_floorplan.odb"), ("orfs_reports", "2_floorplan_final.rpt")],
     "place": [("orfs_results", "3_place.odb")],
     "cts": [("orfs_results", "4_cts.odb"), ("orfs_reports", "4_cts_final.rpt")],

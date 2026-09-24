@@ -199,6 +199,7 @@ def _synth_bounded_run(workspace: str, run_id: str = "synth_0001") -> tuple:
         os.path.join(run_dir, "orfs_reports", "sky130hd", "counter", "base", "synth_stat.txt"),
         "Chip area for module '\\counter': 12.0\n10 1.0 cells\n",
     )
+    _write(os.path.join(run_dir, "orfs_results", "sky130hd", "counter", "base", "1_synth.odb"), "odb")
     meta = {"run_id": run_id, "status": "running", "max_stage": "synth"}
     return run_dir, meta
 

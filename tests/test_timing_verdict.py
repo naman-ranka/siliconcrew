@@ -180,6 +180,10 @@ def test_partial_flow_has_no_timing_data_and_says_so(monkeypatch):
                 os.path.join(run_dir, "orfs_results", "sky130hd", "counter", "base", "1_synth.v"),
                 "module counter(); endmodule",
             )
+            _write_file(
+                os.path.join(run_dir, "orfs_results", "sky130hd", "counter", "base", "1_synth.odb"),
+                "odb",
+            )
             return {"success": True, "stdout": "", "stderr": "", "command": "fake"}
 
         monkeypatch.setattr(sm, "_run_orfs_targets", fake_targets)
