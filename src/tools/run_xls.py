@@ -508,6 +508,11 @@ def run_xls_flow(
         return done("codegen", {**estimate, **generated})
 
     lint_result = _lint_generated_verilog(workspace, codegen["verilog_filename"])
+    if lint_result.get("unavailable"):
+        # No lint engine on this server: nothing was checked, and the generated
+        # Verilog is not at fault. Say so and finish at codegen.
+        stage_results["verilog_lint"] = {"skipped": lint_result.get("stderr", "no lint engine")}
+        return done("codegen", {**estimate, **generated})
     stage_results["verilog_lint"] = lint_result
     if not lint_result.get("success"):
         return {

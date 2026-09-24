@@ -666,6 +666,12 @@ def build_actions_router(
                 abs_files, cwd=workspace, engine=engine, scope_modules=scope_modules,
                 include_dirs=manifest_mod.include_dirs(manifest),
             )
+            if result.get("unavailable") or result.get("invalid_engine"):
+                # No engine ran: an error, never a failed-lint verdict.
+                _ui_log_result(workspace, session_id, "linter_tool", call_id,
+                               {"status": "error", "error": result["stderr"]}, ok=False)
+                key = "engineInvalid" if result.get("invalid_engine") else "engineUnavailable"
+                return {key: result["stderr"]}
             # The drop notes are written AFTER the run, from what the engine
             # proved it read. The residual widening case: an include-role file
             # lives in a source directory, so that directory is on -I and
@@ -711,6 +717,10 @@ def build_actions_router(
             _err("no_files", "The files override contains no .v/.sv/.vh/.svh sources to lint.", status=400)
         if out.get("empty"):
             _err("no_rtl", "No RTL files in the manifest to lint.", status=400)
+        if out.get("engineUnavailable"):
+            _err("engine_unavailable", out["engineUnavailable"], {"engine": engine}, status=409)
+        if out.get("engineInvalid"):
+            _err("invalid_engine", out["engineInvalid"], {"engine": engine}, status=400)
 
         result = out["result"]
         return _ok({

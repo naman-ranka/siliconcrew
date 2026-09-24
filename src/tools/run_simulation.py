@@ -273,7 +273,7 @@ def _compile(
     # flag only covers what iverilog parses but can't elaborate.
     cmd = ["iverilog", "-g2012", "-gsupported-assertions"] + include_args + top_args + ["-o", output_executable, "-f", filelist]
     try:
-        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         if filelist:
             try:
@@ -315,7 +315,7 @@ def _compile(
 def _simulate(output_executable: str, cwd: str, timeout: int) -> Dict[str, Any]:
     cmd = ["vvp", output_executable]
     try:
-        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return {"returncode": -1, "stdout": "", "stderr": "Simulation timed out.", "command": " ".join(cmd)}
     except Exception as exc:

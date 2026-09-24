@@ -126,7 +126,7 @@ def repo_commit() -> str:
     try:
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         out = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, timeout=5
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL
         )
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip()
@@ -138,7 +138,7 @@ def repo_commit() -> str:
 @lru_cache(maxsize=1)
 def iverilog_version() -> Optional[str]:
     try:
-        out = subprocess.run(["iverilog", "-V"], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["iverilog", "-V"], capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL)
         first = (out.stdout or out.stderr or "").splitlines()
         if first:
             m = re.search(r"version\s+(\S+)", first[0])

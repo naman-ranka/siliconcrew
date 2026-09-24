@@ -41,7 +41,7 @@ def run_iverilog(verilog_files, output_executable="simulation.out", cwd=None, ti
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True, stdin=subprocess.DEVNULL
         )
         stdout, stderr = proc.communicate(timeout=timeout)
         
@@ -81,7 +81,7 @@ def run_iverilog(verilog_files, output_executable="simulation.out", cwd=None, ti
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True, stdin=subprocess.DEVNULL
         )
         stdout, stderr = proc.communicate(timeout=timeout)
         

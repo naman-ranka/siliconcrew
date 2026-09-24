@@ -57,9 +57,34 @@ the design. The simulation tooling already records a timed-out run as failed —
 do not re-interpret it as "needs a longer timeout" without evidence from the
 waveform.
 
+**A stimulus helper that idles between transactions.** If the task that sends
+a frame, word or request ends with an idle cycle (or waits for `busy` to drop
+and then a little more), every "back-to-back" test it drives has a gap in it.
+A UART receiver that drops 15 of 16 frames sent without a gap passed a test
+like that. Drive at least one burst with zero idle cycles, and at the rate
+error the spec allows.
+
 **A pass marker printed by a testbench that checked nothing.** If the run passed
 but no comparison could have failed — no assertions, no reference, no error
 counter — you have measured that the design compiles.
+
+## Measure coverage; don't count it yourself
+
+Two kinds, and you need both:
+
+- **Functional coverage** is the spec's list of cases turned into bins: every
+  mode, every error condition, each corner class above that applies. Name the
+  bins before you write stimulus, hit each one, and fail the test if one is
+  never hit.
+- **Code coverage** says which RTL no test reached. Where your tool list has
+  `cocotb_tool`, `coverage=True` measures it (Verilator line, branch and toggle)
+  and lists the uncovered lines. Each uncovered line is either unreachable, and
+  you say why, or untested, and you add a test for it. Without that tool, say
+  that code coverage was not measured.
+
+Report the measured numbers. A percentage your own testbench computed is a
+claim, not a measurement. Full line coverage still says nothing about whether
+the checks were right, which is why the functional bins come first.
 
 ## When the testbench and the RTL disagree
 

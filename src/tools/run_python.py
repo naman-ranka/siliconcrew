@@ -180,7 +180,8 @@ def _run_argv(argv, *, cwd=None, env=None, preexec_fn=None, timeout=_WALL_TIMEOU
     BEFORE SIGKILLing the CLI client — dockerd owns the container, so killing the
     foreground client alone leaves it running past the wall timeout (AR-1)."""
     popen_kwargs = dict(
-        cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     if preexec_fn is not None:
         popen_kwargs["preexec_fn"] = preexec_fn
@@ -225,6 +226,7 @@ def _docker_kill(name: str) -> None:
         subprocess.run(
             ["docker", "kill", name],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         pass

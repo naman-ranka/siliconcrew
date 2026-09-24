@@ -58,7 +58,7 @@ def generate_schematic(verilog_file, top_module, cwd=None):
         # Run local command (shell=True for Windows npx resolution sometimes needed, but list is safer)
         # On Windows, npx might be a batch file, so shell=True might be needed or full path.
         # Let's try shell=True for npx on Windows.
-        subprocess.run(cmd, cwd=cwd, check=True, shell=True, capture_output=True)
+        subprocess.run(cmd, cwd=cwd, check=True, shell=True, capture_output=True, stdin=subprocess.DEVNULL)
         
         if os.path.exists(local_svg_path):
             return {"success": True, "svg_path": local_svg_path}

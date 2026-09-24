@@ -1,3 +1,4 @@
+import glob
 import json
 import os
 import re
@@ -1320,7 +1321,7 @@ def _run_equiv_check(golden_files: List[str], gate_file: str, top_module: str, t
     ]
     cmd = ["yosys", "-q", "-p", "; ".join(script)]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return {"status": "fail", "note": "equivalence timed out"}
     except Exception as exc:
@@ -1746,15 +1747,48 @@ def _retry_pd_worker(workspace: str, run_dir: str, args: Dict[str, Any]) -> Dict
     return run_meta
 
 
+# OpenROAD tools print "[ERROR PDN-0185] ..."; yosys prints "ERROR: ...".
+_ORFS_ERROR_LINE = re.compile(r"^\s*(\[ERROR [A-Z0-9]+-\d+\].*|ERROR: .*)$")
+
+
+def _first_orfs_error(run_dir: str) -> Optional[Dict[str, str]]:
+    """The first error line ORFS logged, in stage order, and the log it came from.
+
+    ORFS stage logs are numbered (1_2_yosys.log ... 2_4_floorplan_pdn.log), so
+    a lexical sort is stage order and the first hit is the cause, not a
+    downstream symptom like "6_finish.rpt not found"."""
+    logs = sorted(glob.glob(os.path.join(run_dir, "orfs_logs", "**", "*.log"), recursive=True),
+                  key=os.path.basename)
+    for path in logs:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    m = _ORFS_ERROR_LINE.match(line)
+                    if m:
+                        return {"log": os.path.basename(path), "line": m.group(1).strip()[:300]}
+        except OSError:
+            continue
+    return None
+
+
 def _signoff_guardrail(run_dir: str, top_module: str, docker_result: Dict[str, Any]) -> Dict[str, str]:
     artifacts = _collect_artifacts(run_dir)
     if artifacts["reports"] == 0:
+        # A run that died before writing any report (RTL read, early yosys)
+        # still logged why; say that rather than only what is missing.
+        first = _first_orfs_error(run_dir) if not docker_result.get("success") else None
+        if first:
+            return {"status": "fail", "note": f"ORFS failed in {first['log']}: {first['line']}"}
         return {"status": "fail", "note": "No ORFS reports found"}
 
     recovered = False
     if not docker_result.get("success"):
         recovery = _orfs_final_artifacts_are_clean(run_dir, top_module)
         if recovery["status"] != "pass":
+            first = _first_orfs_error(run_dir)
+            if first:
+                return {"status": "fail",
+                        "note": f"ORFS failed in {first['log']}: {first['line']}"}
             return {"status": "fail", "note": f"ORFS command failed; {recovery['note']}"}
         recovered = True
 

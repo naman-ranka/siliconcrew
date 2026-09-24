@@ -79,7 +79,7 @@ def test_run_linter_verilator_end_to_end_with_fake_binary(monkeypatch, tmp_path)
     monkeypatch.setattr(rl.shutil, "which", lambda name: f"/usr/bin/{name}")
     captured = {}
 
-    def fake_run(cmd, cwd, timeout):
+    def fake_run(cmd, cwd, timeout, env_extra=None):
         captured["cmd"] = cmd
         return {"returncode": 0, "stdout": "", "stderr": VERILATOR_OUT, "command": " ".join(cmd)}
 
@@ -98,7 +98,7 @@ def test_run_linter_verilator_end_to_end_with_fake_binary(monkeypatch, tmp_path)
 def test_run_linter_iverilog_success_keeps_legacy_keys(monkeypatch, tmp_path):
     monkeypatch.setattr(rl.shutil, "which", lambda name: None if name == "verilator" else "/usr/bin/iverilog")
 
-    def fake_run(cmd, cwd, timeout):
+    def fake_run(cmd, cwd, timeout, env_extra=None):
         return {"returncode": 0, "stdout": "", "stderr": "", "command": " ".join(cmd)}
 
     monkeypatch.setattr(rl, "_run", fake_run)
@@ -143,7 +143,7 @@ def _iverilog(monkeypatch, stderr, returncode=1):
     monkeypatch.setattr(rl.shutil, "which", lambda name: None if name == "verilator" else "/usr/bin/iverilog")
     monkeypatch.setattr(
         rl, "_run",
-        lambda cmd, cwd, timeout: {"returncode": returncode, "stdout": "", "stderr": stderr, "command": " ".join(cmd)},
+        lambda cmd, cwd, timeout, env_extra=None: {"returncode": returncode, "stdout": "", "stderr": stderr, "command": " ".join(cmd)},
     )
 
 
@@ -180,7 +180,7 @@ def test_file_scoped_lint_of_a_clean_verilator_run_adds_no_note(monkeypatch, tmp
     monkeypatch.setattr(rl.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         rl, "_run",
-        lambda cmd, cwd, timeout: {"returncode": 0, "stdout": "", "stderr": "", "command": " ".join(cmd)},
+        lambda cmd, cwd, timeout, env_extra=None: {"returncode": 0, "stdout": "", "stderr": "", "command": " ".join(cmd)},
     )
     result = rl.run_linter(["a.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
     assert result["success"] is True and result["notes"] == []
@@ -190,7 +190,7 @@ def test_file_scoped_verilator_missing_module_is_a_note_too(monkeypatch, tmp_pat
     monkeypatch.setattr(rl.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         rl, "_run",
-        lambda cmd, cwd, timeout: {"returncode": 1, "stdout": "", "stderr": VERILATOR_MISSING_MODULE, "command": " ".join(cmd)},
+        lambda cmd, cwd, timeout, env_extra=None: {"returncode": 1, "stdout": "", "stderr": VERILATOR_MISSING_MODULE, "command": " ".join(cmd)},
     )
     result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"missing_mod"})
     assert result["success"] is True
@@ -236,7 +236,7 @@ def test_file_scoped_verilator_keeps_a_module_no_dropped_file_defines(monkeypatc
     monkeypatch.setattr(rl.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         rl, "_run",
-        lambda cmd, cwd, timeout: {"returncode": 1, "stdout": "", "stderr": VERILATOR_MISSING_MODULE, "command": " ".join(cmd)},
+        lambda cmd, cwd, timeout, env_extra=None: {"returncode": 1, "stdout": "", "stderr": VERILATOR_MISSING_MODULE, "command": " ".join(cmd)},
     )
     result = rl.run_linter(["top.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
     assert result["success"] is False and result["notes"] == []
@@ -289,7 +289,7 @@ def _capture_verilator(monkeypatch, depfile_text=None, returncode=0, stderr=""):
     monkeypatch.setattr(rl.shutil, "which", lambda name: f"/usr/bin/{name}")
     captured = {}
 
-    def fake_run(cmd, cwd, timeout):
+    def fake_run(cmd, cwd, timeout, env_extra=None):
         captured["cmd"] = cmd
         mdir = cmd[cmd.index("--Mdir") + 1]
         captured["mdir"] = mdir
@@ -351,7 +351,7 @@ def test_iverilog_command_gets_the_same_include_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(rl.shutil, "which", lambda name: None if name == "verilator" else "/usr/bin/iverilog")
     captured = {}
 
-    def fake_run(cmd, cwd, timeout):
+    def fake_run(cmd, cwd, timeout, env_extra=None):
         captured["cmd"] = cmd
         return {"returncode": 0, "stdout": "", "stderr": "", "command": " ".join(cmd)}
 
@@ -600,7 +600,7 @@ def test_unparsed_non_zero_exit_is_never_silent(monkeypatch, tmp_path):
     assert len(result["diagnostics"]) == 1 and result["diagnostics"][0]["code"] == "EXIT"
     assert "nope.v" in result["diagnostics"][0]["message"]
     # A timeout is the same shape.
-    monkeypatch.setattr(rl, "_run", lambda cmd, cwd, timeout: {
+    monkeypatch.setattr(rl, "_run", lambda cmd, cwd, timeout, env_extra=None: {
         "returncode": -1, "stdout": "", "stderr": "Error: Linting timed out.", "command": "x"})
     result = rl.run_linter(["a.v"], cwd=str(tmp_path), engine="iverilog")
     assert result["success"] is False
@@ -626,7 +626,10 @@ def test_real_verilator_excused_exit_matches_its_total(tmp_path):
     rtl, _ = _nested_design(tmp_path)
     result = rl.run_linter([str(rtl / "top.v")], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
     assert result["success"] is True, result
-    assert rl.engine_error_total("verilator", result["stderr"]) == 2
+    # 5.020 counts the "no search path" hint as its own %Error (total 2);
+    # 5.048 prints it as a `...` continuation (total 1). Either way the total
+    # is fully explained by what was excused, which is what the verdict needs.
+    assert rl.engine_error_total("verilator", result["stderr"]) in (1, 2)
     result = rl.run_linter([str(rtl / "top.v"), "nope.v"], cwd=str(tmp_path), engine="verilator", scope_modules={"alu"})
     assert result["success"] is False, result
     assert any(d["code"] == "EXIT" and "nope.v" in d["message"] for d in result["diagnostics"]), result["diagnostics"]
