@@ -190,3 +190,17 @@ def test_the_path_is_overridable_without_a_code_change(tmp_path, monkeypatch):
     path.write_text("tool_sets:\n  architect:\n    surface: agent\n", encoding="utf-8")
     monkeypatch.setenv("SILICONCREW_TOOL_SETS_FILE", str(path))
     assert tc.tool_sets_path() == str(path)
+
+
+def test_the_verification_child_runs_cocotb_and_formal():
+    """verify-tb selects the `verification` category, so advertising cocotb_tool
+    and sby_tool on the agent surface gave the testbench-writing child both.
+    Intended: a child that writes the testbench should be able to run it under
+    cocotb and prove properties. Pinned so a change to it is a decision."""
+    from src.api.tool_catalog import tool_names_in_set
+
+    assert set(tool_names_in_set("verify-tb")) == {
+        "cocotb_tool", "sby_tool", "linter_tool", "run_simulation", "waveform_tool",
+        "write_spec", "read_spec", "write_file", "read_file", "list_files_tool",
+        "get_manifest", "list_skills", "read_skill",
+    }
