@@ -116,6 +116,8 @@ def test_run_cocotb_coverage_uses_the_coverage_image_and_verilator(monkeypatch, 
     seen = {}
 
     class Engine:
+        mode = "docker"
+
         def run(self, image, command, cwd, env, timeout, name_prefix, base_env=None):
             seen.update(image=image, env=env)
             return {"success": True, "stdout": "SC_COCOTB_RESULT pass=1 fail=0 xml=yes\n"
@@ -123,6 +125,7 @@ def test_run_cocotb_coverage_uses_the_coverage_image_and_verilator(monkeypatch, 
                     "stderr": ""}
 
     monkeypatch.setattr(rc, "get_tool_engine", lambda: Engine())
+    monkeypatch.setattr(rc, "_local_image_exists", lambda image: True)
     r = rc.run_cocotb(["fifo.v"], "fifo", "t", cwd=str(tmp_path), coverage=True)
     assert seen["image"] == "siliconcrew/cocotb-coverage:1"
     assert seen["env"]["SC_SIM"] == "verilator" and seen["env"]["SC_COVERAGE"] == "1"
@@ -133,6 +136,8 @@ def test_missing_coverage_image_says_how_to_build_it(monkeypatch, tmp_path):
     (tmp_path / "fifo.v").write_text("module fifo; endmodule\n")
 
     class Engine:
+        mode = "docker"
+
         def run(self, **kw):
             return {"success": False, "stdout": "",
                     "stderr": "Unable to find image 'siliconcrew/cocotb-coverage:1' locally\n"
@@ -150,6 +155,8 @@ def test_unbuilt_coverage_image_is_never_pulled(monkeypatch, tmp_path):
     ran = []
 
     class DockerToolEngine:
+        mode = "docker"
+
         def run(self, **kw):
             ran.append(kw)
             return {"success": True, "stdout": "", "stderr": ""}
@@ -165,6 +172,8 @@ def test_default_run_stays_on_the_grader_image(monkeypatch, tmp_path):
     seen = {}
 
     class Engine:
+        mode = "docker"
+
         def run(self, image, env, **kw):
             seen.update(image=image, env=env)
             return {"success": True, "stdout": "SC_COCOTB_RESULT pass=1 fail=0 xml=yes", "stderr": ""}
@@ -173,3 +182,36 @@ def test_default_run_stays_on_the_grader_image(monkeypatch, tmp_path):
     r = rc.run_cocotb(["fifo.v"], "fifo", "t", cwd=str(tmp_path))
     assert seen["image"] == rc.DEFAULT_OSVB_IMAGE and seen["env"]["SC_SIM"] == "icarus"
     assert "coverage" not in r
+
+
+def test_coverage_on_the_native_engine_is_refused_not_faked(monkeypatch, tmp_path):
+    """Hosted runs the native engine, where verilator/cocotb come from PATH and
+    are not the pinned pair the coverage image guarantees. Reporting those
+    numbers as measured would be a lie; the tool says so instead."""
+    (tmp_path / "fifo.v").write_text("module fifo; endmodule\n")
+    ran = []
+
+    class NativeToolEngine:
+        mode = "native"
+
+        def run(self, **kw):
+            ran.append(kw)
+            return {"success": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(rc, "get_tool_engine", lambda: NativeToolEngine())
+    r = rc.run_cocotb(["fifo.v"], "fifo", "t", cwd=str(tmp_path), coverage=True)
+    assert ran == []
+    assert r["status"] == "ERROR" and "SIM_ENGINE=native" in r["stderr"]
+
+
+def test_a_plain_run_still_works_on_the_native_engine(monkeypatch, tmp_path):
+    (tmp_path / "fifo.v").write_text("module fifo; endmodule\n")
+
+    class NativeToolEngine:
+        mode = "native"
+
+        def run(self, **kw):
+            return {"success": True, "stdout": "SC_COCOTB_RESULT pass=1 fail=0 xml=yes", "stderr": ""}
+
+    monkeypatch.setattr(rc, "get_tool_engine", lambda: NativeToolEngine())
+    assert rc.run_cocotb(["fifo.v"], "fifo", "t", cwd=str(tmp_path))["status"] == "PASS"

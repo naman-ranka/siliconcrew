@@ -243,7 +243,15 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
     }
 
     engine = get_tool_engine()
-    if coverage and _is_docker_engine(engine) and not _local_image_exists(image):
+    if coverage and not _is_docker_engine(engine):
+        # The native engine runs whatever verilator/cocotb is on PATH, which is
+        # not the pinned pair the coverage image exists to guarantee. Numbers
+        # from an unknown toolchain, reported as measured, are worse than none.
+        return _err("Coverage needs the docker engine and the pinned coverage image; this server "
+                    "runs the native engine (SIM_ENGINE=native), where the toolchain on PATH is "
+                    "not the measured one. Run without coverage=True, or use the docker engine.",
+                    command)
+    if coverage and not _local_image_exists(image):
         # A locally built tag must never be pulled: whatever a registry has
         # under that name would run with the workspace mounted.
         return _err(f"Coverage image '{image}' is not built on this server. Build it with: "
@@ -292,7 +300,9 @@ def run_cocotb(verilog_files, toplevel, python_module, cwd=None,
 
 
 def _is_docker_engine(engine) -> bool:
-    return type(engine).__name__ == "DockerToolEngine"
+    # The engines declare their own mode (tool_engine.py); a class-name check
+    # would miss a subclass or a test double.
+    return getattr(engine, "mode", "") == "docker"
 
 
 def _local_image_exists(image: str) -> bool:

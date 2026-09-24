@@ -173,7 +173,7 @@ def test_lint_override_typo_module_still_fails_file_scoped(client, monkeypatch):
     stderr = {"text": "rtl/top.v:1: error: Unknown module type: countr\n"}
     monkeypatch.setattr(
         rl, "_run",
-        lambda cmd, cwd, timeout: {"returncode": 1, "stdout": "", "stderr": stderr["text"], "command": " ".join(cmd)},
+        lambda cmd, cwd, timeout, env_extra=None: {"returncode": 1, "stdout": "", "stderr": stderr["text"], "command": " ".join(cmd)},
     )
 
     r = c.post(f"/api/workspace/{SID}/lint", json={"files": ["top.v"]})

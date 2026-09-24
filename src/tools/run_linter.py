@@ -453,7 +453,7 @@ def run_linter(
                 "-Wno-EOFNEWLINE", "-Wno-DECLFILENAME", "--relative-includes",
                 "-MMD", "--Mdir", mdir,
             ] + include_args + list(verilog_files)
-            raw = _run(cmd, cwd, timeout, env_extra=vcmd["env"]) if vcmd["env"] else _run(cmd, cwd, timeout)
+            raw = _run(cmd, cwd, timeout, env_extra=vcmd["env"])
             files_read = _read_verilator_depfiles(mdir, cwd)
         finally:
             shutil.rmtree(mdir, ignore_errors=True)
