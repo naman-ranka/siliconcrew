@@ -4,7 +4,13 @@ import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional
 
-from src.tools.stdcells import get_asap7_compat_model_files, resolve_stdcell_models, stdcell_root
+from src.tools.stdcells import (
+    ensure_stdcells,
+    get_asap7_compat_model_files,
+    has_pinned_source,
+    resolve_stdcell_models,
+    stdcell_root,
+)
 
 
 PASS_MARKER_DEFAULT = "TEST PASSED"
@@ -31,15 +37,27 @@ def _is_stdcell_cache_error(exc: Exception) -> bool:
     return ("Standard-cell cache missing" in msg) or ("No stdcell model files found" in msg)
 
 
-def _stdcell_bootstrap_hint(platform: Optional[str]) -> str:
+def _hosted() -> bool:
+    from src.platform_engines.settings import get_settings
+
+    return get_settings().hosted
+
+
+def _stdcell_bootstrap_hint(platform: Optional[str], bootstrap_attempted: bool = False) -> str:
     pf = platform or "<platform>"
     root = stdcell_root()
+    populate = f'PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace "{root}" --platform {pf}.'
+    if bootstrap_attempted:
+        return (
+            "Standard-cell models are missing for post-synthesis simulation, and this "
+            "run's download of them failed (the run's stdcell bootstrap result says why). They are "
+            "baked into the backend image only on hosted; on this install, populate "
+            f"them with: {populate}"
+        )
     return (
-        "Standard-cell models are missing for post-synthesis simulation. They ship "
-        "baked into the backend image at the install root, so on a hosted or "
-        "self-host deploy this should never happen — report it. For a local "
-        "checkout, populate them with: "
-        f'PYTHONPATH=. python scripts/bootstrap_stdcells.py --workspace "{root}" --platform {pf}.'
+        "Standard-cell models are missing for post-synthesis simulation. They are "
+        "baked into the backend image on hosted, so there this should never happen "
+        f"— report it. On a local install, populate them with: {populate}"
     )
 
 
@@ -508,13 +526,32 @@ def run_simulation(
         if effective_sim_profile == "auto":
             effective_sim_profile = "compat" if platform == "asap7" else "pinned"
 
+        stdcell_err: Optional[Exception] = None
         try:
             stdcells, manifest = resolve_stdcell_models(stdcell_root(), platform)
         except Exception as exc:
-            stdcells = []
-            is_cache_err = _is_stdcell_cache_error(exc)
-            hint = _stdcell_bootstrap_hint(platform) if is_cache_err else ""
-            msg = str(exc)
+            stdcells, stdcell_err = [], exc
+        # Self-host has no image bake, so a fresh checkout starts with no cache:
+        # populate it once from the pinned sources and resolve again. Hosted
+        # bakes the cache into the image; a miss there is reported, not fixed.
+        # Platforms without a pinned source have nothing to download.
+        if (stdcell_err is not None and _is_stdcell_cache_error(stdcell_err)
+                and not _hosted() and has_pinned_source(platform)):
+            stdcell_bootstrap_attempted = True
+            try:
+                stdcell_bootstrap_result = ensure_stdcells(stdcell_root(), platform)
+                stdcells, manifest = resolve_stdcell_models(stdcell_root(), platform)
+                stdcell_err = None
+            except Exception as exc:
+                stdcell_bootstrap_result = {"error": str(exc)}
+                stdcell_err = FileNotFoundError(
+                    f"Standard-cell cache missing for platform '{platform}'; "
+                    f"bootstrap from the pinned sources failed: {exc}"
+                )
+        if stdcell_err is not None:
+            is_cache_err = _is_stdcell_cache_error(stdcell_err)
+            hint = _stdcell_bootstrap_hint(platform, stdcell_bootstrap_attempted) if is_cache_err else ""
+            msg = str(stdcell_err)
             if hint:
                 msg = f"{msg}\n{hint}"
             return {
@@ -531,7 +568,7 @@ def run_simulation(
                 # Semantic outcome + a native recovery the IDE (button) and the
                 # agent (tool call) can both invoke — not a shell command.
                 "outcome": "stdcell_cache_missing" if is_cache_err else "compile_failed",
-                "recovery": stdcell_recovery_action(platform) if is_cache_err else None,
+                "recovery": stdcell_recovery_action(platform, bootstrap_attempted=stdcell_bootstrap_attempted) if is_cache_err else None,
                 "resolved_run_id": resolved_run_id,
                 "resolved_netlist": resolved_netlist,
                 "stdcell_source": stdcell_source,

@@ -112,6 +112,16 @@ def resolve_stdcell_models(workspace: str, platform: str) -> Tuple[List[str], Di
         raise FileNotFoundError(
             f"Standard-cell cache missing for platform '{platform}'. Run: python scripts/bootstrap_stdcells.py --platform {platform} --workspace {workspace}"
         )
+    # Same rule as the image bake (scripts/verify_stdcell_bake.py): a cache whose
+    # bootstrap lost downloads is not a cache. Using it compiles gate netlists
+    # against a partial cell set.
+    failed = _failed_downloads(manifest)
+    if failed:
+        raise FileNotFoundError(
+            f"Standard-cell cache missing for platform '{platform}': its last bootstrap was "
+            f"incomplete ({len(failed)} download(s) failed). Run: python scripts/bootstrap_stdcells.py "
+            f"--platform {platform} --workspace {workspace}"
+        )
 
     files = []
     for name in sorted(os.listdir(sim_dir)):
@@ -124,6 +134,50 @@ def resolve_stdcell_models(workspace: str, platform: str) -> Tuple[List[str], Di
         )
 
     return files, manifest
+
+
+def _failed_downloads(manifest: Dict) -> List[str]:
+    return list(((manifest or {}).get("sources") or {}).get("pinned_source", {}).get("failed") or [])
+
+
+def has_pinned_source(platform: str) -> bool:
+    return platform in PINNED_GITHUB_SOURCES
+
+
+def ensure_stdcells(workspace: str, platform: str) -> Dict:
+    """Populate a missing or incomplete cache without exposing a partial one.
+
+    The download happens in a private staging dir beside the cache; only a
+    complete result is moved into place, and a cache another sim completed in
+    the meantime is kept, never cleared under it. Two concurrent callers
+    therefore see either no cache or a finished one.
+    """
+    stdroot = os.path.join(workspace, STDROOT)
+    os.makedirs(stdroot, exist_ok=True)
+    staging = tempfile.mkdtemp(prefix=f".{platform}-staging-", dir=stdroot)
+    try:
+        result = bootstrap_stdcells(staging, platform)
+        failed = _failed_downloads(read_stdcell_manifest(staging, platform))
+        if failed:
+            raise FileNotFoundError(
+                f"Standard-cell cache missing for platform '{platform}': bootstrap incomplete, "
+                f"{len(failed)} download(s) failed: {failed[:3]}"
+            )
+        live = os.path.dirname(stdcell_cache_dir(workspace, platform))
+        try:
+            resolve_stdcell_models(workspace, platform)
+            return {**result, "installed": False, "note": "another caller completed the cache first"}
+        except FileNotFoundError:
+            pass
+        if os.path.exists(live):  # present but incomplete: set it aside, then install
+            stale = f"{live}.stale-{os.getpid()}-{datetime.now().strftime('%H%M%S%f')}"
+            os.replace(live, stale)
+            shutil.rmtree(stale, ignore_errors=True)
+        os.replace(os.path.join(staging, STDROOT, platform), live)
+        return {**result, "cache_dir": stdcell_cache_dir(workspace, platform),
+                "manifest": stdcell_manifest_path(workspace, platform), "installed": True}
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _is_sim_model_file(platform: str, filename: str) -> bool:

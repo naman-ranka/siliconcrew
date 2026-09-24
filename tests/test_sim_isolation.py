@@ -274,6 +274,8 @@ def test_isolated_post_synth_missing_cache_recovery_propagates(tmp_path):
         return {"status": "compile_failed", "pass_marker_found": False,
                 "outcome": "stdcell_cache_missing",
                 "recovery": {"kind": "infra", "label": "x", "detail": "y"},
+                "stdcell_bootstrap_attempted": True,
+                "stdcell_bootstrap_result": {"error": "network unreachable"},
                 "compile_command": "iverilog", "sim_command": None,
                 "stdout_tail": "", "stderr_tail": "cache missing", "log_truncated": False,
                 "failure_type": "compile", "first_failure_line": "cache missing"}
@@ -284,13 +286,24 @@ def test_isolated_post_synth_missing_cache_recovery_propagates(tmp_path):
     assert r["status"] == "failed"
     assert r["outcome"] == "stdcell_cache_missing"
     assert r["recovery"]["kind"] == "infra"
+    # The recovery text points at the bootstrap result, so the record carries it.
+    assert r["stdcellBootstrapAttempted"] is True
+    assert r["stdcellBootstrapResult"] == {"error": "network unreachable"}
 
 
-def test_post_synth_gets_past_run_resolution_with_real_runner(tmp_path):
+def test_post_synth_gets_past_run_resolution_with_real_runner(tmp_path, monkeypatch):
     """End-to-end: with the real run_simulation, post_synth via the isolated
     path resolves a workspace synth run and proceeds PAST run resolution
     (it may still fail later at stdcell/compile, but never with the
     unresolved-run_id / missing-netlist errors)."""
+    from src.tools import run_simulation as rs
+
+    # On a fresh checkout the cache is empty and self-host would download it;
+    # keep this unit test off the network.
+    def offline(*_a, **_k):
+        raise OSError("offline")
+
+    monkeypatch.setattr(rs, "ensure_stdcells", offline, raising=False)
     ws = str(tmp_path)
     open(os.path.join(ws, "tb.v"), "w").close()
     _make_synth_run(ws, run_id="synth_0001")

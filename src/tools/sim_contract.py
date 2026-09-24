@@ -268,13 +268,14 @@ def resolve_post_synth(
     )
 
 
-def stdcell_recovery_action(platform: Optional[str]) -> Dict[str, Any]:
+def stdcell_recovery_action(platform: Optional[str], bootstrap_attempted: bool = False) -> Dict[str, Any]:
     """Honest guidance for the rare ``stdcell_cache_missing`` outcome.
 
     The cache is infrastructure, not a per-run action: on hosted it is baked
-    into the backend image (so it should never be missing), and on self-host it
-    bootstraps at boot — and ``run_simulation`` already retries the bootstrap
-    internally on a cache miss. So this is an infra/boot condition we DESCRIBE;
+    into the backend image (so it should never be missing), and on self-host
+    ``run_simulation`` bootstraps it from the pinned sources on the first
+    miss. This outcome therefore means that bootstrap failed (typically no
+    network), so it is an infra condition we DESCRIBE;
     we deliberately do NOT add a first-class tool to the one registry for a path
     that is baked away on hosted and auto-handled on self-host (keeping the
     agent's action space small — invariant #2).
@@ -285,8 +286,16 @@ def stdcell_recovery_action(platform: Optional[str]) -> Dict[str, Any]:
         "label": f"Standard-cell simulation models for {pf} are missing.",
         "detail": (
             "Hosted: they are baked into the backend image and should never be "
-            "missing (report it). Self-host: they bootstrap at boot — restart "
-            "the backend, or the next post_synth run retries the bootstrap "
-            "internally."
+            "missing (report it). Self-host: "
+            + (
+                "this post_synth run already tried to download them from the "
+                "pinned sources and failed (the run's stdcell bootstrap result says why). The "
+                "operator can populate them with scripts/bootstrap_stdcells.py "
+                "once the host has network access."
+                if bootstrap_attempted else
+                "there is no pinned download for this platform; the operator "
+                "has to provide its simulation models under the install's "
+                "_stdcells/ directory."
+            )
         ),
     }
