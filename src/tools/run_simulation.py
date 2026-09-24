@@ -5,8 +5,9 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 from src.tools.stdcells import (
-    bootstrap_stdcells,
+    ensure_stdcells,
     get_asap7_compat_model_files,
+    has_pinned_source,
     resolve_stdcell_models,
     stdcell_root,
 )
@@ -527,10 +528,12 @@ def run_simulation(
         # Self-host has no image bake, so a fresh checkout starts with no cache:
         # populate it once from the pinned sources and resolve again. Hosted
         # bakes the cache into the image; a miss there is reported, not fixed.
-        if stdcell_err is not None and _is_stdcell_cache_error(stdcell_err) and not _hosted():
+        # Platforms without a pinned source have nothing to download.
+        if (stdcell_err is not None and _is_stdcell_cache_error(stdcell_err)
+                and not _hosted() and has_pinned_source(platform)):
             stdcell_bootstrap_attempted = True
             try:
-                stdcell_bootstrap_result = bootstrap_stdcells(stdcell_root(), platform)
+                stdcell_bootstrap_result = ensure_stdcells(stdcell_root(), platform)
                 stdcells, manifest = resolve_stdcell_models(stdcell_root(), platform)
                 stdcell_err = None
             except Exception as exc:
@@ -559,7 +562,7 @@ def run_simulation(
                 # Semantic outcome + a native recovery the IDE (button) and the
                 # agent (tool call) can both invoke — not a shell command.
                 "outcome": "stdcell_cache_missing" if is_cache_err else "compile_failed",
-                "recovery": stdcell_recovery_action(platform) if is_cache_err else None,
+                "recovery": stdcell_recovery_action(platform, bootstrap_attempted=stdcell_bootstrap_attempted) if is_cache_err else None,
                 "resolved_run_id": resolved_run_id,
                 "resolved_netlist": resolved_netlist,
                 "stdcell_source": stdcell_source,

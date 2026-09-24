@@ -37,7 +37,7 @@ def _setup(monkeypatch, tmp_path, *, hosted, bootstrap):
         calls.append((workspace, platform))
         return bootstrap(workspace, platform)
 
-    monkeypatch.setattr(rs, "bootstrap_stdcells", fake_bootstrap, raising=False)
+    monkeypatch.setattr(rs, "ensure_stdcells", fake_bootstrap, raising=False)
     compiled = {}
 
     def fake_compile(compile_files, **_):
@@ -89,3 +89,77 @@ def test_hosted_cache_miss_is_reported_not_bootstrapped(monkeypatch, tmp_path):
     assert calls == []
     assert out["outcome"] == "stdcell_cache_missing"
     assert out["stdcell_bootstrap_attempted"] is False
+
+
+# ---- review findings: partial downloads, concurrent callers, platforms without a source ----
+
+
+def _fake_pinned(names, failed=()):
+    def populate(cache_dir):
+        for n in names:
+            with open(os.path.join(cache_dir, n), "w", encoding="utf-8") as f:
+                f.write(f"module {n[:-2]}; endmodule\n")
+        return {"added": list(names), "failed": list(failed), "attempted_urls": []}
+    return populate
+
+
+def test_a_partial_bootstrap_is_never_installed(monkeypatch, tmp_path):
+    monkeypatch.setattr(std, "_populate_sky130_pinned",
+                        _fake_pinned(["sky130_fd_sc_hd__inv_1.v"], failed=["sky130_fd_sc_hd__dfxtp_1.v"]))
+
+    with pytest.raises(FileNotFoundError, match="Standard-cell cache missing"):
+        std.ensure_stdcells(str(tmp_path), "sky130hd")
+
+    assert not os.path.exists(std.stdcell_cache_dir(str(tmp_path), "sky130hd"))
+
+
+def test_a_cache_recorded_as_incomplete_is_a_miss(monkeypatch, tmp_path):
+    # What the old in-place bootstrap left behind after a lost download.
+    monkeypatch.setattr(std, "_populate_sky130_pinned",
+                        _fake_pinned(["sky130_fd_sc_hd__inv_1.v"], failed=["sky130_fd_sc_hd__dfxtp_1.v"]))
+    std.bootstrap_stdcells(str(tmp_path), "sky130hd")
+
+    with pytest.raises(FileNotFoundError, match="Standard-cell cache missing") as err:
+        std.resolve_stdcell_models(str(tmp_path), "sky130hd")
+    assert rs._is_stdcell_cache_error(err.value)  # so run_simulation bootstraps again
+
+
+def test_a_complete_cache_is_never_cleared_under_a_reader(monkeypatch, tmp_path):
+    root = str(tmp_path)
+    monkeypatch.setattr(std, "_populate_sky130_pinned", _fake_pinned(["sky130_fd_sc_hd__inv_1.v"]))
+    std.ensure_stdcells(root, "sky130hd")
+    files, _ = std.resolve_stdcell_models(root, "sky130hd")
+
+    # A second caller that missed earlier finishes its own download later.
+    monkeypatch.setattr(std, "_populate_sky130_pinned", _fake_pinned(["sky130_fd_sc_hd__buf_1.v"]))
+    out = std.ensure_stdcells(root, "sky130hd")
+
+    assert out["installed"] is False
+    assert all(os.path.exists(f) for f in files)
+    assert std.resolve_stdcell_models(root, "sky130hd")[0] == files
+
+
+def test_an_incomplete_cache_is_replaced_by_a_complete_one(monkeypatch, tmp_path):
+    root = str(tmp_path)
+    monkeypatch.setattr(std, "_populate_sky130_pinned",
+                        _fake_pinned(["sky130_fd_sc_hd__inv_1.v"], failed=["sky130_fd_sc_hd__dfxtp_1.v"]))
+    std.bootstrap_stdcells(root, "sky130hd")
+    monkeypatch.setattr(std, "_populate_sky130_pinned",
+                        _fake_pinned(["sky130_fd_sc_hd__inv_1.v", "sky130_fd_sc_hd__dfxtp_1.v"]))
+
+    assert std.ensure_stdcells(root, "sky130hd")["installed"] is True
+    names = sorted(os.path.basename(f) for f in std.resolve_stdcell_models(root, "sky130hd")[0])
+    assert names == ["sky130_fd_sc_hd__dfxtp_1.v", "sky130_fd_sc_hd__inv_1.v"]
+
+
+def test_a_platform_without_a_pinned_source_is_not_bootstrapped(monkeypatch, tmp_path):
+    ws, _, calls, _ = _setup(monkeypatch, tmp_path, hosted=False, bootstrap=_populate)
+    monkeypatch.setattr(sc, "resolve_post_synth", lambda **_: (
+        sc.PostSynthResolution(netlist_abs=os.path.join(ws, "6_final.v"), platform="nangate45"), None))
+
+    out = rs.run_simulation(verilog_files=[], top_module="tb", cwd=ws, workspace=ws, mode="post_synth")
+
+    assert calls == []
+    assert out["outcome"] == "stdcell_cache_missing"
+    assert out["stdcell_bootstrap_attempted"] is False
+    assert "no pinned download" in out["recovery"]["detail"]

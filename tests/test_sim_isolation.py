@@ -298,7 +298,7 @@ def test_post_synth_gets_past_run_resolution_with_real_runner(tmp_path, monkeypa
     def offline(*_a, **_k):
         raise OSError("offline")
 
-    monkeypatch.setattr(rs, "bootstrap_stdcells", offline, raising=False)
+    monkeypatch.setattr(rs, "ensure_stdcells", offline, raising=False)
     ws = str(tmp_path)
     open(os.path.join(ws, "tb.v"), "w").close()
     _make_synth_run(ws, run_id="synth_0001")
